@@ -2,10 +2,15 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +48,17 @@ import (
 // wait when it stops. A static
 // public URL is one the operator already routes to the listener, so nothing
 // runs for it.
+//
+// A provider's word that the tunnel is up is not proof that anything gets
+// through it (a cloudflared quick tunnel can keep running while its URL
+// answers nothing), so the host checks the whole path itself: every
+// tunnelProbeEvery it requests a path only its own listener answers
+// (probePath and a token per daemon) through the public URL. After
+// tunnelProbeFailures probes in a row fail it raises tunnel_unreachable (a
+// diagnostic, a warning in the log and a telemetry event) and, for a
+// provider's tunnel, ends the run so it starts again with a new URL, which
+// the extensions' managed hooks then follow. A static URL is the operator's
+// to fix, so the host only reports it, and keeps probing until it answers.
 
 // TunnelOptions select webhook exposure.
 type TunnelOptions struct {
@@ -82,6 +98,19 @@ type webhookState struct {
 	options TunnelOptions
 	// providers are the packages' tunnel types (manifest tunnels).
 	providers map[string]extension.TunnelProvider
+	// probeToken is the path segment only this daemon's listener answers
+	// under probePath; probe checks the public URL with it (probePublic,
+	// or a test's).
+	probeToken string
+	probe      func(ctx context.Context, public, token string) error
+	// probed is when a probe through the current public URL last
+	// answered; probeFails counts the probes that have failed in a row
+	// since, and probeCause says why the last one did.
+	probed     time.Time
+	probeFails int
+	probeCause string
+	// delivered is when a request last reached a package's webhook route.
+	delivered time.Time
 }
 
 // staticTunnel is settings.webhooks' tunnel for a public URL the operator
@@ -92,6 +121,27 @@ const staticTunnel = "static"
 // tunnelBackoff is the first wait before a stopped tunnel starts again; it
 // doubles to tunnelMaxBackoff and resets once a run reports a URL.
 var tunnelBackoff, tunnelMaxBackoff = 5 * time.Second, 5 * time.Minute
+
+// The probe of the public URL: one every tunnelProbeEvery, each given
+// tunnelProbeTimeout, and tunnelProbeFailures in a row make the URL
+// unreachable. The first probe comes a full interval after the URL does,
+// so a new quick tunnel's name has time to resolve.
+var (
+	tunnelProbeEvery    = time.Minute
+	tunnelProbeTimeout  = 15 * time.Second
+	tunnelProbeFailures = 3
+	// probeTicker paces the probes; tests replace it with a channel they
+	// fire themselves.
+	probeTicker = func(every time.Duration) (<-chan time.Time, func()) {
+		t := time.NewTicker(every)
+		return t.C, t.Stop
+	}
+)
+
+// probePath is where the listener answers the host's own probe, followed by
+// the daemon's token. No package is named ".open-conduit", so it is never a
+// package's route.
+const probePath = ".open-conduit/probe/"
 
 // addTunnel registers a package's tunnel type.
 func (h *webhookState) addTunnel(typ string, p extension.TunnelProvider) {
@@ -184,6 +234,11 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 	if err != nil {
 		return nil, bindError(addr, addrFrom, err)
 	}
+	token := make([]byte, 16)
+	_, _ = rand.Read(token)
+	d.hooks.mu.Lock()
+	d.hooks.probeToken = hex.EncodeToString(token)
+	d.hooks.mu.Unlock()
 	srv := &http.Server{Handler: d.webhookHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	d.hooks.mu.Lock()
 	d.hooks.listening = ln.Addr().String()
@@ -216,6 +271,11 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 			// The operator already routes this URL to the listener: there
 			// is nothing to run.
 			d.publicURL(t.Kind, t.PublicURL)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				d.watchPublic(tctx, t.Kind, nil, func(string) {})
+			}()
 			return stop(cancel, &wg, srv), nil
 		}
 		run := extension.TunnelRun{Addr: ln.Addr().String(), Config: tunnelConfig(t)}
@@ -254,29 +314,49 @@ func (d *daemon) superviseTunnel(ctx context.Context, kind string, run extension
 		}
 		d.hooks.mu.Unlock()
 		var err error
-		var reported atomic.Bool
+		var reported, answered atomic.Bool
+		var unreachable atomic.Pointer[string]
 		if p == nil {
 			err = errors.New("no installed or bundled package provides tunnel type " + kind)
 		} else {
 			d.log.Info("tunnel started", "provider", kind, "listener", run.Addr)
-			err = p.Run(ctx, run, func(u string) {
+			// The run lasts until its URL stops answering the host's
+			// probe, too: the provider's process may still be running.
+			rctx, end := context.WithCancel(ctx)
+			watched := make(chan struct{})
+			go func() {
+				defer close(watched)
+				d.watchPublic(rctx, kind, &answered, func(cause string) {
+					unreachable.Store(&cause)
+					end()
+				})
+			}()
+			err = p.Run(rctx, run, func(u string) {
 				if u != "" {
 					reported.Store(true)
 				}
 				d.publicURL(kind, u)
 			})
+			end()
+			<-watched
 		}
 		d.publicURL(kind, "")
 		if ctx.Err() != nil {
 			return
 		}
-		if reported.Load() {
+		cause := unreachable.Load()
+		// A run whose URL never answered doesn't reset the wait, so a
+		// machine that can't be reached doesn't restart its tunnel every
+		// few minutes for ever.
+		if answered.Load() || reported.Load() && cause == nil {
 			backoff = tunnelBackoff
 		}
 		code := "tunnel_failed"
 		switch {
 		case p == nil:
 			code = "tunnel_unavailable"
+		case cause != nil:
+			code, err = "tunnel_unreachable", errors.New(*cause)
 		case errors.Is(err, extension.ErrTunnelConfig):
 			code = "tunnel_invalid"
 		case err == nil:
@@ -287,7 +367,7 @@ func (d *daemon) superviseTunnel(ctx context.Context, kind string, run extension
 		d.hooks.failures++
 		d.hooks.mu.Unlock()
 		d.report("tunnel", domain.ID(kind), code, err.Error())
-		if code != "tunnel_failed" {
+		if code != "tunnel_failed" && code != "tunnel_unreachable" {
 			d.log.Error("tunnel not started", "provider", kind, "code", code, "cause", err.Error())
 			return
 		}
@@ -314,6 +394,9 @@ func (d *daemon) publicURL(kind, u string) {
 	d.hooks.mu.Lock()
 	changed := d.hooks.public != u
 	d.hooks.public = u
+	if changed {
+		d.hooks.probed, d.hooks.probeFails, d.hooks.probeCause = time.Time{}, 0, ""
+	}
 	if u != "" {
 		d.hooks.tunnelErr, d.hooks.tunnelCause = "", ""
 	}
@@ -327,11 +410,159 @@ func (d *daemon) publicURL(kind, u string) {
 	}
 }
 
-// webhookHandler serves only the registered routes listed above.
+// watchPublic probes the public URL every tunnelProbeEvery until ctx ends.
+// When tunnelProbeFailures probes in a row have failed it reports the URL
+// unreachable and calls dead with why, once until the URL changes or
+// answers again; a probe that answers sets answered (when given).
+func (d *daemon) watchPublic(ctx context.Context, kind string, answered *atomic.Bool, dead func(cause string)) {
+	tick, stop := probeTicker(tunnelProbeEvery)
+	defer stop()
+	var last string
+	fails := 0
+	// failingSince is when the current run of failed probes began.
+	var failingSince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick:
+		}
+		d.hooks.mu.Lock()
+		public, token, probe := d.hooks.public, d.hooks.probeToken, d.hooks.probe
+		d.hooks.mu.Unlock()
+		if public != last {
+			last, fails = public, 0
+		}
+		if public == "" {
+			continue
+		}
+		if probe == nil {
+			probe = probePublic
+		}
+		pctx, cancel := context.WithTimeout(ctx, tunnelProbeTimeout)
+		err := probe(pctx, public, token)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		d.hooks.mu.Lock()
+		current := d.hooks.public == public
+		delivered := d.hooks.delivered
+		if current && err == nil {
+			d.hooks.probed, d.hooks.probeFails, d.hooks.probeCause = d.now(), 0, ""
+		} else if current {
+			d.hooks.probeFails, d.hooks.probeCause = fails+1, err.Error()
+		}
+		d.hooks.mu.Unlock()
+		if !current {
+			continue
+		}
+		if err == nil {
+			if answered != nil {
+				answered.Store(true)
+			}
+			if fails >= tunnelProbeFailures {
+				d.log.Info("webhook public URL answering again", "provider", kind, "url", public)
+				d.report("tunnel", domain.ID(kind), "")
+				d.capture(ctx, "webhooks.public_url_answering", map[string]any{"provider": kind, "url": public})
+			}
+			fails = 0
+			continue
+		}
+		if fails == 0 {
+			failingSince = d.now()
+		}
+		fails++
+		if fails != tunnelProbeFailures {
+			continue
+		}
+		if !delivered.Before(failingSince) {
+			// A delivery reached a route while the probes were failing,
+			// so the path works and the probe is what fails (this
+			// machine's DNS or egress, say). Restarting would only lose
+			// deliveries, so start counting again.
+			d.log.Info("webhook probe failing while deliveries arrive; not treated as unreachable", "provider", kind, "url", public, "cause", err.Error())
+			fails = 0
+			continue
+		}
+		cause := "public URL " + public + " is not answering: " + strconv.Itoa(fails) + " probes in a row failed (last: " + err.Error() + ")"
+		attrs := []any{"provider", kind, "url", public, "probes", fails, "cause", err.Error()}
+		if kind != staticTunnel {
+			attrs = append(attrs, "action", "restarting the tunnel")
+		}
+		d.log.Warn("webhook public URL unreachable", attrs...)
+		d.report("tunnel", domain.ID(kind), "tunnel_unreachable", cause)
+		dead(cause)
+		d.capture(ctx, "webhooks.public_url_unreachable", map[string]any{"provider": kind, "url": public, "probes": fails, "cause": err.Error()})
+	}
+}
+
+// probeClient sends the host's probes; a redirect is an answer from
+// somewhere else, so it is never followed.
+var probeClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// probePublic requests probePath with token through public and succeeds
+// only when this daemon's listener answered it.
+func probePublic(ctx context.Context, public, token string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, public+"/"+probePath+token, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.New("no answer within " + tunnelProbeTimeout.String())
+		}
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("answered %d", resp.StatusCode)
+	}
+	if string(body) != token {
+		return errors.New("answered, but not from this daemon's webhook listener")
+	}
+	return nil
+}
+
+// captureTimeout bounds a telemetry event's capture, since every sink is a
+// package that may be slow when the network is in trouble.
+const captureTimeout = 2 * time.Second
+
+// capture records a host telemetry event about the machine. It outlives
+// ctx (the watch that records an outage has just ended it) but never
+// takes longer than captureTimeout.
+func (d *daemon) capture(ctx context.Context, name string, props map[string]any) {
+	if d.telemetry.primary == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), captureTimeout)
+	defer cancel()
+	_ = d.telemetry.Capture(cctx, "", name, d.now(), props)
+}
+
+// webhookHandler serves only the registered routes listed above, and the
+// host's own probe.
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
+		d.hooks.mu.Lock()
+		token := d.hooks.probeToken
+		d.hooks.mu.Unlock()
+		if token != "" && r.Method == http.MethodGet && name == probePath+token {
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = io.WriteString(w, token)
+			return
+		}
 		if h := d.packageWebhook(name); h != nil {
+			d.hooks.mu.Lock()
+			d.hooks.delivered = d.now()
+			d.hooks.mu.Unlock()
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -345,6 +576,7 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	d.hooks.mu.Lock()
 	listening, public, kind, terr, cause := d.hooks.listening, d.hooks.public, d.hooks.tunnel, d.hooks.tunnelErr, d.hooks.tunnelCause
 	starts, failures := d.hooks.starts, d.hooks.failures
+	probed, probeFails, probeCause, delivered := d.hooks.probed, d.hooks.probeFails, d.hooks.probeCause, d.hooks.delivered
 	listenFrom, tunnelFrom, stored := d.hooks.listenFrom, d.hooks.tunnelFrom, d.hooks.stored
 	d.hooks.mu.Unlock()
 	check = runtime.Check{Name: "webhooks", Status: runtime.CheckOK, Code: "listening"}
@@ -374,7 +606,7 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 		check.Status, check.Code = runtime.CheckWarn, terr
 		check.Detail += "; tunnel " + kind + " (from " + tunnelFrom + ") stopped: " + cause
 		switch terr {
-		case "tunnel_failed":
+		case "tunnel_failed", "tunnel_unreachable":
 			check.Detail += "; restarting (" + strconv.Itoa(failures) + " stopped of " + strconv.Itoa(starts) + " started)"
 		case "tunnel_unavailable":
 			check.Status = runtime.CheckFail
@@ -388,6 +620,27 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 		check.Detail += "; tunnel " + kind + " (from " + tunnelFrom + ") has no public URL yet"
 	default:
 		check.Detail += "; public " + public + " (" + kind + ", from " + tunnelFrom + ")"
+		switch {
+		case probeFails >= tunnelProbeFailures:
+			check.Status, check.Code = runtime.CheckWarn, "tunnel_unreachable"
+			check.Detail += "; not answering: the last " + strconv.Itoa(probeFails) + " probes through it failed (" + probeCause + "), so webhooks are not arriving"
+			if kind == staticTunnel {
+				check.Detail += "; check what routes it to the listener"
+			} else {
+				check.Detail += "; restarting the tunnel"
+			}
+		case probeFails > 0:
+			check.Detail += "; the last probe through it failed (" + probeCause + ")"
+		case !probed.IsZero():
+			check.Detail += "; answered a probe at " + probed.UTC().Format(time.RFC3339)
+		default:
+			check.Detail += "; not probed yet"
+		}
+	}
+	if delivered.IsZero() {
+		check.Detail += "; no deliveries since serve started"
+	} else {
+		check.Detail += "; last delivery " + delivered.UTC().Format(time.RFC3339)
 	}
 	sort.Strings(check.Items)
 	return check

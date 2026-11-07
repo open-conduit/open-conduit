@@ -186,6 +186,8 @@ type Server struct {
 	// installPerms are the App installation's permissions, as
 	// GET /repos/<repo>/installation reports them (none when nil).
 	installPerms map[string]string
+	// refusePings makes pinging a hook fail.
+	refusePings bool
 	// refusePullEdits makes editing a PR (PATCH and the draft mutations)
 	// forbidden, as for a connection without Pull requests write.
 	refusePullEdits bool
@@ -198,6 +200,24 @@ type Hook struct {
 	Secret string
 	Events []string
 	Active bool
+	// LastCode and LastMessage are the hook's last_response (none before
+	// SetHookResponse); Pings counts the pings it was sent.
+	LastCode    int
+	LastMessage string
+	Pings       int
+}
+
+// RefusePings makes pinging a hook answer 503.
+func (s *Server) RefusePings(v bool) { s.mu.Lock(); s.refusePings = v; s.mu.Unlock() }
+
+// SetHookResponse sets what every hook's last delivery answered, as GitHub
+// reports it in last_response.
+func (s *Server) SetHookResponse(code int, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.hooks {
+		h.LastCode, h.LastMessage = code, message
+	}
 }
 
 // Hooks returns copies of the repository webhooks.
@@ -1451,6 +1471,26 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			list = append(list, map[string]any{"id": h.ID, "active": h.Active, "events": h.Events, "config": map[string]any{"url": h.URL, "content_type": "json"}})
 		}
 		return http.StatusOK, paged(r, list)
+	case (get || r.Method == http.MethodPost && strings.HasSuffix(rest, "/pings")) && strings.HasPrefix(rest, "/hooks/"):
+		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/hooks/"), "/pings")
+		for _, h := range s.hooks {
+			if strconv.FormatInt(h.ID, 10) != id {
+				continue
+			}
+			if !get && s.refusePings {
+				return http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}
+			}
+			if !get {
+				h.Pings++
+				return http.StatusNoContent, nil
+			}
+			last := map[string]any{"code": nil, "status": "unused", "message": nil}
+			if h.LastCode != 0 {
+				last = map[string]any{"code": h.LastCode, "status": "active", "message": h.LastMessage}
+			}
+			return http.StatusOK, map[string]any{"id": h.ID, "active": h.Active, "events": h.Events, "config": map[string]any{"url": h.URL, "content_type": "json"}, "last_response": last}
+		}
+		return http.StatusNotFound, map[string]any{"message": "Not Found"}
 	case (r.Method == http.MethodPost && rest == "/hooks") || (r.Method == http.MethodPatch && strings.HasPrefix(rest, "/hooks/")):
 		var req struct {
 			Active bool     `json:"active"`
