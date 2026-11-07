@@ -31,6 +31,11 @@ const (
 	hookRetry       = time.Minute
 	gitTokenPace    = 5 * time.Second
 	hookCallTimeout = 30 * time.Second
+	// hookCheckEvery is how often a managed hook's last delivery is read
+	// back from GitHub, and hookPingWait how long after a re-point (and its
+	// ping) the first read comes.
+	hookCheckEvery = 5 * time.Minute
+	hookPingWait   = 30 * time.Second
 )
 
 // entry is one registered `github` entry.
@@ -49,6 +54,12 @@ type entry struct {
 type hook struct {
 	url, id, code string
 	next          time.Time
+	// checked is when the hook's last delivery was last read back from
+	// GitHub; delivery says what GitHub recorded for it, and failing
+	// whether that was a failure.
+	checked  time.Time
+	delivery string
+	failing  bool
 }
 
 // registry is the extension's entries for the daemon's lifetime: a
@@ -464,7 +475,11 @@ func (x *Extension) manageHooks(ctx context.Context) error {
 		if st != nil {
 			existing = st.id
 		}
+		check := !due && st.code == "ok" && st.id != "" && !x.now().Before(st.checked.Add(hookCheckEvery))
 		r.mu.Unlock()
+		if check {
+			x.readDelivery(ctx, e, s.Namespace, st.id)
+		}
 		if !due {
 			continue
 		}
@@ -473,22 +488,61 @@ func (x *Extension) manageHooks(ctx context.Context) error {
 		secret, err := x.webhookSecret(e)(cx)
 		if err == nil {
 			dry := x.svc().DryRun || s.Projection.DryRun
-			next.id, _, err = e.client.EnsureWebhook(cx, s.Repo, target, "/"+e.name, secret, existing, dry)
+			var wrote bool
+			next.id, wrote, err = e.client.EnsureWebhook(cx, s.Repo, target, "/"+e.name, secret, existing, dry)
 			if dry {
 				next.code = "dry_run"
+			}
+			if err == nil && wrote {
+				// GitHub keeps the last delivery's result across a
+				// re-point; a ping replaces it with the new URL's.
+				_ = e.client.PingWebhook(cx, s.Repo, next.id)
+				next.checked = x.now().Add(hookPingWait - hookCheckEvery)
 			}
 		}
 		cancel()
 		if err != nil {
 			next.code, next.next = CallCode(err), x.now().Add(hookRetry)
-			code = next.code
 		}
 		r.mu.Lock()
 		r.hooks[s.Namespace] = next
 		r.mu.Unlock()
 	}
+	entries := x.list()
+	r.mu.Lock()
+	for _, e := range entries {
+		st := r.hooks[e.ingress.Settings().Namespace]
+		switch {
+		case st == nil:
+		case st.code != "ok" && st.code != "dry_run":
+			code = st.code
+		case st.failing && code == "":
+			code = "hook_delivery_failing"
+		}
+	}
+	r.mu.Unlock()
 	x.report("webhook", code)
 	return nil
+}
+
+// readDelivery reads back from GitHub how the hook's last delivery went, so
+// doctor shows whether deliveries arrive and not only that the hook is set.
+// A failed read keeps the last answer and waits for the next interval.
+func (x *Extension) readDelivery(ctx context.Context, e *entry, ns, id string) {
+	cx, cancel := context.WithTimeout(ctx, hookCallTimeout)
+	d, err := e.client.HookDelivery(cx, e.ingress.Settings().Repo, id)
+	cancel()
+	r := x.own
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.hooks[ns]
+	if st == nil || st.id != id {
+		return
+	}
+	st.checked = x.now()
+	if err == nil {
+		st.delivery, st.failing = d.Describe(), d.Failing()
+	}
 }
 
 // sweepGitTokens revokes the git tokens of every execution that isn't
@@ -622,6 +676,12 @@ func (x *Extension) hookItems(raise func(status, code string)) map[string]string
 			item += "; hook " + st.code
 			if st.code != "ok" && st.code != "dry_run" {
 				raise(inproc.CheckWarn, st.code)
+			} else if st.delivery != "" {
+				item += "; " + st.delivery
+				if st.failing {
+					item += " (hook_delivery_failing: GitHub's deliveries are not arriving)"
+					raise(inproc.CheckWarn, "hook_delivery_failing")
+				}
 			}
 		case s.ManageWebhook:
 			item += "; hook pending"

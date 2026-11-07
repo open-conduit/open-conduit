@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -123,4 +124,76 @@ func (c *Client) EnsureWebhook(ctx context.Context, repo, url, suffix, secret, e
 		return "", false, err
 	}
 	return strconv.FormatInt(created.ID, 10), true, nil
+}
+
+// Delivery is what GitHub recorded for a hook's last delivery (the hook's
+// last_response).
+type Delivery struct {
+	// Code is the HTTP status the hook's URL answered (0 when there was
+	// no answer, or no delivery yet).
+	Code int
+	// Status is GitHub's word for it ("unused" before the first delivery).
+	Status string
+	// Message is GitHub's description ("failed to connect to host").
+	Message string
+}
+
+// Failing says whether the last delivery did not get through.
+func (d Delivery) Failing() bool {
+	if d.Code != 0 {
+		return d.Code < 200 || d.Code >= 300
+	}
+	return d.Status != "" && d.Status != "unused" && d.Status != "active"
+}
+
+// Describe is the delivery for doctor.
+func (d Delivery) Describe() string {
+	switch {
+	case d.Code == 0 && (d.Status == "unused" || d.Status == ""):
+		return "no delivery yet"
+	case d.Code == 0:
+		return "last delivery " + d.Status + describeMessage(d.Message)
+	}
+	return fmt.Sprintf("last delivery %d%s", d.Code, describeMessage(d.Message))
+}
+
+func describeMessage(m string) string {
+	m = strings.TrimSpace(m)
+	if m == "" || strings.EqualFold(m, "OK") {
+		return ""
+	}
+	if len(m) > 120 {
+		m = m[:120] + "…"
+	}
+	return " " + m
+}
+
+// HookDelivery reads how the hook's last delivery went. It needs hook
+// administration, so it uses the reader identity, as EnsureWebhook does.
+func (c *Client) HookDelivery(ctx context.Context, repo, id string) (Delivery, error) {
+	var out struct {
+		LastResponse struct {
+			Code    *int    `json:"code"`
+			Status  string  `json:"status"`
+			Message *string `json:"message"`
+		} `json:"last_response"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/hooks/%s", url.PathEscape(id)), nil, &out); err != nil {
+		return Delivery{}, err
+	}
+	d := Delivery{Status: out.LastResponse.Status}
+	if out.LastResponse.Code != nil {
+		d.Code = *out.LastResponse.Code
+	}
+	if out.LastResponse.Message != nil {
+		d.Message = *out.LastResponse.Message
+	}
+	return d, nil
+}
+
+// PingWebhook has GitHub send the hook a ping, so its last delivery is one
+// to the URL it points at now.
+func (c *Client) PingWebhook(ctx context.Context, repo, id string) error {
+	_, err := c.call(ctx, false, repo, http.MethodPost, repoPath(repo, "/hooks/%s/pings", url.PathEscape(id)), nil, nil)
+	return err
 }
