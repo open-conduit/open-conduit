@@ -1218,3 +1218,41 @@ func TestManagementRefusalFollowsThePinnedGeneration(t *testing.T) {
 		t.Fatalf("generation 1 after apply: %q", got)
 	}
 }
+
+// A control with no expected_revision acts on the Work's current revision,
+// as the CLI does without --revision, and its Event records the revision it
+// acted on. A stated revision still has to be current.
+func TestManagementControlWithoutRevisionActsOnCurrent(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	c := h.operatorClient()
+	root, err := c.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "unrevised", CorrelationKey: &client.Key{Source: "ops", ExternalID: "unrevised"}}, "unrevised-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := root.RoutedWorkID
+	w, err := c.Work(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := c.HoldWork(ctx, work, "", "no revision given", "unrevised-hold")
+	if err != nil {
+		t.Fatalf("hold without expected_revision: %v", err)
+	}
+	e, err := c.Event(ctx, held.EventID)
+	if err != nil || e.Data == nil || !strings.Contains(string(e.Data.Data), `"revision":`+w.Revision) {
+		t.Fatalf("hold event does not record the revision it acted on (%s): %+v %v", w.Revision, e.Data, err)
+	}
+	if _, err = c.ReleaseWork(ctx, work, "999", "stale", "unrevised-stale"); !isStatus(err, 409) {
+		t.Fatalf("a stale stated revision was not refused: %v", err)
+	}
+	if _, err = c.ReleaseWork(ctx, work, "current", "bad", "unrevised-bad"); !isStatus(err, 400) || !strings.Contains(err.Error(), "expected_revision") {
+		t.Fatalf("a malformed revision was not refused by name: %v", err)
+	}
+	if _, err = c.CancelWork(ctx, work, "", "no revision given", "unrevised-cancel"); err != nil {
+		t.Fatalf("cancel without expected_revision: %v", err)
+	}
+	if w, err = c.Work(ctx, work); err != nil || w.State != "cancelled" {
+		t.Fatalf("work after cancel: %+v %v", w, err)
+	}
+}

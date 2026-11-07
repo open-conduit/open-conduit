@@ -14,6 +14,19 @@ import (
 // ErrRevision reports a stale expected revision on an operator mutation.
 var ErrRevision = errors.New("revision conflict")
 
+// CurrentRevision, as an operator control's expected revision, acts on
+// whatever revision the record has when the control commits, rather than
+// only on one the operator saw. The control's Event records the revision it
+// acted on.
+const CurrentRevision = domain.Revision(1<<64 - 1)
+
+// ActOnRevision is the revision a control expecting expected acts on, for a
+// record now at current, and whether it may: expected must be current, or
+// CurrentRevision.
+func ActOnRevision(current, expected domain.Revision) (domain.Revision, bool) {
+	return current, expected == CurrentRevision || expected == current
+}
+
 // Control exposes trusted operator actions. Every action commits through the
 // normal accepted-event path; none launches executors or forces wake state.
 type Control struct {
@@ -241,7 +254,8 @@ func (c *Control) CancelWork(ctx context.Context, workID domain.ID, expected dom
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State.Terminal() {
@@ -249,7 +263,7 @@ func (c *Control) CancelWork(ctx context.Context, workID domain.ID, expected dom
 		}
 		// Control checkpoints keep Work in the envelope but use an empty routed
 		// association so earlier runnable input cannot delay fencing.
-		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, "", expected)}, "core.manual.cancel")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, "", acted)}, "core.manual.cancel")
 		if e != nil {
 			return e
 		}
@@ -278,7 +292,8 @@ func (c *Control) CancelExecution(ctx context.Context, executionID domain.ID, ex
 		if e != nil {
 			return e
 		}
-		if x.Revision != expected {
+		acted, ok := ActOnRevision(x.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if x.State.Terminal() {
@@ -288,7 +303,7 @@ func (c *Control) CancelExecution(ctx context.Context, executionID domain.ID, ex
 		if e != nil {
 			return e
 		}
-		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, x.ID, expected)}, "core.manual.cancel")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, x.ID, acted)}, "core.manual.cancel")
 		if e != nil {
 			return e
 		}
@@ -380,7 +395,8 @@ func (c *Control) RetryWork(ctx context.Context, workID domain.ID, expected doma
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State != domain.WorkReady {
@@ -414,7 +430,7 @@ func (c *Control) RetryWork(ctx context.Context, workID domain.ID, expected doma
 				return storage.ErrConflict
 			}
 		}
-		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.retry.v1", reason, "", expected)}, "core.manual.retry")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.retry.v1", reason, "", acted)}, "core.manual.retry")
 		event = accepted.Event.ID
 		return e
 	})
@@ -453,7 +469,8 @@ func (c *Control) Wake(ctx context.Context, workID domain.ID, expected domain.Re
 			}
 			return e
 		}
-		if w.Revision != expected {
+		_, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State != domain.WorkWaiting || waitID == "" {

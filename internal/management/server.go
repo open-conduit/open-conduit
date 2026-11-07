@@ -719,10 +719,16 @@ func (c *call) decode(v any) error {
 	return nil
 }
 
+// parseRevision reads a control's expected_revision: an unsigned decimal
+// string to act only on that revision, or omitted (empty) to act on the
+// current one (runtime.CurrentRevision), as the CLI does without --revision.
 func parseRevision(s string) (domain.Revision, error) {
+	if s == "" {
+		return runtime.CurrentRevision, nil
+	}
 	n, err := strconv.ParseUint(s, 10, 64)
-	if err != nil || s == "" {
-		return 0, fail(400, "malformed", "revisions are unsigned decimal strings")
+	if err != nil || domain.Revision(n) == runtime.CurrentRevision {
+		return 0, fail(400, "malformed", "expected_revision is an unsigned decimal string, or omitted to act on the current revision")
 	}
 	return domain.Revision(n), nil
 }

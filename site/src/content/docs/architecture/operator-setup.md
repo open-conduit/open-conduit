@@ -78,6 +78,8 @@ The GitHub extension contributes `github`, `github-capability`, `github-git-bot`
 
 Every control is a management call with the operator credential and an `Idempotency-Key`. It commits an accepted `core.manual.*` control Event, marked routed as `control`, in the same transaction as its state change. History, `events chain` and telemetry therefore explain it. None launches an executor or forces a wake.
 
+A control's `expected_revision` (of the Work, the execution or the scope) is optional. Given, the control acts only if the record is still at that revision (`409 revision_conflict` otherwise). Omitted, it acts on the record's current revision when it commits (`runtime.CurrentRevision`), as the CLI does without `--revision`. Either way the control Event records the revision it acted on. A value that is not an unsigned decimal string is refused as `400 malformed`, naming the field.
+
 Beside these, `POST /work/{id}/cancel` ends the Work, `POST /executions/{id}/cancel` ends one attempt and holds the Work for an explicit retry, and `POST /work/{id}/interrupt` (below) ends the running attempt and keeps the Work going.
 
 | Endpoint | Semantics |
