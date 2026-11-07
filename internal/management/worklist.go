@@ -364,7 +364,7 @@ func (s *Server) queryWork(tx storage.Tx, f workFilter, ask map[string]bool) (li
 
 // listWork lists Work by the query, with the total that match.
 func (s *Server) listWork(c *call) (int, any, error) {
-	q, err := s.query(c, "work", "scope_id", "state", "kind", "parent_id", "source", "executor", "updated_after", "q", "sort", "with")
+	q, err := s.query(c, "work", listFilters["work"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -399,7 +399,7 @@ func (s *Server) listWork(c *call) (int, any, error) {
 // match the query (state, scope_id, kind): the scopes, sources and latest
 // attempts' executors of every such Work.
 func (s *Server) workFacets(c *call) (int, any, error) {
-	q, err := s.query(c, "work_facets", "scope_id", "state", "kind")
+	q, err := s.query(c, "work_facets", listFilters["work/facets"]...)
 	if err != nil {
 		return 0, nil, err
 	}

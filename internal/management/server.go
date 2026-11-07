@@ -411,6 +411,65 @@ var routes = []route{
 	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
 }
 
+// listFilters are each list endpoint's query filters, by path; every list
+// also takes limit and cursor. APIRoutes reports them.
+var listFilters = map[string][]string{
+	"scopes":      {"parent_id", "enabled"},
+	"work":        {"scope_id", "state", "kind", "parent_id", "source", "executor", "updated_after", "q", "sort", "with"},
+	"work/facets": {"scope_id", "state", "kind"},
+	"events":      {"scope_id", "work_id", "type", "after_sequence", "with"},
+	"executions":  {"scope_id", "work_id", "state"},
+	"waits":       {"scope_id", "work_id", "execution_id", "state"},
+	"artifacts":   {"work_id", "execution_id", "kind"},
+	"runs":        {"scope_id", "work_id", "state", "executor_binding", "executor", "work_kind", "outcome"},
+}
+
+// APIRoute is one management API route as the HTTP API reference lists it:
+// its method and path under /v1 ({id} and the like for a percent-encoded
+// segment), the least operator role it needs ("execution" for the toolbelt,
+// which only an execution's own token reaches), whether it takes an
+// Idempotency-Key ("required", "optional" or ""), and a list's filters.
+type APIRoute struct {
+	Method, Path, Role, IdempotencyKey string
+	Filters                            []string
+}
+
+// APIRoutes lists the management API's routes in the order the server
+// matches them.
+func APIRoutes() []APIRoute {
+	out := make([]APIRoute, 0, len(routes))
+	for i := range routes {
+		rt := &routes[i]
+		parts := make([]string, len(rt.pattern))
+		names := []string{"{id}"}
+		for j, p := range rt.pattern {
+			if p == "*" {
+				if j > 0 && rt.pattern[j-1] == "actions" {
+					names = []string{"{provider}", "{action}"}
+				}
+				p, names = names[0], append(names[1:], "{id}")
+			}
+			parts[j] = p
+		}
+		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern)}
+		if rt.pattern[0] == "toolbelt" {
+			// Served only to an execution's token, on its own socket.
+			e.Role = "execution"
+		}
+		switch {
+		case rt.idem:
+			e.IdempotencyKey = "required"
+		case rt.mutation:
+			e.IdempotencyKey = "optional"
+		}
+		if rt.method == "GET" {
+			e.Filters = listFilters[strings.Join(rt.pattern, "/")]
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
 // applying config, exporting it (it carries secret reference text) and

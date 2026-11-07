@@ -79,7 +79,7 @@ func (s *Server) schema(c *call) (int, any, error) {
 // ---- scopes ----
 
 func (s *Server) listScopes(c *call) (int, any, error) {
-	q, err := s.query(c, "scopes", "parent_id", "enabled")
+	q, err := s.query(c, "scopes", listFilters["scopes"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -170,7 +170,7 @@ func annotationsQuery(c *call) (extensions bool, err error) {
 // ---- events ----
 
 func (s *Server) listEvents(c *call) (int, any, error) {
-	q, err := s.query(c, "events", "scope_id", "work_id", "type", "after_sequence", "with")
+	q, err := s.query(c, "events", listFilters["events"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -408,7 +408,7 @@ func routeOf(tx storage.Tx, a domain.AcceptedEvent, scope domain.ID) (wireEventR
 // ---- executions ----
 
 func (s *Server) listExecutions(c *call) (int, any, error) {
-	q, err := s.query(c, "executions", "scope_id", "work_id", "state")
+	q, err := s.query(c, "executions", listFilters["executions"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -466,7 +466,7 @@ func (s *Server) getExecution(c *call) (int, any, error) {
 // ---- waits ----
 
 func (s *Server) listWaits(c *call) (int, any, error) {
-	q, err := s.query(c, "waits", "scope_id", "work_id", "execution_id", "state")
+	q, err := s.query(c, "waits", listFilters["waits"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -560,7 +560,7 @@ func (s *Server) artifacts(c *call) ([]wireArtifact, []domain.Execution, error) 
 	return out, xs, err
 }
 func (s *Server) listArtifacts(c *call) (int, any, error) {
-	q, err := s.query(c, "artifacts", "work_id", "execution_id", "kind")
+	q, err := s.query(c, "artifacts", listFilters["artifacts"]...)
 	if err != nil {
 		return 0, nil, err
 	}

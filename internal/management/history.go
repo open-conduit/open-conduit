@@ -184,7 +184,7 @@ func toRun(r runtime.Run) wireRun {
 }
 
 func (s *Server) listRuns(c *call) (int, any, error) {
-	q, err := s.query(c, "runs", "scope_id", "work_id", "state", "executor_binding", "executor", "work_kind", "outcome")
+	q, err := s.query(c, "runs", listFilters["runs"]...)
 	if err != nil {
 		return 0, nil, err
 	}

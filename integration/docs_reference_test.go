@@ -36,6 +36,7 @@ func TestDocsReferenceCurrent(t *testing.T) {
 		"cli.md":        cliReference(t),
 		"config.md":     configReference(t),
 		"operations.md": operationsReference(t),
+		"http-api.md":   httpAPIReference(t),
 	}
 	for name, want := range pages {
 		path := filepath.Join(referenceDir, name)
