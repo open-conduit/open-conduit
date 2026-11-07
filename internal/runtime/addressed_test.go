@@ -71,6 +71,38 @@ func TestOperatorEventAddressedToWorkIsItsInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Rebound with nothing queued, the Work's follow-up goes to the binding
+	// the operator moved it to, not the one its last attempt ran on.
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) error {
+		scope, e := tx.Scope("routing-scope")
+		if e != nil {
+			return e
+		}
+		scope.Bindings = append(scope.Bindings, domain.Binding{Name: "other", Executor: "fixture"})
+		if e = tx.PutScope(scope, scope.Revision); e != nil {
+			return e
+		}
+		w, e = tx.Work(work.ID)
+		return e
+	})
+	if _, err = control.Rebind(ctx, work.ID, w.Revision, "other", "move it", "rebind-1"); err != nil {
+		t.Fatal(err)
+	}
+	reply, _, err = control.SubmitEvent(ctx, runtime.ManualEvent{ScopeID: "routing-scope", WorkID: work.ID, Type: "operator.reply", DeliveryID: "reply-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, err = driver.Router.Decision(ctx, reply.Event.ID); err != nil || rec.Reason != runtime.ReasonAddressed || rec.Binding != "other" {
+		t.Fatalf("the follow-up after a rebind did not go to the new binding: %+v %v", rec, err)
+	}
+	if a, err = driver.Scheduler.Start(ctx, work.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = driver.Scheduler.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+
 	// Negative controls: neither of these is addressed input.
 	loose, _, err := control.SubmitEvent(ctx, runtime.ManualEvent{ScopeID: "routing-scope", Type: "operator.reply", DeliveryID: "loose-1"})
 	if err != nil {

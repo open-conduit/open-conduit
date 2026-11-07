@@ -239,21 +239,24 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	return
 }
 
-// addressedBindingInTx is the binding on which an operator Event that names
-// Work w directly (its WorkID) is that Work's input when no route takes it:
-// the binding of w's latest attempt, or of its queued input before it has
-// run. The operator named the Work, so the input needs no route to find it,
-// and it continues on the binding the Work already runs on. Work created
-// without a route (Control.CreateWork) has no route to take follow-up input
-// at all. Any other Event, Work that has ended, and Work with no binding to
-// continue on get "", and routing is as usual.
-func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string, error) {
-	if w == nil || w.State.Terminal() || e.Source != ManualSource || e.WorkID != w.ID || strings.HasPrefix(e.Type, "core.") {
-		return "", nil
-	}
-	xs, err := tx.ListExecutions(w.ID)
+// rebindNamespace holds each Work's last operator rebind (Control.Rebind),
+// so input addressed to it later follows the rebind even when nothing was
+// queued or held for retry when it was rebound.
+const rebindNamespace = "core.routing.rebind"
+
+// rebound is a Work's last rebind: its binding, and the number of the
+// Work's latest attempt then (0 before the first), so a later attempt is
+// told apart without a clock.
+type rebound struct {
+	Binding string
+	After   uint32
+}
+
+// latestAttemptInTx is the Work's attempt with the highest number, or nil.
+func latestAttemptInTx(tx storage.Tx, work domain.ID) (*domain.Execution, error) {
+	xs, err := tx.ListExecutions(work)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var latest *domain.Execution
 	for i := range xs {
@@ -261,8 +264,21 @@ func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string
 			latest = &xs[i]
 		}
 	}
-	if latest != nil {
-		return latest.ExecutorBinding, nil
+	return latest, nil
+}
+
+// addressedBindingInTx is the binding on which an operator Event that names
+// Work w directly (its WorkID) is that Work's input when no route takes it:
+// the binding the Work runs on next. That is its queued input's, else its
+// retry state's (both of which Control.Rebind rewrites), else the newer of
+// its last rebind and its latest attempt's. The operator named the Work, so the input needs no route to find it,
+// and it continues on the binding the Work already runs on. Work created
+// without a route (Control.CreateWork) has no route to take follow-up input
+// at all. Any other Event, Work that has ended, and Work with no binding to
+// continue on get "", and routing is as usual.
+func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string, error) {
+	if w == nil || w.State.Terminal() || e.Source != ManualSource || e.WorkID != w.ID || strings.HasPrefix(e.Type, "core.") {
+		return "", nil
 	}
 	inputs, err := pendingInputs(tx, w.ID)
 	if err != nil {
@@ -273,7 +289,23 @@ func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string
 			return in.Binding, nil
 		}
 	}
-	return "", nil
+	if state, err := retryState(tx, w.ID); err == nil && state.Binding != "" {
+		return state.Binding, nil
+	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return "", err
+	}
+	var last rebound
+	if err := getJSON(tx, rebindNamespace, identity(string(w.ID)), &last); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return "", err
+	}
+	latest, err := latestAttemptInTx(tx, w.ID)
+	if err != nil {
+		return "", err
+	}
+	if latest != nil && (last.Binding == "" || latest.Attempt > last.After) {
+		return latest.ExecutorBinding, nil
+	}
+	return last.Binding, nil
 }
 
 // routeContext fills in s.event's Scope chain and its effective routes and

@@ -161,6 +161,15 @@ func (c *Control) Rebind(ctx context.Context, workID domain.ID, expected domain.
 				return e
 			}
 		}
+		after := rebound{Binding: binding}
+		if latest, er := latestAttemptInTx(tx, w.ID); er != nil {
+			return er
+		} else if latest != nil {
+			after.After = latest.Attempt
+		}
+		if e = putJSON(tx, rebindNamespace, identity(string(w.ID)), after); e != nil {
+			return e
+		}
 		if state, er := retryState(tx, w.ID); er == nil {
 			state.Binding = binding
 			if e = putJSON(tx, retryNamespace, identity(string(w.ID)), state); e != nil {
