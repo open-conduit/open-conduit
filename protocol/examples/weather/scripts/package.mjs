@@ -1,6 +1,7 @@
 // Lays out the installable package in OUT (default dist/weather): the
-// manifest, certification.json and one executable, weather-extension,
-// bundled with esbuild so the package needs nothing but Node to run.
+// manifest, certification.json, one executable, weather-extension, bundled
+// with esbuild so the package needs nothing but Node to run, and a
+// package.json that makes it CommonJS.
 //
 //   node scripts/package.mjs [OUT]
 import { execFileSync } from "node:child_process";
@@ -20,7 +21,9 @@ await build({
   bundle: true,
   platform: "node",
   target: "node22",
-  // CommonJS, so the extensionless file runs whatever package.json is above it.
+  // CommonJS. Node reads an extensionless file as the nearest package.json
+  // says, and one above OUT with "type": "module" would make it ESM, so
+  // the package carries its own.
   format: "cjs",
   conditions: ["development"],
   banner: { js: "#!/usr/bin/env node" },
@@ -28,6 +31,7 @@ await build({
   logLevel: "warning",
 });
 chmodSync(bin, 0o755);
+writeFileSync(join(out, "package.json"), '{ "type": "commonjs" }\n');
 writeFileSync(
   join(out, "open-conduit-extension.json"),
   execFileSync(bin, ["package-manifest"]),

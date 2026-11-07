@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -74,6 +75,10 @@ type RouteRefusal struct {
 
 // MaxRefusalReason bounds each recorded refusal reason, in bytes.
 const MaxRefusalReason = 500
+
+// ReasonAddressed is a RouteRecord's reason when no route took an operator
+// Event and it was queued for the Work it named (addressedBindingInTx).
+const ReasonAddressed = "addressed"
 
 type QueuedInput struct {
 	EventID  domain.ID
@@ -208,6 +213,9 @@ type routeSnapshot struct {
 	work   *domain.Work
 	events []domain.AcceptedEvent
 	routes []domain.Route
+	// addressed is the binding an operator Event naming this Work is input
+	// on when no route takes it (addressedBindingInTx), or "".
+	addressed string
 }
 
 func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
@@ -224,8 +232,80 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
+	if s.addressed, err = addressedBindingInTx(tx, s.event.Event, s.work); err != nil {
+		return
+	}
 	s.events, err = tx.UnroutedEvents(0, 0)
 	return
+}
+
+// rebindNamespace holds each Work's last operator rebind (Control.Rebind),
+// so input addressed to it later follows the rebind even when nothing was
+// queued or held for retry when it was rebound.
+const rebindNamespace = "core.routing.rebind"
+
+// rebound is a Work's last rebind: its binding, and the number of the
+// Work's latest attempt then (0 before the first), so a later attempt is
+// told apart without a clock.
+type rebound struct {
+	Binding string
+	After   uint32
+}
+
+// latestAttemptInTx is the Work's attempt with the highest number, or nil.
+func latestAttemptInTx(tx storage.Tx, work domain.ID) (*domain.Execution, error) {
+	xs, err := tx.ListExecutions(work)
+	if err != nil {
+		return nil, err
+	}
+	var latest *domain.Execution
+	for i := range xs {
+		if latest == nil || xs[i].Attempt > latest.Attempt {
+			latest = &xs[i]
+		}
+	}
+	return latest, nil
+}
+
+// addressedBindingInTx is the binding on which an operator Event that names
+// Work w directly (its WorkID) is that Work's input when no route takes it:
+// the binding the Work runs on next. That is its queued input's, else its
+// retry state's (both of which Control.Rebind rewrites), else the newer of
+// its last rebind and its latest attempt's. The operator named the Work, so the input needs no route to find it,
+// and it continues on the binding the Work already runs on. Work created
+// without a route (Control.CreateWork) has no route to take follow-up input
+// at all. Any other Event, Work that has ended, and Work with no binding to
+// continue on get "", and routing is as usual.
+func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string, error) {
+	if w == nil || w.State.Terminal() || e.Source != ManualSource || e.WorkID != w.ID || strings.HasPrefix(e.Type, "core.") {
+		return "", nil
+	}
+	inputs, err := pendingInputs(tx, w.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, in := range inputs {
+		if in.Binding != "" {
+			return in.Binding, nil
+		}
+	}
+	if state, err := retryState(tx, w.ID); err == nil && state.Binding != "" {
+		return state.Binding, nil
+	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return "", err
+	}
+	var last rebound
+	if err := getJSON(tx, rebindNamespace, identity(string(w.ID)), &last); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return "", err
+	}
+	latest, err := latestAttemptInTx(tx, w.ID)
+	if err != nil {
+		return "", err
+	}
+	if latest != nil && (last.Binding == "" || latest.Attempt > last.After) {
+		return latest.ExecutorBinding, nil
+	}
+	return last.Binding, nil
 }
 
 // routeContext fills in s.event's Scope chain and its effective routes and
@@ -330,6 +410,10 @@ type routePlan struct {
 	// refusals are the routes tried before one matched, or all of them
 	// when none did, with each handler's reason.
 	refusals []RouteRefusal
+	// addressed says no route took the Event and it is its Work's input
+	// because the operator addressed it there; selected then names no
+	// route, only the Work's binding.
+	addressed bool
 }
 
 // binding resolves the whole nearest Scope binding before looking up its
@@ -405,6 +489,12 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(doma
 			d.AttachKeys = append([]domain.CorrelationKey(nil), d.AttachKeys...)
 			p.decision = d
 			break
+		}
+	}
+	if p.selected == nil && s.addressed != "" {
+		// A binding config has since removed leaves the Event unmatched.
+		if _, err := r.binding(s.scope, s.addressed); err == nil {
+			p.selected, p.addressed = &domain.Route{Binding: s.addressed}, true
 		}
 	}
 	return
@@ -606,6 +696,7 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 					}
 					// Scope metadata is immutable; a key attachment cannot grant
 					// authority over input accepted into another Scope.
+					var addressed string
 					e := r.transact(ctx, nil, func(tx storage.Tx) error {
 						scope, e := scopeForEvent(tx, a)
 						if e != nil {
@@ -626,7 +717,8 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 								return storage.ErrInvalid
 							}
 						}
-						return nil
+						addressed, e = addressedBindingInTx(tx, a.Event, projected)
+						return e
 					})
 					if e != nil {
 						return e
@@ -634,6 +726,7 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 					bs := s
 					bs.event = a
 					bs.work = projected
+					bs.addressed = addressed
 					bp, e := r.evaluate(ctx, bs, nil)
 					if e != nil {
 						return e
@@ -754,6 +847,9 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 			// isn't a route failure: the input waits, uncounted, until
 			// the attempt ends and it queues.
 			return err
+		}
+		if p.addressed {
+			rec.Reason = ReasonAddressed
 		}
 		if rec.Policy != "drop" {
 			input := QueuedInput{p.event.Event.ID, p.event.Sequence, p.selected.Binding}

@@ -123,7 +123,8 @@ func (c *Control) Rebind(ctx context.Context, workID domain.ID, expected domain.
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State != domain.WorkReady {
@@ -150,7 +151,7 @@ func (c *Control) Rebind(ctx context.Context, workID domain.ID, expected domain.
 				previous = append(previous, in.Binding)
 			}
 		}
-		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.rebind", operatorData("core.manual.rebind.v1", operatorPayload{Reason: reason, Revision: expected, Binding: binding, Previous: previous, Generation: c.scheduler.options.Generation}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.rebind", operatorData("core.manual.rebind.v1", operatorPayload{Reason: reason, Revision: acted, Binding: binding, Previous: previous, Generation: c.scheduler.options.Generation}))
 		if e != nil {
 			return e
 		}
@@ -159,6 +160,15 @@ func (c *Control) Rebind(ctx context.Context, workID domain.ID, expected domain.
 			if e = putJSON(tx, queueNamespace, queueKey(w.ID, in.Sequence), in); e != nil {
 				return e
 			}
+		}
+		after := rebound{Binding: binding}
+		if latest, er := latestAttemptInTx(tx, w.ID); er != nil {
+			return er
+		} else if latest != nil {
+			after.After = latest.Attempt
+		}
+		if e = putJSON(tx, rebindNamespace, identity(string(w.ID)), after); e != nil {
+			return e
 		}
 		if state, er := retryState(tx, w.ID); er == nil {
 			state.Binding = binding
@@ -194,7 +204,8 @@ func (c *Control) HoldWork(ctx context.Context, workID domain.ID, expected domai
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State.Terminal() || w.State == domain.WorkRunning {
@@ -208,7 +219,7 @@ func (c *Control) HoldWork(ctx context.Context, workID domain.ID, expected domai
 		if e = noLiveAttempt(tx, w.ID, true); e != nil {
 			return e
 		}
-		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.hold", operatorData("core.manual.hold.v1", operatorPayload{Reason: reason, Revision: expected}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.hold", operatorData("core.manual.hold.v1", operatorPayload{Reason: reason, Revision: acted}))
 		if e != nil {
 			return e
 		}
@@ -238,7 +249,8 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		h, held, e := HoldInTx(tx, w.ID)
@@ -249,7 +261,7 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		} else if h.Kind == HoldKindGate {
 			return ErrGateHold
 		}
-		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: expected}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: acted}))
 		if e != nil {
 			return e
 		}
@@ -305,7 +317,8 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 		if e != nil {
 			return e
 		}
-		if scope.Revision != expected {
+		acted, ok := ActOnRevision(scope.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		rows, e := tx.List("core.ingress.registration", "")
@@ -332,7 +345,7 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 			sources = append(sources, state.Name)
 			states = append(states, state)
 		}
-		accepted, _, e := c.acceptInTx(ctx, tx, scopeID, ManualEvent{DeliveryID: delivery, Data: operatorData("core.manual.reconcile.v1", operatorPayload{Revision: expected, Sources: sources})}, "core.manual.reconcile")
+		accepted, _, e := c.acceptInTx(ctx, tx, scopeID, ManualEvent{DeliveryID: delivery, Data: operatorData("core.manual.reconcile.v1", operatorPayload{Revision: acted, Sources: sources})}, "core.manual.reconcile")
 		if e != nil {
 			return e
 		}
@@ -420,7 +433,8 @@ func (c *Control) InterruptWork(ctx context.Context, workID domain.ID, expected 
 		if e != nil {
 			return e
 		}
-		if w.Revision != expected {
+		acted, ok := ActOnRevision(w.Revision, expected)
+		if !ok {
 			return ErrRevision
 		}
 		if w.State != domain.WorkRunning {
@@ -452,7 +466,7 @@ func (c *Control) InterruptWork(ctx context.Context, workID domain.ID, expected 
 		if _, ok := executor.(extension.InterruptExecutor); !ok || !attempt.Capabilities.Interrupt {
 			return ErrInterruptUnsupported
 		}
-		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.interrupt.v1", reason, target.ID, expected)}, "core.manual.interrupt")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.interrupt.v1", reason, target.ID, acted)}, "core.manual.interrupt")
 		if e != nil {
 			return e
 		}

@@ -184,7 +184,7 @@ func toRun(r runtime.Run) wireRun {
 }
 
 func (s *Server) listRuns(c *call) (int, any, error) {
-	q, err := s.query(c, "runs", "scope_id", "work_id", "state", "executor_binding", "executor", "work_kind", "outcome")
+	q, err := s.query(c, "runs", listFilters["runs"]...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -367,7 +367,7 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 	case "default":
 		cfg.Status, cfg.Code, cfg.Detail = runtime.CheckInfo, "default_config", "there is no config file: generation "+strconv.FormatUint(generation, 10)+" is the default configuration, what the first-run setup writes into an empty file; write a config file and apply it"
 	case "missing":
-		cfg.Status, cfg.Code, cfg.Detail = runtime.CheckWarn, "disk_missing", "the config file is missing; generation "+strconv.FormatUint(generation, 10)+" keeps running, and the next apply writes the file"
+		cfg.Status, cfg.Code, cfg.Detail = runtime.CheckWarn, "disk_missing", "the config file is missing; generation "+strconv.FormatUint(generation, 10)+" keeps running, and the next apply writes the file; open-conduit config export writes this one back"
 	case "unreadable":
 		cfg.Status, cfg.Code, cfg.Detail = runtime.CheckWarn, "disk_unreadable", "the config file cannot be read safely; generation "+strconv.FormatUint(generation, 10)+" keeps running"
 	}

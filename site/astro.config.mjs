@@ -71,6 +71,7 @@ export default defineConfig({
 						{ label: 'Command line', slug: 'reference/cli' },
 						{ label: 'Configuration', slug: 'reference/config' },
 						{ label: 'Toolbelt operations', slug: 'reference/operations' },
+						{ label: 'Management HTTP API', slug: 'reference/http-api' },
 						{ label: 'Extensions', slug: 'reference/extensions' },
 						{ label: 'Platforms and files', slug: 'reference/platforms' },
 						{ label: 'Usage telemetry', slug: 'reference/telemetry' },

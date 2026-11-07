@@ -1218,3 +1218,96 @@ func TestManagementRefusalFollowsThePinnedGeneration(t *testing.T) {
 		t.Fatalf("generation 1 after apply: %q", got)
 	}
 }
+
+// A control with no expected_revision acts on the Work's current revision,
+// as the CLI does without --revision, and its Event records the revision it
+// acted on. A stated revision still has to be current.
+func TestManagementControlWithoutRevisionActsOnCurrent(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	c := h.operatorClient()
+	root, err := c.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "unrevised", CorrelationKey: &client.Key{Source: "ops", ExternalID: "unrevised"}}, "unrevised-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := root.RoutedWorkID
+	w, err := c.Work(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := c.HoldWork(ctx, work, "", "no revision given", "unrevised-hold")
+	if err != nil {
+		t.Fatalf("hold without expected_revision: %v", err)
+	}
+	e, err := c.Event(ctx, held.EventID)
+	if err != nil || e.Data == nil || !strings.Contains(string(e.Data.Data), `"revision":`+w.Revision) {
+		t.Fatalf("hold event does not record the revision it acted on (%s): %+v %v", w.Revision, e.Data, err)
+	}
+	if _, err = c.ReleaseWork(ctx, work, "999", "stale", "unrevised-stale"); !isStatus(err, 409) {
+		t.Fatalf("a stale stated revision was not refused: %v", err)
+	}
+	if _, err = c.ReleaseWork(ctx, work, "current", "bad", "unrevised-bad"); !isStatus(err, 400) || !strings.Contains(err.Error(), "expected_revision") {
+		t.Fatalf("a malformed revision was not refused by name: %v", err)
+	}
+	if _, err = c.CancelWork(ctx, work, "", "no revision given", "unrevised-cancel"); err != nil {
+		t.Fatalf("cancel without expected_revision: %v", err)
+	}
+	if w, err = c.Work(ctx, work); err != nil || w.State != "cancelled" {
+		t.Fatalf("work after cancel: %+v %v", w, err)
+	}
+}
+
+// config export writes the running generation back to a missing config
+// file, with secret references as reference text; applying the file is no
+// change. It never replaces a file, and only an admin may export.
+func TestManagementConfigExportRestoresAMissingFile(t *testing.T) {
+	h := newManagementHarness(t)
+	before, err := os.ReadFile(h.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(h.configPath); err != nil {
+		t.Fatal(err)
+	}
+	snap, gen := h.configs.Current()
+	out, errOut, code := h.cli("config", "export")
+	if code != 0 || !strings.Contains(out, h.configPath) {
+		t.Fatalf("export: %d %q %s", code, out, errOut)
+	}
+	exported, err := os.ReadFile(h.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(h.configPath); info.Mode().Perm() != 0o600 {
+		t.Fatalf("exported file mode %v", info.Mode())
+	}
+	if strings.Contains(string(before), "secret_refs") && !strings.Contains(string(exported), "secret_refs") {
+		t.Fatalf("secret references dropped:\n%s", exported)
+	}
+	var applied client.ConfigApplied
+	h.mustCLI(&applied, "config", "apply", h.configPath)
+	if s, g := h.configs.Current(); s.Hash != snap.Hash {
+		t.Fatalf("the exported file is another configuration: generation %d -> %d (%+v)", gen, g, applied)
+	}
+	if _, errOut, code = h.cli("config", "export"); code == 0 || !strings.Contains(errOut, "exists") {
+		t.Fatalf("export replaced an existing file: %d %s", code, errOut)
+	}
+	printed, _, code := h.cli("config", "export", "-")
+	if code != 0 || printed != string(exported) {
+		t.Fatalf("export - printed %q", printed)
+	}
+
+	path := filepath.Join(h.state, "viewer.token")
+	h.mustCLI(nil, "auth", "add", "viewer", "--role", "view", "--out", path)
+	f, err := client.ReadTokenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer, err := client.New(h.endpoint, f.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = viewer.ExportConfig(context.Background()); !isStatus(err, 403) {
+		t.Fatalf("a view operator exported the config: %v", err)
+	}
+}

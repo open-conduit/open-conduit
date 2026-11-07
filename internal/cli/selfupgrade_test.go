@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 )
@@ -58,7 +59,7 @@ func TestUpgrade(t *testing.T) {
 			}
 			u := &upgrade.Updater{Executable: filepath.Join(bin, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "amd64", HTTP: srv.Client()}
 			fake := &fakeServiceManager{}
-			host := &ServiceHost{GOOS: goos, Executable: u.Executable, UID: 501, Run: fake.run, LookPath: func(string) (string, error) { return "/usr/bin/x", nil }}
+			host := &ServiceHost{GOOS: goos, Executable: u.Executable, UID: 501, Run: fake.run, Answers: func() bool { return fake.running }, Sleep: func(time.Duration) {}, LookPath: func(string) (string, error) { return "/usr/bin/x", nil }}
 			env := map[string]string{"HOME": root}
 			run := func(version string, args ...string) (string, string, int) {
 				var out, errOut bytes.Buffer

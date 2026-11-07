@@ -659,7 +659,7 @@ func (o *operator) artifacts(args []string) int {
 }
 
 func (o *operator) config(args []string) int {
-	const configUsage = "expected config check|path|show|get|set|unset|include|edit (local file) or config validate|apply FILE (running daemon)"
+	const configUsage = "expected config check|path|show|get|set|unset|include|edit (local file) or config validate|apply FILE|export [FILE] (running daemon)"
 	if len(args) == 0 {
 		return usageError(o.errOut, configUsage)
 	}
@@ -668,6 +668,9 @@ func (o *operator) config(args []string) int {
 	}
 	if code, ok := o.localConfig(args); ok {
 		return code
+	}
+	if args[0] == "export" {
+		return o.exportConfig(args[1:])
 	}
 	f := newFlags(args[0], "generation", "key")
 	pos, err := f.parse(args[1:])
@@ -832,4 +835,46 @@ func writePrivateJSON(path string, v any) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+// exportConfig writes the running daemon's active generation as config file
+// text to FILE (the daemon's config file when omitted; - prints it), for
+// when the file is gone or out of step. Secret references are written as
+// reference text, never values. It never replaces an existing file.
+func (o *operator) exportConfig(args []string) int {
+	f := newFlags("export", "file")
+	pos, err := f.parse(args)
+	if err != nil || len(pos) > 1 || len(pos) == 1 && f.get("file") != "" {
+		return usageError(o.errOut, "expected config export [FILE]")
+	}
+	path := f.get("file")
+	if len(pos) == 1 {
+		path = pos[0]
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	out, err := c.ExportConfig(cx)
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	if path == "-" {
+		_, _ = io.WriteString(o.out, out.ConfigText)
+		return 0
+	}
+	if path == "" {
+		path = out.Path
+	}
+	path = o.abs(path)
+	if _, err := os.Stat(path); err == nil {
+		return o.emit(nil, fmt.Errorf("%s exists; export to another file (or - to print it), or move it aside first", path))
+	}
+	if err = writePrivate(path, []byte(out.ConfigText)); err != nil {
+		return o.emit(nil, fmt.Errorf("could not write %s: %w", path, err))
+	}
+	fmt.Fprintf(o.out, "wrote generation %s (%s) to %s\n", out.Generation, out.Hash, path)
+	return 0
 }

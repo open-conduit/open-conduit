@@ -378,6 +378,7 @@ var routes = []route{
 	{"GET", []string{"runs", "*", "live"}, false, false, (*Server).liveRun},
 	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
 	{"GET", []string{"config"}, false, false, (*Server).config},
+	{"GET", []string{"config", "export"}, false, false, (*Server).exportConfig},
 	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
 	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},
 	{"POST", []string{"events"}, true, true, (*Server).postEvent},
@@ -410,16 +411,79 @@ var routes = []route{
 	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
 }
 
+// listFilters are each list endpoint's query filters, by path; every list
+// also takes limit and cursor. APIRoutes reports them.
+var listFilters = map[string][]string{
+	"scopes":      {"parent_id", "enabled"},
+	"work":        {"scope_id", "state", "kind", "parent_id", "source", "executor", "updated_after", "q", "sort", "with"},
+	"work/facets": {"scope_id", "state", "kind"},
+	"events":      {"scope_id", "work_id", "type", "after_sequence", "with"},
+	"executions":  {"scope_id", "work_id", "state"},
+	"waits":       {"scope_id", "work_id", "execution_id", "state"},
+	"artifacts":   {"work_id", "execution_id", "kind"},
+	"runs":        {"scope_id", "work_id", "state", "executor_binding", "executor", "work_kind", "outcome"},
+}
+
+// APIRoute is one management API route as the HTTP API reference lists it:
+// its method and path under /v1 ({id} and the like for a percent-encoded
+// segment), the least operator role it needs ("execution" for the toolbelt,
+// which only an execution's own token reaches), whether it takes an
+// Idempotency-Key ("required", "optional" or ""), and a list's filters.
+type APIRoute struct {
+	Method, Path, Role, IdempotencyKey string
+	Filters                            []string
+}
+
+// APIRoutes lists the management API's routes in the order the server
+// matches them.
+func APIRoutes() []APIRoute {
+	out := make([]APIRoute, 0, len(routes))
+	for i := range routes {
+		rt := &routes[i]
+		parts := make([]string, len(rt.pattern))
+		names := []string{"{id}"}
+		for j, p := range rt.pattern {
+			if p == "*" {
+				if j > 0 && rt.pattern[j-1] == "actions" {
+					names = []string{"{provider}", "{action}"}
+				}
+				p, names = names[0], append(names[1:], "{id}")
+			}
+			parts[j] = p
+		}
+		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern)}
+		if rt.pattern[0] == "toolbelt" {
+			// Served only to an execution's token, on its own socket.
+			e.Role = "execution"
+		}
+		switch {
+		case rt.idem:
+			e.IdempotencyKey = "required"
+		case rt.mutation:
+			e.IdempotencyKey = "optional"
+		}
+		if rt.method == "GET" {
+			e.Filters = listFilters[strings.Join(rt.pattern, "/")]
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
-// applying config and issuing operators' credentials need admin; every
-// other control needs operate. Revoking another operator's credential
-// needs admin too, which revoke checks itself.
+// applying config, exporting it (it carries secret reference text) and
+// issuing operators' credentials need admin; every other control needs
+// operate. Revoking another operator's credential needs admin too, which
+// revoke checks itself.
 func requiredRole(rt *route, parts []string) string {
+	path := strings.Join(rt.pattern, "/")
+	if path == "config/export" {
+		return RoleAdmin
+	}
 	if !rt.mutation {
 		return RoleView
 	}
-	path := strings.Join(rt.pattern, "/")
 	switch path {
 	case "scopes/*/route/trace", "config/validate":
 		return RoleView
@@ -719,10 +783,16 @@ func (c *call) decode(v any) error {
 	return nil
 }
 
+// parseRevision reads a control's expected_revision: an unsigned decimal
+// string to act only on that revision, or omitted (empty) to act on the
+// current one (runtime.CurrentRevision), as the CLI does without --revision.
 func parseRevision(s string) (domain.Revision, error) {
+	if s == "" {
+		return runtime.CurrentRevision, nil
+	}
 	n, err := strconv.ParseUint(s, 10, 64)
-	if err != nil || s == "" {
-		return 0, fail(400, "malformed", "revisions are unsigned decimal strings")
+	if err != nil || domain.Revision(n) == runtime.CurrentRevision {
+		return 0, fail(400, "malformed", "expected_revision is an unsigned decimal string, or omitted to act on the current revision")
 	}
 	return domain.Revision(n), nil
 }
