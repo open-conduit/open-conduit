@@ -347,14 +347,23 @@ func (s *Server) TokenApp(token string) (string, bool) {
 
 // gitAllowed reports whether token may read (or, with push, write) repo's
 // git data: an accepted token, or a valid installation token whose scope
-// covers repo, with contents: write for a push.
+// covers repo, with contents: write for a push, and for a push no longer
+// propagating (SetGitPropagation).
 func (s *Server) gitAllowed(token, repo string, push bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.gitAllowedLocked(token, repo, push)
+}
+
+// gitAllowedLocked is gitAllowed with s.mu held.
+func (s *Server) gitAllowedLocked(token, repo string, push bool) bool {
 	if s.tokens[token] {
 		return true
 	}
 	if _, ok := s.installs[token]; !ok {
+		return false
+	}
+	if push && s.now.Before(s.minted[token].Add(s.gitLag)) {
 		return false
 	}
 	scope, scoped := s.scopes[token]
@@ -438,7 +447,6 @@ func (s *Server) GitHandler(root, git string) http.Handler {
 
 var reGitPath = regexp.MustCompile(`^/([^/]+/[^/]+?)\.git/(info/refs|git-upload-pack|git-receive-pack)$`)
 
-// SetTokenTTL sets installation token lifetime.
 // SetGitPropagation makes the git service refuse an installation token for
 // push (403, "Permission to <repo>.git denied") until d after it was minted
 // by the fake's clock, as GitHub can while it propagates a new token.
@@ -448,6 +456,7 @@ func (s *Server) SetGitPropagation(d time.Duration) { s.mu.Lock(); s.gitLag = d;
 // first request of a git push.
 func (s *Server) GitPushChecks() int { s.mu.Lock(); defer s.mu.Unlock(); return s.gitPushAsk }
 
+// SetTokenTTL sets installation token lifetime.
 func (s *Server) SetTokenTTL(d time.Duration) { s.mu.Lock(); s.tokenTTL = d; s.mu.Unlock() }
 
 // InstallationTokensIssued counts minted installation tokens.
@@ -1204,14 +1213,13 @@ func (s *Server) GitPushable(tok string) bool {
 }
 
 // pushStatus is the git service's answer to a push to repo signed in with
-// tok. s.mu is held.
+// tok: 401 for a token it doesn't know, 403 for one gitAllowed refuses the
+// push. s.mu is held.
 func (s *Server) pushStatus(tok, repo string) int {
-	_, install := s.installs[tok]
-	if tok == "" || !s.tokens[tok] && !install {
+	if _, install := s.installs[tok]; tok == "" || !s.tokens[tok] && !install {
 		return http.StatusUnauthorized
 	}
-	scope, scoped := s.scopes[tok]
-	if !strings.EqualFold(repo, s.Repo) || !s.readAllowed(tok, repo) || scoped && scope.Permissions != nil && permLevel[scope.Permissions["contents"]] < permLevel["write"] || install && s.now.Before(s.minted[tok].Add(s.gitLag)) {
+	if !s.gitAllowedLocked(tok, repo, true) {
 		return http.StatusForbidden
 	}
 	return http.StatusOK
