@@ -606,7 +606,8 @@ func TestProductionToolbeltGates(t *testing.T) {
 // classifies (an operation the binding's playbook declares, which config
 // doesn't grant) records why, so it reaches the operator as configuration
 // drift rather than as the agent reaching outside its role. Negative
-// control: an unclassified refusal and a granted call carry no reason.
+// control: an operation outside the grant the host doesn't classify is
+// only not_granted, and a granted call carries no reason.
 func TestProductionToolbeltRecordsConfigDrift(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
@@ -635,13 +636,48 @@ func TestProductionToolbeltRecordsConfigDrift(t *testing.T) {
 	}
 	want := map[string]string{
 		"tracker.edit":   "toolbelt.rejected unauthorized config_drift",
-		"tracker.delete": "toolbelt.rejected unauthorized ",
+		"tracker.delete": "toolbelt.rejected unauthorized not_granted",
 		"fixture.echo":   "toolbelt.called ok ",
 	}
 	for op, w := range want {
 		if got[op] != w {
 			t.Errorf("%s: %q, want %q", op, got[op], w)
 		}
+	}
+}
+
+// TestProductionToolbeltRecordsLapsedLease: a call refused because the
+// execution's lease lapsed under it (a host that slept or stalled past the
+// lease) records lease_lost, and one with the token recovery then revoked
+// records token_ended, so the record says the authority ended rather than
+// that the caller reached outside it. A lapsed lease is never configuration drift,
+// even for an operation the host would classify as drift. The caller still
+// sees only ErrUnauthorized.
+func TestProductionToolbeltRecordsLapsedLease(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	h.refusal = func(runtime.AuthorityCheck) string { return runtime.RefusalConfigDrift }
+	echo := extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}}
+	h.f.Clock.Advance(conformance.RuntimeLease + time.Second)
+	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrUnauthorized) || err.Error() != extension.ErrUnauthorized.Error() {
+		t.Fatalf("a call under a lapsed lease: %v, want the bare ErrUnauthorized", err)
+	}
+	if _, err := h.scheduler.Recover(ctx, h.attempt.Lease.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("a superseded token: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var refusals []string
+	for _, r := range *h.records {
+		if r.Name == "toolbelt.rejected" {
+			refusals = append(refusals, r.Attributes["toolbelt.refusal"])
+		}
+	}
+	if strings.Join(refusals, ",") != "lease_lost,token_ended" {
+		t.Fatalf("refusals %q, want lease_lost for the lapsed lease, then token_ended for the token recovery revoked", refusals)
 	}
 }
 
