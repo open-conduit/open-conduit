@@ -241,11 +241,15 @@ func TestWatchPublicTrustsADeliveryOverFailingProbes(t *testing.T) {
 		defer close(done)
 		d.watchPublic(ctx, "cloudflared", nil, func(cause string) { deaths <- cause })
 	}()
+	// The second tick is taken only once the first one's probe has failed
+	// and started the run, so the delivery lands inside it rather than
+	// racing its start.
+	tick <- time.Time{}
 	tick <- time.Time{}
 	d.hooks.mu.Lock()
 	d.hooks.delivered = d.now()
 	d.hooks.mu.Unlock()
-	for range tunnelProbeFailures {
+	for range tunnelProbeFailures - 1 {
 		tick <- time.Time{}
 	}
 	// Each tick is taken only once the last one's probe is done.

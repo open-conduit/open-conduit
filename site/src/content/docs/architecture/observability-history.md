@@ -50,7 +50,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | `timer.armed`, `timer.fired`, `timer.cancelled` | Timers, with fire and rearm as one commit | timer ID, event type, fire time, recurring |
 | `wait.registered`, `wait.woken`, `wait.cancelled` | Waits | types, key count, timeout timer, wake winner ID and type |
 | `toolbelt.declared` | Declared wait or outcome | declaration kind |
-| `toolbelt.called`, `toolbelt.rejected` | Toolbelt | operation, safe result code |
+| `toolbelt.called`, `toolbelt.rejected` | Toolbelt | operation, safe result code, and for a refusal which check refused it (`toolbelt.refusal`, [toolbelt](../toolbelt-management/)) |
 | `ingress.scan_started`, `_page`, `_completed`, `_partial`, `_failed` | Reconcile scan ledger | source, scan ID, safe error code, failures, next due; for `provider_failed`, the provider's failure class, code and bounded message (`ingress.error_class`, `ingress.error_code`, `ingress.error_message`) |
 | `provider.timing_out`, `provider.answering` | An action provider's actions or panels call, or an annotating extension's annotations call, starts timing out across requests, or answers again (management's provider health) | `provider.name`, `provider.call` (`actions`, `panels` or `annotations`), `provider.since`, `provider.timeouts`, and for `timing_out` the time it is next asked (`provider.retry_at`); correlated with the scope and Work whose view saw it |
 

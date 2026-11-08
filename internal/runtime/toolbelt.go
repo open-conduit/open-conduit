@@ -53,6 +53,45 @@ type ToolbeltGrant struct {
 // so the operator's configuration needs the fix, not the agent.
 const RefusalConfigDrift = "config_drift"
 
+// The other toolbelt.refusal values: which authority check refused a call
+// whose credential is genuine, so a refusal's record says whether the
+// caller reached outside its grant or its authority lapsed under it.
+const (
+	// RefusalLeaseLost: the execution's lease lapsed or moved to a newer
+	// epoch (a host that stalled or slept past the lease, then recovery),
+	// so the segment the token was issued to no longer holds the Work.
+	RefusalLeaseLost = "lease_lost"
+	// RefusalTokenEnded: the token was revoked (its segment ended, or
+	// recovery superseded it with a newer epoch's) or is past its expiry.
+	RefusalTokenEnded = "token_ended"
+	// RefusalNotRunning: the execution or its Work is no longer running.
+	RefusalNotRunning = "not_running"
+	// RefusalNotGranted: the token's grant, or the current ceiling, doesn't
+	// cover the operation, or the call names another execution's Work.
+	RefusalNotGranted = "not_granted"
+)
+
+// unauthorized is extension.ErrUnauthorized with the check that refused
+// (a Refusal* reason) for the call's toolbelt.rejected record. Callers see
+// only ErrUnauthorized.
+type unauthorized string
+
+func (u unauthorized) Error() string { return extension.ErrUnauthorized.Error() }
+func (u unauthorized) Unwrap() error { return extension.ErrUnauthorized }
+
+// refusalReason is the Refusal* reason an unauthorized refusal carries, or
+// "".
+func refusalReason(err error) string {
+	var u unauthorized
+	if errors.As(err, &u) {
+		return string(u)
+	}
+	if errors.Is(err, storage.ErrLeaseLost) {
+		return RefusalLeaseLost
+	}
+	return ""
+}
+
 type ToolbeltOptions struct {
 	CausalLimits CausalLimits
 	// Grant selects the pinned allowlist from trusted config when the scheduler
@@ -582,7 +621,7 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	}
 	a := record.Authority
 	if record.Revoked || !t.now().Before(a.ExpiresAt) {
-		return record, x, w, state, extension.ErrUnauthorized
+		return record, x, w, state, unauthorized(RefusalTokenEnded)
 	}
 	var err error
 	if x, err = tx.Execution(a.ExecutionID); err != nil {
@@ -594,8 +633,14 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	if state, err = attemptState(tx, x.ID); err != nil {
 		return record, x, w, state, err
 	}
-	if x.State != domain.ExecutionRunning || x.Lease.Epoch != a.Lease.Epoch || x.Lease.Owner != a.Lease.Owner || !t.now().Before(x.Lease.ExpiresAt) || state.Epoch != a.Lease.Epoch || x.WorkID != a.WorkID || w.ScopeID != a.ScopeID || w.State != domain.WorkRunning {
+	if x.WorkID != a.WorkID || w.ScopeID != a.ScopeID {
 		return record, x, w, state, extension.ErrUnauthorized
+	}
+	if x.Lease.Epoch != a.Lease.Epoch || x.Lease.Owner != a.Lease.Owner || !t.now().Before(x.Lease.ExpiresAt) || state.Epoch != a.Lease.Epoch {
+		return record, x, w, state, unauthorized(RefusalLeaseLost)
+	}
+	if x.State != domain.ExecutionRunning || w.State != domain.WorkRunning {
+		return record, x, w, state, unauthorized(RefusalNotRunning)
 	}
 	if state.Declaration != nil {
 		// The token is genuine and its segment still holds the lease, but it
@@ -638,8 +683,16 @@ func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operatio
 		name = "toolbelt.rejected"
 	}
 	rec := observability.Record{Name: name, At: t.now(), Correlation: observability.Correlation{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, ExecutorBinding: record.Binding}, Attributes: map[string]string{"toolbelt.operation": operation, "toolbelt.result": callCode(callErr), "lease.epoch": strconv.FormatUint(a.Lease.Epoch, 10)}}
-	if t.options.Refusal != nil && rec.Attributes["toolbelt.result"] == "unauthorized" {
-		if kind := t.options.Refusal(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: operation}); kind != "" {
+	if rec.Attributes["toolbelt.result"] == "unauthorized" {
+		// Only a refusal of the grant can be the configuration lagging the
+		// playbook; a lapsed lease or an ended token is not drift.
+		kind := refusalReason(callErr)
+		if t.options.Refusal != nil && (kind == "" || kind == RefusalNotGranted) {
+			if drift := t.options.Refusal(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: operation}); drift != "" {
+				kind = drift
+			}
+		}
+		if kind != "" {
 			rec.Attributes["toolbelt.refusal"] = kind
 		}
 	}
@@ -689,7 +742,9 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 // response fail authorization and must be resolved by inspection.
 func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c extension.ToolCall) (out extension.ToolResult, err error) {
 	defer func() {
-		if errors.Is(err, storage.ErrLeaseLost) || errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, storage.ErrLeaseLost) {
+			err = unauthorized(RefusalLeaseLost)
+		} else if errors.Is(err, storage.ErrNotFound) {
 			err = extension.ErrUnauthorized
 		}
 	}()
@@ -706,18 +761,21 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		defer func() { t.observeCall(ctx, record, c.Operation, requestID, gatedBy, err) }()
 	}
 	a := record.Authority
-	if record.Revoked || !t.now().Before(a.ExpiresAt) || c.ScopeID != "" && c.ScopeID != a.ScopeID || c.WorkID != "" && c.WorkID != a.WorkID || c.ExecutionID != "" && c.ExecutionID != a.ExecutionID {
-		return out, extension.ErrUnauthorized
+	if record.Revoked || !t.now().Before(a.ExpiresAt) {
+		return out, unauthorized(RefusalTokenEnded)
+	}
+	if c.ScopeID != "" && c.ScopeID != a.ScopeID || c.WorkID != "" && c.WorkID != a.WorkID || c.ExecutionID != "" && c.ExecutionID != a.ExecutionID {
+		return out, unauthorized(RefusalNotGranted)
 	}
 	if !t.declared(c.Operation) {
 		return out, extension.ErrUndeclared
 	}
 	if !contains(a.Operations, c.Operation) {
-		return out, extension.ErrUnauthorized
+		return out, unauthorized(RefusalNotGranted)
 	}
 	if t.options.Authorize != nil {
 		if e := t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: c.Operation}); e != nil {
-			return out, extension.ErrUnauthorized
+			return out, unauthorized(RefusalNotGranted)
 		}
 	}
 	digest := TokenDigest(token)

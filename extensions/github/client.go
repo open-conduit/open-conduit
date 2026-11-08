@@ -48,6 +48,10 @@ type ClientOptions struct {
 	// HTTP supplies the base round tripper/timeout (default http.DefaultClient).
 	HTTP *http.Client
 	Now  func() time.Time
+	// Sleep waits d or until ctx ends (default a timer). GitToken waits
+	// with it between its checks that GitHub's git service accepts a
+	// token it has just minted.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 // Client is one GitHub connection. Reads use the sign-in identity; writes use
@@ -59,6 +63,7 @@ type Client struct {
 	base           *http.Client // ClientOptions.HTTP, which writer clients share
 	tr             *transport
 	now            func() time.Time
+	sleep          func(context.Context, time.Duration) error
 	who            atomic.Pointer[signIn] // swapped whole by Reconfigure
 }
 
@@ -84,7 +89,10 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 	if base == nil {
 		base = &http.Client{Timeout: 30 * time.Second}
 	}
-	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now}
+	if o.Sleep == nil {
+		o.Sleep = sleep
+	}
+	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now, sleep: o.Sleep}
 	c.tr = newTransport(base.Transport, u.Host, o.Now)
 	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if u.Host == "api.github.com" {
@@ -181,7 +189,87 @@ func (c *Client) GitToken(ctx context.Context, repo string, also []Permission) (
 			}
 		}
 	}
-	return app.scoped(ctx, repo, perms)
+	tok, expires, err := app.scoped(ctx, repo, perms)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if err := c.gitAccepts(ctx, repo, tok); err != nil {
+		// Nobody will use a token GitHub won't take; don't leave it live.
+		_ = c.RevokeToken(context.WithoutCancel(ctx), tok)
+		return "", time.Time{}, err
+	}
+	return tok, expires, nil
+}
+
+// ErrGitTokenUnaccepted is GitToken's refusal when GitHub's git service
+// still refuses a token it has just minted once gitAcceptWithin has
+// passed.
+var ErrGitTokenUnaccepted = errors.New("github: the git service did not accept the minted token for push")
+
+// gitAcceptDelays are the waits between GitToken's checks that GitHub's git
+// service accepts a token it has just minted; gitAcceptWithin is their sum,
+// after which it gives up. A new installation token can be refused for
+// push ("Permission to <repo>.git denied") for a few seconds while GitHub
+// propagates it, then accepted: the API that minted it doesn't wait for
+// that, so git would take the refusal as the push's answer.
+var gitAcceptDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+
+var gitAcceptWithin = func() (d time.Duration) {
+	for _, x := range gitAcceptDelays {
+		d += x
+	}
+	return d
+}()
+
+// gitAccepts waits until GitHub's git service accepts tok for a push to
+// repo: it asks for the receive-pack advertisement, the first request
+// `git push` makes, signed in as git signs in with the token. 401, 403 and
+// 404 are a token not yet propagated, checked again after the next of
+// gitAcceptDelays, and ErrGitTokenUnaccepted once they run out. Any other
+// answer, or none, doesn't say the token is refused, so it is handed out
+// as minted and git reports what it meets.
+func (c *Client) gitAccepts(ctx context.Context, repo, tok string) error {
+	target := c.web + "/" + repo + ".git/info/refs?service=git-receive-pack"
+	for i := 0; ; i++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil
+		}
+		req.SetBasicAuth("x-access-token", tok)
+		req.Header.Set("User-Agent", "git/open-conduit")
+		res, err := c.http.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		switch res.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		default:
+			return nil
+		}
+		if i == len(gitAcceptDelays) {
+			return fmt.Errorf("%w (HTTP %d after %s)", ErrGitTokenUnaccepted, res.StatusCode, gitAcceptWithin)
+		}
+		if err := c.sleep(ctx, gitAcceptDelays[i]); err != nil {
+			return err
+		}
+	}
+}
+
+// sleep waits d or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // GitIdentity is who git commits as for a GitHub App: its bot user's login

@@ -158,16 +158,21 @@ type Server struct {
 	failNext                         map[string]int
 	loseNext                         map[string]int
 	tokenTTL                         time.Duration
-	issued                           int
-	commits                          map[string]time.Time
-	contents                         map[string][]byte // attachments branch path → content
-	branches                         map[string]bool
-	onBranch                         map[string]map[string]bool // branch → commits in its history
-	files                            map[string]string          // /files/<name> → redirect target
-	fileReads                        []Write
-	fileData                         map[string][]byte
-	hooks                            []*Hook
-	perms                            map[string]bool
+	// gitLag is how long after it is minted an installation token is
+	// refused for push (SetGitPropagation); minted is when each was.
+	gitLag     time.Duration
+	minted     map[string]time.Time
+	gitPushAsk int
+	issued     int
+	commits    map[string]time.Time
+	contents   map[string][]byte // attachments branch path → content
+	branches   map[string]bool
+	onBranch   map[string]map[string]bool // branch → commits in its history
+	files      map[string]string          // /files/<name> → redirect target
+	fileReads  []Write
+	fileData   map[string][]byte
+	hooks      []*Hook
+	perms      map[string]bool
 	// collaborators are users' repository permissions by lower-case login
 	// (none for a user not listed).
 	collaborators map[string]string
@@ -256,7 +261,7 @@ type limit struct {
 func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
-		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
+		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, minted: map[string]time.Time{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
 		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, onBranch: map[string]map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
 		protection: map[string][]string{}, rulesets: map[string][]string{}, resolved: map[int64]string{}, threadPage: 100}
 	for _, t := range tokens {
@@ -342,14 +347,23 @@ func (s *Server) TokenApp(token string) (string, bool) {
 
 // gitAllowed reports whether token may read (or, with push, write) repo's
 // git data: an accepted token, or a valid installation token whose scope
-// covers repo, with contents: write for a push.
+// covers repo, with contents: write for a push, and for a push no longer
+// propagating (SetGitPropagation).
 func (s *Server) gitAllowed(token, repo string, push bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.gitAllowedLocked(token, repo, push)
+}
+
+// gitAllowedLocked is gitAllowed with s.mu held.
+func (s *Server) gitAllowedLocked(token, repo string, push bool) bool {
 	if s.tokens[token] {
 		return true
 	}
 	if _, ok := s.installs[token]; !ok {
+		return false
+	}
+	if push && s.now.Before(s.minted[token].Add(s.gitLag)) {
 		return false
 	}
 	scope, scoped := s.scopes[token]
@@ -432,6 +446,15 @@ func (s *Server) GitHandler(root, git string) http.Handler {
 }
 
 var reGitPath = regexp.MustCompile(`^/([^/]+/[^/]+?)\.git/(info/refs|git-upload-pack|git-receive-pack)$`)
+
+// SetGitPropagation makes the git service refuse an installation token for
+// push (403, "Permission to <repo>.git denied") until d after it was minted
+// by the fake's clock, as GitHub can while it propagates a new token.
+func (s *Server) SetGitPropagation(d time.Duration) { s.mu.Lock(); s.gitLag = d; s.mu.Unlock() }
+
+// GitPushChecks counts the receive-pack advertisements asked for: the
+// first request of a git push.
+func (s *Server) GitPushChecks() int { s.mu.Lock(); defer s.mu.Unlock(); return s.gitPushAsk }
 
 // SetTokenTTL sets installation token lifetime.
 func (s *Server) SetTokenTTL(d time.Duration) { s.mu.Lock(); s.tokenTTL = d; s.mu.Unlock() }
@@ -1159,8 +1182,48 @@ var (
 	reAccessToken = regexp.MustCompile(`^/app/installations/([0-9]+)/access_tokens$`)
 	// reFile is a file ServeFile serves: /files/<name>,
 	// /user-attachments/files/<name> or /<owner>/<repo>/files/<name>.
-	reFile = regexp.MustCompile(`^/(?:(user-attachments|[^/]+/[^/]+)/)?files/(.+)$`)
+	reGitRefs = regexp.MustCompile(`^/([^/]+/[^/]+)\.git/info/refs$`)
+	reFile    = regexp.MustCompile(`^/(?:(user-attachments|[^/]+/[^/]+)/)?files/(.+)$`)
 )
+
+// gitReceivePack answers git's push advertisement for repo, signed in with
+// Basic auth as git does: 401 without a token it knows, 403 for one that
+// can't push to repo (not its repository, no contents: write, or still
+// propagating), else 200. s.mu is held.
+func (s *Server) gitReceivePack(w http.ResponseWriter, repo string, r *http.Request) {
+	s.gitPushAsk++
+	_, tok, _ := r.BasicAuth()
+	switch s.pushStatus(tok, repo) {
+	case http.StatusUnauthorized:
+		http.Error(w, "Invalid username or token.", http.StatusUnauthorized)
+	case http.StatusForbidden:
+		http.Error(w, "Permission to "+repo+".git denied.", http.StatusForbidden)
+	default:
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+		_, _ = io.WriteString(w, "001f# service=git-receive-pack\n0000")
+	}
+}
+
+// GitPushable reports whether the git service would take tok for a push
+// to the fake's repository now, without counting a check.
+func (s *Server) GitPushable(tok string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pushStatus(tok, s.Repo) == http.StatusOK
+}
+
+// pushStatus is the git service's answer to a push to repo signed in with
+// tok: 401 for a token it doesn't know, 403 for one gitAllowed refuses the
+// push. s.mu is held.
+func (s *Server) pushStatus(tok, repo string) int {
+	if _, install := s.installs[tok]; tok == "" || !s.tokens[tok] && !install {
+		return http.StatusUnauthorized
+	}
+	if !s.gitAllowedLocked(tok, repo, true) {
+		return http.StatusForbidden
+	}
+	return http.StatusOK
+}
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
 	auth := strings.TrimPrefix(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), "token ")
@@ -1238,6 +1301,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"message":"Bad gateway"}`, http.StatusBadGateway)
 			return
 		}
+	}
+	if m := reGitRefs.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodGet && r.URL.Query().Get("service") == "git-receive-pack" {
+		s.gitReceivePack(w, m[1], r)
+		return
 	}
 	token, ok := s.authorize(w, r)
 	if !ok {
@@ -1407,6 +1474,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		s.issued++
 		tok := fmt.Sprintf("ghs_%s_%d", strings.TrimPrefix(token, "app:"), s.issued)
 		s.installs[tok] = strings.TrimPrefix(token, "app:")
+		s.minted[tok] = s.now
 		if scoped {
 			s.scopes[tok] = scope
 		}
