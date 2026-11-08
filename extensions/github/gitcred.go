@@ -92,7 +92,9 @@ type gitCredentialOutput struct {
 // the connection the calling binding acts as (its own `github` connection,
 // else the entry's), the one RunEnvironment took the identity from. A
 // token connection has nothing to mint: its token crosses into the
-// container as it is.
+// container as it is. A newly minted token is handed out only once GitHub's
+// git service accepts it for push (Client.GitToken), so git's first push
+// doesn't meet a token GitHub is still propagating.
 func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	// A call with a request ID would keep its result, the token, for
 	// replay: `os git-credential` never sends one.
@@ -129,6 +131,9 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 	tok, expires, err := client.GitToken(ctx, repo, gitPermissionsFor(b.a.Operations))
 	if errors.Is(err, ErrStaticToken) {
 		return nil, refuse("github_static_token", "this GitHub connection signs in with a token, not an App, so there is no token to mint for git")
+	}
+	if errors.Is(err, ErrGitTokenUnaccepted) {
+		return nil, refuse("git_token_unaccepted", "GitHub minted a token for %s but its git service still refuses it for push: %v", repo, err)
 	}
 	if err != nil {
 		return nil, err

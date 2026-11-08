@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -86,7 +87,7 @@ func gitCredLabWith(t *testing.T, auth string, conns map[string]string) (*github
 		}
 		return pemText, nil
 	}
-	client, err := gh.NewClient(cfg, secrets, gh.ClientOptions{HTTP: &http.Client{Transport: apiOnly{to}}, Now: fake.Now})
+	client, err := gh.NewClient(cfg, secrets, gh.ClientOptions{HTTP: &http.Client{Transport: apiOnly{to}}, Now: fake.Now, Sleep: func(_ context.Context, d time.Duration) error { fake.Advance(d); return nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +239,50 @@ func TestGitCredential(t *testing.T) {
 	}
 	if _, ok := fake.Scope(credentialOf(t, next).Password); !ok {
 		t.Fatal("a failed listing revoked a token")
+	}
+}
+
+// TestGitCredentialWaitsForPropagation: GitHub can refuse a token it has
+// just minted for push ("Permission to <repo>.git denied") for a few
+// seconds and then accept it, so a token is handed to git only once git's
+// first request of a push, the receive-pack advertisement, accepts it. One
+// still refused once the checks run out is revoked and refused with a code
+// saying so, and the next ask mints afresh.
+func TestGitCredentialWaitsForPropagation(t *testing.T) {
+	fake, _, call := gitCredLab(t, `{"auth":"app","app_id":"42"}`)
+	in := `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`
+	fake.SetGitPropagation(3 * time.Second)
+	out, err := call.do("x/1", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := credentialOf(t, out)
+	if !fake.GitPushable(c.Password) {
+		t.Fatal("handed git a token GitHub's git service still refuses for push")
+	}
+	if n := fake.GitPushChecks(); n < 2 {
+		t.Fatalf("%d push checks, want the refused one and the accepted one", n)
+	}
+	// The cached token was accepted once; handing it out again checks nothing.
+	before := fake.GitPushChecks()
+	if again, _ := call.do("x/1", in); credentialOf(t, again).Password != c.Password || fake.GitPushChecks() != before {
+		t.Fatal("the accepted token was checked or minted again")
+	}
+
+	fake.SetGitPropagation(time.Hour)
+	_, err = call.do("x/2", in)
+	var op *extension.OperationError
+	if !errors.As(err, &op) || op.Code != "git_token_unaccepted" {
+		t.Fatalf("a token never accepted: %v, want git_token_unaccepted", err)
+	}
+	issued := fake.InstallationTokensIssued()
+	tok := fmt.Sprintf("ghs_42_%d", issued)
+	if _, ok := fake.Scope(tok); ok {
+		t.Fatal("the refused token was left live")
+	}
+	fake.SetGitPropagation(0)
+	if _, err := call.do("x/2", in); err != nil || fake.InstallationTokensIssued() != issued+1 {
+		t.Fatalf("after a refusal: %v, %d tokens minted, want a new one", err, fake.InstallationTokensIssued()-issued)
 	}
 }
 
