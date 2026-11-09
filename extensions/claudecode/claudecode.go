@@ -122,9 +122,10 @@ type Options struct {
 
 // Executor implements extension.Executor with interrupt, inject and resume.
 type Executor struct {
-	o    Options
-	mu   sync.Mutex
-	runs map[domain.ID]*run
+	o     Options
+	mu    sync.Mutex
+	runs  map[domain.ID]*run
+	tasks tasks
 }
 
 // Offline is an executor for validating and describing configs alone: it
@@ -156,7 +157,7 @@ func (e *Executor) Open(o Options) error {
 	if o.Store == nil {
 		return errors.New("claude code executor needs coordination storage for continuity")
 	}
-	for _, sub := range []string{"runs", "work"} {
+	for _, sub := range []string{"runs", "work", "tasks"} {
 		if err := os.MkdirAll(filepath.Join(o.StateDir, sub), 0o700); err != nil {
 			return err
 		}

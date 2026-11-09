@@ -5,7 +5,7 @@ description: "How the Claude Code executor runs agent turns as detached segments
 
 The Claude Code executor runs each agent turn as a detached `claude -p` segment on the Work's session, resumes or hands off sessions from continuity it keeps private to itself, and gives the agent its toolbelt over MCP. It lives in [`extensions/claudecode`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode) and implements the [B03 executor contract](../extensions/). `os mcp`, the toolbelt's MCP transport, lives in [`internal/cli`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another. Its package, [`extensions/claudecode/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode/pkg), serves it as executor `claude-code`.
 
-The executor advertises `interrupt`, `inject`, `resume`, `workspace`, `sandbox`, `container` and `toolbelt: mcp`. It runs as a package bundled with the release, served by `open-conduit extension-run claude-code`.
+The executor advertises `interrupt`, `inject`, `resume`, `workspace`, `sandbox`, `container` and `toolbelt: mcp`. Its extension also registers the [task operations](#background-tasks) (`claude-code.task.*`, toolset `@claude-code.tasks`) and their Event, `claude-code.task.ended`. It runs as a package bundled with the release, served by `open-conduit extension-run claude-code`.
 
 ## A segment
 
@@ -68,6 +68,7 @@ The outcome data schema is the binding's optional `status_schema`. The default i
 - `exit_code` and `injected`
 - the `transcript` and `log` artifact IDs
 - `workspace` `{ref, schema, data}`
+- `tasks_unwatched`: how many of the Work's [tasks](#background-tasks) were still running when the turn ended without parking on them, when any were
 
 The data never carries the session or the handoff note. Usage maps to `extension.Usage`, with cost in USD and `CachedTokens` holding the cache-read count. A resumed session reports cumulative totals, so the per-turn delta subtracts the session's previous totals, which are kept in continuity. Totals that went backwards (a fork) are left as reported.
 
@@ -116,6 +117,40 @@ When the attempt has a toolbelt token and the `os` binary is available, the segm
 - `call` (registered extension operations)
 
 Their inputs are the toolbelt wire inputs, and every call goes through `POST /v1/toolbelt/call`, the CLI's authority path. Refusals come back as `isError` tool results carrying only the safe error code. A call that fails without the daemon's answer says why, also as an `isError` result: no answer within the call's 60 seconds (the operation may still finish, and a retry with the same `request_id` never repeats it), the management endpoint unreachable (nothing listening on the socket, with the cause), or the connection breaking mid-call. Only the second reads "unreachable", so a slow operation, such as one that reads an issue and every page of its comments, is not mistaken for a daemon that is down. claude's own environment gets the execution identity (`OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`) but no toolbelt credential.
+
+## Background tasks
+
+A segment's wrapper signals its whole process group when claude exits, so whatever the agent left running in the background (a backgrounded shell command, a Monitor, an in-process Workflow) is stopped with the turn (#556). Work that should outlive the turn runs as a *task* instead. The executor starts it, the runtime does the waiting, and nothing has to stay alive for it.
+
+| Operation | Input | Does |
+| --- | --- | --- |
+| `claude-code.task.start` | `command`, `name`?, `timeout_minutes`? | starts the command as a task of the calling Work |
+| `claude-code.task.list` | | the Work's tasks: state, exit code, signal, last line, log |
+| `claude-code.task.stop` | `task` (ID or name) | stops a running task |
+| `claude-code.task.wait` | `tasks`?, `until`? | parks the Work until one of the tasks ends (default: every running one), or until a time |
+
+- **Where it runs.** `task.start` runs only from a live segment that this executor instance launched, at the caller's lease epoch. It starts `/bin/sh -c <command>` under a wrapper of its own (`open-conduit-task:<nonce>` in `$0`, the segment wrapper's shape), as a new session and process-group leader. That puts it outside the segment's group and outside the daemon's. It runs in the segment's working directory, with the segment's environment minus every `OS_*` name: a task outlives the segment's authority, so it has no toolbelt. Output goes to `<state>/tasks/<id>/log`. The wrapper writes `pid` and, atomically, `exit`.
+- **What it refuses.** It fails closed with `not_supported` in these cases:
+  - a container binding (the container ends with the segment)
+  - a sandboxed binding (the task would run outside the sandbox)
+  - a `fresh` or `shared` workspace (given up when the segment ends)
+  - an adopted segment (its environment went with the daemon that launched it)
+  - a turn that has ended
+
+  It also refuses a ninth running task, or a running task's name used again.
+- **Identity.** The task ID derives from the execution and the call's request ID, so a retried start returns the same task and starts nothing more. A record (`task/<id>` in the `claude-code` namespace) holds the Work, scope, execution, the attempt's trigger, the nonce, the state and the deadline. It is written before the process starts, so a crash leaves a record that is counted lost, never a process nothing knows of. The task's own key is `claude-code`/`task/<id>`; no Work owns it.
+- **Ending.** The `tasks` background task (every 15 seconds, and at once when a task this instance started exits) reconciles each running record with its files and process:
+  - a recorded `exit`: `succeeded` for 0, `failed` otherwise, or `stopped`/`timed_out` when a stop was requested, with the signal named for an exit over 128
+  - no live wrapper (a group leader carrying the nonce) and no `exit`: `lost`, or `stopped`/`timed_out` once a requested stop had to kill it
+  - past `timeout_minutes` (default 240, at most 1440): SIGTERM to its group, then SIGKILL after the grace period, so a wait on a task always ends
+  - its Work finished: stopped the same way
+
+  The end is accepted as a derived `claude-code.task.ended` Event (schema `claude-code.task.v1`: task, name, Work, outcome, exit code, signal, last line, log, start and end), in one transaction with the record's update. The task's key carries it, its delivery is `task/<id>/ended`, and its parent is the trigger of the attempt that started the task. A loop of tasks and wakes with no outside input therefore deepens and stops at `causal_max_depth`. A causal refusal is recorded by the host and the task still ends. A task of finished Work is released (record and files) once announced.
+- **Waking.** `task.wait` is a translated wait. It adds one dependency per task: `claude-code.task.ended` on the task's key, aliased as `claude-code.task.finished`, scanning all history, so a task that has already ended wakes the Work at once. The Wait matches only that alias, so other input becomes context for the wake rather than waking it early, and `until` bounds it. The extension renders both Events for the next turn (outcome, exit code, last line, log).
+- **Flagging.** `task.wait` records that the segment parked on its tasks. A turn that ends while the Work has tasks running and no such record reports `tasks_unwatched` in its outcome data and in its `agent_turn` telemetry, because nothing will tell the Work when those tasks end.
+- **Telemetry.** `task_started`, `task_start_failed` and `task_ended` (with outcome and exit code) go to the executor's log beside `agent_turn`.
+
+The operations' guidance tells an agent to run anything that outlives the turn as a task and to end the turn with `task.wait`. The `work-issue`, `work-tracker-issue` and `slack-thread` playbooks say the same in one line.
 
 ## Playbooks and rendering
 
@@ -205,6 +240,7 @@ The config is strict and validated at load. Every field is optional:
   - config validation, and the playbook a binding that names none starts on
   - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
+  - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); and `tasks_unwatched`, with a parked turn as the negative control
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks
@@ -215,6 +251,10 @@ The config is strict and validated at load. Every field is optional:
 - [`TestDaemonClaudeCodeContinuityKill`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) uses the `kv` fault boundary to SIGKILL the daemon before and after the decision commit. The retry launches once and resumes the Work's session.
 
 ## Limitations
+
+- **Tasks need a host segment.** Tasks run only for bindings without a sandbox or container, because the task would outlive the one and run outside the other. A container or sandbox that a task joins is future work.
+- **Tasks don't join tracker waits.** A task is waited on with `claude-code.task.wait`, not as a condition of a tracker's wait (`github.wait`'s `pr:`, `issue:` and `job:`), so other news queues as context until a task ends or the wait's `until`.
+- **Long Workflows.** An in-process Workflow can't be a task. Running one headless (`claude -p`) as a task is the way to keep it past the turn. Finding a Workflow's journal by run ID from a later session is Claude Code's to provide.
 
 - **No "in flight" list.** The cross-issue "in flight" list has no Open Conduit equivalent; the playbook instead tells the agent to read overlapping issues and their PRs.
 
@@ -235,3 +275,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#73** removed the handoff experiment (the draw, trials, the blinded feedback question and `handoff_share`); a cold turn now follows the binding's `cold_turns`.
 - **#164** added the sandbox wrap ([B09](../sandboxes/)).
 - **#428** moved it out of process. It runs as a package bundled with the release (`extensions/claudecode/pkg`, `open-conduit extension-run claude-code`), the executor itself served through `inprocsdk`, with its live output and container attach crossing the wire (`executor.live`, `executor.container_attach`). A run takes the toolbelt and playbook directories the host names for it (`ExecutionContext.ToolbeltDir`, `PlaybookDir`). Its continuity moved from `executor.claudecode` to the package's own `claude-code` namespace; the daemon moved existing records once at start until #497 dropped that step, so continuity an older release left in `executor.claudecode` is no longer carried over. Its doctor check is its own (`claude-code`, formerly `claude_code` in bootstrap), and usage reading moved from `serve --claude-usage` to the binding's `usage`. Certification runs it against a fake `claude` the fixture command writes.
+- **#556** added background tasks: the `claude-code.task.*` operations, the `claude-code.task.ended` Event, the task sweep and the `tasks_unwatched` flag.

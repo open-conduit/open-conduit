@@ -83,6 +83,17 @@ Declare how this attempt ends (completed, failed or handoff); it applies when yo
 
 The operations an extension's agents need for a role, granted together as `@<name>`. Each operation joined its toolset in the version shown; a toolset only gains operations. `open-conduit doctor` reports a list that names an earlier version's operations one by one, with the `config set` that grants the toolset instead.
 
+### `@claude-code.tasks`
+
+Run commands that outlive the turn, and be woken when they end.
+
+| Operation | Since version |
+| --- | --- |
+| `claude-code.task.start` | 1 |
+| `claude-code.task.list` | 1 |
+| `claude-code.task.stop` | 1 |
+| `claude-code.task.wait` | 1 |
+
 ### `@github.author`
 
 Work a GitHub issue: read it, comment, open and edit its PRs, answer their reviews and wait on them.
@@ -215,6 +226,43 @@ Read a pull request with its description and every comment, inline comments incl
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `number` | integer | yes | the pull request's number |
+
+### Claude Code (`claude-code`)
+
+Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.
+
+#### `claude-code.task.list`
+
+List this Work's tasks: each one's state, exit code, last line of output and log.
+
+Takes no input.
+
+#### `claude-code.task.start`
+
+Start a command that keeps running after your turn ends, with its output in a log; claude-code.task.wait wakes you when it ends.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `command` | string | yes | the shell command, run with /bin/sh -c in your working directory, at most 8 KiB |
+| `name` | string |  | a short name to refer to it by: lower case letters, digits, '.', '_' and '-', at most 40 |
+| `timeout_minutes` | integer |  | stop it as timed_out after this many minutes (default 240, at most 1440) |
+
+#### `claude-code.task.stop`
+
+Stop one of this Work's running tasks.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `task` | string | yes | the task's id or name |
+
+#### `claude-code.task.wait`
+
+End your turn until one of the tasks ends (or until a time), then be resumed with how it ended.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `tasks` | array of string |  | the tasks' ids or names; omit for every task still running |
+| `until` | string |  | a future ISO time with Z or an offset: you are resumed then if no task has ended |
 
 ### GitHub (`github`)
 

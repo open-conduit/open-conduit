@@ -58,3 +58,4 @@ When your last turn ended long ago, or the session has grown large, Open Conduit
 
 - Don't reply more than once per turn unless a message arrived during the turn that needs its own answer.
 - Don't paste secrets, tokens or personal data into the thread.
+- Don't leave work running in the background when you end a turn (`&`, `nohup`, a background shell, a Monitor or a Workflow): it is stopped with the turn, and nothing tells you. When your toolbelt offers `claude-code.task.start`, run anything that should outlive the turn as a task and end the turn with `claude-code.task.wait`; otherwise finish it within the turn.

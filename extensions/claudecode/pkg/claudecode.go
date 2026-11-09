@@ -26,9 +26,17 @@ const Version = "0.1.0"
 // base is what the bridge cannot read from the extension's surfaces.
 func base() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Claude Code",
-		Summary:  "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.",
-		Command:  protocol.HostRunCommand(Name),
-		Provides: protocol.Provides{Checks: []protocol.CheckDecl{{Name: "claude-code", Offline: true}}}}
+		Summary: "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.",
+		Command: protocol.HostRunCommand(Name),
+		Provides: protocol.Provides{Checks: []protocol.CheckDecl{{Name: "claude-code", Offline: true}},
+			Families: []protocol.Family{{Type: claudecode.TypeTaskEnded, Loss: "A task an agent started has ended, as its wrapper recorded or the sweep found; nothing upstream re-derives it."}},
+			Schemas:  []protocol.SchemaDecl{{Name: claudecode.Name + ".task", Versions: []int{1}}, {Name: claudecode.Name + ".tool", Versions: []int{1}}},
+			Operations: []protocol.OperationDecl{
+				{Name: claudecode.OpTaskStart, Kind: protocol.OperationHandler, Guidance: claudecode.TaskGuidance(claudecode.OpTaskStart)},
+				{Name: claudecode.OpTaskList, Kind: protocol.OperationHandler},
+				{Name: claudecode.OpTaskStop, Kind: protocol.OperationHandler},
+				{Name: claudecode.OpTaskWait, Kind: protocol.OperationWait},
+			}}}
 }
 
 // New returns the bridge serving a new Claude Code executor.
