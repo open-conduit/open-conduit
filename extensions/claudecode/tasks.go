@@ -776,7 +776,7 @@ func workDone(tx storage.Tx, seen map[domain.ID]bool, id domain.ID) (bool, error
 }
 
 // testHookObserved, when a test sets it, runs between the sweep's
-// liveness check of a task and its read of the exit record.
+// look at whether a task is alive and its read of the exit record.
 var testHookObserved atomic.Value
 
 // observeTask reads a running task's files and process. It returns the
