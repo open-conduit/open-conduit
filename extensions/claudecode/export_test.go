@@ -13,3 +13,10 @@ func HoldFollowers(release <-chan struct{}) func() {
 func (x *Extension) StubChecks(usage func(ctx context.Context, configDir string) ([]UsageWindow, error), version func(ctx context.Context, bin string) (string, error)) {
 	x.usage, x.versionOf = usage, version
 }
+
+// OnTaskObserved runs fn between the task sweep's liveness check and its
+// read of a task's exit record. The returned func restores the default.
+func OnTaskObserved(fn func(task string)) func() {
+	testHookObserved.Store(fn)
+	return func() { testHookObserved.Store(func(string) {}) }
+}

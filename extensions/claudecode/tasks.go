@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -774,10 +775,25 @@ func workDone(tx storage.Tx, seen map[domain.ID]bool, id domain.ID) (bool, error
 	return seen[id], nil
 }
 
+// testHookObserved, when a test sets it, runs between the sweep's
+// liveness check of a task and its read of the exit record.
+var testHookObserved atomic.Value
+
 // observeTask reads a running task's files and process. It returns the
 // ended record when the task has ended, and whether it signaled it.
 func (e *Executor) observeTask(t taskRecord, now time.Time, workDone bool) (*taskRecord, bool) {
 	dir := e.taskDir(t.ID)
+	// Liveness first, the exit record second: the wrapper writes exit
+	// before it exits, so a wrapper found gone has either recorded its exit
+	// by now or never will. Read the other way round, a task that exits
+	// between the two reads would be counted lost.
+	e.tasks.mu.Lock()
+	reaping := e.tasks.live[t.ID]
+	e.tasks.mu.Unlock()
+	pid, alive := e.taskLeader(t)
+	if hook, _ := testHookObserved.Load().(func(string)); hook != nil {
+		hook(t.ID)
+	}
 	var stop taskStop
 	stopped := readJSON(filepath.Join(dir, "stop.json"), &stop) == nil
 	if b, err := os.ReadFile(filepath.Join(dir, "exit")); err == nil {
@@ -801,10 +817,6 @@ func (e *Executor) observeTask(t taskRecord, now time.Time, workDone bool) (*tas
 		}
 		return e.ended(t, now), false
 	}
-	e.tasks.mu.Lock()
-	reaping := e.tasks.live[t.ID]
-	e.tasks.mu.Unlock()
-	pid, alive := e.taskLeader(t)
 	if !alive && !reaping {
 		if !exists(filepath.Join(dir, "pid")) && now.Sub(t.Started) < taskStartGrace {
 			return nil, false // still starting

@@ -150,7 +150,7 @@ A segment's wrapper signals its whole process group when claude exits, so whatev
 - **Flagging.** `task.wait` records that the segment parked on its tasks. A turn that ends while the Work has tasks running and no such record reports `tasks_unwatched` in its outcome data and in its `agent_turn` telemetry, because nothing will tell the Work when those tasks end.
 - **Telemetry.** `task_started`, `task_start_failed` and `task_ended` (with outcome and exit code) go to the executor's log beside `agent_turn`.
 
-The operations' guidance tells an agent to run anything that outlives the turn as a task and to end the turn with `task.wait`. The `work-issue`, `work-tracker-issue` and `slack-thread` playbooks say the same in one line.
+The operations' guidance, served only to an execution granted them, tells an agent to run anything that outlives the turn as a task and to end the turn with `task.wait`. The `work-issue`, `work-tracker-issue` and `slack-thread` playbooks name no executor: they say not to leave work running in the background when a turn ends, and to use whatever the toolbelt offers for work that outlives it.
 
 ## Playbooks and rendering
 
@@ -240,7 +240,7 @@ The config is strict and validated at load. Every field is optional:
   - config validation, and the playbook a binding that names none starts on
   - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
-  - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); and `tasks_unwatched`, with a parked turn as the negative control
+  - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); a task that exits between the sweep's liveness check and its read of the exit record, announced with its exit rather than as lost; and `tasks_unwatched`, with a parked turn as the negative control
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks

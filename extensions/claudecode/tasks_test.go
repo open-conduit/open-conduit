@@ -407,3 +407,39 @@ func TestTurnEndingWithUnwatchedTasksIsFlagged(t *testing.T) {
 		th.ended(1)
 	}
 }
+
+// TestTaskExitingDuringSweepIsNotLost: a wrapper that records its exit and
+// quits between the sweep's liveness check and its read of the exit
+// record is announced with its exit, not as lost (review of #557).
+func TestTaskExitingDuringSweepIsNotLost(t *testing.T) {
+	th, handle := liveTurn(t, nil)
+	defer th.release(handle)
+	task := th.start(context.Background(), map[string]any{"command": `while [ ! -e "$FAKE_DIR/go" ]; do sleep 0.05; done; echo built`, "name": "build"})
+	id := task["task"].(string)
+	waitFor(t, "the task's pid", func() bool {
+		_, err := os.Stat(filepath.Join(th.state, "tasks", id, "pid"))
+		return err == nil
+	})
+	// The wrapper records its exit and quits after the sweep has checked
+	// whether it is alive and before it reads the exit record.
+	exitFile := filepath.Join(th.state, "tasks", id, "exit")
+	var once sync.Once
+	restore := claudecode.OnTaskObserved(func(task string) {
+		if task != id {
+			return
+		}
+		once.Do(func() {
+			if err := os.WriteFile(filepath.Join(th.fake, "go"), nil, 0o600); err != nil {
+				t.Error(err)
+			}
+			waitFor(t, "the wrapper's exit", func() bool { _, err := os.Stat(exitFile); return err == nil })
+		})
+	})
+	defer restore()
+	events := th.ended(1)
+	var p map[string]any
+	_ = json.Unmarshal(events[0].Data.Data, &p)
+	if p["outcome"] != claudecode.TaskSucceeded || p["last_line"] != "built" {
+		t.Fatalf("payload %v", p)
+	}
+}
