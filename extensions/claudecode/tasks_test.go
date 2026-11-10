@@ -443,3 +443,46 @@ func TestTaskExitingDuringSweepIsNotLost(t *testing.T) {
 		t.Fatalf("payload %v", p)
 	}
 }
+
+// TestStaleSweepLeavesReleasedTaskGone: a task released between a sweep's
+// look at whether it is alive and its read of the task's files is not
+// brought back by that sweep stopping it (review of #557).
+func TestStaleSweepLeavesReleasedTaskGone(t *testing.T) {
+	th, handle := liveTurn(t, nil)
+	defer th.release(handle)
+	task := th.start(context.Background(), map[string]any{"command": `while :; do sleep 0.05; done`, "name": "spin"})
+	id := task["task"].(string)
+	dir := filepath.Join(th.state, "tasks", id)
+	var pid int
+	waitFor(t, "the task's pid", func() bool {
+		b, err := os.ReadFile(filepath.Join(dir, "pid"))
+		if err == nil {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(b)))
+		}
+		return err == nil && pid > 1
+	})
+	defer syscall.Kill(-pid, syscall.SIGKILL)
+	th.store.setWork(domain.Work{ID: "work/t", ScopeID: "eng", State: domain.WorkCompleted})
+	var once sync.Once
+	restore := claudecode.OnTaskObserved(func(task string) {
+		if task != id {
+			return
+		}
+		// What another sweep's release does: the record and the files go.
+		once.Do(func() {
+			th.store.mu.Lock()
+			delete(th.store.kv, "claude-code\x00task/"+id)
+			th.store.mu.Unlock()
+			if err := os.RemoveAll(dir); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+	defer restore()
+	if _, err := th.e.SweepTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("a released task's directory came back: %v", err)
+	}
+}

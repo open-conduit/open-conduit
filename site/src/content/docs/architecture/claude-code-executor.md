@@ -139,7 +139,7 @@ A segment's wrapper signals its whole process group when claude exits, so whatev
 
   It also refuses a ninth running task, or a running task's name used again.
 - **Identity.** The task ID derives from the execution and the call's request ID, so a retried start returns the same task and starts nothing more. A record (`task/<id>` in the `claude-code` namespace) holds the Work, scope, execution, the attempt's trigger, the nonce, the state and the deadline. It is written before the process starts, so a crash leaves a record that is counted lost, never a process nothing knows of. The task's own key is `claude-code`/`task/<id>`; no Work owns it.
-- **Ending.** The `tasks` background task (every 15 seconds, and at once when a task this instance started exits) reconciles each running record with its files and process:
+- **Ending.** The `tasks` background task (every 15 seconds, and at once when a task this instance started exits; one sweep at a time) reconciles each running record with its files and process:
   - a recorded `exit`: `succeeded` for 0, `failed` otherwise, or `stopped`/`timed_out` when a stop was requested, with the signal named for an exit over 128
   - no live wrapper (a group leader carrying the nonce) and no `exit`: `lost`, or `stopped`/`timed_out` once a requested stop had to kill it
   - past `timeout_minutes` (default 240, at most 1440): SIGTERM to its group, then SIGKILL after the grace period, so a wait on a task always ends
@@ -240,7 +240,7 @@ The config is strict and validated at load. Every field is optional:
   - config validation, and the playbook a binding that names none starts on
   - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
-  - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); a task that exits between the sweep's liveness check and its read of the exit record, announced with its exit rather than as lost; and `tasks_unwatched`, with a parked turn as the negative control
+  - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); a task that exits between the sweep's liveness check and its read of the exit record, announced with its exit rather than as lost; a task released while a sweep is looking at it, whose directory that sweep doesn't bring back; and `tasks_unwatched`, with a parked turn as the negative control
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks
