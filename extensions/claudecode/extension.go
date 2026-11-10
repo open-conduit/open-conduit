@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Name is the Claude Code executor's registration name.
@@ -20,6 +21,11 @@ const Name = "claude-code"
 // maintainPace is how often the executor's housekeeping (releasing the
 // continuity of terminal Work) runs.
 const maintainPace = 30 * time.Second
+
+// taskSweepPace is how often agents' tasks are reconciled with their
+// processes. A task that exits is announced at once by the instance that
+// started it; the sweep covers restarts, lost wrappers, deadlines and stops.
+const taskSweepPace = 15 * time.Second
 
 // Extension registers the Claude Code executor through the in-process
 // contract (#357): an agent turn, in no job pool. Before Start
@@ -44,10 +50,15 @@ type Extension struct {
 func NewExtension() *Extension { return &Extension{exec: &Executor{}} }
 
 var (
-	_ inproc.Executing = (*Extension)(nil)
-	_ inproc.Starter   = (*Extension)(nil)
-	_ inproc.Stopper   = (*Extension)(nil)
-	_ inproc.Tasker    = (*Extension)(nil)
+	_ inproc.Executing  = (*Extension)(nil)
+	_ inproc.Starter    = (*Extension)(nil)
+	_ inproc.Stopper    = (*Extension)(nil)
+	_ inproc.Tasker     = (*Extension)(nil)
+	_ inproc.Tooled     = (*Extension)(nil)
+	_ inproc.Operator   = (*Extension)(nil)
+	_ inproc.Declarer   = (*Extension)(nil)
+	_ inproc.Toolsetter = (*Extension)(nil)
+	_ inproc.Renderer   = (*Extension)(nil)
 
 	_ extension.SetupProbes = (*Extension)(nil)
 )
@@ -77,10 +88,55 @@ func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 	if h.Render != nil {
 		render = func(events []domain.Event) string { return renderVia(h.Render, events) }
 	}
-	return x.exec.Open(Options{
+	if err := x.exec.Open(Options{
 		StateDir: executorDir(h), Store: h.Store, Artifacts: h.Artifacts,
 		ToolbeltDir: h.ToolbeltDir, Report: x.report, Now: h.Now,
 		Render: render, PluginDir: h.PlaybookDir, DryRun: h.DryRun,
+	}); err != nil {
+		return err
+	}
+	x.exec.SetTaskHost(TaskHost{Accept: h.AcceptDerivedInTx, Nudge: h.Nudge})
+	return nil
+}
+
+// Operations are the task operations (inproc.Operator).
+func (*Extension) Operations() []string { return TaskOperations() }
+
+// Declarations declare the task operations (inproc.Declarer).
+func (*Extension) Declarations() []extension.Operation { return TaskDeclarations() }
+
+// Toolsets are the extension's toolsets (inproc.Toolsetter).
+func (*Extension) Toolsets() []extension.Toolset { return TaskToolsets() }
+
+// Registration registers the task operations and their Event (#556).
+func (x *Extension) Registration() extension.Registration {
+	e := x.exec
+	return extension.Registration{Version: extension.ContractVersion, Name: Name, EventTypes: []string{TypeTaskEnded},
+		Operations: []extension.Operation{
+			{Name: OpTaskStart, Handler: e.TaskStart, Guidance: TaskGuidance(OpTaskStart)},
+			{Name: OpTaskList, Handler: e.TaskList},
+			{Name: OpTaskStop, Handler: e.TaskStop},
+			{Name: OpTaskWait, Wait: e.TaskWait},
+		}}
+}
+
+// Render renders a task's end for the agent.
+func (x *Extension) Render(ctx context.Context, ev domain.Event) (string, bool) {
+	return RenderTask(ev, func(id domain.ID) (domain.Event, bool) {
+		if x.h.Store == nil {
+			return domain.Event{}, false
+		}
+		var a domain.AcceptedEvent
+		now := time.Now
+		if x.h.Now != nil {
+			now = x.h.Now
+		}
+		err := x.h.Store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+			var err error
+			a, err = tx.Event(id)
+			return err
+		})
+		return a.Event, err == nil
 	})
 }
 
@@ -127,10 +183,13 @@ func (x *Extension) report(name string, attrs map[string]any) {
 }
 
 // Tasks: the executor's housekeeping, releasing the continuity of terminal
-// Work.
+// Work, and the sweep that announces agents' tasks as they end.
 func (x *Extension) Tasks() []inproc.Task {
 	return []inproc.Task{{Name: "maintain", Pace: maintainPace, Run: func(ctx context.Context) error {
 		_, err := x.exec.Maintain(ctx)
+		return err
+	}}, {Name: "tasks", Pace: taskSweepPace, Run: func(ctx context.Context) error {
+		_, err := x.exec.SweepTasks(ctx)
 		return err
 	}}}
 }

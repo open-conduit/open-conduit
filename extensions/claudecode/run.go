@@ -43,6 +43,10 @@ type run struct {
 	offset  int64
 	partial string
 	waiting []pendingInput
+
+	// space is where the segment's tasks run (tasks.go): known only to
+	// the instance that launched it, so an adopted segment starts none.
+	space *taskSpace
 }
 
 type pendingInput struct {
@@ -211,6 +215,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "invalid_config", "invalid claude code binding config", nil)
 	}
+	rn.space = newTaskSpace(r, cfg, workdir, env)
 	if cfg.PluginDir == "" && cfg.Playbook != "-" {
 		cfg.PluginDir = e.pluginDir(r)
 	}
@@ -1037,6 +1042,10 @@ type resultFields struct {
 	Log           string           `json:"log,omitempty"`
 	ArtifactError string           `json:"artifact_error,omitempty"`
 	Workspace     *workspaceRecord `json:"workspace,omitempty"`
+	// TasksUnwatched counts the Work's tasks still running when a turn
+	// ended without parking on them (claude-code.task.wait): nothing will
+	// tell the Work when they end (#556).
+	TasksUnwatched int `json:"tasks_unwatched,omitempty"`
 }
 
 func resultData(schema string, f resultFields) domain.Payload {
@@ -1243,16 +1252,17 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 		ws.Dir = ""
 		f.Workspace = &ws
 	}
+	f.TasksUnwatched = e.unwatchedTasks(ctx, domain.ID(turn.WorkID), rn.id, rn.epoch)
 	result.Outcome.Data = resultData(turn.StatusSchema, f)
 	result.Workspace = historyWorkspace(rn.dir)
 	if fresh {
-		e.reportTurn(turn, end, outcome, now)
+		e.reportTurn(turn, end, outcome, now, f.TasksUnwatched)
 	}
 	return result, nil
 }
 
 // reportTurn sends one telemetry record per turn, outside core.
-func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outcome, now time.Time) {
+func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outcome, now time.Time, unwatched int) {
 	p := end.parsed
 	a := map[string]any{
 		"scope": turn.ScopeID, "work": turn.WorkID, "execution": turn.ExecutionID,
@@ -1264,6 +1274,9 @@ func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outco
 	}
 	if turn.HandoffReason != "" {
 		a["handoff_reason"] = turn.HandoffReason
+	}
+	if unwatched > 0 {
+		a["tasks_unwatched"] = unwatched
 	}
 	if p.Context > 0 {
 		a["context_tokens"] = p.Context

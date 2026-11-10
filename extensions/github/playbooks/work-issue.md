@@ -152,6 +152,7 @@ When resuming your session would cost more than starting again (your last turn e
 ## Don't
 
 - Don't wait or poll for checks or replies: end the turn and let Open Conduit resume you.
+- Don't leave work running in the background when you end a turn: it stops with the turn, and nothing tells you. If your toolbelt can run work that outlives the turn, use it and park on it; otherwise finish the work within the turn.
 - Don't push to the base branch, merge the PR or close the issue, unless a routine the issue asked you to run says to.
 - Don't push with other credentials (a `gh` login, a token you find, another remote) when `git push` is refused: the push would go out under someone else's name. Report the error (and file it as a defect if the toolbelt offers that), then end with `help`.
 - Don't change Open Conduit's labels on the issue; it sets them from your status.

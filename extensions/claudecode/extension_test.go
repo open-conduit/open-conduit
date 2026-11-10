@@ -81,7 +81,7 @@ func TestExtensionRendersOwnedEventsLogsAndMaintains(t *testing.T) {
 	}
 
 	tasks := x.Tasks()
-	if len(tasks) != 1 || tasks[0].Name != "maintain" {
+	if len(tasks) != 2 || tasks[0].Name != "maintain" || tasks[1].Name != "tasks" {
 		t.Fatalf("tasks %+v", tasks)
 	}
 	if len(h.store.record(t, "work/9")) == 0 {
