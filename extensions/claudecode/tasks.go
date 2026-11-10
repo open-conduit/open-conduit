@@ -252,6 +252,9 @@ type tasks struct {
 	mu   sync.Mutex
 	host TaskHost
 	live map[string]bool
+	// sweep serializes sweeps (the paced one and each reaper's), so none
+	// acts on a record another has already ended or released.
+	sweep sync.Mutex
 }
 
 // SetTaskHost gives the executor the host services the task sweep needs.
@@ -537,10 +540,12 @@ func (e *Executor) TaskStop(ctx context.Context, a extension.Authority, in domai
 func (e *Executor) stopTask(t taskRecord, reason string) error {
 	dir := e.taskDir(t.ID)
 	path := filepath.Join(dir, "stop.json")
+	if !isDir(dir) {
+		// Released, or never started: there is nothing to stop, and
+		// making the directory again would leave it behind.
+		return nil
+	}
 	if !exists(path) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
 		if err := writeJSON(path, taskStop{Reason: reason, At: e.o.Now().UTC()}); err != nil {
 			return err
 		}
@@ -687,6 +692,8 @@ type TaskSweepReport struct {
 // and after restart: the announcement and the record's update commit
 // together, and the Event's delivery identity makes a repeat a duplicate.
 func (e *Executor) SweepTasks(ctx context.Context) (TaskSweepReport, error) {
+	e.tasks.sweep.Lock()
+	defer e.tasks.sweep.Unlock()
 	var report TaskSweepReport
 	e.tasks.mu.Lock()
 	host := e.tasks.host
