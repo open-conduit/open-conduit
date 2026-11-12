@@ -22,6 +22,11 @@ import (
 // MarkProperty is the comment entity property that marks an agent's comment.
 const MarkProperty = "open-conduit"
 
+// formerMarkProperty is the key Open Conduit wrote its mark under before
+// MarkProperty, still read so the comments it posted then stay its own (and
+// an intent attempted across the change is found by its mark, not reposted).
+const formerMarkProperty = "open-supervisor"
+
 // MarkValue is the property's value.
 type MarkValue struct {
 	Agent  bool   `json:"agent"`
@@ -473,7 +478,7 @@ func (c *Client) comment(key string, r rawComment) tracker.Comment {
 		}
 	}
 	for _, p := range r.Properties {
-		if p.Key != MarkProperty {
+		if p.Key != MarkProperty && p.Key != formerMarkProperty {
 			continue
 		}
 		var v MarkValue

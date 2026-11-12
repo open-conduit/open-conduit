@@ -164,6 +164,22 @@ func TestCommentsAndMarks(t *testing.T) {
 	if err != nil || key != "PROJ-1" || one.Agent == nil || one.Agent.Intent != "iabc" {
 		t.Fatalf("read back with properties: %v %+v", err, one)
 	}
+	// A comment Open Conduit posted under the mark's former key is still
+	// its own; any other property doesn't mark a comment.
+	former := f.AddComment("PROJ-1", "Agent", "earlier note")
+	former.Properties = map[string]json.RawMessage{"open-supervisor": json.RawMessage(`{"agent":true,"work":"w-0","intent":"iold"}`)}
+	other := f.AddComment("PROJ-1", "Ada", "not marked")
+	other.Properties = map[string]json.RawMessage{"something-else": json.RawMessage(`{"agent":true,"work":"w-0"}`)}
+	comments, err = c.Comments(ctx, "PROJ-1")
+	if err != nil || len(comments) != 6 {
+		t.Fatal(comments, err)
+	}
+	if a := comments[4].Agent; a == nil || a.Work != "w-0" || a.Intent != "iold" {
+		t.Fatalf("former-key mark: %+v", comments[4])
+	}
+	if comments[5].Agent != nil {
+		t.Fatalf("an unrelated property marked a comment: %+v", comments[5])
+	}
 }
 
 func TestLabelsTransitionAndReopens(t *testing.T) {
