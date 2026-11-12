@@ -19,14 +19,12 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
-// MarkProperty is the comment entity property that marks an agent's comment
-// (Open Supervisor's key, so both runtimes recognize each other's notes).
-const MarkProperty = "open-supervisor"
+// MarkProperty is the comment entity property that marks an agent's comment.
+const MarkProperty = "open-conduit"
 
 // MarkValue is the property's value.
 type MarkValue struct {
 	Agent  bool   `json:"agent"`
-	From   string `json:"from,omitempty"`
 	Work   string `json:"work,omitempty"`
 	Intent string `json:"intent,omitempty"`
 }
@@ -480,7 +478,7 @@ func (c *Client) comment(key string, r rawComment) tracker.Comment {
 		}
 		var v MarkValue
 		if json.Unmarshal(p.Value, &v) == nil && v.Agent {
-			out.Agent = &tracker.Agent{From: v.From, Work: v.Work, Intent: v.Intent}
+			out.Agent = &tracker.Agent{Work: v.Work, Intent: v.Intent}
 		}
 	}
 	return out
@@ -530,7 +528,7 @@ func (c *Client) PostComment(ctx context.Context, key, body string, m tracker.Ma
 	}
 	req := map[string]any{
 		"body":       ToWiki(body),
-		"properties": []map[string]any{{"key": MarkProperty, "value": MarkValue{Agent: true, From: m.From, Work: m.Work, Intent: m.Intent}}},
+		"properties": []map[string]any{{"key": MarkProperty, "value": MarkValue{Agent: true, Work: m.Work, Intent: m.Intent}}},
 	}
 	var r rawComment
 	if err := c.do(ctx, http.MethodPost, "rest/api/2/issue/"+url.PathEscape(key)+"/comment", req, &r); err != nil {

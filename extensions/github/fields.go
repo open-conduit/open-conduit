@@ -24,7 +24,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "repo", Help: "owner/name", Required: true},
 		{Name: "tracker", Help: "shared tracker {repo, namespace}"},
 		{Name: "track_issues", Default: "true"},
-		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (Open Supervisor's names by default)"},
+		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone)"},
 		{Name: "closed_horizon_hours", Help: "how long after closing an issue or PR stays observed", Default: "1"},
 		{Name: "branch_pattern", Default: `^agent/issue-(\d+)$`},
 		{Name: "preview_pattern", Default: "deploy-preview"},

@@ -375,19 +375,14 @@ func (c *Client) EnsureWebhook(ctx context.Context, s Settings, hookURL, secret,
 // ---- marks --------------------------------------------------------------------
 
 var (
-	legacyMark  = regexp.MustCompile(`(?m)\n*^\[//\]: # \(open-supervisor:agent(?: from=([^)\s]+))?\)\s*$`)
 	conduitMark = regexp.MustCompile(`(?m)\n*^\[//\]: # \(open-conduit:agent((?: [a-z]+=[A-Za-z0-9_.:/@-]+)*)\)\s*$`)
 	markAttr    = regexp.MustCompile(`([a-z]+)=([A-Za-z0-9_.:/@-]+)`)
 	markValue   = regexp.MustCompile(`^[A-Za-z0-9_.:/@-]{1,200}$`)
 )
 
-// Mark appends the invisible lines that say an agent posted the comment:
-// Open Supervisor's (which it still reads) and Open Conduit's intent.
+// Mark appends the invisible line that says an agent posted the comment,
+// naming its Work and intent.
 func Mark(body string, m tracker.Mark) string {
-	legacy := "[//]: # (open-supervisor:agent)"
-	if markValue.MatchString(m.From) {
-		legacy = "[//]: # (open-supervisor:agent from=" + m.From + ")"
-	}
 	line := "[//]: # (open-conduit:agent"
 	if markValue.MatchString(m.Work) {
 		line += " work=" + m.Work
@@ -395,20 +390,14 @@ func Mark(body string, m tracker.Mark) string {
 	if markValue.MatchString(m.Intent) {
 		line += " intent=" + m.Intent
 	}
-	return strings.TrimRight(body, "\n") + "\n\n" + legacy + "\n" + line + ")"
+	return strings.TrimRight(body, "\n") + "\n\n" + line + ")"
 }
 
 // Unmark takes the agent lines off a body and says who posted it.
 func Unmark(body string) (string, *tracker.Agent) {
 	var a *tracker.Agent
-	if m := legacyMark.FindStringSubmatch(body); m != nil {
-		a = &tracker.Agent{From: m[1]}
-		body = legacyMark.ReplaceAllString(body, "")
-	}
 	if m := conduitMark.FindStringSubmatch(body); m != nil {
-		if a == nil {
-			a = &tracker.Agent{}
-		}
+		a = &tracker.Agent{}
 		for _, kv := range markAttr.FindAllStringSubmatch(m[1], -1) {
 			switch kv[1] {
 			case "work":

@@ -268,8 +268,6 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 			v.Agent = "agent"
 			if c.Agent.Work != "" {
 				v.Agent = "agent on " + c.Agent.Work
-			} else if c.Agent.From != "" {
-				v.Agent = "agent on " + c.Agent.From
 			}
 		}
 		views = append(views, v)
@@ -296,7 +294,7 @@ func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	intent := Intent{ID: intentID(ctx, b, t.o.Type+OpIssueComment, data), Work: b.work.ID, Issue: key, Body: in.Body, From: b.issue, Durable: true}
+	intent := Intent{ID: intentID(ctx, b, t.o.Type+OpIssueComment, data), Work: b.work.ID, Issue: key, Body: in.Body, Durable: true}
 	state, err := b.src.Projector.Deliver(ctx, intent)
 	if err != nil && state != StateAttempted {
 		return nil, err

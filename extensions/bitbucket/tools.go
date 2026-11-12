@@ -317,8 +317,6 @@ func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any
 			v.Agent = "agent"
 			if agent.Work != "" {
 				v.Agent = "agent on " + agent.Work
-			} else if agent.From != "" {
-				v.Agent = "agent on " + agent.From
 			}
 		}
 		if c.Inline != nil {
@@ -400,12 +398,11 @@ func (t *Tools) post(ctx context.Context, b *bound, op string, data json.RawMess
 	if parent > 0 {
 		target += "/reply/" + strconv.Itoa(parent)
 	}
-	from := b.issue
 	id := intentID(ctx, b, op, data)
 	s := b.src.Settings
 	state, err := b.src.Outbox.Deliver(ctx, tracker.OutboxItem{ID: id, Work: b.work.ID, Target: target, Body: body, Durable: false},
 		func(ctx context.Context, mark string) (tracker.Posted, error) {
-			c, err := b.src.Client.PostComment(ctx, s, number, Mark(body, tracker.Mark{Work: string(b.work.ID), Intent: mark, From: from}), parent)
+			c, err := b.src.Client.PostComment(ctx, s, number, Mark(body, tracker.Mark{Work: string(b.work.ID), Intent: mark}), parent)
 			if err != nil {
 				return tracker.Posted{}, err
 			}

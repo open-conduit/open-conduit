@@ -79,8 +79,6 @@ type Intent struct {
 	Work  domain.ID
 	Issue string
 	Body  string
-	// From is the issue key the agent works on (written into the mark).
-	From string
 	// Durable keeps the body in the intent record so Converge finishes a
 	// delivery whose caller is gone (tool calls).
 	Durable bool
@@ -120,13 +118,9 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if !ValidKey(in.Issue) {
 		return "", storage.ErrInvalid
 	}
-	from := in.From
-	if from == "" {
-		from = in.Issue
-	}
 	return p.outbox.Deliver(ctx, OutboxItem{ID: in.ID, Work: in.Work, Target: in.Issue, Body: in.Body, Durable: in.Durable},
 		func(ctx context.Context, mark string) (Posted, error) {
-			return p.o.Service.PostComment(ctx, in.Issue, in.Body, Mark{Work: string(in.Work), Intent: mark, From: from})
+			return p.o.Service.PostComment(ctx, in.Issue, in.Body, Mark{Work: string(in.Work), Intent: mark})
 		},
 		func(ctx context.Context, mark string) (Posted, bool, error) {
 			comments, err := p.o.Service.Comments(ctx, in.Issue)

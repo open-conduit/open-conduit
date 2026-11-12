@@ -92,8 +92,7 @@ release:
 # it; without the secret this step is skipped and the release goes ahead.
 # Only open-conduit is linked onto PATH: `os` is a generic name, so it stays
 # in the cask's own directory beside open-conduit, which resolves its link to
-# find it. Nothing here touches Open Supervisor's cask (open-supervisor in
-# alsiola/homebrew-tap), its binary or its config and state directories.
+# find it.
 homebrew_casks:
   - name: open-conduit
     ids: [default]

@@ -111,15 +111,8 @@ func selfAuthored(a *Agent, w *domain.Work) bool {
 	if a == nil {
 		return false
 	}
-	if a.Work != "" {
-		return a.Work == string(w.ID)
-	}
-	for _, k := range w.CorrelationKeys {
-		if key, _, ok := ParseIssueKey(k.ExternalID); ok && strings.EqualFold(a.From, key) {
-			return true
-		}
-	}
-	return a.From == ""
+	// A comment known to be an agent's only by its author is this Work's.
+	return a.Work == "" || a.Work == string(w.ID)
 }
 
 // Match selects input for existing Work and creates Work for admitted issues.

@@ -50,12 +50,11 @@ type Issue struct {
 }
 
 // Agent marks a comment written by an execution or the projector. Work and
-// Intent come from Open Conduit's mark; From is the issue key Open Supervisor
-// put in its mark, kept for fallback parity.
+// Intent come from Open Conduit's mark; both are empty for a comment known
+// to be an agent's only by its author (a connection's agent account).
 type Agent struct {
 	Work   string `json:"work,omitempty"`
 	Intent string `json:"intent,omitempty"`
-	From   string `json:"from,omitempty"`
 }
 
 // Comment is one comment on an issue.
@@ -76,8 +75,6 @@ type Comment struct {
 // agent's (and, with Intent, so an ambiguous post can be found again).
 type Mark struct {
 	Work, Intent string
-	// From is the issue key the agent works on (Open Supervisor's mark).
-	From string
 }
 
 // Posted is a published comment.

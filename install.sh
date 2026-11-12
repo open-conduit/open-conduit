@@ -16,8 +16,7 @@
 # daemon finds it beside the real binary. The bundled extension packages
 # (the archive's extensions/ directory, such as setup) replace the ones in
 # INSTALL_DIR/extensions; packages installed in the config directory are not
-# touched. Open Supervisor's open-supervisor
-# binary and its config and state directories are not touched.
+# touched.
 set -eu
 
 repo=open-conduit/open-conduit

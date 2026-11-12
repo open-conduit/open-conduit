@@ -7,18 +7,18 @@ import (
 	"testing"
 )
 
-// Ported from Open Supervisor's TestProjectAdditions: a project's additions
-// to a playbook are read without frontmatter and only ever added to a turn.
+// A project's additions to a playbook are read without frontmatter and only
+// ever added to a turn; nothing else in the checkout is read for them.
 func TestProjectAdditions(t *testing.T) {
 	root := t.TempDir()
 	if projectAdditions(root, "work-issue") != "" {
 		t.Fatal("additions without a file")
 	}
-	legacy := filepath.Join(root, legacyAdditionsDir)
-	_ = os.MkdirAll(legacy, 0o755)
-	_ = os.WriteFile(filepath.Join(legacy, "work-issue.md"), []byte("- Legacy rule.\n"), 0o644)
-	if got := projectAdditions(root, "work-issue"); got != "- Legacy rule." {
-		t.Fatalf("legacy additions %q", got)
+	other := filepath.Join(root, ".other/playbooks")
+	_ = os.MkdirAll(other, 0o755)
+	_ = os.WriteFile(filepath.Join(other, "work-issue.md"), []byte("- Elsewhere.\n"), 0o644)
+	if got := projectAdditions(root, "work-issue"); got != "" {
+		t.Fatalf("additions read from outside %s: %q", AdditionsDir, got)
 	}
 	dir := filepath.Join(root, AdditionsDir)
 	_ = os.MkdirAll(dir, 0o755)

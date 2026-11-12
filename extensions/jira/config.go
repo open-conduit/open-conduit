@@ -1,11 +1,9 @@
 // Package jira is the first-party Jira extension (06-01): the issue tracker
 // of one or more Jira projects, Cloud or Data Center, through REST API v2
 // (whose bodies are wiki markup, converted to and from the Markdown agents
-// write), ported from Open Supervisor's adapter onto the shared tracker kit.
-// An agent's comment carries the `open-supervisor` entity property (which
-// Open Supervisor still reads, so both runtimes recognize each other's notes
-// during the fallback release); workflow transitions move the issue as the
-// agent's state changes.
+// write), on the shared tracker kit. An agent's comment carries the
+// `open-conduit` entity property naming its Work and intent; workflow
+// transitions move the issue as the agent's state changes.
 package jira
 
 import (

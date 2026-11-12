@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -251,15 +250,7 @@ func selfAuthored(a *Agent, w *domain.Work) bool {
 	if a == nil {
 		return false
 	}
-	if a.Work != "" {
-		return a.Work == string(w.ID)
-	}
-	for _, k := range w.CorrelationKeys {
-		if n, _, ok := ParseIssueKey(k.ExternalID); ok && strings.TrimPrefix(a.From, "#") == strconv.Itoa(n) {
-			return true
-		}
-	}
-	return a.From == ""
+	return a.Work == "" || a.Work == string(w.ID)
 }
 
 // Match selects input for existing Work and creates Work for admitted

@@ -10,8 +10,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/introspection/playbooks"
 )
 
-// Every introspection operation a playbook names is registered, and none
-// tells the agent to use Open Supervisor's commands.
+// Every introspection operation a playbook names is registered.
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	for _, name := range []string{"sweep", "triage-reports", "fix-report"} {
 		text, ok := playbooks.All()[name]
@@ -27,11 +26,6 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 		}
 		if found == 0 {
 			t.Fatalf("%s names no operation", name)
-		}
-		for _, v1 := range []string{"$OPEN_SUPERVISOR", "agent problem", "agent correction", "--upstream", "open-supervisor/", ".local/"} {
-			if strings.Contains(text, v1) {
-				t.Errorf("%s still names %s", name, v1)
-			}
 		}
 	}
 	if len(playbooks.All()) != 3 {

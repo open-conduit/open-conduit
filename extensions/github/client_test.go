@@ -349,20 +349,9 @@ func TestMarkers(t *testing.T) {
 	if a == nil || a.Work != "work/abc" || a.Intent != "i123" || !hasIntent(body, "i123") || hasIntent(body, "i124") {
 		t.Fatalf("conduit marker: %+v in %q", a, body)
 	}
-	// 06-02 fallback window: Open Supervisor's own pattern finds its own-note
-	// marker (empty from) in every comment Open Conduit writes.
-	if m := legacyMark.FindStringSubmatch(body); m == nil || m[1] != "" || !strings.HasSuffix(body, LegacyMarker+"\n") {
-		t.Fatalf("no Open Supervisor own-note marker in %q", body)
-	}
-	for body, from := range map[string]string{
-		"x\n\n<!-- open-supervisor:agent from=12 -->\n": "12",
-		"x <!-- open-supervisor:agent -->":              "",
-		"x <!-- claude-agent from #9 -->":               "9",
-	} {
-		a := ParseAgent(body)
-		if a == nil || a.From != from || a.Work != "" {
-			t.Fatalf("legacy marker %q: %+v", body, a)
-		}
+	// The comment carries Open Conduit's marker and nothing else.
+	if want := "Done.\n\n<!-- open-conduit:agent work=work/abc intent=i123 -->\n"; body != want {
+		t.Fatalf("marked body %q, want %q", body, want)
 	}
 	if ParseAgent("plain comment <!-- other -->") != nil {
 		t.Fatal("unmarked comment parsed as agent")

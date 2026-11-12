@@ -339,7 +339,7 @@ Extension entry `config`:
 | `repo` |  | Required. owner/name |
 | `tracker` |  | shared tracker {repo, namespace} |
 | `track_issues` | `true` |  |
-| `labels` |  | claimed, help, review, done, skip[], require[] (Open Supervisor's names by default) |
+| `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `closed_horizon_hours` | `1` | how long after closing an issue or PR stays observed |
 | `branch_pattern` | `^agent/issue-(\d+)$` |  |
 | `preview_pattern` | `deploy-preview` |  |
@@ -407,7 +407,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `namespace` |  | Required. stable source identity and correlation-key source |
 | `scope` |  | Required. the containing scope's id |
-| `labels` |  | claimed, help, review, done, skip[], require[] (Open Supervisor's names by default) |
+| `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `transitions` |  | workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone) |
 | `closed_horizon_hours` | `168` | how long closed issues stay observed |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |
@@ -447,7 +447,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `namespace` |  | Required. stable source identity and correlation-key source |
 | `scope` |  | Required. the containing scope's id |
-| `labels` |  | claimed, help, review, done, skip[], require[] (Open Supervisor's names by default) |
+| `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `transitions` |  | workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone) |
 | `closed_horizon_hours` | `168` | how long closed issues stay observed |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |

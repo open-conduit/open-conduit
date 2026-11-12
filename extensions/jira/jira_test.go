@@ -133,7 +133,7 @@ func TestCommentsAndMarks(t *testing.T) {
 	app.App = true
 	c, _ := newClient(t, f, entry)
 	ctx := context.Background()
-	posted, err := c.PostComment(ctx, "PROJ-1", "**Done**", tracker.Mark{Work: "w-1", Intent: "iabc", From: "PROJ-1"})
+	posted, err := c.PostComment(ctx, "PROJ-1", "**Done**", tracker.Mark{Work: "w-1", Intent: "iabc"})
 	if err != nil || posted.ID == "" {
 		t.Fatal(posted, err)
 	}
@@ -151,14 +151,14 @@ func TestCommentsAndMarks(t *testing.T) {
 		t.Fatal("an app's comment is a bot's")
 	}
 	a := comments[3].Agent
-	if a == nil || a.Work != "w-1" || a.Intent != "iabc" || a.From != "PROJ-1" || comments[3].Body != "**Done**" {
+	if a == nil || a.Work != "w-1" || a.Intent != "iabc" || comments[3].Body != "**Done**" {
 		t.Fatalf("marked: %+v %+v", comments[3], a)
 	}
 	_, _, raw := f.Snapshot("PROJ-1")
 	var v map[string]any
 	_ = json.Unmarshal(raw[3].Properties[jira.MarkProperty], &v)
-	if v["agent"] != true || v["from"] != "PROJ-1" || raw[3].Body != "*Done*" {
-		t.Fatalf("Open Supervisor reads agent and from: %v %q", v, raw[3].Body)
+	if v["agent"] != true || v["work"] != "w-1" || v["intent"] != "iabc" || len(v) != 3 || raw[3].Body != "*Done*" {
+		t.Fatalf("mark property %s: %v %q", jira.MarkProperty, v, raw[3].Body)
 	}
 	key, one, err := c.ReadComment(ctx, tracker.CommentRef{Issue: "PROJ-1", ID: posted.ID})
 	if err != nil || key != "PROJ-1" || one.Agent == nil || one.Agent.Intent != "iabc" {

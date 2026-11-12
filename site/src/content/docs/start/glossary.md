@@ -33,5 +33,4 @@ description: The terms the rest of the docs use, each in a sentence or two.
 
 ## Other names
 
-- **Open Supervisor:** Open Conduit's predecessor. Installing Open Conduit leaves Open Supervisor's binary, config and state alone.
 - **`os`:** the toolbelt's command-line client, installed beside `open-conduit` and kept off your `PATH`. Agents and shell commands reach the toolbelt through it.

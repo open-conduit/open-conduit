@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -66,10 +65,7 @@ func (f dependencyFilter) peer(p CommentPayload) bool {
 	if a == nil || p.Edited || p.Kind == KindReview && strings.TrimSpace(p.Body) == "" {
 		return false
 	}
-	if a.Work != "" {
-		return a.Work != f.Work
-	}
-	return a.From != "" && strings.TrimPrefix(a.From, "#") != strconv.Itoa(f.Number)
+	return a.Work != "" && a.Work != f.Work
 }
 
 // DependencyFilter selects the named item among Events on a shared
@@ -549,8 +545,8 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	if err != nil {
 		return extension.WaitPlan{}, err
 	}
-	// The reason goes on the issue with the hold marker, as in v1: people see
-	// what the agent waits for, and Open Supervisor reads the same marker.
+	// The reason goes on the issue with the hold marker, so people see what
+	// the agent waits for.
 	posted, err := t.post(ctx, b, b.issue, Intent{ID: intentID(ctx, b, OpWait, data), Work: b.work.ID, Number: b.number, Body: strings.TrimSpace(in.Reason) + "\n\n" + h.Marker(), Durable: true})
 	if err != nil {
 		return extension.WaitPlan{}, err

@@ -129,9 +129,7 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 		want  bool
 	}{
 		{&gh.Agent{Work: "work/9"}, false, true},
-		{&gh.Agent{From: "#9"}, false, true},
 		{&gh.Agent{Work: "work/1"}, false, false},
-		{&gh.Agent{From: "5"}, false, false},
 		{&gh.Agent{}, false, false},
 		{nil, false, false},
 		{&gh.Agent{Work: "work/9"}, true, false},

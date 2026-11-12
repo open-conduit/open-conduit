@@ -4,8 +4,6 @@
 
 Security fixes go to the latest release and the `main` branch. Older releases do not get backports.
 
-Open Supervisor is a separate project with its own policy. Report its issues there.
-
 ## Reporting a vulnerability
 
 Report vulnerabilities privately through GitHub's private vulnerability reporting on this repository:

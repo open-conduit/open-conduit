@@ -69,13 +69,10 @@ func TestConfigAndIssueOf(t *testing.T) {
 }
 
 func TestMarkRoundTrip(t *testing.T) {
-	body := bitbucket.Mark("Done.\n", tracker.Mark{Work: "w-1", Intent: "iabc", From: "PROJ-4"})
+	body := bitbucket.Mark("Done.\n", tracker.Mark{Work: "w-1", Intent: "iabc"})
 	text, a := bitbucket.Unmark(body)
-	if text != "Done." || a == nil || a.From != "PROJ-4" || a.Work != "w-1" || a.Intent != "iabc" {
+	if text != "Done." || a == nil || a.Work != "w-1" || a.Intent != "iabc" || body != "Done.\n\n[//]: # (open-conduit:agent work=w-1 intent=iabc)" {
 		t.Fatalf("%q -> %q %+v", body, text, a)
-	}
-	if text, a := bitbucket.Unmark("ok\n\n[//]: # (open-supervisor:agent)"); text != "ok" || a == nil || a.From != "" {
-		t.Fatalf("Open Supervisor's plain mark: %q %+v", text, a)
 	}
 	if _, a := bitbucket.Unmark("plain"); a != nil {
 		t.Fatal("unmarked")
@@ -88,7 +85,7 @@ func TestReconcilePaginationCommentsAndChecks(t *testing.T) {
 	f.AddPR(1, "Fix it", "agent/issue/PROJ-7", "aaa1111abc")
 	f.AddPR(2, "Unrelated", "feature", "bbb2222abc")
 	f.AddComment(1, "Ada", "looks good")
-	f.AddComment(1, "Agent", bitbucket.Mark("pushed", tracker.Mark{Work: "w-9", From: "PROJ-7"}))
+	f.AddComment(1, "Agent", bitbucket.Mark("pushed", tracker.Mark{Work: "w-9"}))
 	bot := f.AddComment(1, "CI", "deployed")
 	bot.App = true
 	inline := f.AddComment(1, "Ada", "rename this")

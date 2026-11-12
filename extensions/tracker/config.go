@@ -33,8 +33,7 @@ func Strict(data []byte, out any) error {
 	return nil
 }
 
-// Labels are the projected and admission labels (Open Supervisor's names by
-// default, so either runtime sees the other's claim).
+// Labels are the projected and admission labels.
 type Labels struct {
 	Claimed string   `json:"claimed,omitempty"`
 	Help    string   `json:"help,omitempty"`
@@ -44,7 +43,7 @@ type Labels struct {
 	Require []string `json:"require,omitempty"`
 }
 
-// DefaultLabels matches Open Supervisor.
+// DefaultLabels are the labels a scope uses unless it names its own.
 func DefaultLabels() Labels {
 	return Labels{Claimed: "agent-in-progress", Help: "agent-needs-help", Review: "ready-for-review", Done: "might-be-done",
 		Skip: []string{"backlog", "human", "milestone"}}

@@ -1697,7 +1697,7 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 
 	pr := e.must(a, gh.OpPRCreate, "pr", map[string]any{"title": "Fix the wobble", "body": "Not done yet: the mobile layout.", "draft": true})
 	number := int(pr["number"].(float64))
-	if body := e.fake.Issue(number).Body; !strings.HasPrefix(body, "Closes #"+itoa(n)+"\n\n") || !strings.Contains(body, marker) || markers(body) != 1 || strings.Contains(body, gh.LegacyMarker) {
+	if body := e.fake.Issue(number).Body; !strings.HasPrefix(body, "Closes #"+itoa(n)+"\n\n") || !strings.Contains(body, marker) || markers(body) != 1 || strings.Contains(body, "intent=") {
 		t.Fatalf("created PR body: %q", body)
 	}
 

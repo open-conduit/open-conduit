@@ -163,7 +163,7 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 		return equal(labels, "agent-in-progress", "might-be-done") && state == "Done" && len(comments) == 2
 	})
 	_, _, lc := lf.Snapshot("ENG-1")
-	if !strings.Contains(lc[0].Body+lc[1].Body, "Ready for review.") || !strings.Contains(lc[1].Body, "Posted by an open-supervisor agent working on ENG-1") {
+	if !strings.Contains(lc[0].Body+lc[1].Body, "Ready for review.") || !strings.Contains(lc[1].Body, "*open-conduit work=") {
 		t.Fatalf("linear comments: %+v", lc)
 	}
 	if prc := bf.PRComments(1); len(prc) != 1 || !strings.Contains(prc[0].Body, "Pushed the fix.") || !strings.Contains(prc[0].Body, "open-conduit:agent") {

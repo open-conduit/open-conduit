@@ -600,8 +600,6 @@ func view(kind string, c rawComment, reply string) commentView {
 		v.Agent = "agent"
 		if a.Work != "" {
 			v.Agent = "agent on " + a.Work
-		} else if a.From != "" {
-			v.Agent = "agent on " + a.From
 		}
 	}
 	if t := firstTime(c.CreatedAt, c.SubmittedAt, c.UpdatedAt); !t.IsZero() {

@@ -53,7 +53,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 - **Listing.** The enhanced search (`/search/jql`, token pages) falls back to the classic search on a 404.
 - **Closed.** An issue is closed once its status is in the done category or, when the issue carries no category, once it has a resolution. A `finished` or `done` transition to a done-category status therefore closes it, and completed Work then loses the claimed label.
 - **Reopens.** They come from the changelog against status categories, or from a cleared resolution when the categories are unreadable.
-- **Marks.** Comments carry an entity property (`work` and `intent`).
+- **Marks.** Comments carry the `open-conduit` entity property (`work` and `intent`).
 - **Transitions.** Matched by target status first, then by transition name.
 - **Webhooks.** `X-Hub-Signature` HMAC through the admin API (needs an administrator, refusal code `hook_permission_denied`). **Intentional difference:** unsigned deliveries are refused rather than accepted with a log line; reconcile recovers what they would have said.
 
