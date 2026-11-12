@@ -649,6 +649,42 @@ func (s *Scheduler) InspectAttempt(ctx context.Context, id domain.ID) (state Att
 	err = s.transact(ctx, nil, func(tx storage.Tx) error { var e error; state, e = attemptState(tx, id); return e })
 	return
 }
+
+// Holding reports which of ids may still have a process the host must keep
+// serving: an execution that is not terminal, or one that is terminal but
+// whose physical stop is not yet confirmed (AttemptState.Excluded false). A
+// timeout or cancel ends an execution before its process is stopped, and
+// until the stop is confirmed the process can still call its toolbelt; those
+// calls should reach the host and be refused there, on the record. An
+// unknown execution, or one that never had an attempt, holds nothing.
+func (s *Scheduler) Holding(ctx context.Context, ids []domain.ID) (map[domain.ID]bool, error) {
+	out := map[domain.ID]bool{}
+	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		for _, id := range ids {
+			x, err := tx.Execution(id)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !x.State.Terminal() {
+				out[id] = true
+				continue
+			}
+			state, err := attemptState(tx, id)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			out[id] = !state.Excluded
+		}
+		return nil
+	})
+	return out, err
+}
 func (s *Scheduler) Renew(ctx context.Context, ref domain.LeaseRef) error {
 	return s.transact(ctx, &ref, func(tx storage.Tx) error { return tx.Renew(ref, s.options.LeaseDuration) })
 }

@@ -179,13 +179,20 @@ func (t *toolbelt) payload(f *toolFlags) (*client.Payload, error) {
 func (t *toolbelt) client() (*client.Client, error) {
 	endpoint := t.env.Getenv("OS_ENDPOINT")
 	token := ""
-	if path := t.env.Getenv("OS_TOKEN_FILE"); path != "" {
+	path := t.env.Getenv("OS_TOKEN_FILE")
+	if path != "" {
 		if b, err := os.ReadFile(path); err == nil {
 			token = strings.TrimSpace(string(b))
 		}
 	}
 	if token == "" {
 		token = t.env.Getenv("OS_TOKEN")
+	}
+	if endpoint != "" && token == "" && path != "" {
+		// The host keeps the token file until the execution has ended and
+		// its process is stopped, so a missing file means this process is
+		// outliving its execution.
+		return nil, fmt.Errorf("the toolbelt token file %s is gone: this execution has ended (timed out, cancelled or finished) and its toolbelt is closed; the run's history says why", path)
 	}
 	if endpoint == "" || token == "" {
 		return nil, errors.New("OS_ENDPOINT and OS_TOKEN are not set; os runs inside an execution with a toolbelt")

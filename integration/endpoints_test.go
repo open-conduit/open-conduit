@@ -13,7 +13,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
-	"github.com/open-conduit/open-conduit/storage"
 )
 
 // TestManagementExecutionEndpoints runs real scheduled attempts through the
@@ -201,25 +200,40 @@ func TestManagementExecutionEndpoints(t *testing.T) {
 		t.Fatalf("adopted attempt's socket after restart: %v", err)
 	}
 
-	// Terminal: the run directory and its socket go away; the live one stays.
+	// Terminal with its process ended: the run directory and its socket go
+	// away; the live one stays.
 	if err = h.scheduler.Complete(ctx, adoptedAttempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
 		t.Fatal(err)
 	}
-	if err = h.endpoints.Reconcile(func(ids []domain.ID) (map[domain.ID]bool, error) {
-		live := map[domain.ID]bool{}
-		err := h.store.Transact(ctx, storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
-			for _, id := range ids {
-				x, err := tx.Execution(id)
-				if err != nil {
-					return err
-				}
-				live[id] = !x.State.Terminal()
-			}
-			return nil
-		})
-		return live, err
-	}); err != nil {
+	// An execution ended before its process is proved stopped (cancelled
+	// here; timed out alike): its token is revoked, but the endpoint stays
+	// until the stop is confirmed, so the process's calls reach the host
+	// and are refused there instead of finding no token file.
+	c := start("endpoint-c")
+	cc := contextOf(c.Lease.ExecutionID)
+	var cancelled client.ControlResult
+	h.mustCLI(&cancelled, "executions", "cancel", string(c.Lease.ExecutionID), "--reason", "operator", "--key", "endpoint-c-cancel")
+	reconcile := func() {
+		t.Helper()
+		if err := h.endpoints.Reconcile(func(ids []domain.ID) (map[domain.ID]bool, error) {
+			return h.scheduler.Holding(ctx, ids)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	if b, err := os.ReadFile(cc.ToolbeltTokenFile); err != nil || strings.TrimSpace(string(b)) != cc.ToolbeltToken {
+		t.Fatalf("ended execution's token file went before its process stopped: %q %v", b, err)
+	}
+	if err = readContext(dial(cc.ToolbeltEndpoint, cc.ToolbeltToken)); !isStatus(err, 403) {
+		t.Fatalf("ended execution's call was not refused by the host: %v", err)
+	}
+	if err = h.scheduler.ConfirmStopped(ctx, c.Lease.ExecutionID, c.Lease.Epoch); err != nil {
 		t.Fatal(err)
+	}
+	reconcile()
+	if _, err = os.Stat(filepath.Dir(cc.ToolbeltTokenFile)); !os.IsNotExist(err) {
+		t.Fatalf("stopped execution's run directory kept: %v", err)
 	}
 	if _, err = os.Stat(filepath.Dir(ca.ToolbeltTokenFile)); !os.IsNotExist(err) {
 		t.Fatalf("terminal attempt's run directory kept: %v", err)
