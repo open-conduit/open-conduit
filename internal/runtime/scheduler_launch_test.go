@@ -362,15 +362,34 @@ func TestProductionSchedulerHoldEndsOnLostLease(t *testing.T) {
 	ticks := make(chan time.Time)
 	ctx, lost, stop := s.Hold(context.Background(), a.Lease, ticks, nil)
 	defer stop()
-	ticks <- r.f.Clock.Now()
+	// The holder takes a tick only between renewals, so the second tick
+	// is taken only once the first renewal is done: the clock must not move
+	// until then, or that renewal is rightly refused. A holder that has
+	// stopped takes no tick, so each send also watches lost and a bound.
+	tick := func(what string) {
+		t.Helper()
+		select {
+		case ticks <- r.f.Clock.Now():
+		case <-lost:
+			t.Fatalf("%s: the lease was lost", what)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the holder never took the tick", what)
+		}
+	}
+	tick("first renewal")
+	tick("control: a renewal within the lease")
+	r.f.Clock.Advance(2 * r.o.LeaseDuration)
+	select {
+	case ticks <- r.f.Clock.Now():
+	case <-lost:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the holder never took the tick past the lease")
+	}
 	select {
 	case <-lost:
-		t.Fatal("control: a renewal within the lease lost it")
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a renewal past the lease did not lose it")
 	}
-	r.f.Clock.Advance(2 * r.o.LeaseDuration)
-	ticks <- r.f.Clock.Now()
-	<-lost
 	<-ctx.Done()
 	if !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
 		t.Fatalf("cause %v, want the lease lost", context.Cause(ctx))
