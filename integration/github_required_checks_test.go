@@ -41,8 +41,8 @@ func (e *toolsEnv) renderLast(typ string) string {
 	return text
 }
 
-// Port of v1 c37edf1 engine TestMissingRequiredCheckIsNotAPass, with the
-// protection and ruleset sources, a refused read and the github.checks tool:
+// A missing required check is not a pass, with the protection and ruleset
+// sources, a refused read and the github.checks tool:
 // the agent never hears "Checks passed" while a check the base branch
 // requires has not reported.
 func TestGitHubRequiredChecks(t *testing.T) {

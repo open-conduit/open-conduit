@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Subscription usage windows (v1 Usage): the 5-hour and 7-day percentages
+// Subscription usage windows: the 5-hour and 7-day percentages
 // /usage shows, read from the OAuth usage endpoint Claude Code itself uses
 // with the machine's Claude login. The endpoint is undocumented, so callers
 // treat failure as "usage unknown" rather than a fault. Reading it is opt-in

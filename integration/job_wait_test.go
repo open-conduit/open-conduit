@@ -18,7 +18,7 @@ import (
 // subscriptions on SQLite: a finished job run is announced as a run-ended
 // Event on the job's key (derived from its trigger, after a per-job
 // checkpoint), and the GitHub wait translation makes that type a FromNow
-// dependency, so v1's TestJobRunEndsAWait holds with no condition kind in
+// dependency, so a job-run wait holds with no condition kind in
 // core.
 
 const jobNS = "schedule/eng"
@@ -101,7 +101,7 @@ func (e *toolsEnv) publishJobRuns() {
 	e.route()
 }
 
-// TestJobRunEndsAWait ports v1 TestJobRunEndsAWait: a held issue waiting
+// TestJobRunEndsAWait: a held issue waiting
 // for job:backup starts when the job's next run ends; an agent's
 // `github.wait job:backup` is woken by the next run, not an earlier one, and
 // is told how it ended; an unknown job is refused.

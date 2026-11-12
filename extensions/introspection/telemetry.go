@@ -10,8 +10,8 @@ import (
 	"github.com/open-conduit/open-conduit/observability"
 )
 
-// Telemetry events (05-03): v1 captured named product-telemetry events
-// (agent_problem, host_metrics, host_alert) on its sinks. Here they are an
+// Telemetry events (05-03): named product-telemetry events
+// (agent_problem, host_metrics, host_alert) captured on sinks. They are an
 // optional adapter on the public observability contract, not a runtime
 // feature: Exporter is an observability.Exporter the host adds to its
 // lifecycle pipeline, which turns the committed acceptance records of the

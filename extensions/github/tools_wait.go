@@ -23,7 +23,7 @@ import (
 // condition already happened wakes through the same core path.
 
 // waitInputTypes are the own-key families that still reach an agent while
-// it waits (v1: comments, check results and merges arrive meanwhile). Agent
+// it waits (comments, check results and merges arrive meanwhile). Agent
 // comments are excluded: the wait's own reason comment is one. Another
 // agent's comment wakes it through peerComments instead.
 var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypePullConflicts, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
@@ -248,8 +248,8 @@ func (t *Tools) mayRead(b *bound, c Cond, target domain.ID) error {
 }
 
 // resolveJob translates `job:<name>`: the next run of the job ending, in any
-// way, is a dependency on the job's own key (v1 waited for the next run, not
-// an earlier one).
+// way, is a dependency on the job's own key (the next run, not an
+// earlier one).
 func (t *Tools) resolveJob(ctx context.Context, b *bound, c Cond) (resolvedCond, error) {
 	r := resolvedCond{cond: c}
 	if t.o.Jobs == nil {
@@ -367,7 +367,7 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			r.dep.Types = []string{TypeIssueClosed}
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "issue", Repo: repo, Number: c.Number()})
 		} else {
-			// The next turn ending in that state, not an earlier one (v1).
+			// The next turn ending in that state, not an earlier one.
 			r.dep.Types, r.dep.FromNow = []string{domain.TypeTurnEnded}, true
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On})
 		}
@@ -610,7 +610,7 @@ func (t *Tools) keepHeld(ctx context.Context, b *bound, h *Hold, resolved []reso
 }
 
 // latestHold is the latest hold marker on an issue: its body, then its
-// comments in order (v1 latestHold). A cancel marker drops the hold.
+// comments in order. A cancel marker drops the hold.
 // unscheduled reports that the issue no longer carries the scheduled label.
 func (t *Tools) latestHold(ctx context.Context, b *bound) (h *Hold, cancelled, unscheduled bool, err error) {
 	repo := b.issue.Settings.TrackerRepo
@@ -719,7 +719,7 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 		r, err := t.resolveCond(ctx, b, c)
 		if err != nil {
 			// Conditions nothing here can meet (an unknown job or project)
-			// leave only the time, as in v1.
+			// leave only the time.
 			s.Unmatched = append(s.Unmatched, c.String())
 			var op *extension.OperationError
 			if errors.As(err, &op) {

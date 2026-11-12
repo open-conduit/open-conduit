@@ -13,8 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// The agent-facing tracker tools: Open Supervisor's `agent issue …` commands
-// as toolbelt operations, the same for every tracker type. Every handler
+// The agent-facing tracker tools as
+// toolbelt operations, the same for every tracker type. Every handler
 // receives validated authority, reads the Work it serves from durable state
 // and acts only on that Work's issue (or the entry's issues). Comments go
 // through the projector's durable intents, so a retried call never posts

@@ -111,7 +111,7 @@ type Options struct {
 	// Now is the wall clock (default time.Now).
 	Now func() time.Time
 	// DryRun runs every turn as a stub on DryRunModel (default haiku) that
-	// is told to do nothing and call no tools (v1 dry run). Continuity and
+	// is told to do nothing and call no tools. Continuity and
 	// outcomes behave as usual.
 	DryRun      bool
 	DryRunModel string

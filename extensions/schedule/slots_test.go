@@ -15,7 +15,7 @@ func latestName(j sc.Job, now time.Time) string {
 	return s.Name
 }
 
-// TestCronSlot ports v1 engine/jobs_test.go TestCronSlot onto Latest.
+// TestCronSlot checks Latest for cron slots.
 func TestCronSlot(t *testing.T) {
 	london, _ := time.LoadLocation("Europe/London")
 	at := func(y int, mo time.Month, d, h, mi int) time.Time { return time.Date(y, mo, d, h, mi, 0, 0, london) }
@@ -44,7 +44,7 @@ func TestCronSlot(t *testing.T) {
 	}
 }
 
-// TestCronSlotClockChanges ports v1 TestCronSlotClockChanges.
+// TestCronSlotClockChanges checks cron slots across clock changes.
 func TestCronSlotClockChanges(t *testing.T) {
 	job := sc.Job{Name: "j", Cron: "30 1 * * *", TimeZone: "Europe/London"}
 	// The clocks skip 01:00-02:00 on 29 March 2026: no 01:30 that night.
@@ -66,7 +66,7 @@ func TestCronSlotClockChanges(t *testing.T) {
 		t.Errorf("after the BST 01:30: %+v", n)
 	}
 	// A schedule within the hour runs at repeated times whose name differs
-	// from the one just run, as v1's single LastSlot did.
+	// from the one just run.
 	half := sc.Job{Name: "j", Cron: "*/30 * * * *", TimeZone: "Europe/London"}
 	bst130 := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
 	n, _ = sc.Next(half, bst130, "2026-10-25 01:30 Europe/London")
@@ -75,8 +75,8 @@ func TestCronSlotClockChanges(t *testing.T) {
 	}
 }
 
-// The six-hour boundary is exclusive, exactly as v1's algorithm (not its
-// README prose): now-slot < 6h runs, == 6h waits for the next slot.
+// The six-hour boundary is exclusive: now-slot < 6h runs, == 6h waits for the
+// next slot.
 func TestCatchUpBoundary(t *testing.T) {
 	slot := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
 	for _, j := range []sc.Job{{Name: "c", Cron: "0 9 * * *"}, {Name: "a", At: []string{"09:00"}}} {
@@ -255,7 +255,7 @@ func TestDesiredEdits(t *testing.T) {
 		t.Fatal("trigger edit rearmed")
 	}
 	// Edited to 08:00 at 10:00: today's 08:00 is within six hours and is not
-	// the slot that ran last, so it runs now (v1 kept LastSlot).
+	// the slot that ran last, so it runs now.
 	edited := sc.Job{Name: "report", Cron: "0 8 * * *"}
 	next, spec, changed := sc.Desired(ns, edited, now, cur)
 	if !changed || !next.FireAt.Equal(time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)) {

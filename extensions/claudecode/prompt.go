@@ -48,7 +48,7 @@ const (
 	kindHandoff turnKind = "handoff"
 )
 
-// body composes the args and body of a turn (Open Supervisor's turnBody).
+// body composes the args and body of a turn.
 func body(kind turnKind, args, note string, events string) (string, string) {
 	switch kind {
 	case kindHandoff:
@@ -78,7 +78,7 @@ func prompt(playbook, args, body string) string {
 	return text
 }
 
-// dryRunPrompt wraps a turn's prompt for a dry run (v1 parity): the agent
+// dryRunPrompt wraps a turn's prompt for a dry run: the agent
 // is told to do nothing and call no tools.
 func dryRunPrompt(text string, structured bool) string {
 	end := "End with a one-line summary."

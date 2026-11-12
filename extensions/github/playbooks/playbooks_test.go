@@ -20,7 +20,7 @@ func registered() map[string]bool {
 }
 
 // Every toolbelt operation a playbook tells the agent to call is one the
-// github extension registers, and v1's agent commands are gone.
+// github extension registers, and no `agent …` command remains.
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	ops := registered()
 	books := playbooks.All()

@@ -49,10 +49,10 @@ func (f *fixture) leaseFiles() int {
 	return len(entries)
 }
 
-// Port of v1 TestSetupRefusesAFullDisk: a disk with room takes a new
-// workspace; one that would be left too full refuses it with how much is free,
-// what the checkout needs and which of the scope's workspaces can go, and
-// nothing is made or leased. Re-acquiring an existing workspace needs no room.
+// A disk with room takes a new workspace; one that would be left too full
+// refuses it with how much is free, what the checkout needs and which of the
+// scope's workspaces can go, and nothing is made or leased. Re-acquiring an
+// existing workspace needs no room.
 func TestRefusesAWorkspaceOnAFullDisk(t *testing.T) {
 	f := newFixture(t)
 	if got := f.provider.checkoutSize(context.Background(), f.root, "main"); got != 6 {
@@ -128,9 +128,8 @@ func TestRefusesAWorkspaceOnAFullDisk(t *testing.T) {
 	}
 }
 
-// Port of v1 TestSetupClearsAHalfMadeWorktree: whatever made git fail, no
-// directory is left to be reused as if it were whole, the worktree is not
-// registered and the lease is dropped.
+// Whatever made git fail, no directory is left to be reused as if it were whole,
+// the worktree is not registered and the lease is dropped.
 func TestClearsAHalfMadeWorkspace(t *testing.T) {
 	f := newFixture(t)
 	var log strings.Builder
@@ -157,7 +156,7 @@ func TestClearsAHalfMadeWorkspace(t *testing.T) {
 	}
 }
 
-// Port of v1 TestIssueWorktrees and the sweep: finished Work's workspaces and
+// The sweep removes finished Work's workspaces and
 // idle clean ones no lease or record holds are removed (branches kept); dirty,
 // unpushed and in-use ones are kept and reported; live ones are untouched.
 func TestSweepRemovesSpareWorkspacesOnly(t *testing.T) {

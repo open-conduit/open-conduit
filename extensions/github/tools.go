@@ -18,15 +18,15 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// The agent-facing engineering tools (03-04): Open Supervisor's
-// `agent …` commands as toolbelt operations registered through the public
-// Registrar. An agent reaches them as `call {operation, input}` (MCP) or
-// `os call <operation> --data <json>` (CLI). Every handler receives validated
-// authority, reads the Work it serves from durable state, and acts only on
-// that Work's issue and repository (or another scope's, for an authorized
-// cross-scope wait). The PR operations also reach any PR in a repository the
-// Work's scope registers, so Work without an issue (a Slack request, a job)
-// can review one. Non-re-derivable writes are marked and idempotent.
+// The agent-facing engineering tools (03-04): toolbelt operations registered
+// through the public Registrar. An agent reaches them as `call {operation,
+// input}` (MCP) or `os call <operation> --data <json>` (CLI). Every handler
+// receives validated authority, reads the Work it serves from durable state, and
+// acts only on that Work's issue and repository (or another scope's, for an
+// authorized cross-scope wait). The PR operations also reach any PR in a
+// repository the Work's scope registers, so Work without an issue (a Slack
+// request, a job) can review one. Non-re-derivable writes are marked and
+// idempotent.
 
 // Event families the tools and the host add to the extension's ingress
 // families.
@@ -813,7 +813,7 @@ func (t *Tools) issueProject(ctx context.Context, b *bound, project string, fili
 }
 
 // holdFor reads conditions and a time into a hold, checking each names
-// something that exists and has not already happened (v1 holdFor/checkCond).
+// something that exists and has not already happened.
 func (t *Tools) holdFor(ctx context.Context, b *bound, conds []string, until string) (Hold, []resolvedCond, error) {
 	var h Hold
 	if until != "" {

@@ -82,7 +82,8 @@ func (l Labels) Status(status string) string {
 }
 
 // TransitionStates are the states the projector can move an issue's workflow
-// status for (Open Supervisor's stateClaimed…stateFinished fields).
+// status for: the claimed, building, review, help, done and finished
+// fields.
 var TransitionStates = []string{"claimed", "building", "review", "help", "done", "finished"}
 
 // Projection controls label, transition and comment convergence.

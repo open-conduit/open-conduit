@@ -14,7 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 )
 
-// Scheduled holds (v1 `scheduled` label plus a runAt/waitFor marker). A held
+// Scheduled holds (a `scheduled` label plus a runAt/waitFor marker). A held
 // issue is claimed by the `github-hold` route as WorkKindHeld Work bound to
 // the `github-hold` executor. Its attempt translates the hold through the
 // github.hold operation into a core Wait (timeout timer plus dependency
@@ -286,7 +286,7 @@ func (h *HoldExecutorImpl) decide(ctx context.Context, tb ToolbeltClient, r exte
 // label off.
 const unscheduledWhy = "The scheduled label was taken off this issue, so it starts now."
 
-// heldWake is v1's wording for a held issue whose condition happened.
+// heldWake is the wording for a held issue whose condition happened.
 func heldWake(alias domain.Event) string {
 	var p struct {
 		SourceType string `json:"source_type"`

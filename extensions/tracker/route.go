@@ -56,7 +56,7 @@ func has(labels []string, name string) bool {
 	return false
 }
 
-// Admits is the claim admission rule (Open Supervisor parity): the issue is
+// Admits is the claim admission rule: the issue is
 // open and not waiting, carries no skip label, one of the required labels
 // when any are configured, and not the claimed label unless this is a
 // reopened generation (a claimed, unowned issue belongs to another owner).

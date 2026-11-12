@@ -80,7 +80,7 @@ type Options struct {
 	// or tool it can't vouch for: a route's decision (route.match) and a
 	// container runtime's list and inspect (default 5s).
 	CallTimeout time.Duration
-	// SweepInterval paces the spare-workspace sweep (default 6h, as in v1).
+	// SweepInterval paces the spare-workspace sweep (default 6h).
 	// The first sweep runs one interval after start.
 	SweepInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.

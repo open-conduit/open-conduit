@@ -335,8 +335,7 @@ func TestAutoCompactTokens(t *testing.T) {
 	}
 }
 
-// TestResumedFreshAndColdTurns follows Open Supervisor's
-// TestColdSessionHandsOffToAFreshOne through the executor: a warm turn
+// TestResumedFreshAndColdTurns checks, through the executor, that a warm turn
 // resumes with its own cumulative usage delta; a cold turn starts a fresh
 // session from the note and keeps the old one (cold_turns: handoff, the
 // default); with cold_turns: resume a cold turn resumes; attaching forces the

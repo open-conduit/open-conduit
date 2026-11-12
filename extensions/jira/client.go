@@ -686,7 +686,7 @@ func (c *Client) EnsureWebhook(ctx context.Context, hookURL, secret, existing st
 var deliveryID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 // ParseHook checks the delivery's signature (X-Hub-Signature, HMAC-SHA256)
-// and says what it is about. Unlike Open Supervisor, an unsigned delivery is
+// and says what it is about. An unsigned delivery is
 // refused: reconcile recovers whatever it would have reported.
 func (c *Client) ParseHook(h http.Header, body []byte, secret string, _ time.Time) (tracker.Hook, error) {
 	if !tracker.VerifyHMAC(secret, body, h.Get("X-Hub-Signature")) {

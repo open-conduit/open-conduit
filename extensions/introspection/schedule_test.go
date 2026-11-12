@@ -78,7 +78,7 @@ func newTimer(t *testing.T, s Schedule, now time.Time, current *domain.Timer) (*
 	return timer, sp, changed
 }
 
-// v1's calendar: a new schedule waits for its next slot; a firing publishes
+// The calendar: a new schedule waits for its next slot; a firing publishes
 // the latest slot strictly within six hours once and rearms; a slot missed
 // by six hours or more is skipped; an edited timing catches up its latest
 // slot unless it ran; the epoch survives edits.
@@ -167,7 +167,7 @@ func TestRecurrenceRejectsBadSpecs(t *testing.T) {
 	}
 }
 
-// v1's host watch: a crossing alerts once, recovery needs 5% headroom.
+// The host watch: a crossing alerts once, recovery needs 5% headroom.
 func TestHostWatcher(t *testing.T) {
 	var w HostWatcher
 	h := HostWatch{Disk: 90}

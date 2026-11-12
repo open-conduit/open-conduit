@@ -12,7 +12,7 @@
 //   - the agent-facing tool operations (context, issue view/comment/list/create).
 //
 // Labels and workflow statuses are projections: the runtime never reads them
-// as state. Tracker-specific markers (Linear's visible footer, Jira's comment
+// as state. Tracker-specific markers (Linear's visible mark line, Jira's comment
 // entity property) and transitions stay behind the Service boundary.
 package tracker
 

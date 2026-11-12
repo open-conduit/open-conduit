@@ -8,7 +8,7 @@
 // route turns every trigger into input of one standing `schedule.job` Work per
 // job, so a job runs only through event → route → Work → Execution.
 //
-// It depends only on public contracts (plus the cron parser v1 used). It has
+// It depends only on public contracts (plus the cron parser). It has
 // no executor: a job's command is the route's binding.
 package schedule
 
@@ -51,7 +51,7 @@ const SchemaTrigger = "schedule.trigger.v1"
 
 // CatchUp is how late a timed run may start: the latest slot strictly within
 // six hours that has not run runs once; a slot missed by six hours or more
-// waits for the next (v1 engine/jobs.go catchUp).
+// waits for the next.
 const CatchUp = 6 * time.Hour
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
@@ -128,7 +128,7 @@ func (j Job) Location() (*time.Location, error) {
 	return time.LoadLocation(j.TimeZone)
 }
 
-// Schedule is the job's cron, parsed as v1 did.
+// Schedule is the job's cron, parsed as standard cron.
 func (j Job) Schedule() (cron.Schedule, error) { return cron.ParseStandard(j.Cron) }
 
 // Describe says when the job runs, in words: "every 30 min; on push to
@@ -236,8 +236,8 @@ func parseHM(at string) (int, int, bool) {
 	return hh, mm, true
 }
 
-// Validate is what is wrong with the job (v1 config.Job.Validate, minus the
-// run settings that bindings own).
+// Validate is what is wrong with the job (the run settings that
+// bindings own are not checked here).
 func (j Job) Validate() []string {
 	var errs []string
 	name := "job " + j.Name
@@ -361,8 +361,8 @@ func ValidateExtension(data json.RawMessage, secretNames []string) error {
 // selects (all jobs of every schedule entry in the scope when empty). One
 // route per binding lets each job run its own command. Triggers narrows the
 // route to trigger kinds (timer, webhook, event, manual; all when empty), so
-// two routes to one binding can give kinds different active policies: v1's
-// detached jobs queued a timer slot behind the run going but started
+// two routes to one binding can give kinds different active policies: a
+// detached job can queue a timer slot behind the run going but started
 // nothing for a delivery or a manual run (05-02).
 type RouteConfig struct {
 	Jobs     []string `json:"jobs,omitempty"`

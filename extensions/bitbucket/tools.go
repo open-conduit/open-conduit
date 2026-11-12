@@ -15,10 +15,10 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// The agent-facing code-host tools: Open Supervisor's `agent pr …` and
-// `agent checks` commands for a Bitbucket repository, acting on the PRs of
-// the Work's tracker issue. Comments go through a durable outbox with a
-// discoverable mark, so a retried call never posts twice.
+// The agent-facing code-host tools: the PR and checks operations for a
+// Bitbucket repository, acting on the PRs of the Work's tracker issue.
+// Comments go through a durable outbox with a discoverable mark, so a retried
+// call never posts twice.
 
 // Operation names.
 const (

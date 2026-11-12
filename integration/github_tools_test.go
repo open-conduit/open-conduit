@@ -29,9 +29,8 @@ import (
 )
 
 // The engineering tools, waits and holds (03-04) through the production
-// toolbelt and scheduler, over SQLite, against the GitHub fake: v1's
-// `agent …` command fixtures and engine wait tests, ported to toolbelt
-// operations, translated waits and the `github-hold` route.
+// toolbelt and scheduler, over SQLite, against the GitHub fake:
+// toolbelt operations, translated waits and the `github-hold` route.
 
 // toolsEnv adds the toolbelt, scheduler, timers and the hold executor to
 // the GitHub runtime environment, exactly as bootstrap composes them.
@@ -534,7 +533,8 @@ func TestGitHubToolsRefuseOutsideTheirWork(t *testing.T) {
 	}
 }
 
-// v1 TestWaitOnAnotherPRWakesTheAgentWhenItMerges, through a translated wait.
+// A wait on another PR wakes the agent when it merges, through a translated
+// wait.
 func TestGitHubWaitOnAnotherPRWakesTheAgentWhenItMerges(t *testing.T) {
 	e := newToolsEnv(t)
 	e.fake.OpenIssue("Twenty-nine", "", ghAlice, "backlog")
@@ -601,7 +601,7 @@ func statusData(state string) domain.Payload {
 	return domain.Payload{Schema: domain.TurnSchema, Data: data}
 }
 
-// v1 TestAlreadyMetWaitWakesAtOnce: the agent hears it already happened;
+// An already-met wait wakes at once: the agent hears it already happened;
 // a held issue whose condition already happened starts through the core path.
 func TestGitHubAlreadyMetWaits(t *testing.T) {
 	e := newToolsEnv(t)
@@ -711,7 +711,7 @@ func (e *toolsEnv) runHold(work domain.ID) string {
 	return why
 }
 
-// v1 TestWaitTimesOutAndCancels (time half) and a scheduled start time: the
+// A wait that times out and a scheduled start time: the
 // hold parks on a core timeout timer and starts the agent when it fires.
 func TestGitHubHeldIssueStartsAtItsTime(t *testing.T) {
 	e := newToolsEnv(t)
@@ -785,7 +785,7 @@ func TestGitHubHeldIssueStartsWhenUnscheduled(t *testing.T) {
 	}
 }
 
-// v1 TestHeldIssueStartsWhenAnotherAgentReports: issue:21:review waits on
+// A held issue starts when another agent reports: issue:21:review waits on
 // the turn-ended Event the host publishes with the other agent's outcome.
 func TestGitHubHeldIssueStartsWhenAnotherAgentReports(t *testing.T) {
 	e := newToolsEnv(t)
@@ -1101,7 +1101,7 @@ func TestGitHubIssuesInAnotherProject(t *testing.T) {
 }
 
 // A PR head with no checks at all reports "No checks ran" after
-// no_checks_minutes (v1 noChecksMinutes), as an ordinary routed input.
+// no_checks_minutes, as an ordinary routed input.
 func TestGitHubNoChecksRanIsObserved(t *testing.T) {
 	e := newToolsEnv(t)
 	_, w := e.claim("No CI", "", "bug")

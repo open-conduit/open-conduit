@@ -19,7 +19,7 @@ import (
 // the project's rules; a triage acts on their reports and problems. Both
 // start from OpEvidence: the scope's open reports and the notes no earlier
 // run handled, grouped by kind and leading line with counts, the Work they
-// came from and sample bodies, plus the run's settings (v1's message lines).
+// came from and sample bodies, plus the run's settings.
 // Notes are the extension's own (OpCorrection, OpProblem) plus any other
 // namespaces an entry names, read through public storage; the extension
 // never writes another extension's namespace, so handling a note records it
@@ -224,7 +224,7 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-// Settings is a run's message: v1's lines, from the current generation.
+// Settings is a run's message, from the current generation.
 type Settings struct {
 	Notes      []string `json:"notes"`
 	Rules      []string `json:"rules,omitempty"`

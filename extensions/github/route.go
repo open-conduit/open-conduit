@@ -86,7 +86,7 @@ func ValidateRoute(data json.RawMessage) error {
 // TypeClaimRequested is an operator's claim by hand: the Event of the
 // entry's "claim" action (Actions), accepted under extension.ActionSource,
 // whose correlation key is the entry's `issue/N`. It creates Work for the
-// issue whatever its labels (v1 manual claim overriding routes). The same
+// issue whatever its labels (a manual claim overrides routes). The same
 // Event posted any other way claims nothing.
 const TypeClaimRequested = "github.claim.requested"
 
@@ -139,7 +139,7 @@ func has(labels []string, name string) bool {
 	return false
 }
 
-// Admits is the claim admission rule (Open Supervisor parity): no skip label,
+// Admits is the claim admission rule: no skip label,
 // one of the required labels when any are configured, and not carrying the
 // claimed label unless this is a reopened generation (a claimed, unowned issue
 // belongs to another owner). Scheduled issues are claimed by HoldRoute.
@@ -312,7 +312,7 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return extension.Skip("the event names no issue or pull request"), nil
 	}
 	if e.Type == TypeClaimRequested {
-		// A manual claim overrides the admission labels (v1 claim by hand).
+		// A manual claim overrides the admission labels.
 		// It never feeds existing Work, which already owns the issue.
 		if in.Work != nil {
 			return extension.Skip("the issue already has Work"), nil

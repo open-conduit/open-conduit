@@ -1,13 +1,12 @@
-// Package posthog is the first-party PostHog telemetry extension (06-01),
-// ported from Open Supervisor's sink. It sends product telemetry to
-// PostHog's capture endpoint directly (nothing else is installed): an
-// `agent_turn` event for every finished execution (outcome, duration,
-// tokens and cost, from the lifecycle records the observability pipeline
-// delivers once each), the lifecycle records an entry selects, each as an
-// event named after the record, and the host's telemetry events (reports,
-// fixes, host readings) too. It is an exporter on
-// the public observability contract: a failing or slow PostHog loses
-// telemetry (counted by the pipeline) and never delays the runtime.
+// Package posthog is the first-party PostHog telemetry extension (06-01). It
+// sends product telemetry to PostHog's capture endpoint directly (nothing else
+// is installed): an `agent_turn` event for every finished execution (outcome,
+// duration, tokens and cost, from the lifecycle records the observability
+// pipeline delivers once each), the lifecycle records an entry selects, each as
+// an event named after the record, and the host's telemetry events (reports,
+// fixes, host readings) too. It is an exporter on the public observability
+// contract: a failing or slow PostHog loses telemetry (counted by the pipeline)
+// and never delays the runtime.
 package posthog
 
 import (

@@ -61,7 +61,7 @@ func PutOriginInTx(tx storage.Tx, accepted domain.AcceptedEvent, r Report) error
 }
 
 // recoverAt is the share of a threshold a reading must fall back under
-// before it counts as recovered (v1), so one hovering at the line doesn't
+// before it counts as recovered, so one hovering at the line doesn't
 // alert on every reading.
 const recoverAt = 0.95
 
@@ -122,9 +122,8 @@ func HostReport(scope domain.ID, a HostAlert, at time.Time) (domain.Event, Repor
 	return OriginReport(scope, OriginHostWatch, a.Key()+"/"+at.UTC().Format(time.RFC3339), "env", a.Condition(), body, at)
 }
 
-// HostWatcher remembers which readings are over their thresholds (v1
-// hostWatch). It is in memory: after a restart a reading still over is a new
-// crossing.
+// HostWatcher remembers which readings are over their thresholds. It is in
+// memory: after a restart a reading still over is a new crossing.
 type HostWatcher struct {
 	mu     sync.Mutex
 	over   map[string]bool
@@ -191,7 +190,7 @@ func (w *HostWatcher) Over() []string {
 	return out
 }
 
-// HostProps are a reading's telemetry properties (v1 hostProps): each disk
+// HostProps are a reading's telemetry properties: each disk
 // by path, plus the fullest under disk_*.
 func HostProps(s host.Sample) map[string]any {
 	props := map[string]any{"cpus": s.CPUs}

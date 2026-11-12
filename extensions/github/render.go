@@ -10,7 +10,7 @@ import (
 )
 
 // RenderEvent renders one GitHub Event the way an agent reads it at the
-// start of a turn (Open Supervisor's core.Render), with each comment's
+// start of a turn, with each comment's
 // reply hint naming the tool that answers it. ok is false for Events this
 // extension does not own; the host falls back to the generic renderer.
 //

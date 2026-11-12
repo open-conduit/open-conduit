@@ -45,7 +45,7 @@ func (d *daemon) openResources() {
 }
 
 // sweepResources runs each sweeping provider's spare-workspace sweep in the
-// background, once per SweepInterval (v1: every 6 hours).
+// background, once per SweepInterval (every 6 hours).
 func (d *daemon) sweepResources(c *components) {
 	r := &d.resources
 	r.mu.Lock()

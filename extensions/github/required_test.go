@@ -27,9 +27,8 @@ func handlerClient(t *testing.T, h http.Handler) *Client {
 	return c
 }
 
-// Port of v1 c37edf1 adapters/github TestRequiredChecks: protection and
-// rulesets are both read, deduplicated, with an escaped branch name, and a
-// plan without rulesets (403) is a refused source, not an error.
+// Protection and rulesets are both read, deduplicated, with an escaped branch
+// name, and a plan without rulesets (403) is a refused source, not an error.
 func TestRequiredChecksFromProtectionAndRulesets(t *testing.T) {
 	c := handlerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch strings.Split(r.URL.EscapedPath(), "?")[0] {
@@ -93,7 +92,7 @@ func TestRequiredChecksRefusedAndRateLimited(t *testing.T) {
 	}
 }
 
-// Port of v1 c37edf1 core TestChecksMissing.
+// TestMissingChecks checks which required checks have not reported.
 func TestMissingChecks(t *testing.T) {
 	runs := []CheckRun{{Name: "test", State: "success"}, {Name: "lint", State: "failure"}}
 	got := missingChecks(runs, []string{"test", "deploy-preview", "lint", "deploy-preview"})

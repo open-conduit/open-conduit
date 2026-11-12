@@ -13,8 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Ported from Open Supervisor's core wait tests and toolbelt
-// TestHoldForChecksBeforeAnyCall: the agent-facing syntax only.
+// TestParseCondAndHoldMarkers covers the agent-facing wait and hold syntax
+// only.
 func TestParseCondAndHoldMarkers(t *testing.T) {
 	for in, want := range map[string]string{
 		"pr:12": "pr:12:merged", "pr:#12:closed": "pr:12:closed", "issue:7": "issue:7:closed", "issue:7:review": "issue:7:review", "issue:7:Approved": "issue:7:approved",
@@ -235,7 +235,7 @@ func TestRenderEventsWithReplyHints(t *testing.T) {
 		"### Checks failed on PR #4 at abcdef1: ci":         ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Failed: []string{"ci"}}),
 		"### Checks passed on PR #4 at abcdef1\nPreview: u": ev(gh.TypeChecksPassed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Preview: "u"}),
 		"### No checks ran on PR #4":                        ev(gh.TypeChecksNone, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", None: true}),
-		// v1 c37edf1 core TestRender: a required check that never reported.
+		// A required check that never reported.
 		"### Required checks never reported on PR #5 at 995bdda: netlify/site/deploy-preview\nThe PR can't merge without them.":                                               ev(gh.TypeChecksMissing, gh.SchemaChecks, gh.ChecksPayload{Number: 5, SHA: "995bdda12", Missing: []string{"netlify/site/deploy-preview"}}),
 		"### Checks failed on PR #6 at abcdef1: lint\nSee `call github.checks {\"number\": 6}` for links to each.\nThese required checks never reported either: deploy.":      ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 6, SHA: "abcdef1234", Failed: []string{"lint"}, Missing: []string{"deploy"}}),
 		"### PR #4 has conflicts with main at abcdef1\nIt can't merge until they're resolved.":                                                                                ev(gh.TypePullConflicts, gh.SchemaConflict, gh.ConflictsPayload{Number: 4, HeadSHA: "abcdef1234", BaseRef: "main"}),

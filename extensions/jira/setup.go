@@ -13,7 +13,7 @@ import (
 )
 
 // Setup is the Jira extension's `init jira`: one scope working one or more
-// projects' issues (v1 wizard outcomes: the site and its authentication, the
+// projects' issues (the site and its authentication, the
 // project keys, extra JQL and route fields, an optional git work resource,
 // the agent binding with the tracker's tools and the route).
 type Setup struct{}

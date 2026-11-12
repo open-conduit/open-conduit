@@ -174,7 +174,7 @@ func (d *daemon) startReady(ctx context.Context) {
 			if w.State != domain.WorkReady {
 				continue
 			}
-			// A dry run starts no scheduled job (v1); its triggers wait.
+			// A dry run starts no scheduled job; its triggers wait.
 			if d.o.DryRun && timed[w.Kind] {
 				continue
 			}

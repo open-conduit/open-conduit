@@ -17,8 +17,8 @@ import (
 // The daily sweep and triage are each scope's standing Work, started by the
 // extension's own calendar timers: durable core timers whose recurrence is
 // this package's RecurrenceFunc (registered by the host under
-// RecurrenceKind). The calendar rules are v1's, as the schedule extension
-// ports them for jobs: a new timer waits for its next slot; an edited timing
+// RecurrenceKind). The calendar rules match the schedule extension's
+// for jobs: a new timer waits for its next slot; an edited timing
 // runs its latest slot strictly within six hours unless that slot ran last;
 // a firing publishes the latest slot strictly within six hours, so a missed
 // slot is caught up once and one missed by six hours or more is skipped.
@@ -29,7 +29,7 @@ const RecurrenceKind = "introspection.v1"
 // SchemaDue is the payload schema of a sweep or triage slot Event.
 const SchemaDue = "introspection.due.v1"
 
-// CatchUp is how late a missed slot may still run (v1: strictly less than
+// CatchUp is how late a missed slot may still run (strictly less than
 // six hours).
 const CatchUp = 6 * time.Hour
 

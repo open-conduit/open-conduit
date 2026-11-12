@@ -163,7 +163,7 @@ func (p *Projector) declaration(x *domain.Execution) (domain.TurnDeclaration, bo
 
 // Desired returns the managed labels and the workflow state a Work's durable
 // state projects. Labels: the claimed label while the Work owns the issue
-// and at most one status label, absent while an attempt runs (v1: the status
+// and at most one status label, absent while an attempt runs (the status
 // comes off while a turn runs). State: the declared status of the latest
 // finished attempt (done or help for completed or failed Work without one),
 // "claimed" before any, kept while a turn runs; cancelled Work leaves the

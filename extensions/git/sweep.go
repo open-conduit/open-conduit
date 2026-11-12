@@ -27,11 +27,11 @@ const (
 
 // spareIdle is how long a workspace no lease or record holds is left before
 // the sweep takes it, so one made by hand isn't taken from under whoever made
-// it (v1 spareAge).
+// it.
 const spareIdle = 24 * time.Hour
 
 // Sweep removes spare workspaces that Reconcile's owner-driven release does
-// not reach (v1 #63's six-hourly worktree sweep): those of finished Work that
+// not reach: those of finished Work that
 // are still kept (a failed or cancelled Work's, inside its retention), those
 // whose owner no record holds, and directories under the provider's root no
 // lease holds at all. The last two must have been idle for a day. It never

@@ -1,7 +1,7 @@
 // Package host reads how loaded the machine Open Conduit runs on is: its CPU load, memory and disk space.
 // Agents, their dev servers and their worktrees all share the one machine, so a host that runs out of any of
 // them stalls every project at once. It reads what the OS already keeps (/proc on Linux, sysctl on macOS), so
-// nothing runs to take a sample. Ported from Open Supervisor v1 internal/host for the introspection host watch (05-03).
+// nothing runs to take a sample. Used by the introspection host watch (05-03).
 package host
 
 import (

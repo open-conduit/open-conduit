@@ -1,6 +1,6 @@
-// Package tunnel exposes the host's webhook listener to the internet (ported
-// from Open Supervisor's adapters/tunnel) through ngrok or a Cloudflare
-// tunnel. Each type is an extension.TunnelProvider: one Run starts the provider's process, publishes
+// Package tunnel exposes the host's webhook listener to the internet
+// through ngrok or a Cloudflare tunnel. Each type is an
+// extension.TunnelProvider: one Run starts the provider's process, publishes
 // each public URL it reports, and returns when the process exits, so the
 // host decides when to start it again. It forwards only to the listener's
 // address the host gives it, never to the management socket.

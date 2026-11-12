@@ -67,8 +67,8 @@ func TestDependencyClosures(t *testing.T) {
 		{"kit_package_serves_protocol", []pkg{project("extensions/tracker/pkg", "extensions/tracker", "protocol/sdk/inprocsdk"), project("extensions/linear/pkg", "extensions/tracker/pkg", "extensions/linear")}, ""},
 		{"kit_cannot_import_sdk", []pkg{project("extensions/tracker", "protocol/sdk/inprocsdk")}, "protocol/sdk/inprocsdk"},
 		{"kit_package_cannot_use_examples", []pkg{project("extensions/tracker/pkg", "protocol/examples/notes")}, "protocol/examples/notes"},
-		// 06-02: the v1 converter reads extension config names, never the
-		// runtime, storage or composition; the CLI reaches it by injection.
+		// The protocol reads only the public contracts, never the runtime
+		// or an extension, and they never import it.
 		{"protocol_reads_public_contracts", []pkg{project("protocol", "extension", "domain")}, ""},
 		{"protocol_cannot_reach_runtime", []pkg{project("protocol", "internal/runtime")}, "internal/runtime"},
 		{"protocol_cannot_reach_extensions", []pkg{project("protocol", "extensions/slack")}, "extensions/slack"},

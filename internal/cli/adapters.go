@@ -16,7 +16,7 @@ type Field struct {
 	Options  []string `json:"options,omitempty"`
 }
 
-// Adapter describes one registered integration (v1 `adapters`): what it
+// Adapter describes one registered integration: what it
 // registers (connection, extension entry, route handler, executor,
 // resource provider, serve option) and the fields each takes. The
 // entrypoint supplies the catalog (cli.Env.Adapters) from bootstrap, so this
