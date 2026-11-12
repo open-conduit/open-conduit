@@ -442,7 +442,7 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 }
 
 // baseline admits only safe process variables: unrelated credentials, toolbelt
-// variables and Open Conduit/Open Supervisor settings never reach the command.
+// variables and Open Conduit settings never reach the command.
 func baseline(name string) bool {
 	switch name {
 	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TERM":

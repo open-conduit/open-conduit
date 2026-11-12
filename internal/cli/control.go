@@ -262,7 +262,7 @@ func (o *operator) reconcileScope(args []string) int {
 	return o.emit(c.ReconcileScope(cx, pos[0], rev, f.key()))
 }
 
-// claimRef is v1's claim syntax: [scope#]N, also #N.
+// claimRef is the claim syntax: [scope#]N, also #N.
 var claimRef = regexp.MustCompile(`^(?:([a-z][a-z0-9_-]{0,62})?#)?([0-9]{1,10})$`)
 
 // ParseClaim splits "scope#12", "#12" or "12".

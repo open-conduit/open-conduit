@@ -158,17 +158,11 @@ func TestRouteInputSelection(t *testing.T) {
 	if comment(gh.TypeCommentAgent, gh.CommentPayload{Kind: gh.KindIssue, Body: "my note", Agent: &gh.Agent{Work: "work/1"}}) {
 		t.Fatal("own note handed back")
 	}
-	if comment(gh.TypeCommentAgent, gh.CommentPayload{Kind: gh.KindIssue, Body: "v1 note", Agent: &gh.Agent{From: "5"}}) {
-		t.Fatal("own v1-marked note handed back")
-	}
 	if !comment(gh.TypeCommentAgent, gh.CommentPayload{Kind: gh.KindIssue, Body: "I'm doing the header", Agent: &gh.Agent{Work: "work/9"}}) {
 		t.Fatal("another agent's comment not delivered")
 	}
-	if !comment(gh.TypeCommentAgent, gh.CommentPayload{Kind: gh.KindIssue, Body: "v1 other", Agent: &gh.Agent{From: "9"}}) {
-		t.Fatal("another v1 agent's comment not delivered")
-	}
 	if comment(gh.TypeCommentHuman, gh.CommentPayload{Kind: gh.KindReview, State: "APPROVED"}) {
-		t.Fatal("empty review delivered (v1 takes reviews with a body)")
+		t.Fatal("empty review delivered (only reviews with a body are input)")
 	}
 	if !comment(gh.TypeCommentHuman, gh.CommentPayload{Kind: gh.KindReview, State: "CHANGES_REQUESTED", Body: "rename"}) {
 		t.Fatal("review with body not delivered")

@@ -1,9 +1,8 @@
-// Package linear is the first-party Linear extension (06-01): a tracker over
-// one or more Linear teams' issues through Linear's GraphQL API and its
-// webhooks, ported from Open Supervisor's adapter onto the shared tracker
-// kit. Linear keeps Markdown but drops HTML comments, so an agent's comment
-// carries a visible footer (Open Supervisor's, plus Open Conduit's intent
-// line). Workflow states are moved by name as the agent's state changes.
+// Package linear is the first-party Linear extension (06-01): a tracker over one
+// or more Linear teams' issues through Linear's GraphQL API and its webhooks, on
+// the shared tracker kit. Linear keeps Markdown but drops HTML comments, so an
+// agent's comment ends with a visible line naming its Work and intent.
+// Workflow states are moved by name as the agent's state changes.
 package linear
 
 import (

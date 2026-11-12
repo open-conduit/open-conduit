@@ -12,7 +12,7 @@ import (
 
 // Run-ended Events (05-02). Each finished run of a job is announced by one
 // Event on the job's own key, typed by how it ended, so another Work can wait
-// for "the next run of the backup job to end" (v1 `job:<name>` waits) through
+// for "the next run of the backup job to end" (`job:<name>` waits) through
 // an ordinary B04 dependency subscription. The host derives them from durable
 // execution outcomes after a per-job checkpoint, accepting each as a derived
 // Event of the run's trigger in one transaction with the checkpoint, so a

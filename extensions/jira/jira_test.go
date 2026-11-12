@@ -133,7 +133,7 @@ func TestCommentsAndMarks(t *testing.T) {
 	app.App = true
 	c, _ := newClient(t, f, entry)
 	ctx := context.Background()
-	posted, err := c.PostComment(ctx, "PROJ-1", "**Done**", tracker.Mark{Work: "w-1", Intent: "iabc", From: "PROJ-1"})
+	posted, err := c.PostComment(ctx, "PROJ-1", "**Done**", tracker.Mark{Work: "w-1", Intent: "iabc"})
 	if err != nil || posted.ID == "" {
 		t.Fatal(posted, err)
 	}
@@ -151,18 +151,34 @@ func TestCommentsAndMarks(t *testing.T) {
 		t.Fatal("an app's comment is a bot's")
 	}
 	a := comments[3].Agent
-	if a == nil || a.Work != "w-1" || a.Intent != "iabc" || a.From != "PROJ-1" || comments[3].Body != "**Done**" {
+	if a == nil || a.Work != "w-1" || a.Intent != "iabc" || comments[3].Body != "**Done**" {
 		t.Fatalf("marked: %+v %+v", comments[3], a)
 	}
 	_, _, raw := f.Snapshot("PROJ-1")
 	var v map[string]any
 	_ = json.Unmarshal(raw[3].Properties[jira.MarkProperty], &v)
-	if v["agent"] != true || v["from"] != "PROJ-1" || raw[3].Body != "*Done*" {
-		t.Fatalf("Open Supervisor reads agent and from: %v %q", v, raw[3].Body)
+	if v["agent"] != true || v["work"] != "w-1" || v["intent"] != "iabc" || len(v) != 3 || raw[3].Body != "*Done*" {
+		t.Fatalf("mark property %s: %v %q", jira.MarkProperty, v, raw[3].Body)
 	}
 	key, one, err := c.ReadComment(ctx, tracker.CommentRef{Issue: "PROJ-1", ID: posted.ID})
 	if err != nil || key != "PROJ-1" || one.Agent == nil || one.Agent.Intent != "iabc" {
 		t.Fatalf("read back with properties: %v %+v", err, one)
+	}
+	// A comment Open Conduit posted under the mark's former key is still
+	// its own; any other property doesn't mark a comment.
+	former := f.AddComment("PROJ-1", "Agent", "earlier note")
+	former.Properties = map[string]json.RawMessage{"open-supervisor": json.RawMessage(`{"agent":true,"work":"w-0","intent":"iold"}`)}
+	other := f.AddComment("PROJ-1", "Ada", "not marked")
+	other.Properties = map[string]json.RawMessage{"something-else": json.RawMessage(`{"agent":true,"work":"w-0"}`)}
+	comments, err = c.Comments(ctx, "PROJ-1")
+	if err != nil || len(comments) != 6 {
+		t.Fatal(comments, err)
+	}
+	if a := comments[4].Agent; a == nil || a.Work != "w-0" || a.Intent != "iold" {
+		t.Fatalf("former-key mark: %+v", comments[4])
+	}
+	if comments[5].Agent != nil {
+		t.Fatalf("an unrelated property marked a comment: %+v", comments[5])
 	}
 }
 

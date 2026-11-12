@@ -37,10 +37,10 @@ func zeroSHA(sha string) bool { return sha != "" && strings.Trim(sha, "0") == ""
 // Matches reports whether a job runs on the delivery: one of its events
 // names it ("push") or it and its action ("release.published"), its ref is on
 // one of the job's branches when it has any, and a push changes a file its
-// paths take (v1 engine/jobs.go matches and OnEvent), and a check suite or
+// paths take, and a check suite or
 // run ended one of its conclusions when it lists any. A push whose changed
-// files are unknown, or possibly truncated, runs anyway, as in v1 (05-02
-// decided against v1's `git diff` in the checkout: the extension reads no
+// files are unknown, or possibly truncated, runs anyway (05-02
+// decided against a `git diff` in the checkout: the extension reads no
 // repository); a deleted branch changes nothing.
 func (j Job) Matches(d Delivery) bool {
 	if j.On == nil {
@@ -122,7 +122,7 @@ func EventTrigger(namespace string, j Job, d Delivery, received domain.Event) do
 
 // PathsMatch reports whether any file is taken by the patterns, as GitHub
 // Actions reads them: a file is taken when the last pattern matching it does
-// not start with ! (v1 engine/jobs.go pathsMatch).
+// not start with !.
 func PathsMatch(patterns, files []string) bool {
 	for _, f := range files {
 		in := false

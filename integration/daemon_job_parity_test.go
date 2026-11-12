@@ -20,15 +20,13 @@ import (
 
 const parityNS = "schedule/jobs"
 
-// jobParityConfig ports v1's job fixtures onto bindings of one scope:
+// jobParityConfig sets up job fixtures as bindings of one scope:
 //
-//   - slow (webhook): waits for a gate and records each run (v1
-//     TestJobDeliveryWhileRunningRunsAgain);
-//   - check: alternates exit codes (v1 TestJobRunsAreKept);
-//   - hold, behind: two jobs in the shared main checkout (v1
-//     TestJobCatchesUpTheMainCheckout);
-//   - env: a secret and a plain variable (v1 TestJobEnvResolvesSecrets);
-//   - sleepy: the shell's process deadline (v1 TestJobTimesOut);
+//   - slow (webhook): waits for a gate and records each run;
+//   - check: alternates exit codes;
+//   - hold, behind: two jobs in the shared main checkout;
+//   - env: a secret and a plain variable;
+//   - sleepy: the shell's process deadline;
 //   - stuck: the binding's timeout_seconds, the runtime deadline every
 //     executor shares.
 func jobParityConfig(root, checkout string) []byte {
@@ -75,7 +73,7 @@ func jobParityConfig(root, checkout string) []byte {
 	return b
 }
 
-// TestDaemonJobParity runs the ported v1 job fixtures on the composed
+// TestDaemonJobParity runs the job fixtures on the composed
 // daemon: queueing (one pending run, newest delivery), kept runs under the
 // shared retention, a stale shared checkout and its catch-up, secrets, the
 // shell's process timeout and the binding's
@@ -146,7 +144,7 @@ func TestDaemonJobParity(t *testing.T) {
 		return ""
 	}
 
-	// Queueing (v1 TestJobDeliveryWhileRunningRunsAgain): deliveries 2 and 3
+	// Queueing: deliveries 2 and 3
 	// while 1 runs make one pending run, for the newest delivery.
 	var addr string
 	d.until("webhook listener", 30*time.Second, func() bool {
@@ -204,7 +202,7 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatalf("second slow run %+v", second)
 	}
 
-	// Kept runs (v1 TestJobRunsAreKept): the shared kept_executions (2 here)
+	// Kept runs: the shared kept_executions (2 here)
 	// releases the oldest run's content and keeps every record.
 	for i, k := range []string{"c1", "c2", "c3"} {
 		manual("check", k)
@@ -219,7 +217,7 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatalf("kept check runs: %+v / %+v log %q", rs[1].Outcome, rs[2].Outcome, logOf(rs[1]))
 	}
 
-	// A stale shared checkout (v1 TestJobCatchesUpTheMainCheckout): hold
+	// A stale shared checkout: hold
 	// catches the checkout up and keeps it; a new remote commit lands; behind
 	// runs alongside and is only told how far behind it is; once hold ends,
 	// behind fast-forwards.
@@ -269,7 +267,7 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatalf("caught-up run %+v log %q", caught.Workspace, logOf(caught))
 	}
 
-	// Secrets (v1 TestJobEnvResolvesSecrets): the binding's selected secret
+	// Secrets: the binding's selected secret
 	// and plain env.
 	manual("env", "e1")
 	d.until("env ran", 30*time.Second, settled("env", 1))
@@ -277,7 +275,7 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatalf("env job saw %q", got)
 	}
 
-	// Process timeout (v1 TestJobTimesOut): the shell's deadline stops the
+	// Process timeout: the shell's deadline stops the
 	// whole tree.
 	began := time.Now()
 	manual("sleepy", "s1")

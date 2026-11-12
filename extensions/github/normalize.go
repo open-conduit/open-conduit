@@ -193,7 +193,7 @@ type ChecksPayload struct {
 	Preview  string     `json:"preview,omitempty"`
 	Runs     []CheckRun `json:"runs"`
 	// None marks a head that has had no checks at all for no_checks_minutes
-	// (the repository has no CI): v1's "No checks ran".
+	// (the repository has no CI): "No checks ran".
 	None bool `json:"none,omitempty"`
 	// Missing are checks the base branch requires (branch protection,
 	// rulesets) that have not reported on the head at all. A head missing
@@ -776,7 +776,7 @@ func bodyLinks(s Settings, body string) []bodyLink {
 
 // pullKey correlates a PR (and everything on it) with its tracker issue's
 // generation current when the PR was created, else with the PR itself. This
-// is v1's PR-to-issue attachment, derived identically by push and reconcile.
+// is the PR-to-issue attachment, derived identically by push and reconcile.
 func (n *normalizer) pullKey(ctx context.Context, p rawPull) (domain.CorrelationKey, *IssueRef, error) {
 	if number, ok := n.pullIssue(p); ok {
 		issue, err := n.issue(ctx, n.s.TrackerRepo, number)
@@ -952,7 +952,7 @@ func (n *normalizer) pullComment(ctx context.Context, kind string, number int, c
 
 var badConclusions = map[string]bool{"failure": true, "timed_out": true, "cancelled": true, "action_required": true, "startup_failure": true}
 
-// checksObservation evaluates a PR head's runs and statuses (v1 semantics).
+// checksObservation evaluates a PR head's runs and statuses.
 // It reports false when there is nothing to observe yet. from is how the runs
 // were read (checkState): only with check runs are the base branch's
 // required checks verified (08-01).
@@ -1039,7 +1039,7 @@ func (n *normalizer) checksObservation(ctx context.Context, p rawPull, runs []ra
 	if out.Complete && from == RunsFromCheckRuns {
 		// A required check that never started (a deploy skipped by
 		// "[skip …]", say) is not a pass: hold the head as pending until
-		// no_checks_minutes, then report which never reported (v1 c37edf1).
+		// no_checks_minutes, then report which never reported.
 		req, err := n.requiredChecks(ctx, p.Base.Ref)
 		if err != nil {
 			return extension.Observation{}, false, err
@@ -1080,7 +1080,7 @@ func (n *normalizer) checksForPull(ctx context.Context, p rawPull) (extension.Ob
 }
 
 // checksDue reports when a head still short of checks stops being waited
-// on: its commit time plus NoChecks (v1 noChecksMinutes), once the
+// on: its commit time plus NoChecks, once the
 // normalizer's receive time has reached it. The commit time makes it
 // deterministic, so push and reconcile agree once both see it. It is a
 // latency signal only, so a failed commit read is "not yet" rather than a
@@ -1141,8 +1141,8 @@ func (n *normalizer) reviewObservations(ctx context.Context, p rawPull) ([]exten
 		// A review without a body carries nothing to read (its inline
 		// comments are observed on their own). GitHub creates one around
 		// every inline comment and reply, including the agent's own, so
-		// observing it would wake waits with nothing (v1 Comments keeps
-		// only reviews with a body).
+		// observing it would wake waits with nothing (only reviews with a
+		// body are observed).
 		if r.State == "PENDING" || r.ID == 0 || strings.TrimSpace(r.Body) == "" {
 			continue
 		}

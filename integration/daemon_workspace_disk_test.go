@@ -40,7 +40,7 @@ func diskSafetyConfig(root, checkout string) []byte {
 	return b
 }
 
-// TestDaemonWorkspaceDiskSafety drives v1 #63 on the composed daemon: a new
+// TestDaemonWorkspaceDiskSafety drives workspace disk safety on the composed daemon: a new
 // workspace that would leave the disk too full is refused with a structured,
 // actionable failure and nothing is made; the periodic sweep removes a
 // cancelled Work's clean workspace (inside its retention) and an idle clean

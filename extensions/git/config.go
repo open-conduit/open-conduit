@@ -33,8 +33,8 @@ const (
 	defaultRetainSeconds  = 24 * 60 * 60
 	defaultSetupSeconds   = 30 * 60
 	maxSeconds            = 365 * 24 * 60 * 60
-	// defaultDiskFull and defaultDiskReserve are v1's settings.host.disk
-	// default and the most it kept free (worktree.MaxReserve).
+	// defaultDiskFull and defaultDiskReserve are the default full
+	// percentage and the most the check keeps free (worktree.MaxReserve).
 	defaultDiskFull    = 90.0
 	defaultDiskReserve = 10 << 30
 )
@@ -75,12 +75,12 @@ type Config struct {
 	// workspace for inspection before removal (default 86400).
 	RetainFailedSeconds int64 `json:"retain_failed_seconds,omitempty"`
 	// DiskFullPercent is the share of a disk in use above which it is running
-	// out (v1 settings.host.disk). A new work or fresh workspace is refused
+	// out. A new work or fresh workspace is refused
 	// when its checkout would leave less free than the rest of the disk keeps,
 	// counting at most DiskReserveBytes. Default 90; 100 turns the check off.
 	DiskFullPercent float64 `json:"disk_full_percent,omitempty"`
 	// DiskReserveBytes caps what the check keeps free, so a large disk is not
-	// held at its percentage's share (default 10 GiB, as in v1).
+	// held at its percentage's share (default 10 GiB).
 	DiskReserveBytes uint64 `json:"disk_reserve_bytes,omitempty"`
 }
 

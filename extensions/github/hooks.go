@@ -87,7 +87,7 @@ type rawHook struct {
 
 // EnsureWebhook points the repository webhook whose URL ends in suffix (or
 // the hook with existing ID) at url, creating one when none exists. It needs
-// hook administration, so it uses the reader identity (v1 EnsureWebhook).
+// hook administration, so it uses the reader identity.
 // dryRun reports what it would do and writes nothing. It returns the hook ID
 // and whether a write was made.
 func (c *Client) EnsureWebhook(ctx context.Context, repo, url, suffix, secret, existing string, dryRun bool) (string, bool, error) {

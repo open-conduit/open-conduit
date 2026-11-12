@@ -5,19 +5,16 @@ import (
 	"strings"
 )
 
-// Agent marks a comment written by an execution or the projector. Work and
-// Intent come from Open Conduit markers; From is the issue reference carried by
-// Open Supervisor's (and its predecessor's) markers, kept for fallback parity.
+// Agent marks a comment written by an execution or the projector: the Work
+// it was written for and, for a durable intent, the intent's mark.
 type Agent struct {
 	Work   string `json:"work,omitempty"`
 	Intent string `json:"intent,omitempty"`
-	From   string `json:"from,omitempty"`
 }
 
 var (
 	conduitMark = regexp.MustCompile(`<!--\s*open-conduit:agent((?:\s+[a-z]+=[^\s>]+)*)\s*-->`)
 	markAttr    = regexp.MustCompile(`([a-z]+)=([^\s>]+)`)
-	legacyMark  = regexp.MustCompile(`<!--\s*(?:open-supervisor:agent(?:\s+from=([^\s>]+))?|claude-agent(?:\s+from\s+#(\d+))?)\s*-->`)
 	markValue   = regexp.MustCompile(`^[A-Za-z0-9_.:/@-]{1,200}$`)
 )
 
@@ -35,21 +32,8 @@ func ParseAgent(body string) *Agent {
 		}
 		return a
 	}
-	if m := legacyMark.FindStringSubmatch(body); m != nil {
-		from := m[1]
-		if from == "" {
-			from = m[2]
-		}
-		return &Agent{From: from}
-	}
 	return nil
 }
-
-// LegacyMarker is Open Supervisor's own-note marker, appended after the Open
-// Conduit marker for the fallback window (06-02): an Open Supervisor that
-// takes a scope back reads Open Conduit's comments as agent notes rather
-// than as human input. ParseAgent reads the Open Conduit marker first.
-const LegacyMarker = "<!-- open-supervisor:agent -->"
 
 // WithMarker appends the discoverable agent marker. work and intent must be
 // secret-free identifiers; invalid values are omitted rather than escaped.
@@ -61,14 +45,14 @@ func WithMarker(body, work, intent string) string {
 	if markValue.MatchString(intent) {
 		marker += " intent=" + intent
 	}
-	return strings.TrimRight(body, "\n") + "\n\n" + marker + " -->\n" + LegacyMarker + "\n"
+	return strings.TrimRight(body, "\n") + "\n\n" + marker + " -->\n"
 }
 
 // withPullMarker marks a PR body as opened by work, which is how
 // github.pr.edit recognises the Work's own PRs. Any Open Conduit marker
 // already in body (one copied from github.pr.view, say) is dropped first,
-// so the body carries exactly one. A PR body takes no intent and no legacy
-// marker: it is not a comment, and it can become a squash commit's message.
+// so the body carries exactly one. A PR body takes no intent: it is not a
+// comment, and it can become a squash commit's message.
 func withPullMarker(body, work string) string {
 	body = strings.TrimRight(conduitMark.ReplaceAllString(body, ""), "\n ")
 	if !markValue.MatchString(work) {

@@ -657,11 +657,10 @@ func TestProductionSchedulerInjectCompletionRaceRetainsInput(t *testing.T) {
 
 // TestProductionSchedulerInjectConsumptionProof: a finished result's
 // ConsumedInputs consumes an input core injected into that attempt (accepted
-// intent) with the turn, so the next attempt is not given it again (v1
-// TestInterjectionReachesTheRunningTurn: an interjected message starts no
-// other turn). An input that was only routed (no accepted injection) or an
-// unknown Event named in the proof stays pending: the proof grants no
-// authority. Duplicate IDs are an invalid result.
+// intent) with the turn, so the next attempt is not given it again (an
+// interjected message starts no other turn). An input that was only routed (no
+// accepted injection) or an unknown Event named in the proof stays pending: the
+// proof grants no authority. Duplicate IDs are an invalid result.
 func TestProductionSchedulerInjectConsumptionProof(t *testing.T) {
 	o := routingOptions(routingHandlerFunc(routingDecision), "inject")
 	o.Capabilities = domain.Capabilities{Inject: true}

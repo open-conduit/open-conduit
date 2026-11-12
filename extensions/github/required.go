@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Required checks (08-01, v1 c37edf1). GitHub already names the checks a PR
+// Required checks (08-01). GitHub already names the checks a PR
 // needs before it can merge, in the base branch's protection and in the
 // rulesets that apply to it, so no setting repeats them. A head missing one
 // is held (observed as pending) until no_checks_minutes, then observed as
@@ -154,7 +154,7 @@ func (n *normalizer) requiredChecks(ctx context.Context, base string) (RequiredC
 }
 
 // missingChecks are the required checks that have not reported on the head
-// at all (v1 core.Checks.Missing), in required order.
+// at all, in required order.
 func missingChecks(runs []CheckRun, required []string) []string {
 	seen := map[string]bool{}
 	for _, r := range runs {

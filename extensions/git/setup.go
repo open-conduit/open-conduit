@@ -172,7 +172,7 @@ func (p *Provider) runSetup(ctx context.Context, log io.Writer, cfg Config, path
 
 // setupEnv is the provider's environment and the acquisition's HostEnv
 // without toolbelt variables, plus the provider layer. Setup is trusted
-// operator configuration, like v1.
+// operator configuration.
 func (p *Provider) setupEnv(ctx context.Context, layer map[string]string) []string {
 	vars := map[string]string{}
 	for _, kv := range p.environ(ctx) {

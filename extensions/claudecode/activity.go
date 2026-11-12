@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// ActivityMediaType is the rendered activity artifact (v1's transcript and
-// activity view): the turn's stream-json output as readable lines, so an
+// ActivityMediaType is the rendered activity artifact (the activity view of a
+// transcript): the turn's stream-json output as readable lines, so an
 // operator view shows what the agent said and did without parsing the
 // transcript itself. The executor owns the transcript format, so it renders
 // it; the TUI and `runs log` only display artifacts.

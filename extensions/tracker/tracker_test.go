@@ -85,12 +85,13 @@ func TestRouteAdmissionMatchAndInput(t *testing.T) {
 	}
 	own := CommentPayload{Issue: "ENG-1", ID: "c2", Agent: &Agent{Work: "w1"}}
 	other := CommentPayload{Issue: "ENG-1", ID: "c3", Agent: &Agent{Work: "w9"}}
-	legacyOwn := CommentPayload{Issue: "ENG-1", ID: "c4", Agent: &Agent{From: "eng-1"}}
+	// The connection's agent account wrote it, with no Work in a mark.
+	account := CommentPayload{Issue: "ENG-1", ID: "c4", Agent: &Agent{}}
 	if d := match(event(t, tt.CommentAgent, tt.SchemaComment, own, "issue/ENG-1"), w, domain.Route{}); d.Match {
 		t.Fatal("own note handed back")
 	}
-	if d := match(event(t, tt.CommentAgent, tt.SchemaComment, legacyOwn, "issue/ENG-1"), w, domain.Route{}); d.Match {
-		t.Fatal("own Open Supervisor note handed back")
+	if d := match(event(t, tt.CommentAgent, tt.SchemaComment, account, "issue/ENG-1"), w, domain.Route{}); d.Match {
+		t.Fatal("the agent account's note handed back")
 	}
 	if d := match(event(t, tt.CommentAgent, tt.SchemaComment, other, "issue/ENG-1"), w, domain.Route{}); !d.Match {
 		t.Fatal("another Work's note is input")

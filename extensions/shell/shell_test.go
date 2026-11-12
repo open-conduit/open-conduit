@@ -224,7 +224,7 @@ func TestCompletedResultLogAndOutputs(t *testing.T) {
 
 func TestEnvironmentLayers(t *testing.T) {
 	art := &memoryArtifacts{data: map[string][]byte{}}
-	e := newExecutor(t, stateDir(t), art, "PATH=/usr/bin:/bin", "HOME=/home/x", "LC_ALL=C", "AWS_SECRET_ACCESS_KEY=leak", "OPEN_CONDUIT_TOKEN_FILE=/x", "OPEN_SUPERVISOR_TOKEN=y", "OS_TOKEN=forged", "OS_ENDPOINT=unix:///forged")
+	e := newExecutor(t, stateDir(t), art, "PATH=/usr/bin:/bin", "HOME=/home/x", "LC_ALL=C", "AWS_SECRET_ACCESS_KEY=leak", "OPEN_CONDUIT_TOKEN_FILE=/x", "OPEN_CONDUIT_SOCKET=y", "OS_TOKEN=forged", "OS_ENDPOINT=unix:///forged")
 	r, _ := request("exec-env", 1, `{"command":"env > \"$OS_OUTPUT_DIR/env.txt\"","env":{"MODE":"fixture","HOME":"/override"},"secret_env":{"api":"API_KEY"}}`)
 	r.Context.Secrets = map[string]string{"api": "s1", "support-key": "s2"}
 	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken = "unix:///tmp/oc/management.sock", "token-1"
@@ -243,7 +243,7 @@ func TestEnvironmentLayers(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", k, env[k], want)
 		}
 	}
-	for _, k := range []string{"AWS_SECRET_ACCESS_KEY", "OPEN_CONDUIT_TOKEN_FILE", "OPEN_SUPERVISOR_TOKEN"} {
+	for _, k := range []string{"AWS_SECRET_ACCESS_KEY", "OPEN_CONDUIT_TOKEN_FILE", "OPEN_CONDUIT_SOCKET"} {
 		if _, ok := env[k]; ok {
 			t.Fatalf("baseline leaked %s", k)
 		}

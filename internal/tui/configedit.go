@@ -12,7 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
-// The full-screen config editor (06-01, v1's schema-driven forms editor):
+// The full-screen config editor (06-01, a schema-driven forms editor):
 // the config file as a tree, the documented fields of whatever is selected
 // (connection, entry, route, binding or resource config, from the adapter
 // catalog), and the same JSON pointer edits as `config set/unset`. Nothing

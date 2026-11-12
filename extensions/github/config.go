@@ -127,7 +127,7 @@ func ValidateConnection(data json.RawMessage) error {
 	return err
 }
 
-// Labels are the projected and admission labels (v1 names by default).
+// Labels are the projected and admission labels.
 type Labels struct {
 	Claimed   string   `json:"claimed,omitempty"`
 	Scheduled string   `json:"scheduled,omitempty"`
@@ -138,7 +138,7 @@ type Labels struct {
 	Require   []string `json:"require,omitempty"`
 }
 
-// DefaultLabels matches Open Supervisor so one owner is visible to both.
+// DefaultLabels are the labels a scope uses unless it names its own.
 func DefaultLabels() Labels {
 	return Labels{Claimed: "agent-in-progress", Scheduled: "scheduled", Help: "agent-needs-help",
 		Review: "ready-for-review", Done: "might-be-done", Skip: []string{"backlog", "human", "milestone"}}

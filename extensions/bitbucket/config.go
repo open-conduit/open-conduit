@@ -5,10 +5,9 @@
 // tracker issue they belong to (the branch first, then a key in the title
 // or description), so PR state reaches the issue's Work without a route
 // attaching keys. Agents open and comment on PRs through its tools; comments
-// carry an invisible Markdown mark (Open Supervisor's line plus Open
-// Conduit's intent) so a lost answer is never posted twice. Ported from Open
-// Supervisor's adapter; it reaches the tracker only through the public
-// tracker kit.
+// carry an invisible Markdown mark naming the Work and intent, so a lost
+// answer is never posted twice. It reaches the tracker only through the
+// public tracker kit.
 package bitbucket
 
 import (

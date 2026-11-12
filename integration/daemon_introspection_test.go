@@ -18,7 +18,7 @@ import (
 // Workflow D (05-03) on the real `open-conduit serve` daemon with shell
 // executors calling the real `os` toolbelt: an engineering execution
 // reports a defect; the extension's own calendar timer starts the scope's
-// standing triage (caught up by a config edit, as v1's six-hour rule
+// standing triage (caught up by a config edit, as the six-hour rule
 // allows); the triage reads the evidence and requests a fix; the fix runs as
 // its own Work on the user's fix binding and resolves the report; the fix
 // traces through causation to the report and the engineering origin; the

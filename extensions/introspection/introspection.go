@@ -71,8 +71,8 @@ const SchemaReport = "introspection.report.v1"
 // Namespace is the coordination KV namespace of the report index.
 const Namespace = "introspection.reports"
 
-// Kinds are the kinds of defect an agent can report: Open Supervisor's
-// problem kinds plus runtime (Open Conduit itself misbehaving).
+// Kinds are the kinds of defect an agent can report, runtime among them
+// (Open Conduit itself misbehaving).
 var Kinds = []string{"env", "docs", "tooling", "service", "runtime", "other"}
 
 // SourceNamespace is the correlation source of a scope's report keys.

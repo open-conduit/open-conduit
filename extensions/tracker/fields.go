@@ -9,7 +9,7 @@ func EntryFields() []protocol.FieldDecl {
 	return []protocol.FieldDecl{
 		{Name: "namespace", Help: "stable source identity and correlation-key source", Required: true},
 		{Name: "scope", Help: "the containing scope's id", Required: true},
-		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (Open Supervisor's names by default)"},
+		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone)"},
 		{Name: "transitions", Help: "workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone)"},
 		{Name: "closed_horizon_hours", Help: "how long closed issues stay observed", Default: "168"},
 		{Name: "projection", Help: "disabled, verify_seconds (default 900), dry_run"},

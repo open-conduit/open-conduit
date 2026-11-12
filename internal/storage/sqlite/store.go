@@ -59,7 +59,7 @@ var (
 )
 
 // Open initializes an empty database, or validates the version of an existing one.
-// It never resets, downgrades or reuses Open Supervisor state.
+// It never resets or downgrades it.
 func Open(ctx context.Context, path string) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

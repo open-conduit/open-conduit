@@ -57,7 +57,7 @@ type Config struct {
 	// gets a private directory. A binding with a resource must not set it.
 	Dir string `json:"dir,omitempty"`
 	// HandoffMinutes is how long after a turn the session counts as cold
-	// (default 55, Open Supervisor's prompt-cache horizon).
+	// (default 55, the prompt-cache horizon).
 	HandoffMinutes *int `json:"handoff_minutes,omitempty"`
 	// ColdTurns is what a cold turn does: "handoff" starts a fresh session
 	// from the last turn's handoff note, "resume" resumes the session

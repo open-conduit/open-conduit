@@ -27,7 +27,7 @@ const (
 type TriggerPayload struct {
 	Job  string `json:"job"`
 	Kind string `json:"kind"`
-	// Trigger is the run's label, as v1 recorded it ("cron 2026-10-25 01:30
+	// Trigger is the run's label ("cron 2026-10-25 01:30
 	// Europe/London", "at 2026-10-25 05:17 UTC", "every 60m", "webhook",
 	// "push abc1234").
 	Trigger string `json:"trigger"`
@@ -118,8 +118,8 @@ func everySlot(t time.Time) Slot {
 // either way. The timer then rearms for the next slot after now whose name
 // differs from the one that ran last.
 //
-// Every N minutes: the firing publishes its own occurrence (v1 ran an
-// interval job at start too) and rearms N minutes after it, or N minutes
+// Every N minutes: the firing publishes its own occurrence (an
+// interval job also runs at start) and rearms N minutes after it, or N minutes
 // after now when that is already past, so an outage yields one run rather
 // than a burst.
 func Recurrence(spec []byte, fired domain.Timer, now time.Time) (*domain.Event, *domain.Timer, error) {
@@ -159,15 +159,15 @@ func Recurrence(spec []byte, fired domain.Timer, now time.Time) (*domain.Event, 
 // Desired is the timer a job should have at now, given its current timer
 // (nil when it has none). changed is false when the current timer already
 // matches the job's timing; a nil timer with changed true means the job can
-// have no timer (its cron never fires) and the current one goes. It ports
-// v1's timer start rules:
+// have no timer (its cron never fires) and the current one goes. Its timer
+// start rules:
 //
 //   - A new timed job waits for its next slot rather than running a slot
-//     someone may already have run (v1 "first start").
-//   - A new interval job runs at once, as v1's ticker did.
+//     someone may already have run.
+//   - A new interval job runs at once.
 //   - An edited timing rearms: an interval job runs at once; a timed job runs
 //     its latest slot within six hours if that slot's name is not the one
-//     that ran last (v1 kept LastSlot across a timer restart), else waits.
+//     that ran last (the last slot is kept across a timer restart), else waits.
 //
 // An unchanged timer is left alone across restarts, so a missed slot is
 // caught up by the timer's own firing.

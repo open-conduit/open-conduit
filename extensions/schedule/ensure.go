@@ -39,7 +39,7 @@ type EnsureResult struct {
 }
 
 // Ensure reconciles every schedule timer with the current generation, the
-// reload behavior of 05-01 (v1 refresh): a new timed job gets its timer, an
+// reload behavior of 05-01: a new timed job gets its timer, an
 // edited timing rearms (Desired), an unchanged one is left alone, and a timer
 // whose job or entry was removed is cancelled while a run already going
 // carries on. It is idempotent and restart-safe: timers are durable, so a

@@ -15,8 +15,8 @@ import (
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 )
 
-// TestJobValidate ports v1 config/jobs_test.go TestJobValidate (run
-// settings such as checkout and status belong to bindings and 05-02).
+// TestJobValidate checks job validation (run settings such as checkout and
+// status belong to bindings and 05-02).
 func TestJobValidate(t *testing.T) {
 	for i, c := range []struct {
 		job  sc.Job
@@ -75,7 +75,7 @@ func TestParseExtension(t *testing.T) {
 	}
 }
 
-// TestJobMatches ports v1 TestJobMatches onto code-host deliveries.
+// TestJobMatches checks which code-host deliveries a job matches.
 func TestJobMatches(t *testing.T) {
 	job := func(on sc.Trigger) sc.Job { return sc.Job{Name: "j", On: &on} }
 	push := sc.Delivery{Event: "push", Ref: "refs/heads/main"}
@@ -109,7 +109,7 @@ func TestJobMatches(t *testing.T) {
 	}
 }
 
-// TestPathsMatch ports v1 TestPathsMatch.
+// TestPathsMatch checks path pattern matching.
 func TestPathsMatch(t *testing.T) {
 	reels := []string{"data/reels/*.json", "!data/reels/posted.json"}
 	for i, c := range []struct {
@@ -135,7 +135,7 @@ func TestPathsMatch(t *testing.T) {
 	}
 }
 
-// TestJobPathsFilterPushes ports v1 TestJobPathsFilterPushes onto Matches.
+// TestJobPathsFilterPushes checks that a job's paths filter pushes in Matches.
 func TestJobPathsFilterPushes(t *testing.T) {
 	j := sc.Job{Name: "post", On: &sc.Trigger{Events: []string{"push"}, Branches: []string{"main"}, Paths: []string{"data/reels/*.json", "!data/reels/posted.json"}}}
 	if j.Matches(sc.Delivery{Event: "push", Ref: "refs/heads/main", SHA: "bbb", Files: []string{"data/reels/posted.json"}}) {
@@ -145,7 +145,7 @@ func TestJobPathsFilterPushes(t *testing.T) {
 		t.Error("did not run on a matching push")
 	}
 	if !j.Matches(sc.Delivery{Event: "push", Ref: "refs/heads/main", SHA: "ddd"}) {
-		t.Error("unknown changed files must run anyway (v1)")
+		t.Error("unknown changed files must run anyway")
 	}
 	if j.Matches(sc.Delivery{Event: "push", Ref: "refs/heads/main", SHA: strings.Repeat("0", 40)}) {
 		t.Error("a deleted branch changes nothing")
@@ -213,8 +213,8 @@ func TestRouteMatch(t *testing.T) {
 	}
 }
 
-// TestSelectTrigger is the one-pending-run contract (B09, v1
-// TestJobDeliveryWhileRunningRunsAgain and TestJobTimerRunWaitsForTheOneGoing).
+// TestSelectTrigger is the one-pending-run contract (B09): a delivery while a
+// run goes, and a timer run that waits for the one going.
 func TestSelectTrigger(t *testing.T) {
 	ev := func(typ, id string) domain.Event { return domain.Event{ID: domain.ID(id), Type: typ} }
 	for i, c := range []struct {

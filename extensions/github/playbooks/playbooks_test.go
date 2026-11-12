@@ -20,7 +20,7 @@ func registered() map[string]bool {
 }
 
 // Every toolbelt operation a playbook tells the agent to call is one the
-// github extension registers, and v1's agent commands are gone.
+// github extension registers, and no `agent …` command remains.
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	ops := registered()
 	books := playbooks.All()
@@ -35,13 +35,8 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 		if found == 0 {
 			t.Errorf("%s names no operation", name)
 		}
-		for _, legacy := range []string{"$OPEN_SUPERVISOR", "agent worktree", "OPEN_SUPERVISOR_REMOTE", "open-supervisor:", ".local/"} {
-			if strings.Contains(text, legacy) {
-				t.Errorf("%s still says %q", name, legacy)
-			}
-		}
 	}
-	// The agent-facing tools the work-issue playbook relies on (v1 parity).
+	// The agent-facing tools the work-issue playbook relies on.
 	for _, op := range []string{gh.OpIssueView, gh.OpIssueComment, gh.OpIssueCreate, gh.OpPRCreate, gh.OpPRView, gh.OpPRComment, gh.OpPRReply, gh.OpChecks, gh.OpUpload, gh.OpFetch, gh.OpWait} {
 		if !strings.Contains(books["work-issue"], "`"+op+"`") {
 			t.Errorf("work-issue does not explain %s", op)

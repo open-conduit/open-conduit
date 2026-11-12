@@ -489,7 +489,7 @@ func (c *Client) ReadComment(ctx context.Context, ref tracker.CommentRef) (strin
 	return strings.ToUpper(r.Comment.Issue.Identifier), c.comment(*r.Comment), nil
 }
 
-// PostComment posts on the issue with the footer that marks it as an agent's.
+// PostComment posts on the issue with the line that marks it as an agent's.
 func (c *Client) PostComment(ctx context.Context, key, body string, m tracker.Mark) (tracker.Posted, error) {
 	if c.dryRun {
 		return tracker.Posted{}, nil

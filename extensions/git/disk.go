@@ -20,7 +20,7 @@ import (
 type DiskSpaceFunc func(path string) (total, free uint64, err error)
 
 // NoSpaceError refuses a new workspace whose checkout would leave its disk
-// too full (v1 #63). Nothing was created and the lease was dropped. It wraps
+// too full. Nothing was created and the lease was dropped. It wraps
 // extension.ErrResourceExhausted: trying again is refused the same way until
 // space is freed, and the message says which of the scope's workspaces can go.
 type NoSpaceError struct {
@@ -55,8 +55,7 @@ const maxSpareNames = 10
 
 // roomFor checks the workspace's disk has room for a checkout of start (and,
 // for a clone, the objects it copies), keeping the configured share
-// free. A disk it can't read doesn't stop it, as
-// in v1.
+// free. A disk it can't read doesn't stop it.
 func (p *Provider) roomFor(ctx context.Context, cfg Config, l *lease, start string) error {
 	if cfg.DiskFullPercent <= 0 || cfg.DiskFullPercent >= 100 {
 		return nil

@@ -56,7 +56,7 @@ func has(labels []string, name string) bool {
 	return false
 }
 
-// Admits is the claim admission rule (Open Supervisor parity): the issue is
+// Admits is the claim admission rule: the issue is
 // open and not waiting, carries no skip label, one of the required labels
 // when any are configured, and not the claimed label unless this is a
 // reopened generation (a claimed, unowned issue belongs to another owner).
@@ -111,15 +111,8 @@ func selfAuthored(a *Agent, w *domain.Work) bool {
 	if a == nil {
 		return false
 	}
-	if a.Work != "" {
-		return a.Work == string(w.ID)
-	}
-	for _, k := range w.CorrelationKeys {
-		if key, _, ok := ParseIssueKey(k.ExternalID); ok && strings.EqualFold(a.From, key) {
-			return true
-		}
-	}
-	return a.From == ""
+	// A comment known to be an agent's only by its author is this Work's.
+	return a.Work == "" || a.Work == string(w.ID)
 }
 
 // Match selects input for existing Work and creates Work for admitted issues.

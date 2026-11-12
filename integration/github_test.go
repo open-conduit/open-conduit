@@ -496,7 +496,7 @@ func TestGitHubProjectionConvergesAndRepairsDrift(t *testing.T) {
 			t.Fatal("our own label projection was queued as input")
 		}
 	}
-	// A new attempt takes the status off while it runs (v1 parity).
+	// A new attempt takes the status off while it runs.
 	e.fake.AddComment(n, ghAlice, "one more thing")
 	e.reconcile()
 	e.route()

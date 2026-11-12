@@ -1,6 +1,5 @@
-// Package playbooks holds the instructions agents follow under Open Conduit
-// (ported from Open Supervisor's internal/playbooks): how to work a GitHub
-// issue in turns. Everything that touches GitHub goes
+// Package playbooks holds the instructions agents follow under Open Conduit:
+// how to work a GitHub issue in turns. Everything that touches GitHub goes
 // through the toolbelt operations the github extension registers. The
 // extension offers them (Extension.Playbooks), and the host writes them
 // into the plugin of skills Claude Code loads; a turn starts with

@@ -122,7 +122,7 @@ func delivery(e domain.Event) bool { return e.Type == TypeWebhook || e.Type == T
 // one-pending-run rule. Every trigger accepted while a run goes (or before
 // the next run starts) waits as ordered input, and the next attempt takes the
 // whole batch, so at most one run is pending however many triggers arrive.
-// Which trigger that run is for follows v1: the newest delivery (webhook or
+// Which trigger that run is for: the newest delivery (webhook or
 // code-host event) takes the place of older deliveries and of any timer or
 // manual request; without a delivery the earliest request stands, so a later
 // timer slot never displaces a pending one. Nothing is dropped from history:

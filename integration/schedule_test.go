@@ -411,7 +411,7 @@ func utc(y int, mo time.Month, d, h, mi int) time.Time {
 }
 
 // TestScheduleSixHourCatchUp: the latest missed slot within six hours runs
-// once; exactly six hours or more late is skipped (v1's exclusive boundary),
+// once; exactly six hours or more late is skipped (an exclusive boundary),
 // across restarts, on the durable timer alone.
 func TestScheduleSixHourCatchUp(t *testing.T) {
 	e := newScheduleEnv(t, `[{"name":"report","cron":"0 9 * * *"}]`, utc(2026, 10, 21, 8, 0))
@@ -543,8 +543,8 @@ func TestScheduleClockChanges(t *testing.T) {
 	s.pathChecked()
 }
 
-// TestScheduleConfigEditsAndRemoval: reload rearms an edited timing (v1 kept
-// the last slot across a timer restart), leaves other edits alone, cancels a
+// TestScheduleConfigEditsAndRemoval: reload rearms an edited timing (the last
+// slot is kept across a timer restart), leaves other edits alone, cancels a
 // removed job's timer while its running attempt carries on, ignores late
 // triggers for it and keeps a disabled scope's timers durable.
 func TestScheduleConfigEditsAndRemoval(t *testing.T) {

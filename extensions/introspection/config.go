@@ -30,7 +30,7 @@ type Config struct {
 	Telemetry bool `json:"telemetry,omitempty"`
 }
 
-// Land modes: how a sweep or triage lands its commit (v1's Land line).
+// Land modes: how a sweep or triage lands its commit.
 const (
 	LandPush = "push"
 	LandPR   = "pr"
@@ -38,8 +38,7 @@ const (
 
 // Schedule is when one of the daily runs happens and what its message says.
 type Schedule struct {
-	// Cron is a standard five-field cron (v1 ran sweep at 41 8 * * * and
-	// triage at 51 8 * * * UTC); TimeZone is an IANA name (default UTC).
+	// Cron is a standard five-field cron; TimeZone is an IANA name (default UTC).
 	Cron     string `json:"cron"`
 	TimeZone string `json:"time_zone,omitempty"`
 	// Rules are the sweep's rule files (CLAUDE.md, AGENTS.md, rule skills)
@@ -52,11 +51,11 @@ type Schedule struct {
 	Land   string `json:"land,omitempty"`
 	Remote string `json:"remote,omitempty"`
 	// FileIssues tells the triage to open or update an issue for each cause
-	// it cannot fix (v1 OpenIssues) instead of only writing them up.
+	// it cannot fix instead of only writing them up.
 	FileIssues bool `json:"file_issues,omitempty"`
 }
 
-// HostWatch configures the host readings (v1 settings.host).
+// HostWatch configures the host readings.
 type HostWatch struct {
 	// IntervalSeconds between readings (default 60).
 	IntervalSeconds int `json:"interval_seconds,omitempty"`

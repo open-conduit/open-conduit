@@ -11,11 +11,10 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 )
 
-// Wait conditions and hold markers, ported from Open Supervisor's
-// core/wait.go. They are the agent-facing syntax only: the tools translate a
-// condition into a generic dependency subscription (correlation key, event
-// types and an opaque filter) at the extension boundary, so no condition
-// kind ever enters core.
+// Wait conditions and hold markers. They are the agent-facing syntax only: the
+// tools translate a condition into a generic dependency subscription
+// (correlation key, event types and an opaque filter) at the extension boundary,
+// so no condition kind ever enters core.
 
 // CondKind names what a wait can be on.
 type CondKind string
@@ -149,7 +148,7 @@ func (c Cond) Describe() string {
 }
 
 // Happened describes the fact that met the condition: the source Event type
-// that the dependency alias carried (v1 Fact.Describe).
+// that the dependency alias carried.
 func (c Cond) Happened(sourceType string) string {
 	where := ""
 	if c.Project != "" {
@@ -201,7 +200,7 @@ type Hold struct {
 
 // Spec is the hold in the words a marker carries: `runAt: 2026-10-25T09:00Z`
 // for a time alone, else `waitFor: pr:1257:merged issue:12:review; until …`,
-// or `waitFor: cancel`. Open Supervisor writes and reads the same markers.
+// or `waitFor: cancel`.
 func (h Hold) Spec() string {
 	if h.Cancel {
 		return "waitFor: cancel"
@@ -325,7 +324,7 @@ func parseHold(kind, v string) (Hold, error) {
 }
 
 // ParseTime reads an ISO instant with Z or an offset, with or without
-// seconds; a bare local-less layout is read as UTC (v1 core.ParseTime).
+// seconds; a bare local-less layout is read as UTC.
 func ParseTime(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04Z07:00", "2006-01-02T15:04Z", "2006-01-02T15:04:05Z", "2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02"} {

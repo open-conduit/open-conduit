@@ -215,7 +215,7 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 
 // authCheck (check_secrets only) resolves each entry's key privately and
 // checks its form (PostHog cannot be asked about a key without sending an
-// event, as in Open Supervisor).
+// event).
 func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "posthog_auth", Status: inproc.CheckOK, Code: "verified"}
 	entries, _ := x.snapshot()

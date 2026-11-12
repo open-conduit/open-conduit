@@ -130,7 +130,7 @@ func newDeliveryID(now time.Time) string {
 // listener strips its mount). It verifies the token in constant time before
 // reading the body, then hands a delivery to push, which must durably accept
 // it: 202 only after acceptance, 404 for an unknown job, a job without
-// webhooks or a wrong token (as v1), 413 for an oversized body and 503 when
+// webhooks or a wrong token, 413 for an oversized body and 503 when
 // the delivery was not accepted. A sender's Idempotency-Key (or
 // X-Request-Id) makes a retried POST one delivery; otherwise each POST is
 // distinct.

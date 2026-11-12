@@ -106,19 +106,16 @@ func TestListIssuesWaitingAndAttrs(t *testing.T) {
 }
 
 func TestMarks(t *testing.T) {
-	body := linear.WithMark("Done.\n", tracker.Mark{Work: "w-1", Intent: "iabc", From: "ENG-4"})
+	body := linear.WithMark("Done.\n", tracker.Mark{Work: "w-1", Intent: "iabc"})
 	a := linear.ParseMark(body)
-	if a == nil || a.From != "ENG-4" || a.Work != "w-1" || a.Intent != "iabc" {
+	if a == nil || a.Work != "w-1" || a.Intent != "iabc" || body != "Done.\n\n*open-conduit work=w-1 intent=iabc*\n" {
 		t.Fatalf("mark lost: %q -> %+v", body, a)
 	}
-	if !strings.Contains(body, "*Posted by an open-supervisor agent working on ENG-4*\n") {
-		t.Fatalf("Open Supervisor's footer must stay readable to it: %q", body)
-	}
 	// Linear may rewrite the emphasis.
-	if a := linear.ParseMark("ok\n\n_Posted by an open-supervisor agent_"); a == nil || a.From != "" {
-		t.Fatalf("plain mark: %+v", a)
+	if a := linear.ParseMark("ok\n\n_open-conduit work=w-1 intent=iabc_"); a == nil || a.Work != "w-1" || a.Intent != "iabc" {
+		t.Fatalf("rewritten mark: %+v", a)
 	}
-	if linear.ParseMark("I was posted by an open-supervisor agent, apparently") != nil {
+	if linear.ParseMark("I set open-conduit work=w-1 up yesterday") != nil {
 		t.Fatal("a mention mid-sentence isn't a mark")
 	}
 	f := lineartest.New("k", "ENG")

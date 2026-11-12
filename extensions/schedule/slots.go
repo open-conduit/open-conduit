@@ -7,7 +7,7 @@ import (
 )
 
 // Slot is one timed occurrence: its instant and its wall-clock name. The
-// name is v1's slot identity ("2026-10-25 01:30 Europe/London" for cron,
+// name is the slot identity ("2026-10-25 01:30 Europe/London" for cron,
 // "2026-10-25 05:17" for at, which is UTC): a repeated wall-clock time on the
 // night the clocks go back has two instants and one name. The instant gives
 // each occurrence its stable delivery identity.
@@ -22,7 +22,7 @@ func cronName(t time.Time, loc *time.Location) string {
 
 func atName(t time.Time) string { return t.UTC().Format("2006-01-02 15:04") }
 
-// Label names a timed run for its record, as v1 did.
+// Label names a timed run for its record.
 func (j Job) Label(s Slot) string {
 	switch {
 	case j.Cron != "":
@@ -36,7 +36,7 @@ func (j Job) Label(s Slot) string {
 }
 
 // Latest is the latest of a timed job's slots at or before now and strictly
-// within six hours of it (v1 dueSlot/cronSlot): a slot missed by six hours or
+// within six hours of it: a slot missed by six hours or
 // more waits for the next. A skipped wall-clock time on the night the clocks
 // go forward has no slot; a repeated one has two instants with one name.
 func Latest(j Job, now time.Time) (Slot, bool) {
@@ -82,8 +82,8 @@ func Latest(j Job, now time.Time) (Slot, bool) {
 
 // Next is a timed job's first slot strictly after after whose name differs
 // from last, the slot that ran last. Skipping the same name makes the one
-// repeated wall-clock time of a daily schedule run once, exactly as v1's
-// single LastSlot did (a schedule within the hour, like */30, still runs at
+// repeated wall-clock time of a daily schedule run once, as a
+// single last slot would (a schedule within the hour, like */30, still runs at
 // the repeated times whose name differs from the one just run).
 func Next(j Job, after time.Time, last string) (Slot, bool) {
 	if j.Cron != "" {

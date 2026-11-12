@@ -16,7 +16,7 @@ import (
 // Job run parity (05-02) on the production router, scheduler and timers on
 // SQLite with a fake clock: one deadline model (a binding's timeout_seconds
 // replaces the runtime default for every executor), an executor retry hint
-// honoured on standing job Work (v1's "busy" retried in ten minutes) while
+// honoured on standing job Work (a "busy" retried in ten minutes) while
 // the budget retry stays off, and run-ended Events for `job:` waits.
 
 func (e *scEnv) run(id domain.ID) runtime.Run {
@@ -84,7 +84,7 @@ func TestJobDeadlineRetryHintAndRunEvents(t *testing.T) {
 	if err != nil || !status.Blocked || status.Exhausted || !status.EligibleAt.Equal(start.Add(10*time.Minute)) {
 		t.Fatalf("retry status %+v %v", status, err)
 	}
-	// A trigger during the backoff waits for the retry (v1 RetryAfter).
+	// A trigger during the backoff waits for the retry.
 	e.at(start.Add(5 * time.Minute))
 	e.manual("refresh", "r3")
 	e.route()
@@ -101,7 +101,7 @@ func TestJobDeadlineRetryHintAndRunEvents(t *testing.T) {
 	}
 	e.finish("refresh")
 
-	// Without a hint a failure still arms nothing (v1 had no job retry).
+	// Without a hint a failure still arms nothing.
 	e.x.mu.Lock()
 	e.x.outcome = domain.OutcomeFailed
 	e.x.mu.Unlock()

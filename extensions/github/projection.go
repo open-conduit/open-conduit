@@ -358,13 +358,13 @@ func declaration(x *domain.Execution) (domain.TurnDeclaration, bool) {
 
 // Desired returns the managed labels a Work's durable state projects: the
 // claimed label while the Work owns the issue, and at most one status label,
-// absent while an attempt runs (v1: the status comes off while a turn runs).
+// absent while an attempt runs (the status comes off while a turn runs).
 // It assumes the issue is open.
 func (p *Projector) Desired(w domain.Work, latest *domain.Execution) []string {
 	return p.desired(w, latest, false)
 }
 
-// desired adds the hold projections (v1): a held issue carries only the
+// desired adds the hold projections: a held issue carries only the
 // scheduled label until its first agent turn starts (then it is claimed),
 // and Work parked on an agent's wait carries scheduled with no status.
 // Completed Work drops the claimed label, open issue or not: nothing hears
@@ -697,7 +697,7 @@ type ackCursor struct {
 }
 
 // acknowledge reacts +1 to human comments the router delivered to Work, the
-// v1 "heard" signal. Reactions are idempotent at GitHub, so a lost cursor
+// "heard" signal. Reactions are idempotent at GitHub, so a lost cursor
 // update only repeats a no-op. It never passes an unrouted comment.
 func (p *Projector) acknowledge(ctx context.Context, limit int) (int, error) {
 	var cur ackCursor

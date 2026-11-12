@@ -13,8 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
-// Adapters is the catalog of the config types this daemon offers (v1
-// `adapters [type]`, 06-01): each package's, installed beside configPath or
+// Adapters is the catalog of the config types this daemon offers
+// (06-01): each package's, installed beside configPath or
 // bundled with the binary, as its manifest describes them (title, summary,
 // types, fields, operations and setup), and the core's own webhook
 // listener. It is descriptive only; validation stays with each type's

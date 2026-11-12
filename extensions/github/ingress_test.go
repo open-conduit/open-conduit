@@ -199,7 +199,7 @@ func TestPushAndReconcileAgreeForEveryFamily(t *testing.T) {
 		}
 		sameIdentity(t, tc.label, o, s)
 	}
-	// Everything on the PR correlates with the issue it closes (v1 attachment).
+	// Everything on the PR correlates with the issue it closes.
 	for _, item := range []string{"pr/" + strconv.Itoa(pr), "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10), "pr/" + strconv.Itoa(pr) + "/review_comment/" + strconv.FormatInt(inline, 10), "pr/" + strconv.Itoa(pr) + "/checks", "pr/" + strconv.Itoa(pr) + "/comment/" + strconv.FormatInt(prComment, 10)} {
 		if k := key(scanned[item]); k != "issue/1" {
 			t.Fatalf("%s correlates with %s, want issue/1", item, k)
@@ -221,8 +221,8 @@ func TestPushAndReconcileAgreeForEveryFamily(t *testing.T) {
 // A review with no body (GitHub wraps every inline comment and reply in one,
 // the agent's own replies included) is observed by neither push nor
 // reconcile: on the real sandbox (03-06) it was classified human and woke a
-// waiting agent after each of its own replies, a wake loop. v1 kept only
-// reviews with a body.
+// waiting agent after each of its own replies, a wake loop. Only reviews
+// with a body are observed.
 func TestEmptyReviewIsNotObserved(t *testing.T) {
 	f := newFixture(t, "")
 	fk := f.fake

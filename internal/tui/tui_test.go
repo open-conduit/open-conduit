@@ -142,10 +142,10 @@ func TestExpiredLogIsReportedNotFetched(t *testing.T) {
 	}
 }
 
-// TestJobAndTurnShareTheView ports v1 tui/jobs_test.go TestRunDetail onto
-// the one run view (05-02): a shell job run and an agent turn are listed by
-// the same rows, and a job's detail shows its trigger, outcome, workspace and
-// log through the same renderer as the turn's usage.
+// TestJobAndTurnShareTheView checks the one run view (05-02): a shell job run
+// and an agent turn are listed by the same rows, and a job's detail shows its
+// trigger, outcome, workspace and log through the same renderer as the turn's
+// usage.
 func TestJobAndTurnShareTheView(t *testing.T) {
 	job := run("job-1", "failed", "schedule.job", 1, "1")
 	job.Executor, job.ExecutorBinding = "shell", "post-reels"

@@ -557,7 +557,7 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 // location and any names the binding passes through. Unrelated credentials
 // (ANTHROPIC_API_KEY among them, which comes only from a selected secret),
 // nested-session markers (CLAUDECODE, CLAUDE_CODE_*), toolbelt variables and
-// Open Conduit/Open Supervisor settings never reach claude.
+// Open Conduit settings never reach claude.
 func baseline(name string, pass []string) bool {
 	switch name {
 	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TERM", "CLAUDE_CONFIG_DIR":

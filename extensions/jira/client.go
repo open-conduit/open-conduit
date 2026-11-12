@@ -19,14 +19,17 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
-// MarkProperty is the comment entity property that marks an agent's comment
-// (Open Supervisor's key, so both runtimes recognize each other's notes).
-const MarkProperty = "open-supervisor"
+// MarkProperty is the comment entity property that marks an agent's comment.
+const MarkProperty = "open-conduit"
+
+// formerMarkProperty is the key Open Conduit wrote its mark under before
+// MarkProperty, still read so the comments it posted then stay its own (and
+// an intent attempted across the change is found by its mark, not reposted).
+const formerMarkProperty = "open-supervisor"
 
 // MarkValue is the property's value.
 type MarkValue struct {
 	Agent  bool   `json:"agent"`
-	From   string `json:"from,omitempty"`
 	Work   string `json:"work,omitempty"`
 	Intent string `json:"intent,omitempty"`
 }
@@ -475,12 +478,12 @@ func (c *Client) comment(key string, r rawComment) tracker.Comment {
 		}
 	}
 	for _, p := range r.Properties {
-		if p.Key != MarkProperty {
+		if p.Key != MarkProperty && p.Key != formerMarkProperty {
 			continue
 		}
 		var v MarkValue
 		if json.Unmarshal(p.Value, &v) == nil && v.Agent {
-			out.Agent = &tracker.Agent{From: v.From, Work: v.Work, Intent: v.Intent}
+			out.Agent = &tracker.Agent{Work: v.Work, Intent: v.Intent}
 		}
 	}
 	return out
@@ -530,7 +533,7 @@ func (c *Client) PostComment(ctx context.Context, key, body string, m tracker.Ma
 	}
 	req := map[string]any{
 		"body":       ToWiki(body),
-		"properties": []map[string]any{{"key": MarkProperty, "value": MarkValue{Agent: true, From: m.From, Work: m.Work, Intent: m.Intent}}},
+		"properties": []map[string]any{{"key": MarkProperty, "value": MarkValue{Agent: true, Work: m.Work, Intent: m.Intent}}},
 	}
 	var r rawComment
 	if err := c.do(ctx, http.MethodPost, "rest/api/2/issue/"+url.PathEscape(key)+"/comment", req, &r); err != nil {
@@ -688,7 +691,7 @@ func (c *Client) EnsureWebhook(ctx context.Context, hookURL, secret, existing st
 var deliveryID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 // ParseHook checks the delivery's signature (X-Hub-Signature, HMAC-SHA256)
-// and says what it is about. Unlike Open Supervisor, an unsigned delivery is
+// and says what it is about. An unsigned delivery is
 // refused: reconcile recovers whatever it would have reported.
 func (c *Client) ParseHook(h http.Header, body []byte, secret string, _ time.Time) (tracker.Hook, error) {
 	if !tracker.VerifyHMAC(secret, body, h.Get("X-Hub-Signature")) {

@@ -227,7 +227,6 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 	// An event during a running turn is injected into it and consumed. claude's
 	// echo is the executor's consumption proof (Result.ConsumedInputs), so core
 	// consumes the input with that turn and starts no further attempt for it
-	// (v1 TestInterjectionReachesTheRunningTurn).
 	os.Remove(filepath.Join(d.root, "started"))
 	set("hold-for", "agent.more")
 	submit("agent.more", "more-1")

@@ -16,10 +16,10 @@ import (
 )
 
 // Setup (03-05, moved behind the generic extension.Setup hook in 04-02):
-// `open-conduit init github` adds one scope for a repository. The v1 wizard
-// outcomes are kept: found-git remote detection, an optional git work
-// resource, the agent binding with the GitHub tools, the github route and,
-// with --holds, the github-hold binding and route.
+// `open-conduit init github` adds one scope for a repository. It detects the
+// origin remote and adds an optional git work resource, the agent binding with
+// the GitHub tools, the github route and, with --holds, the github-hold binding
+// and route.
 
 // AgentOperations are what an agent binding is granted for a GitHub scope:
 // the author toolset, so the scope gets every operation a later release
@@ -44,7 +44,7 @@ var (
 )
 
 // GitHubRepo reads a checkout's GitHub repository from its origin remote
-// (v1 wizard's found-git detection). ok is false when there is none.
+// ok is false when there is none.
 func GitHubRepo(dir string) (string, bool) {
 	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
 	if err != nil {

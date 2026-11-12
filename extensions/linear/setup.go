@@ -13,7 +13,7 @@ import (
 )
 
 // Setup is the Linear extension's `init linear`: one scope working one or
-// more teams' issues (v1 wizard outcomes: the tracker binding with its team
+// more teams' issues (the tracker binding with its team
 // keys and claim states, an optional git work resource, the agent binding
 // with the tracker's tools and the route).
 type Setup struct{}
