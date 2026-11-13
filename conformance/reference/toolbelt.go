@@ -220,11 +220,11 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 				return err
 			}
 			out.Work = &saved
-			data, err := json.Marshal(domain.ChildCancel{Parent: string(a.WorkID), Reason: c.Cancel.Reason})
+			data, err := json.Marshal(domain.ChildCancel{Parent: string(a.WorkID), Execution: string(a.ExecutionID), Reason: c.Cancel.Reason})
 			if err != nil {
 				return err
 			}
-			cancel := domain.Event{ID: domain.ID("child-cancel/" + string(child.ID)), Type: domain.TypeChildCancel, Source: "execution/" + string(a.ExecutionID), DeliveryID: "cancel/" + string(child.ID), CausationID: a.TriggerID, WorkID: child.ID, OccurredAt: t.Now(), ReceivedAt: t.Now(), Data: domain.Payload{Schema: domain.SchemaChildCancel, Data: data}}
+			cancel := domain.Event{ID: domain.ID("child-cancel/" + string(child.ID)), Type: domain.TypeChildCancel, Source: domain.LineageSource, DeliveryID: "child-cancel/" + string(child.ID), CausationID: a.TriggerID, WorkID: child.ID, OccurredAt: t.Now(), ReceivedAt: t.Now(), Data: domain.Payload{Schema: domain.SchemaChildCancel, Data: data}}
 			accepted, _, err := tx.AcceptEvent(cancel)
 			if err != nil {
 				return err

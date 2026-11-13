@@ -563,6 +563,11 @@ func ToolbeltCases() []ToolbeltCase {
 			if out.Event == nil || out.Event.Event.Type != domain.TypeChildCancel || out.Event.Event.WorkID != child.ID || out.Event.Event.CausationID != f.Authority.TriggerID {
 				return fmt.Errorf("cancel not recorded on the child with the trigger's causation")
 			}
+			// The record is the host's, from a source no execution emits
+			// from, so the caller can't pre-empt or replace it.
+			if out.Event.Event.Source != domain.LineageSource {
+				return fmt.Errorf("cancel recorded from source %q, not the host's %q", out.Event.Event.Source, domain.LineageSource)
+			}
 			var oe *extension.OperationError
 			if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: child.ID}}); !errors.As(err, &oe) || oe.Code != extension.CodeWorkEnded {
 				return fmt.Errorf("cancel of ended child Work accepted: %v", err)

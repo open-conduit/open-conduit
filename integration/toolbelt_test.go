@@ -492,6 +492,14 @@ func TestProductionToolbeltCancelsChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := asked.Work.ID
+	// The caller's own emissions can't take the cancel record's place:
+	// an Event with the delivery ID the host's record would have.
+	for _, delivery := range []string{"cancel/" + string(id), "child-cancel/" + string(id)} {
+		squat := domain.Event{Type: "fixture.changed.v1", DeliveryID: delivery, Data: domain.Payload{Schema: "fixture.v1", Data: []byte(`{}`)}}
+		if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.Emit, Event: &squat}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, target := range []domain.ID{"work/item", "work/unknown"} {
 		if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: target}}); !errors.Is(err, extension.ErrUnauthorized) {
 			t.Fatalf("cancel of %s, not the caller's child, accepted: %v", target, err)
@@ -509,7 +517,7 @@ func TestProductionToolbeltCancelsChild(t *testing.T) {
 	}
 	cancel := out.Event.Event
 	var why domain.ChildCancel
-	if err = json.Unmarshal(cancel.Data.Data, &why); err != nil || cancel.Type != domain.TypeChildCancel || cancel.WorkID != id || cancel.CausationID != "trigger" || cancel.Source != "execution/"+string(h.attempt.Lease.ExecutionID) || why.Parent != "work/item" || why.Reason != "never mind" {
+	if err = json.Unmarshal(cancel.Data.Data, &why); err != nil || cancel.Type != domain.TypeChildCancel || cancel.WorkID != id || cancel.CausationID != "trigger" || cancel.Source != domain.LineageSource || why.Execution != string(h.attempt.Lease.ExecutionID) || why.Parent != "work/item" || why.Reason != "never mind" {
 		t.Fatalf("cancel recorded as %+v (%+v), %v", cancel, why, err)
 	}
 	// A retry with the same request ID replays the cancel.

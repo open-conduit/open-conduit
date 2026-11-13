@@ -38,8 +38,11 @@ type ChildEnded struct {
 }
 
 // ChildCancel is a TypeChildCancel Event's payload: the parent that
-// cancelled the child and the reason it gave, if any.
+// cancelled the child, the execution of it that did, and the reason it
+// gave, if any. The Event's source is LineageSource, which no execution
+// can emit from, so the record is always the host's.
 type ChildCancel struct {
-	Parent string `json:"parent"`
-	Reason string `json:"reason,omitempty"`
+	Parent    string `json:"parent"`
+	Execution string `json:"execution"`
+	Reason    string `json:"reason,omitempty"`
 }

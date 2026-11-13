@@ -108,10 +108,12 @@ type cancelledChild struct {
 // extension.CodeWorkEnded.
 //
 // The cancel is recorded on the child as a domain.TypeChildCancel Event
-// whose source is the cancelling execution and whose causation is its
-// trigger, so the child's history says who ended it and why. It carries no
-// ExecutionID, which would have to be an attempt of the child's own Work.
-// It is a control fact, never routed. The child then
+// from the host (domain.LineageSource, a source no execution can emit
+// from, so the caller can neither pre-empt nor replace the record), naming
+// the cancelling execution in its payload and caused by its trigger, so the
+// child's history says who ended it and why. It carries no ExecutionID,
+// which would have to be an attempt of the child's own Work. It is a
+// control fact, never routed. The child then
 // ends the way an operator's cancel ends it (cancelWorkInTx), so the
 // parent hears of it with domain.TypeChildEnded in state cancelled.
 func cancelChildInTx(tx storage.Tx, now time.Time, limits CausalLimits, parent domain.Work, x domain.Execution, trigger domain.ID, r extension.CancelRequest) (cancelledChild, error) {
@@ -128,17 +130,22 @@ func cancelChildInTx(tx storage.Tx, now time.Time, limits CausalLimits, parent d
 	if child.State.Terminal() {
 		return cancelledChild{}, &extension.OperationError{Code: extension.CodeWorkEnded, Message: "that Work has already ended (" + string(child.State) + ")"}
 	}
-	data, err := json.Marshal(domain.ChildCancel{Parent: string(parent.ID), Reason: r.Reason})
+	data, err := json.Marshal(domain.ChildCancel{Parent: string(parent.ID), Execution: string(x.ID), Reason: r.Reason})
 	if err != nil {
 		return cancelledChild{}, err
 	}
-	source := "execution/" + string(x.ID)
-	delivery := "cancel/" + string(child.ID)
-	e := domain.Event{ID: domain.ID("child-cancel/" + identity(string(x.ID), string(child.ID))), Type: domain.TypeChildCancel, Source: source, DeliveryID: delivery,
+	delivery := "child-cancel/" + string(child.ID)
+	e := domain.Event{ID: domain.ID("child-cancel/" + identity(string(child.ID))), Type: domain.TypeChildCancel, Source: domain.LineageSource, DeliveryID: delivery,
 		WorkID: child.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildCancel, Data: data}}
-	accepted, _, err := AcceptInTx(tx, parent.ScopeID, e)
+	accepted, added, err := AcceptInTx(tx, parent.ScopeID, e)
 	if err != nil {
 		return cancelledChild{}, err
+	}
+	if !added {
+		// A child that is still open has never been cancelled, so its
+		// record can't exist yet: fail rather than take another Event's
+		// place in the trail.
+		return cancelledChild{}, storage.ErrConflict
 	}
 	if err = tx.MarkRouted(accepted.Event.ID, "", "control"); err != nil {
 		return cancelledChild{}, err
