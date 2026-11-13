@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -182,6 +183,11 @@ func routeOwner(tx storage.Tx, e domain.Event) (domain.Work, error) {
 	}
 	if e.CorrelationKey != nil {
 		w, err := tx.WorkByCorrelation(*e.CorrelationKey)
+		if err == nil && result.ID == "" {
+			// A key alone names the Work its owner's successors lead to;
+			// an explicit Work or Execution names that Work and no other.
+			w, err = latestSuccessor(tx, w)
+		}
 		if errors.Is(err, storage.ErrNotFound) {
 			if result.ID != "" {
 				return result, storage.ErrInvalid
@@ -197,6 +203,75 @@ func routeOwner(tx storage.Tx, e domain.Event) (domain.Work, error) {
 	}
 	return result, nil
 }
+
+// successorNamespace maps a finished Work to the Work a route opened to
+// succeed it (RouteDecision.Successor), keyed by the predecessor's
+// identity.
+const successorNamespace = "core.routing.successor"
+
+// predecessorNamespace is successorNamespace reversed: a successor to the
+// finished Work it succeeds.
+const predecessorNamespace = "core.routing.predecessor"
+
+// inheritedKeysInTx are the keys that route to w from the Work it
+// succeeds, and that one's, and so on back: keys w doesn't own.
+func inheritedKeysInTx(tx storage.Tx, w domain.Work) ([]domain.CorrelationKey, error) {
+	var keys []domain.CorrelationKey
+	for range maxSuccessors {
+		var prev domain.ID
+		err := getJSON(tx, predecessorNamespace, identity(string(w.ID)), &prev)
+		if errors.Is(err, storage.ErrNotFound) {
+			return keys, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if w, err = tx.Work(prev); err != nil {
+			return nil, err
+		}
+		keys = append(keys, w.CorrelationKeys...)
+	}
+	return nil, storage.ErrInvalid
+}
+
+// asSuccessorInput is a as successor w's Waits see it. A Wait subscribes on
+// keys its Work owns, and input reaching w through a key of the Work it
+// succeeds (inherited) carries that key, so to its Waits it carries w's
+// generation key, the first key w owns.
+func asSuccessorInput(inherited []domain.CorrelationKey, w domain.Work, a domain.AcceptedEvent) domain.AcceptedEvent {
+	if a.Event.CorrelationKey == nil || len(w.CorrelationKeys) == 0 || !slices.Contains(inherited, *a.Event.CorrelationKey) || a.Event.WorkID != "" || a.Event.ExecutionID != "" {
+		return a
+	}
+	k := w.CorrelationKeys[0]
+	a.Event.CorrelationKey = &k
+	return a
+}
+
+// maxSuccessors bounds a chain of successors routeOwner follows.
+const maxSuccessors = 10000
+
+// latestSuccessor follows finished Work to its successor, and that one's,
+// to the last of the chain: the Work its keys route to.
+func latestSuccessor(tx storage.Tx, w domain.Work) (domain.Work, error) {
+	for range maxSuccessors {
+		if !w.State.Terminal() {
+			return w, nil
+		}
+		var next domain.ID
+		err := getJSON(tx, successorNamespace, identity(string(w.ID)), &next)
+		if errors.Is(err, storage.ErrNotFound) {
+			return w, nil
+		}
+		if err != nil {
+			return w, err
+		}
+		if w, err = tx.Work(next); err != nil {
+			return w, err
+		}
+	}
+	return w, storage.ErrInvalid
+}
+
 func scopeForEvent(tx storage.Tx, a domain.AcceptedEvent) (domain.ID, error) {
 	var scope domain.ID
 	err := getJSON(tx, acceptanceNamespace, identity(string(a.Event.ID)), &scope)
@@ -644,18 +719,32 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 				return storage.ErrConflict
 			}
 		}
-		p := routePlan{event: s.event}
-		var err error
-		// Terminal ownership is final; late input cannot ask a handler to
-		// mutate it or become runnable through a new matching route.
-		if s.work == nil || !s.work.State.Terminal() {
-			p, err = r.evaluate(ctx, s, nil)
-			if err != nil {
-				return err
+		finished := s.work != nil && s.work.State.Terminal()
+		p, err := r.evaluate(ctx, s, nil)
+		if err != nil && !finished {
+			return err
+		}
+		// Terminal ownership is final: late input never mutates finished
+		// Work or makes it runnable. Only a route asking for a successor
+		// acts on it, by opening new Work.
+		var predecessor *domain.Work
+		if finished {
+			// A route that can't be evaluated asks for nothing: the input is
+			// terminal, as it always was for finished Work.
+			if err == nil && p.selected != nil && !p.addressed && p.decision.Successor {
+				predecessor = s.work
+			} else {
+				p = routePlan{event: s.event}
 			}
 		}
 		var projected *domain.Work
-		if s.work != nil {
+		if predecessor != nil {
+			w, e := successorWork(id, *predecessor, p.decision)
+			if e != nil {
+				return e
+			}
+			projected = &w
+		} else if s.work != nil {
 			w := *s.work
 			w.CorrelationKeys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
 			projected = &w
@@ -786,7 +875,11 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 						return storage.ErrConflict
 					}
 				}
-				if !projected.State.Terminal() {
+				if predecessor != nil {
+					if e = r.openSuccessorInTx(tx, *predecessor, *projected, s.event.Event.ID); e != nil {
+						return e
+					}
+				} else if !projected.State.Terminal() {
 					if e = tx.PutWork(*projected, projected.Revision); e != nil {
 						return e
 					}
@@ -828,6 +921,69 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		return err
 	}
 }
+
+// successorWork is the Work a route's Successor decision opens for the
+// Event id, whose owner, predecessor, has finished: new, ready Work in the
+// predecessor's scope with the decision's identity, kind and keys. The
+// Event's own key stays with the predecessor, which routes it on.
+func successorWork(id domain.ID, predecessor domain.Work, d extension.RouteDecision) (domain.Work, error) {
+	if d.Kind == "" {
+		return domain.Work{}, extension.ErrInvalid
+	}
+	w := domain.Work{ID: d.CreateID, Kind: d.Kind, ScopeID: predecessor.ScopeID, State: domain.WorkReady, Context: d.Context, Grants: slices.Clone(d.Grants)}
+	if w.ID == "" {
+		w.ID = domain.ID("work/" + identity(string(id)))
+	}
+	// A successor owns a key of its own, its generation key (B04): its
+	// Waits subscribe on it.
+	if w.ID == predecessor.ID || len(d.AttachKeys) == 0 {
+		return domain.Work{}, extension.ErrInvalid
+	}
+	for _, k := range d.AttachKeys {
+		if containsKey(predecessor, k) {
+			return domain.Work{}, extension.ErrInvalid
+		}
+	}
+	appendKeys(&w, d.AttachKeys)
+	setDisplay(&w, d.Display)
+	return w, nil
+}
+
+// openSuccessorInTx stores w, the successor of finished Work predecessor,
+// so predecessor's keys route to it from now on, and records the link as
+// a core.work.created Event caused by the Event that asked for it.
+func (r *Router) openSuccessorInTx(tx storage.Tx, predecessor, w domain.Work, trigger domain.ID) error {
+	var existing domain.ID
+	if err := getJSON(tx, successorNamespace, identity(string(predecessor.ID)), &existing); err == nil {
+		return errRouteRetry
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if _, err := tx.Work(w.ID); err == nil {
+		return storage.ErrConflict
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if err := tx.PutWork(w, 0); err != nil {
+		return err
+	}
+	if err := putJSON(tx, successorNamespace, identity(string(predecessor.ID)), w.ID); err != nil {
+		return err
+	}
+	if err := putJSON(tx, predecessorNamespace, identity(string(w.ID)), predecessor.ID); err != nil {
+		return err
+	}
+	data, err := json.Marshal(struct{ WorkID, ParentID, PredecessorID domain.ID }{w.ID, "", predecessor.ID})
+	if err != nil {
+		return err
+	}
+	now := r.now()
+	created := domain.Event{ID: domain.ID("work-created/" + identity(string(w.ID))), Type: "core.work.created", Source: "core.work", DeliveryID: "created/" + string(w.ID),
+		OccurredAt: now, ReceivedAt: now, CausationID: trigger, WorkID: w.ID, Data: domain.Payload{Schema: "core.work.created.v1", Data: data}}
+	_, _, err = AcceptDerivedInTx(tx, now, r.options.CausalLimits, w.ScopeID, trigger, created)
+	return err
+}
+
 func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.Scope) error {
 	rec := RouteRecord{EventID: p.event.Event.ID, Generation: r.options.Generation, Policy: "unmatched", Reason: "no_match", DisplayRefused: p.refused}
 	if p.selected != nil {

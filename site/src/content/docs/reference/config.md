@@ -604,3 +604,21 @@ Binding `config`:
 | `addr` |  | Required. the listener, for example 127.0.0.1:8787 |
 | `tunnel` |  | an object: provider, a tunnel type a package provides, and config, that package's tunnel config (its fields are under the package); provided here: cloudflared, ngrok |
 | `public_url` |  | a URL that already reaches the listener (no tunnel) |
+
+### Webhook (`webhook`)
+
+Signed webhooks where each delivery is Work of its own, deduplicated by a delivery key and threaded by a correlation key. Registers: extension, route.
+
+Extension entry `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `scope` |  | Required. the scope the entry is in |
+| `webhook_secret` |  | Required. names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes the URLs |
+| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"}]: each hook, the header or JSON pointer that identifies a delivery (a retry is the same delivery), and the one that threads it into one Work (a ticket's ID: once that Work finishes, the thread's next delivery opens a successor) |
+
+Route `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `hooks` |  | the hooks the route takes (every hook of the scope's webhook entries when empty) |

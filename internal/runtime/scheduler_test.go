@@ -19,7 +19,7 @@ import (
 )
 
 func TestProductionSchedulerSharedCases(t *testing.T) {
-	selected := map[string]bool{"concurrent_correlations_and_attempts": true, "independent_work_progress": true, "first_match_replay_and_drop_audit": true, "multi_key_attachment_conflict_and_order": true, "uncorrelated_and_terminal_successor": true, "unsupported_policy_explicit_fallback": true, "completion_inject_orders": true, "lease_loss_adoption_and_stale_result": true, "retry_backoff_exhaustion_and_manual_event": true, "retry_cancel_orders": true, "unmatched_and_contradictory_target": true}
+	selected := map[string]bool{"concurrent_correlations_and_attempts": true, "independent_work_progress": true, "first_match_replay_and_drop_audit": true, "multi_key_attachment_conflict_and_order": true, "uncorrelated_and_terminal_successor": true, "route_opened_successor": true, "unsupported_policy_explicit_fallback": true, "completion_inject_orders": true, "lease_loss_adoption_and_stale_result": true, "retry_backoff_exhaustion_and_manual_event": true, "retry_cancel_orders": true, "unmatched_and_contradictory_target": true}
 	for _, mode := range []string{"persistent", "reopen"} {
 		t.Run(mode, func(t *testing.T) {
 			for _, c := range conformance.RuntimeCases() {

@@ -717,6 +717,18 @@ Read the messages of this Work's Slack thread, oldest first.
 | --- | --- | --- | --- |
 | `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
 
+### Webhook (`webhook`)
+
+Signed webhooks where each delivery is Work of its own, deduplicated by a delivery key and threaded by a correlation key.
+
+#### `webhook.delivery.read`
+
+Read a webhook delivery of this Work in full, body included.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `event` | string | yes | the delivery's Event ID, as your turn names it (Event: …) |
+
 ## Installable packages
 
 Packages installed with `open-conduit extension install` declare their operations in their manifests, with the input each takes.

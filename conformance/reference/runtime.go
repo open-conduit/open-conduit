@@ -60,7 +60,19 @@ func owner(tx storage.Tx, e domain.Event) (domain.Work, error) {
 		return tx.Work(e.WorkID)
 	}
 	if e.CorrelationKey != nil {
-		return tx.WorkByCorrelation(*e.CorrelationKey)
+		w, err := tx.WorkByCorrelation(*e.CorrelationKey)
+		// A key alone routes to the last successor of its finished owner.
+		for err == nil && w.State.Terminal() {
+			next, e := tx.Get("runtime.successor", string(w.ID))
+			if errors.Is(e, storage.ErrNotFound) {
+				break
+			}
+			if e != nil {
+				return w, e
+			}
+			w, err = tx.Work(domain.ID(next))
+		}
+		return w, err
 	}
 	return domain.Work{}, storage.ErrNotFound
 }
@@ -138,7 +150,31 @@ func (r *Runtime) Route(id domain.ID) error {
 			}
 		}
 		if w.State.Terminal() {
-			return tx.MarkRouted(id, w.ID, "terminal")
+			if !decision.Successor || input.Work == nil || input.Work.ID != w.ID {
+				return tx.MarkRouted(id, w.ID, "terminal")
+			}
+			// A route asked for a successor: new Work, linked to w, that
+			// w's keys route to from now on; w itself stays as it was.
+			next := domain.Work{ID: decision.CreateID, Kind: decision.Kind, ScopeID: w.ScopeID, State: domain.WorkReady, CorrelationKeys: append([]domain.CorrelationKey(nil), decision.AttachKeys...)}
+			if next.ID == "" || next.Kind == "" || next.ID == w.ID || len(decision.AttachKeys) == 0 {
+				return extension.ErrInvalid
+			}
+			if err := tx.PutWork(next, 0); err != nil {
+				return err
+			}
+			if err := tx.Put("runtime.successor", string(w.ID), []byte(next.ID)); err != nil {
+				return err
+			}
+			data, _ := json.Marshal(struct{ WorkID, ParentID, PredecessorID domain.ID }{next.ID, "", w.ID})
+			now := r.clock.Now()
+			if err := r.derive(tx, domain.Event{ID: domain.ID("work-created/" + string(next.ID)), Type: "core.work.created", Source: "core.work", DeliveryID: "created/" + string(next.ID),
+				OccurredAt: now, ReceivedAt: now, CausationID: id, WorkID: next.ID, Data: domain.Payload{Schema: "core.work.created.v1", Data: data}}); err != nil {
+				return err
+			}
+			if err := tx.Put("runtime.queue", string(next.ID)+"/"+string(id), []byte(id)); err != nil {
+				return err
+			}
+			return tx.MarkRouted(id, next.ID, "queue")
 		}
 		for _, key := range decision.AttachKeys {
 			found := false

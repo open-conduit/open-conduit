@@ -689,8 +689,12 @@ func waitCandidatesInTx(tx storage.Tx, wait domain.Wait, meta waitMetadata) ([]d
 // wait: a matching input the Work has not already consumed, or its timeout.
 // It is empty when none does.
 func waitWinnerInTx(tx storage.Tx, wait domain.Wait, meta waitMetadata, work domain.Work, all []domain.AcceptedEvent) (domain.AcceptedEvent, error) {
+	inherited, err := inheritedKeysInTx(tx, work)
+	if err != nil {
+		return domain.AcceptedEvent{}, err
+	}
 	for _, a := range all {
-		if !waitMatches(wait, a) && !timeoutMatches(meta, a) {
+		if !waitMatches(wait, asSuccessorInput(inherited, work, a)) && !timeoutMatches(meta, a) {
 			continue
 		}
 		if !timeoutMatches(meta, a) {
@@ -1192,7 +1196,11 @@ func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id doma
 	}
 	// A matching input that didn't wake the Work (its wake is blocked) stays
 	// context: it is what the wait is for.
-	skipped := skip != nil && skip.EventID == a.Event.ID && !waitMatches(*active, a) && !timeoutMatches(meta, a)
+	inherited, err := inheritedKeysInTx(tx, current)
+	if err != nil {
+		return false, err
+	}
+	skipped := skip != nil && skip.EventID == a.Event.ID && !waitMatches(*active, asSuccessorInput(inherited, current, a)) && !timeoutMatches(meta, a)
 	all, err := tx.UnroutedEvents(0, 0)
 	if err != nil {
 		return false, err

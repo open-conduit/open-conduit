@@ -199,6 +199,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"jira", "", []string{"ingress.conformance"}},
 		{"bitbucket", "", []string{"ingress.conformance"}},
 		{"schedule", "", []string{"ingress.conformance"}},
+		{"webhook", "", []string{"ingress.conformance", "routes.decisions", "operations.cases"}},
 		{"introspection", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		// srt, a sandbox provider: its policy cases, and adopt refusing a

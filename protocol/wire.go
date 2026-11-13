@@ -550,6 +550,9 @@ type RouteDecision struct {
 	Display *Display `json:"display,omitempty"`
 	Context *Payload `json:"context,omitempty"`
 	Grants  []string `json:"grants,omitempty"`
+	// Successor, on a match for input of finished Work, opens new Work to
+	// succeed it (extension.RouteDecision.Successor).
+	Successor bool `json:"successor,omitempty"`
 }
 
 func fromGrants(gs []domain.BindingGrant) []BindingGrant {
@@ -569,7 +572,7 @@ func toGrants(gs []BindingGrant) []domain.BindingGrant {
 }
 
 func FromRouteDecision(d extension.RouteDecision) RouteDecision {
-	out := RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason, Display: FromDisplay(d.Display), Grants: d.Grants}
+	out := RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason, Display: FromDisplay(d.Display), Grants: d.Grants, Successor: d.Successor}
 	if d.Context.Schema != "" || len(d.Context.Data) > 0 {
 		c := FromPayload(d.Context)
 		out.Context = &c
@@ -577,7 +580,7 @@ func FromRouteDecision(d extension.RouteDecision) RouteDecision {
 	return out
 }
 func (d RouteDecision) Extension() extension.RouteDecision {
-	out := extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain(), Grants: d.Grants}
+	out := extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain(), Grants: d.Grants, Successor: d.Successor}
 	if d.Context != nil {
 		out.Context = d.Context.Domain()
 	}
