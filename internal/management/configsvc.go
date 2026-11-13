@@ -162,6 +162,14 @@ func (c *ConfigService) Current() (*config.Snapshot, uint64) {
 	return c.current, c.generation
 }
 
+// Holding runs fn with the current generation while no apply can commit,
+// so what fn checks against it stays true until fn returns.
+func (c *ConfigService) Holding(fn func(*config.Snapshot) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return fn(c.current)
+}
+
 // Path is the config file the daemon saves applied generations to.
 func (c *ConfigService) Path() string { return c.path }
 

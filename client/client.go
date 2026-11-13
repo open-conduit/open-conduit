@@ -1217,6 +1217,54 @@ func (c *Client) AddOperator(ctx context.Context, name, role string) (out TokenF
 	return
 }
 
+// Secret is one name in the daemon's secret store: where it is stored, the
+// reference a config reads it with, whether it resolves now (else its
+// failure code) and the pointers in the active config that read it. It
+// never carries the value.
+type Secret struct {
+	Name         string   `json:"name"`
+	Store        string   `json:"store"`
+	Reference    string   `json:"reference"`
+	Resolves     bool     `json:"resolves"`
+	Failure      string   `json:"failure,omitempty"`
+	ReferencedBy []string `json:"referenced_by"`
+}
+
+// StoredSecret is where PUT /secrets/{name} stored a value.
+type StoredSecret struct {
+	Name      string `json:"name"`
+	Store     string `json:"store"`
+	Reference string `json:"reference"`
+	FellBack  bool   `json:"fell_back"`
+}
+
+// Secrets lists the names in the daemon's secret store (admin).
+func (c *Client) Secrets(ctx context.Context) ([]Secret, error) {
+	var out struct {
+		Secrets []Secret `json:"secrets"`
+	}
+	err := c.Do(ctx, "GET", "secrets", nil, nil, "", &out)
+	return out.Secrets, err
+}
+
+// SetSecret stores or replaces a value in the daemon's secret store (admin):
+// store is "keyring", "file" or "" for the keyring with the file as
+// fallback.
+func (c *Client) SetSecret(ctx context.Context, name, value, store string) (out StoredSecret, err error) {
+	body := map[string]string{"value": value}
+	if store != "" {
+		body["store"] = store
+	}
+	err = c.Do(ctx, "PUT", "secrets/"+esc(name), nil, body, "", &out)
+	return
+}
+
+// DeleteSecret removes a name from the daemon's secret store (admin),
+// refused (409 secret_in_use) while the active config reads it.
+func (c *Client) DeleteSecret(ctx context.Context, name string) error {
+	return c.Do(ctx, "DELETE", "secrets/"+esc(name), nil, nil, "", nil)
+}
+
 type Revocation struct {
 	TokenID   string `json:"token_id"`
 	RevokedAt string `json:"revoked_at"`

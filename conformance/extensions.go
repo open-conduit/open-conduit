@@ -609,6 +609,12 @@ func CheckObserver(o observability.Observer, records func() []observability.Reco
 	if err := o.Observe(ctx, unanchored); err == nil {
 		return fmt.Errorf("unanchored provider record accepted")
 	}
+	// An operator record needs no scope, but only because the operator who
+	// made the call anchors it.
+	unanchored.Name, unanchored.Correlation.ScopeID = "operator.secret_set", ""
+	if err := o.Observe(ctx, unanchored); err == nil {
+		return fmt.Errorf("unanchored operator record accepted")
+	}
 	if err := o.Observe(ctx, valid); err != nil {
 		return err
 	}
