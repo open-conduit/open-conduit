@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // The stores a SecretStore writes to, as the scheme of the reference that
@@ -40,10 +43,16 @@ var (
 
 // KeyringWriter stores and removes values under a keyring service. Remove
 // of a name the keyring does not hold is not an error.
+// It returns once ctx is done, so a blocked keyring is a refusal, never a
+// hang.
 type KeyringWriter interface {
-	Set(service, name, value string) error
-	Remove(service, name string) error
+	Set(ctx context.Context, service, name, value string) error
+	Remove(ctx context.Context, service, name string) error
 }
+
+// keyringTimeout bounds one keyring tool run, as CommandTimeout bounds a
+// resolver's.
+const keyringTimeout = 10 * time.Second
 
 // SecretStore writes the values keyring: and file: references read: the
 // platform keyring under KeyringService, and the owner-only secrets file a
@@ -61,7 +70,7 @@ func ValidSecretName(name string) bool { return idPattern.MatchString(name) }
 // Set stores value under name and returns the reference that reads it.
 // store is StoreKeyring, StoreFile or "" for the keyring, falling back to
 // the file when no keyring is usable (fellBack reports that it did).
-func (s *SecretStore) Set(name, value, store string) (ref string, fellBack bool, err error) {
+func (s *SecretStore) Set(ctx context.Context, name, value, store string) (ref string, fellBack bool, err error) {
 	if !ValidSecretName(name) {
 		return "", false, ErrSecretName
 	}
@@ -70,7 +79,7 @@ func (s *SecretStore) Set(name, value, store string) (ref string, fellBack bool,
 	}
 	switch store {
 	case "", StoreKeyring:
-		if err := s.keyring().Set(KeyringService, name, value); err == nil {
+		if err := s.keyring().Set(ctx, KeyringService, name, value); err == nil {
 			return StoreKeyring + ":" + name, false, nil
 		} else if store == StoreKeyring {
 			return "", false, ErrKeyringRefused
@@ -95,13 +104,13 @@ func (s *SecretStore) Set(name, value, store string) (ref string, fellBack bool,
 
 // Remove removes name from store. Removing a name the store does not hold
 // succeeds.
-func (s *SecretStore) Remove(name, store string) error {
+func (s *SecretStore) Remove(ctx context.Context, name, store string) error {
 	if !ValidSecretName(name) {
 		return ErrSecretName
 	}
 	switch store {
 	case StoreKeyring:
-		if s.keyring().Remove(KeyringService, name) != nil {
+		if s.keyring().Remove(ctx, KeyringService, name) != nil {
 			return ErrKeyringRefused
 		}
 		return nil
@@ -191,27 +200,50 @@ func (s *SecretStore) writeFile(values map[string]string) error {
 var PlatformKeyring KeyringWriter = platformKeyringWriter{}
 
 // platformKeyringWriter drives the platform's keyring tool. The value
-// travels on stdin, never in arguments.
+// travels on stdin, never in arguments; each run has a deadline and the
+// resolver's minimal environment, in its own process group, killed whole.
 type platformKeyringWriter struct{}
 
-func (platformKeyringWriter) Set(service, name, value string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		cmd := exec.Command("/usr/bin/security", "-i")
-		cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -U -s %s -a %s -X %s\n", service, name, hex.EncodeToString([]byte(value))))
-		return cmd.Run()
-	case "linux":
-		cmd := exec.Command("secret-tool", "store", "--label="+service+" "+name, "service", service, "account", name)
-		cmd.Stdin = strings.NewReader(value)
-		return cmd.Run()
+func keyringCommand(ctx context.Context, stdin string, name string, args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(ctx, keyringTimeout)
+	cmd := exec.CommandContext(ctx, name, args...)
+	env := []string{"PATH=" + CommandPath}
+	for _, k := range []string{"HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
 	}
-	return errors.New("no platform keyring")
+	cmd.Env, cmd.Dir = env, "/"
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	return cmd, cancel
 }
 
-func (platformKeyringWriter) Remove(service, name string) error {
+func (platformKeyringWriter) Set(ctx context.Context, service, name, value string) error {
+	var cmd *exec.Cmd
+	var cancel context.CancelFunc
 	switch runtime.GOOS {
 	case "darwin":
-		err := exec.Command("/usr/bin/security", "delete-generic-password", "-s", service, "-a", name).Run()
+		cmd, cancel = keyringCommand(ctx, fmt.Sprintf("add-generic-password -U -s %s -a %s -X %s\n", service, name, hex.EncodeToString([]byte(value))), "/usr/bin/security", "-i")
+	case "linux":
+		cmd, cancel = keyringCommand(ctx, value, "secret-tool", "store", "--label="+service+" "+name, "service", service, "account", name)
+	default:
+		return errors.New("no platform keyring")
+	}
+	defer cancel()
+	return cmd.Run()
+}
+
+func (platformKeyringWriter) Remove(ctx context.Context, service, name string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		cmd, cancel := keyringCommand(ctx, "", "/usr/bin/security", "delete-generic-password", "-s", service, "-a", name)
+		defer cancel()
+		err := cmd.Run()
 		// security exits 44 when no such item exists.
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 44 {
@@ -220,7 +252,9 @@ func (platformKeyringWriter) Remove(service, name string) error {
 		return err
 	case "linux":
 		// secret-tool clear succeeds whether or not an item matched.
-		return exec.Command("secret-tool", "clear", "service", service, "account", name).Run()
+		cmd, cancel := keyringCommand(ctx, "", "secret-tool", "clear", "service", service, "account", name)
+		defer cancel()
+		return cmd.Run()
 	}
 	return errors.New("no platform keyring")
 }

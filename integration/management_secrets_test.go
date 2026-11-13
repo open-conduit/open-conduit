@@ -30,7 +30,7 @@ func (k *memoryKeyring) Get(service, name string) (string, error) {
 	}
 	return v, nil
 }
-func (k *memoryKeyring) Set(service, name, value string) error {
+func (k *memoryKeyring) Set(_ context.Context, service, name, value string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.refuse {
@@ -39,7 +39,7 @@ func (k *memoryKeyring) Set(service, name, value string) error {
 	k.values[service+"/"+name] = value
 	return nil
 }
-func (k *memoryKeyring) Remove(service, name string) error {
+func (k *memoryKeyring) Remove(_ context.Context, service, name string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.refuse {

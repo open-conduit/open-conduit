@@ -198,7 +198,7 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 		Secrets:  &config.SecretStore{File: secretsFile, Keyring: h.keyring},
 		Resolver: &config.Resolver{SecretsFile: secretsFile, Keyring: h.keyring, LookupEnv: func(string) (string, bool) { return "", false }},
 		Observer: h.observed,
-		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		Actions:  func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
 		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
 			if h.attach == nil {
 				return management.AttachSpec{}, management.ErrAttachUnsupported

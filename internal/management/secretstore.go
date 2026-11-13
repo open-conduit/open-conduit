@@ -136,7 +136,7 @@ func (s *Server) putSecret(c *call) (int, any, error) {
 		err = fail(422, "invalid_store", "store is keyring or file, or omitted for the keyring with the secrets file as fallback")
 		return 0, nil, err
 	}
-	ref, fellBack, err := store.Set(name, *in.Value, in.Store)
+	ref, fellBack, err := store.Set(c.ctx, name, *in.Value, in.Store)
 	if err != nil {
 		err = secretStoreError(err)
 		return 0, nil, err
@@ -199,10 +199,10 @@ func (s *Server) deleteSecret(c *call) (int, any, error) {
 		}
 		// A keyring this daemon cannot use holds nothing to remove, unless
 		// the API stored the name there.
-		if e := store.Remove(name, config.StoreKeyring); e != nil && indexed {
+		if e := store.Remove(c.ctx, name, config.StoreKeyring); e != nil && indexed {
 			return secretStoreError(e)
 		}
-		if e := store.Remove(name, config.StoreFile); e != nil {
+		if e := store.Remove(c.ctx, name, config.StoreFile); e != nil {
 			return secretStoreError(e)
 		}
 		return s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
