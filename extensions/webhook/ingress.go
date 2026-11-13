@@ -298,15 +298,58 @@ func splitPointer(p string) ([]string, error) {
 	return parts, nil
 }
 
+// Receipt is the body of a delivery's 202: the delivery's Events, one for
+// each fan-out target (or one), which the sender can follow to their runs,
+// and whether the delivery was already accepted. Duplicate is true only
+// when every Event was (a retry of the same delivery key); each Event's
+// own Duplicate says which were.
+type Receipt struct {
+	Events    []ReceiptEvent `json:"events"`
+	Duplicate bool           `json:"duplicate"`
+}
+
+// ReceiptEvent is one of a delivery's Events: its ID, its fan-out target
+// when the hook fans out, and whether it was already accepted, in which
+// case ID is the first delivery's.
+type ReceiptEvent struct {
+	ID        domain.ID `json:"id"`
+	Target    string    `json:"target,omitempty"`
+	Duplicate bool      `json:"duplicate"`
+}
+
+// ReceiptOf is the Receipt of a delivery the host accepted, with whether it
+// added each Event. An answer with no Event, or one whose flags don't
+// match its Events, is an error, so the sender gets a 503 and retries
+// rather than a 202 that names nothing.
+func ReceiptOf(accepted []domain.AcceptedEvent, added []bool, err error) (Receipt, error) {
+	if err != nil {
+		return Receipt{}, err
+	}
+	if len(accepted) == 0 || len(added) != len(accepted) {
+		return Receipt{}, fmt.Errorf("webhook: delivery accepted as %d events with %d flags", len(accepted), len(added))
+	}
+	r := Receipt{Events: make([]ReceiptEvent, len(accepted)), Duplicate: true}
+	for i, a := range accepted {
+		var p Payload
+		if a.Event.Type != TypeDelivery || a.Event.Data.Schema != SchemaDelivery || json.Unmarshal(a.Event.Data.Data, &p) != nil {
+			return Receipt{}, fmt.Errorf("webhook: delivery accepted as a %s Event", a.Event.Type)
+		}
+		r.Events[i] = ReceiptEvent{ID: a.Event.ID, Target: p.Target, Duplicate: !added[i]}
+		r.Duplicate = r.Duplicate && !added[i]
+	}
+	return r, nil
+}
+
 // WebhookHandler serves POST /<hook>/<token> for one entry (the caller
 // strips the entry's mount). It checks the token in constant time before
 // reading the body, reads the hook's keys, then hands push the delivery,
-// which must accept it durably: 202 only after acceptance, 404 for an
-// unknown hook or a wrong token, 413 for a body over 1 MiB (or one whose
-// fan-out Events would together encode over MaxEncoded), 400 for a
-// delivery without the hook's delivery key or with a key over 256 bytes,
-// and 503 when the secret is unavailable or the delivery wasn't accepted.
-func WebhookHandler(namespace string, s Settings, secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) error, now func() time.Time) http.Handler {
+// which must accept it durably: 202 with push's Receipt as JSON only after
+// acceptance, 404 for an unknown hook or a wrong token, 413 for a body over
+// 1 MiB (or one whose fan-out Events would together encode over
+// MaxEncoded), 400 for a delivery without the hook's delivery key or with a
+// key over 256 bytes, and 503 when the secret is unavailable or the
+// delivery wasn't accepted.
+func WebhookHandler(namespace string, s Settings, secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) (Receipt, error), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -369,10 +412,14 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context) (
 			return
 		}
 		raw, _ := json.Marshal(env)
-		if err := push(r.Context(), extension.Delivery{ID: id, ReceivedAt: received, ContentType: ContentType, Body: raw}); err != nil {
+		receipt, err := push(r.Context(), extension.Delivery{ID: id, ReceivedAt: received, ContentType: ContentType, Body: raw})
+		if err != nil {
 			http.Error(w, "not accepted", http.StatusServiceUnavailable)
 			return
 		}
+		out, _ := json.Marshal(receipt)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write(append(out, '\n'))
 	})
 }

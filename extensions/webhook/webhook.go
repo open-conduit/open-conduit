@@ -353,9 +353,9 @@ func Build(o Options) *sdk.Extension {
 			if !ok {
 				continue
 			}
-			push := func(ctx context.Context, d extension.Delivery) error {
-				_, err := st.host.Load().Deliver(ctx, e.namespace, protocol.FromDelivery(d))
-				return err
+			push := func(ctx context.Context, d extension.Delivery) (Receipt, error) {
+				accepted, added, err := st.host.Load().DeliverAdded(ctx, e.namespace, protocol.FromDelivery(d))
+				return ReceiptOf(accepted, added, err)
 			}
 			return http.StripPrefix("/"+e.namespace, WebhookHandler(e.namespace, e.settings, st.secret(e), push, o.Now)), rest != ""
 		}

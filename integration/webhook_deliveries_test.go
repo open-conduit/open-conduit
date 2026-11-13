@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/webhook"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -18,7 +19,8 @@ import (
 // and route through the real runtime ingress and router over SQLite: a
 // sender's retry is the first delivery again, a delivery with the same
 // correlation value is the first one's Work's input, and each other
-// delivery opens Work of its own.
+// delivery opens Work of its own. Each 202 names the delivery's Event, and
+// a retry's names the first delivery's as a duplicate.
 func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 	settings, err := webhook.ParseSettings(webhook.FixtureConfig(), nil)
 	if err != nil {
@@ -27,27 +29,33 @@ func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 	var e *incidentEnv
 	adapter := &webhook.Ingress{Namespace: webhook.FixtureSource, Settings: settings, Now: func() time.Time { return e.clock.Now() }}
 	e = newIncidentEnv(t, webhook.FixtureScope, webhook.FixtureEntry, webhook.Name, webhook.FixtureConfig(), webhook.Route{}, webhook.FixtureSource, webhook.FixtureSource, adapter)
-	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.push, e.clock.Now))
-	post := func(name string, header http.Header, body string) {
+	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
+	post := func(name string, header http.Header, body string) webhook.Receipt {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/"+name+"/"+webhook.Token("s", webhook.FixtureSource, name, 0), strings.NewReader(body))
 		req.Header = header
 		w := httptest.NewRecorder()
 		hook.ServeHTTP(w, req)
-		if w.Code != http.StatusAccepted {
-			t.Fatalf("%s %s: %d", name, body, w.Code)
+		var r webhook.Receipt
+		if w.Code != http.StatusAccepted || w.Header().Get("Content-Type") != "application/json" || json.Unmarshal(w.Body.Bytes(), &r) != nil || len(r.Events) != 1 || r.Events[0].ID == "" {
+			t.Fatalf("%s %s: %d %q", name, body, w.Code, w.Body.String())
 		}
+		return r
 	}
 	id := func(v string) http.Header {
 		return http.Header{"Content-Type": {"application/json"}, "X-Delivery-Id": {v}}
 	}
-	post("deploys", id("d-1"), `{"service":"checkout","status":"failed"}`)
+	first := post("deploys", id("d-1"), `{"service":"checkout","status":"failed"}`)
 	// A retry, even one whose body differs, is the first delivery again.
-	post("deploys", id("d-1"), `{"service":"billing","status":"failed"}`)
-	post("deploys", id("d-2"), `{"service":"checkout","status":"failed again"}`)
+	retry := post("deploys", id("d-1"), `{"service":"billing","status":"failed"}`)
+	second := post("deploys", id("d-2"), `{"service":"checkout","status":"failed again"}`)
 	post("deploys", id("d-3"), `{"service":"billing"}`)
-	post("forms", nil, `name=a`)
-	post("forms", nil, `name=a`)
+	form := post("forms", nil, `name=a`)
+	again := post("forms", nil, `name=a`)
+	of := func(r webhook.Receipt) domain.ID { return r.Events[0].ID }
+	if first.Duplicate || !retry.Duplicate || of(retry) != of(first) || second.Duplicate || of(second) == of(first) || form.Duplicate || again.Duplicate || of(again) == of(form) {
+		t.Fatalf("receipts: %+v %+v %+v %+v %+v", first, retry, second, form, again)
+	}
 	e.route()
 	deliveries := e.events(webhook.TypeDelivery)
 	if len(deliveries) != 5 {
@@ -61,9 +69,18 @@ func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 	if w := works[checkout]; w.Kind != webhook.WorkKind || w.Display == nil || w.Display.Title != "A delivery to deploys: checkout" {
 		t.Fatalf("checkout Work: %+v", w)
 	}
+	if deliveries[0].Event.ID != of(first) || deliveries[1].Event.ID != of(second) {
+		t.Fatalf("events: %s %s, receipts %+v %+v", deliveries[0].Event.ID, deliveries[1].Event.ID, first, second)
+	}
 	if deliveries[0].RoutedWorkID != deliveries[1].RoutedWorkID || string(deliveries[0].RoutedWorkID) != checkout || deliveries[2].RoutedWorkID == deliveries[0].RoutedWorkID {
 		t.Fatalf("routed: %s %s %s", deliveries[0].RoutedWorkID, deliveries[1].RoutedWorkID, deliveries[2].RoutedWorkID)
 	}
+}
+
+// receipt is the webhook handler's push: the real ingress, with whether it
+// added each Event.
+func (e *incidentEnv) receipt(ctx context.Context, d extension.Delivery) (webhook.Receipt, error) {
+	return webhook.ReceiptOf(e.ingress.Deliver(ctx, e.source, d))
 }
 
 // TestWebhookFanOutThroughRuntime: a hook that fans out to triage and audit
@@ -93,7 +110,7 @@ func TestWebhookFanOutThroughRuntime(t *testing.T) {
 		}
 		return tx.PutScope(s, s.Revision)
 	})
-	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.push, e.clock.Now))
+	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
 	send := func(id, body string) int {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/tickets/"+webhook.Token("s", webhook.FixtureSource, "tickets", 0), strings.NewReader(body))
