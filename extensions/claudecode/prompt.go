@@ -105,8 +105,15 @@ func RenderEvents(events []domain.Event) string {
 }
 
 func renderEvent(e domain.Event) string {
-	if e.Type == domain.TypeExecutionTimeout {
+	switch e.Type {
+	case domain.TypeExecutionTimeout:
 		return renderTurnLimit(e)
+	case domain.TypeChildEnded:
+		return renderChildEnded(e)
+	case "core.work.created":
+		if out, ok := renderAsked(e); ok {
+			return out
+		}
 	}
 	var m map[string]any
 	_ = json.Unmarshal(e.Data.Data, &m)
@@ -202,6 +209,50 @@ func withAdditions(body, extra string) string {
 		return add
 	}
 	return body + "\n\n" + add
+}
+
+// renderChildEnded gives the agent the answer of the child Work it asked
+// for: which one ended, how, and its result in full.
+func renderChildEnded(e domain.Event) string {
+	var c domain.ChildEnded
+	_ = json.Unmarshal(e.Data.Data, &c)
+	out := "### The " + c.Kind + " Work you asked for (" + c.Work + ") ended: " + string(c.State)
+	if c.Summary != "" {
+		out += "\nSummary: " + strings.TrimSpace(c.Summary)
+	}
+	if len(c.Result) == 0 {
+		return out + "\n\nIt returned no result."
+	}
+	var text string
+	if json.Unmarshal(c.Result, &text) != nil {
+		text = string(c.Result)
+	}
+	return out + "\n\nIts result:\n\n" + strings.TrimSpace(text)
+}
+
+// renderAsked shows child Work's first turn what it was asked: its kind
+// and the task its context carries. ok is false for Work nobody asked for.
+func renderAsked(e domain.Event) (string, bool) {
+	var c struct {
+		ParentID domain.ID
+		Kind     string
+		Context  *domain.Payload
+	}
+	if json.Unmarshal(e.Data.Data, &c) != nil || c.ParentID == "" {
+		return "", false
+	}
+	out := "### Another agent asked for this " + c.Kind + " Work"
+	if c.Context == nil || len(c.Context.Data) == 0 {
+		return out + "\n\nIt gave no task.", true
+	}
+	var task struct {
+		Task string `json:"task"`
+	}
+	text := string(c.Context.Data)
+	if json.Unmarshal(c.Context.Data, &task) == nil && strings.TrimSpace(task.Task) != "" {
+		text = strings.TrimSpace(task.Task)
+	}
+	return out + ". The task:\n\n" + text, true
 }
 
 // renderTurnLimit tells the agent its last turn was cut off at its time
