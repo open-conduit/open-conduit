@@ -346,10 +346,14 @@ func ReceiptOf(accepted []domain.AcceptedEvent, added []bool, err error) (Receip
 // which must accept it durably: 202 with push's Receipt as JSON only after
 // acceptance, 404 for an unknown hook or a wrong token, 413 for a body over
 // 1 MiB (or one whose fan-out Events would together encode over
-// MaxEncoded), 400 for a delivery without the hook's delivery key or with a
+// MaxEncoded), 401 for a hook with a signature check whose sender's
+// signature (or signed timestamp) doesn't verify, 400 for a delivery without the hook's delivery key or with a
 // key over 256 bytes, and 503 when the secret is unavailable or the
 // delivery wasn't accepted.
-func WebhookHandler(namespace string, s Settings, secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) (Receipt, error), now func() time.Time) http.Handler {
+//
+// secret resolves the entry's secrets by name: the webhook secret, and the
+// secret of a hook's signature check.
+func WebhookHandler(namespace string, s Settings, secret func(context.Context, string) (string, error), push func(context.Context, extension.Delivery) (Receipt, error), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -369,7 +373,7 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context) (
 			http.NotFound(w, r)
 			return
 		}
-		key, err := secret(r.Context())
+		key, err := secret(r.Context(), s.WebhookSecret)
 		if err != nil || key == "" {
 			http.Error(w, "webhook secret unavailable", http.StatusServiceUnavailable)
 			return
@@ -388,6 +392,22 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context) (
 			return
 		}
 		received := now()
+		if hook.Signature != nil {
+			v, err := hook.Signature.parse()
+			if err != nil {
+				http.Error(w, "invalid signature check", http.StatusServiceUnavailable)
+				return
+			}
+			sk, err := secret(r.Context(), hook.Signature.Secret)
+			if err != nil || sk == "" {
+				http.Error(w, "signature secret unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if err := v.verify(r.Header, body, sk, received); err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+		}
 		dk, ck := hook.Keys()
 		env := envelope{Hook: hook.Name, ContentType: r.Header.Get("Content-Type"), Body: body}
 		id := newDeliveryID(received)
