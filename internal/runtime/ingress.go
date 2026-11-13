@@ -225,52 +225,61 @@ func (i *Ingress) AdmitsTrace(scope domain.ID, e domain.Event) (known bool, err 
 	return false, nil
 }
 
+// Push accepts one delivery to the named source and returns its Events.
 func (i *Ingress) Push(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, error) {
+	accepted, _, err := i.Deliver(ctx, name, delivery)
+	return accepted, err
+}
+
+// Deliver is Push that also reports, for each accepted Event, whether this
+// delivery added it: false for one already accepted (the same source and
+// delivery ID), such as a sender's retry.
+func (i *Ingress) Deliver(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 	r, err := i.registration(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, i.options.PageTimeout)
 	defer cancel()
 	result, err := r.adapter.Push(ctx, r.source, delivery)
 	if err != nil {
-		return nil, ErrIngressProvider
+		return nil, nil, ErrIngressProvider
 	}
 	if len(result.Observations)+len(result.Events) > i.options.MaxPageItems {
-		return nil, extension.ErrInvalid
+		return nil, nil, extension.ErrInvalid
 	}
 	encoded, encodeErr := json.Marshal(result)
 	if encodeErr != nil || len(encoded) > i.options.MaxPageBytes {
-		return nil, extension.ErrInvalid
+		return nil, nil, extension.ErrInvalid
 	}
-	accepted := []domain.AcceptedEvent{}
+	accepted, added := []domain.AcceptedEvent{}, []bool{}
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
 		for _, observation := range result.Observations {
 			if err := validateObservation(tx, r, observation); err != nil {
 				return err
 			}
-			event, _, err := AcceptInTx(tx, r.source.ScopeID, observation.Event)
+			event, new, err := AcceptInTx(tx, r.source.ScopeID, observation.Event)
 			if err != nil {
 				return err
 			}
-			accepted = append(accepted, event)
+			accepted, added = append(accepted, event), append(added, new)
 		}
 		for _, event := range result.Events {
 			if err := validateEvent(r, event, false); err != nil {
 				return err
 			}
-			a, _, err := AcceptInTx(tx, r.source.ScopeID, event)
+			a, new, err := AcceptInTx(tx, r.source.ScopeID, event)
 			if err != nil {
 				return err
 			}
-			accepted = append(accepted, a)
+			accepted, added = append(accepted, a), append(added, new)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return accepted, nil
+	return accepted, added, nil
 }
 
 // IngressStatus is safe configuration/health output. It contains declarations

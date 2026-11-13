@@ -145,8 +145,13 @@ type IngressDeliverParams struct {
 	Name     string   `json:"name"`
 	Delivery Delivery `json:"delivery"`
 }
+
+// IngressDeliverResult is the delivery's accepted Events. Added[i]
+// reports whether this delivery added Accepted[i]: false for an Event
+// already accepted, such as a sender's retry of the same delivery.
 type IngressDeliverResult struct {
 	Accepted []AcceptedEvent `json:"accepted"`
+	Added    []bool          `json:"added"`
 }
 
 // Routing and in-transaction callbacks.

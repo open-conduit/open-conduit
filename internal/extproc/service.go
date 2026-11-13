@@ -48,8 +48,9 @@ type Deps struct {
 	// configuration generation instead of Limits.
 	CurrentLimits func() runtime.CausalLimits
 	// Deliver is the runtime ingress push for one of the extension's own
-	// registered sources; it returns after durable acceptance.
-	Deliver    func(ctx context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, error)
+	// registered sources; it returns after durable acceptance, with whether
+	// the delivery added each Event (false for one already accepted).
+	Deliver    func(ctx context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, []bool, error)
 	Artifacts  storage.Artifacts
 	Timers     Armer
 	CancelWork func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error)
@@ -378,11 +379,11 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		if !own || s.deps.Deliver == nil {
 			return nil, unauthorized("not a source this extension registered")
 		}
-		accepted, err := s.deps.Deliver(ctx, p.Name, p.Delivery.Extension())
+		accepted, added, err := s.deps.Deliver(ctx, p.Name, p.Delivery.Extension())
 		if err != nil {
 			return nil, err
 		}
-		return protocol.IngressDeliverResult{Accepted: protocol.FromAcceptedList(accepted)}, nil
+		return protocol.IngressDeliverResult{Accepted: protocol.FromAcceptedList(accepted), Added: added}, nil
 	case "execution.persist_recovery":
 		var p protocol.PersistRecoveryParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

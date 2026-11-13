@@ -178,15 +178,27 @@ func (h *Host) Accept(ctx context.Context, p protocol.EventAcceptParams) (domain
 // ingress; the host answers only after durable acceptance, so the extension
 // acknowledges upstream only after Deliver returns.
 func (h *Host) Deliver(ctx context.Context, name string, d protocol.Delivery) ([]domain.AcceptedEvent, error) {
+	accepted, _, err := h.DeliverAdded(ctx, name, d)
+	return accepted, err
+}
+
+// DeliverAdded is Deliver that also reports, for each accepted Event,
+// whether this delivery added it: false for one already accepted (the same
+// source and delivery ID), such as an upstream retry. A host that doesn't
+// report it is taken to have added each Event, so a retry is never claimed
+// as one.
+func (h *Host) DeliverAdded(ctx context.Context, name string, d protocol.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 	var out protocol.IngressDeliverResult
 	if err := h.conn.Call(ctx, "ingress.deliver", protocol.IngressDeliverParams{Name: name, Delivery: d}, &out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	accepted := make([]domain.AcceptedEvent, len(out.Accepted))
+	added := make([]bool, len(out.Accepted))
 	for i, a := range out.Accepted {
 		accepted[i] = a.Domain()
+		added[i] = i >= len(out.Added) || out.Added[i]
 	}
-	return accepted, nil
+	return accepted, added, nil
 }
 
 // Events reads accepted Events of configured scopes after a sequence.

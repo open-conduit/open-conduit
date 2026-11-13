@@ -963,15 +963,15 @@ func (h *Host) deliver(ctx context.Context, p protocol.IngressDeliverParams) (pr
 	for _, o := range r.Observations {
 		events = append(events, o.Event)
 	}
-	out := protocol.IngressDeliverResult{Accepted: []protocol.AcceptedEvent{}}
+	out := protocol.IngressDeliverResult{Accepted: []protocol.AcceptedEvent{}, Added: []bool{}}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, e := range events {
 		if e.Source == "" {
 			e.Source = src.Source.Namespace
 		}
-		a, _ := h.acceptLocked(domain.ID(src.Source.ScopeID), e, "")
-		out.Accepted = append(out.Accepted, protocol.FromAccepted(a))
+		a, added := h.acceptLocked(domain.ID(src.Source.ScopeID), e, "")
+		out.Accepted, out.Added = append(out.Accepted, protocol.FromAccepted(a)), append(out.Added, added)
 	}
 	return out, nil
 }

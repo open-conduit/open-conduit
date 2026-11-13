@@ -616,12 +616,12 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			return out
 		},
 		Secrets: d.scopedSecrets(extTypes, connTypes),
-		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, error) {
-			accepted, err := d.ingress.Push(ctx, name, delivery)
+		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
+			accepted, added, err := d.ingress.Deliver(ctx, name, delivery)
 			if err == nil {
 				d.poke()
 			}
-			return accepted, err
+			return accepted, added, err
 		},
 		Artifacts: d.artifacts,
 		Timers:    currentTimers{d},
