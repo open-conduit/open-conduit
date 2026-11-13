@@ -453,6 +453,8 @@ func (configData) EffectText(kind string) string {
 		return "Wakes the waiting Work"
 	case "drop":
 		return "Dropped"
+	case "attach":
+		return "Attached to the Work, not its input"
 	case "unmatched":
 		return "No route matched"
 	}

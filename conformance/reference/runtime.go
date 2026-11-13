@@ -128,10 +128,17 @@ func (r *Runtime) Route(id domain.ID) error {
 		if selected == nil {
 			return tx.MarkRouted(id, "", "unmatched")
 		}
+		if !decision.Deliver.Valid() {
+			return extension.ErrInvalid
+		}
 		w, err := owner(tx, a.Event)
 		if errors.Is(err, storage.ErrNotFound) {
 			if a.Event.WorkID != "" {
 				return err
+			}
+			// Attaching needs Work to attach to; it creates none.
+			if decision.Deliver == extension.DeliverNone {
+				return tx.MarkRouted(id, "", "unmatched")
 			}
 			if a.Event.CorrelationKey == nil && decision.CreateID == "" {
 				return tx.MarkRouted(id, "", "unmatched")
@@ -189,6 +196,12 @@ func (r *Runtime) Route(id domain.ID) error {
 		}
 		if err := tx.PutWork(w, w.Revision); err != nil {
 			return err
+		}
+		// Only the keys were for the Work: the Event is in its history but
+		// is not its input. This double has one binding, so DeliverCurrent
+		// queues as DeliverRoute does.
+		if decision.Deliver == extension.DeliverNone {
+			return tx.MarkRouted(id, w.ID, extension.DispositionAttach)
 		}
 		policy := selected.Route.ActivePolicy
 		if policy == "" {

@@ -18,7 +18,7 @@ import (
 )
 
 func TestProductionRoutingSharedCases(t *testing.T) {
-	selected := map[string]bool{"concurrent_correlations_and_attempts": true, "independent_work_progress": true, "first_match_replay_and_drop_audit": true, "multi_key_attachment_conflict_and_order": true, "uncorrelated_and_terminal_successor": true, "route_opened_successor": true, "scope_route_inheritance": true, "unsupported_policy_explicit_fallback": true, "completion_inject_orders": true, "unmatched_and_contradictory_target": true}
+	selected := map[string]bool{"concurrent_correlations_and_attempts": true, "independent_work_progress": true, "first_match_replay_and_drop_audit": true, "multi_key_attachment_conflict_and_order": true, "uncorrelated_and_terminal_successor": true, "route_opened_successor": true, "scope_route_inheritance": true, "unsupported_policy_explicit_fallback": true, "completion_inject_orders": true, "unmatched_and_contradictory_target": true, "attach_without_input": true}
 	for _, mode := range []string{"persistent", "reopen"} {
 		t.Run(mode, func(t *testing.T) {
 			for _, c := range conformance.RuntimeCases() {

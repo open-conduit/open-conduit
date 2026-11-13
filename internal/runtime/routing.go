@@ -353,9 +353,8 @@ func latestAttemptInTx(tx storage.Tx, work domain.ID) (*domain.Execution, error)
 
 // addressedBindingInTx is the binding on which an operator Event that names
 // Work w directly (its WorkID) is that Work's input when no route takes it:
-// the binding the Work runs on next. That is its queued input's, else its
-// retry state's (both of which Control.Rebind rewrites), else the newer of
-// its last rebind and its latest attempt's. The operator named the Work, so the input needs no route to find it,
+// the binding the Work runs on next (workBindingInTx). The operator named
+// the Work, so the input needs no route to find it,
 // and it continues on the binding the Work already runs on. Work created
 // without a route (Control.CreateWork) has no route to take follow-up input
 // at all. A child's domain.TypeChildEnded Event is addressed to its parent
@@ -366,6 +365,14 @@ func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string
 	if w == nil || w.State.Terminal() || e.WorkID != w.ID || !addressedEvent(e) {
 		return "", nil
 	}
+	return workBindingInTx(tx, *w)
+}
+
+// workBindingInTx is the binding Work w runs on next: its queued input's,
+// else its retry state's (both of which Control.Rebind rewrites), else the
+// newer of its last rebind and its latest attempt's, or "" for Work that has
+// none yet.
+func workBindingInTx(tx storage.Tx, w domain.Work) (string, error) {
 	inputs, err := pendingInputs(tx, w.ID)
 	if err != nil {
 		return "", err
@@ -564,6 +571,9 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(doma
 		if !d.Match {
 			p.refusals = append(p.refusals, RouteRefusal{Route: route.Name, Reason: extension.Clip(d.Reason, MaxRefusalReason)})
 		}
+		if d.Match && !d.Deliver.Valid() {
+			return p, &RouteError{EventID: id, Route: route.Name, Code: RouteHandlerInvalid, Err: fmt.Errorf("%w: unknown delivery %q", extension.ErrInvalid, d.Deliver)}
+		}
 		if d.Match {
 			// A display is optional: one over the limits is dropped and
 			// recorded, never allowed to stop the Work receiving input.
@@ -671,13 +681,23 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		if s.event.Routed {
 			return nil
 		}
+		var wp routePlan
+		var werr error
+		attachOnly := false
 		if s.work != nil && s.work.State == domain.WorkWaiting {
 			// The Wait decides whether the input wakes the Work. The routes
 			// still say what the Work is, so its display follows the source,
 			// and whether input that doesn't wake it reaches it at all: one
 			// no route passes to the Work is recorded as unmatched, as it
 			// would be were the Work not waiting, not kept as context.
-			display, skip := r.waitingDecision(ctx, s)
+			// A match that only attaches keys (DeliverNone) isn't input, so
+			// the Wait has nothing to decide: it is routed below as for
+			// Work that isn't waiting.
+			wp, werr = r.evaluate(ctx, s, nil)
+			attachOnly = werr == nil && wp.selected != nil && wp.decision.Deliver == extension.DeliverNone
+		}
+		if s.work != nil && s.work.State == domain.WorkWaiting && !attachOnly {
+			display, skip := r.waitingDecision(s, wp, werr)
 			var handled bool
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				var e error
@@ -731,18 +751,22 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 			}
 		}
 		finished := s.work != nil && s.work.State.Terminal()
-		p, err := r.evaluate(ctx, s, nil)
+		p, err := wp, werr
+		if !attachOnly {
+			p, err = r.evaluate(ctx, s, nil)
+		}
 		if err != nil && !finished {
 			return err
 		}
 		// Terminal ownership is final: late input never mutates finished
 		// Work or makes it runnable. Only a route asking for a successor
-		// acts on it, by opening new Work.
+		// acts on it, by opening new Work; a successor's first input is
+		// the Event, so a match that only attaches never opens one.
 		var predecessor *domain.Work
 		if finished {
 			// A route that can't be evaluated asks for nothing: the input is
 			// terminal, as it always was for finished Work.
-			if err == nil && p.selected != nil && !p.addressed && p.decision.Successor {
+			if err == nil && p.selected != nil && !p.addressed && p.decision.Successor && p.decision.Deliver != extension.DeliverNone {
 				predecessor = s.work
 			} else {
 				p = routePlan{event: s.event}
@@ -759,7 +783,9 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 			w := *s.work
 			w.CorrelationKeys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
 			projected = &w
-		} else if p.selected != nil && (s.event.Event.CorrelationKey != nil || p.decision.CreateID != "") {
+		} else if p.selected != nil && p.decision.Deliver != extension.DeliverNone && (s.event.Event.CorrelationKey != nil || p.decision.CreateID != "") {
+			// A match that only attaches needs Work to attach to; it
+			// creates none.
 			w := domain.Work{ID: p.decision.CreateID, Kind: p.decision.Kind, ScopeID: s.scope.ID, State: domain.WorkReady, Context: p.decision.Context, Grants: slices.Clone(p.decision.Grants)}
 			if w.ID == "" {
 				w.ID = domain.ID("work/" + identity(string(id)))
@@ -783,7 +809,10 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		plans := []routePlan{}
 		// New attachments bring earlier unprocessed events into this atomic batch.
 		// They see the projected ownership; checkpointed history is never replayed.
-		if projected != nil && !projected.State.Terminal() {
+		// Waiting Work's input is the Wait's to decide, so an attachment to
+		// it brings nothing in: earlier input on the new keys conflicts
+		// below and is routed on its own first.
+		if projected != nil && !projected.State.Terminal() && projected.State != domain.WorkWaiting {
 			planned := map[domain.ID]bool{}
 			for {
 				changed := false
@@ -1005,10 +1034,22 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 	}
 	if w != nil && w.State.Terminal() {
 		rec.Policy, rec.Reason = "terminal", "terminal_work"
+	} else if p.selected != nil && p.decision.Deliver == extension.DeliverNone {
+		// Only the keys were for the Work; the Event is in its history
+		// but is not its input.
+		rec.Policy, rec.Reason = extension.DispositionAttach, "attached"
+		if w == nil {
+			rec.Policy, rec.Reason = "unmatched", "nothing_to_attach"
+		}
 	} else if p.selected != nil && w != nil {
 		var target *domain.Execution
 		var err error
-		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, *p.selected, *w, scope); err != nil {
+		route, err := r.deliveryRouteInTx(tx, p, *w, scope)
+		if err != nil {
+			return err
+		}
+		rec.Binding = route.Binding
+		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, route, *w, scope); err != nil {
 			// The running attempt can't be given this input (another
 			// binding, or its pinned capabilities lack the control). It
 			// isn't a route failure: the input waits, uncounted, until
@@ -1019,7 +1060,7 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 			rec.Reason = ReasonAddressed
 		}
 		if rec.Policy != "drop" {
-			input := QueuedInput{p.event.Event.ID, p.event.Sequence, p.selected.Binding}
+			input := QueuedInput{p.event.Event.ID, p.event.Sequence, route.Binding}
 			if err := putJSON(tx, queueNamespace, queueKey(w.ID, p.event.Sequence), input); err != nil {
 				return err
 			}
@@ -1044,6 +1085,26 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		return err
 	}
 	return tx.MarkRouted(rec.EventID, rec.WorkID, rec.Policy)
+}
+
+// deliveryRouteInTx is the route p's input is delivered on for Work w: the
+// selected route, on the binding the Work runs on when the decision asks for
+// it (DeliverCurrent) and the Work has one that is still configured.
+func (r *Router) deliveryRouteInTx(tx storage.Tx, p routePlan, w domain.Work, scope domain.Scope) (domain.Route, error) {
+	route := *p.selected
+	if p.decision.Deliver != extension.DeliverCurrent {
+		return route, nil
+	}
+	current, err := workBindingInTx(tx, w)
+	if err != nil || current == "" || current == route.Binding {
+		return route, err
+	}
+	if _, err := r.binding(scope, current); err != nil {
+		// A binding config has since removed: the route's own takes it.
+		return route, nil
+	}
+	route.Binding = current
+	return route, nil
 }
 
 // policyInTx decides, without writing, what a selected route does with input

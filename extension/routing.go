@@ -57,7 +57,40 @@ type RouteDecision struct {
 	// Successor, input for finished Work is checkpointed as terminal; on
 	// Work that hasn't finished it means nothing.
 	Successor bool
+	// Deliver says what a match does with the Event once its keys are
+	// attached: DeliverRoute (the zero value) queues it as input on the
+	// route's binding, DeliverNone only correlates it with the Work, and
+	// DeliverCurrent queues it on the binding the Work already runs on.
+	Deliver RouteDelivery
 }
+
+// RouteDelivery is what a matching route does with the Event (RouteDecision.Deliver).
+type RouteDelivery string
+
+const (
+	// DeliverRoute queues the Event as input on the route's binding, with
+	// the route's active policy.
+	DeliverRoute RouteDelivery = ""
+	// DeliverNone attaches the decision's keys and records the Event in the
+	// Work's history (disposition "attach") without making it input, so it
+	// starts no turn. It needs Work that already exists: a match with no
+	// owner creates nothing and is recorded as unmatched.
+	DeliverNone RouteDelivery = "none"
+	// DeliverCurrent queues the Event as input on the binding the Work runs
+	// on next (its queued input's, its retry's, or its last rebind's or
+	// attempt's), with the route's active policy. Work that has not run yet
+	// takes it on the route's binding, as with DeliverRoute.
+	DeliverCurrent RouteDelivery = "current"
+)
+
+// Valid reports whether d is one of the deliveries above.
+func (d RouteDelivery) Valid() bool {
+	return d == DeliverRoute || d == DeliverNone || d == DeliverCurrent
+}
+
+// DispositionAttach is how an Event a DeliverNone match correlated with its
+// Work is recorded.
+const DispositionAttach = "attach"
 
 // RouteHandler decides whether its route takes an Event. Match must be free
 // of side effects: routing may evaluate it again after a revision conflict,

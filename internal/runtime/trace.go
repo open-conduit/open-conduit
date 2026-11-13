@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -30,6 +31,9 @@ const (
 	EffectInterrupt = "interrupt"
 	EffectWake      = "wake"
 	EffectDrop      = "drop"
+	// EffectAttach: the route attached keys to the Work and recorded the
+	// Event in its history without making it input (extension.DeliverNone).
+	EffectAttach    = extension.DispositionAttach
 	EffectUnmatched = "unmatched"
 )
 
@@ -181,6 +185,17 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 			out.Also = append(out.Also, wakeEffect(w, "through its dependency on this event"))
 		}
 	}
+	if waiting != nil {
+		// A match that only attaches keys isn't input, so the wait has
+		// nothing to decide (as routing does it).
+		steps := slices.Clone(out.Routes)
+		p, err := r.evaluate(ctx, s, traceVerdicts(steps))
+		if err == nil && p.selected != nil && p.decision.Deliver == extension.DeliverNone {
+			out.Routes = steps
+			out.Effect = RouteEffect{Kind: EffectAttach, WorkID: waiting.work.ID, Detail: p.selected.Name + " attaches its keys to " + string(waiting.work.ID) + " and records the event in its history; it is not input, and " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait)}
+			return out, nil
+		}
+	}
 	if waiting != nil && waiting.wakes {
 		// Routes are not consulted for input that wakes waiting Work.
 		for i := range out.Routes {
@@ -246,6 +261,14 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		return out, nil
 	}
 	route := *p.selected
+	if p.decision.Deliver == extension.DeliverNone {
+		if s.work == nil {
+			out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: route.Name + " matched, but it only attaches keys and there is no Work to attach them to"}
+			return out, nil
+		}
+		out.Effect = RouteEffect{Kind: EffectAttach, WorkID: s.work.ID, Detail: route.Name + " attaches its keys to " + string(s.work.ID) + " and records the event in its history; it is not input and starts no turn"}
+		return out, nil
+	}
 	if s.work == nil {
 		if e.CorrelationKey == nil && p.decision.CreateID == "" {
 			out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: route.Name + " matched, but the event has no correlation key for new Work to own"}
@@ -269,6 +292,9 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 	var target *domain.Execution
 	if err = r.transact(ctx, nil, func(tx storage.Tx) error {
 		var e error
+		if route, e = r.deliveryRouteInTx(tx, p, w, s.scope); e != nil {
+			return e
+		}
 		policy, reason, target, e = r.policyInTx(tx, route, w, s.scope)
 		return e
 	}); err != nil {
@@ -282,6 +308,9 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		out.Effect.Detail = policy + " into " + string(w.ID) + "'s running attempt " + string(target.ID)
 	default:
 		out.Effect.Detail = "queued for " + string(w.ID) + "'s next turn (it is " + string(w.State) + ")"
+	}
+	if route.Binding != p.selected.Binding {
+		out.Effect.Detail += " on " + route.Binding + ", the binding " + string(w.ID) + " runs on, not the route's " + p.selected.Binding
 	}
 	if p.addressed {
 		out.Effect.Detail = "no route matched; the operator addressed it to " + string(w.ID) + ", so it is " + out.Effect.Detail + " on " + route.Binding + ", the binding it runs on"

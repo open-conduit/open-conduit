@@ -88,6 +88,7 @@ func RuntimeCases() []RuntimeCase {
 		{"causal_depth_rate_replay_and_clock", runtimeChains},
 		{"concurrent_chain_budget", runtimeChainRace},
 		{"unmatched_and_contradictory_target", runtimeUnmatched},
+		{"attach_without_input", runtimeAttachOnly},
 	}
 }
 func RunRuntime(t *testing.T, factory RuntimeFactory) {
@@ -1115,4 +1116,76 @@ func runtimeUnmatched(factory RuntimeFactory) error {
 		return fmt.Errorf("explicit work bypassed correlation authority: %v", err)
 	}
 	return nil
+}
+
+// runtimeAttachOnly: a match that only attaches (extension.DeliverNone)
+// gives the Work the key and records the Event in its history, but queues
+// no input, so the attempt's completion ends the Work instead of starting
+// another turn. With no Work to attach to it creates none.
+func runtimeAttachOnly(factory RuntimeFactory) error {
+	opened := domain.CorrelationKey{Source: runtimeKey.Source, ExternalID: "opened"}
+	routes := runtimeRoutes("queue")
+	base := routes[0].Handler
+	routes[0].Handler = routeFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		d, err := base.Match(context.Background(), in)
+		if in.Event.Event.Type == "fixture.opened" {
+			d.AttachKeys, d.Deliver = []domain.CorrelationKey{opened}, extension.DeliverNone
+		}
+		return d, err
+	})
+	f, ref, err := runtimeSeed(factory, RuntimeOptions{Routes: routes})
+	if err != nil {
+		return err
+	}
+	e := runtimeEvent(f, "opened", nil)
+	e.Type, e.WorkID = "fixture.opened", runtimeWork
+	if err := f.Driver.Accept(e); err != nil {
+		return err
+	}
+	if err := f.Driver.Route(e.ID); err != nil {
+		return err
+	}
+	if err := f.Driver.Complete(ref); err != nil {
+		return err
+	}
+	if err := RuntimeRead(f, func(tx storage.Tx) error {
+		a, err := tx.Event("opened")
+		if err != nil {
+			return err
+		}
+		if !a.Routed || a.Disposition != extension.DispositionAttach || a.RoutedWorkID != runtimeWork {
+			return fmt.Errorf("attach audit missing: %q %q", a.Disposition, a.RoutedWorkID)
+		}
+		owner, err := tx.WorkByCorrelation(opened)
+		if err != nil || owner.ID != runtimeWork {
+			return fmt.Errorf("attached key not owned by the Work: %v", err)
+		}
+		if owner.State != domain.WorkCompleted {
+			return fmt.Errorf("attach-only event was queued as input: Work is %s", owner.State)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	orphan := runtimeEvent(f, "orphan", &domain.CorrelationKey{Source: runtimeKey.Source, ExternalID: "orphan"})
+	orphan.Type = "fixture.opened"
+	if err := f.Driver.Accept(orphan); err != nil {
+		return err
+	}
+	if err := f.Driver.Route(orphan.ID); err != nil {
+		return err
+	}
+	return RuntimeRead(f, func(tx storage.Tx) error {
+		o, err := tx.Event("orphan")
+		if err != nil {
+			return err
+		}
+		if !o.Routed || o.Disposition != "unmatched" || o.RoutedWorkID != "" {
+			return fmt.Errorf("attach with no Work created one: %q %q", o.Disposition, o.RoutedWorkID)
+		}
+		if _, err := tx.Work("fixture/account/orphan"); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("attach with no Work created one")
+		}
+		return nil
+	})
 }

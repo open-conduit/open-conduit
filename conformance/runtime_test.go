@@ -2,6 +2,7 @@ package conformance_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -49,17 +51,37 @@ func (b noSuccessor) Route(id domain.ID) error {
 	}
 	return b.RuntimeDriver.Route(id)
 }
+
+// deliverAlways is a router that ignores RouteDecision.Deliver and queues
+// every match as input.
+type deliverAlways struct{ extension.RouteHandler }
+
+func (h deliverAlways) Match(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+	d, err := h.RouteHandler.Match(ctx, in)
+	d.Deliver = extension.DeliverRoute
+	return d, err
+}
+
 func TestWeakenedRuntimeContractsAreRejected(t *testing.T) {
 	for _, test := range []struct {
 		name, diagnostic string
 		wrap             func(conformance.RuntimeDriver) conformance.RuntimeDriver
 		fixture          func(conformance.RuntimeFixture, conformance.RuntimeDriver) conformance.RuntimeDriver
+		options          func(conformance.RuntimeOptions) conformance.RuntimeOptions
 	}{
 		{"route_opened_successor", "successor not opened", nil, func(f conformance.RuntimeFixture, d conformance.RuntimeDriver) conformance.RuntimeDriver {
 			return noSuccessor{d, f.Store, f.Clock.Now}
+		}, nil},
+		{"wait_event_registration_orders", "invalid", func(d conformance.RuntimeDriver) conformance.RuntimeDriver { return brokenWake{d} }, nil, nil},
+		{"causal_depth_rate_replay_and_clock", "chain depth bound bypassed", func(d conformance.RuntimeDriver) conformance.RuntimeDriver { return unboundedChain{d} }, nil, nil},
+		{"attach_without_input", "attach audit missing", nil, nil, func(o conformance.RuntimeOptions) conformance.RuntimeOptions {
+			routes := slices.Clone(o.Routes)
+			for i := range routes {
+				routes[i].Handler = deliverAlways{routes[i].Handler}
+			}
+			o.Routes = routes
+			return o
 		}},
-		{"wait_event_registration_orders", "invalid", func(d conformance.RuntimeDriver) conformance.RuntimeDriver { return brokenWake{d} }, nil},
-		{"causal_depth_rate_replay_and_clock", "chain depth bound bypassed", func(d conformance.RuntimeDriver) conformance.RuntimeDriver { return unboundedChain{d} }, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			found := false
@@ -69,14 +91,19 @@ func TestWeakenedRuntimeContractsAreRejected(t *testing.T) {
 				}
 				found = true
 				err := c.Check(func(o conformance.RuntimeOptions) conformance.RuntimeFixture {
+					if test.options != nil {
+						o = test.options(o)
+					}
 					f := reference.NewRuntime(o)
 					wrap := test.wrap
 					if test.fixture != nil {
 						wrap = func(d conformance.RuntimeDriver) conformance.RuntimeDriver { return test.fixture(f, d) }
 					}
-					f.Driver = wrap(f.Driver)
-					restart := f.Restart
-					f.Restart = func() conformance.RuntimeDriver { return wrap(restart()) }
+					if wrap != nil {
+						f.Driver = wrap(f.Driver)
+						restart := f.Restart
+						f.Restart = func() conformance.RuntimeDriver { return wrap(restart()) }
+					}
 					return f
 				})
 				if err == nil || !strings.Contains(err.Error(), test.diagnostic) {
