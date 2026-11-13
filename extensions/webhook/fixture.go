@@ -78,7 +78,7 @@ func NewFixture() (protocol.Fixture, error) {
 		// Reading a delivery binds the calling Work from durable state: Work
 		// the scope doesn't hold is refused.
 		Operations: []protocol.OperationCase{
-			{Operation: OpRead, Input: protocol.Payload{Schema: OpRead + ".request.v1", Data: json.RawMessage(`{}`)}, Error: protocol.CodeUnauthorized},
+			{Operation: OpRead, Input: protocol.Payload{Schema: OpRead + ".request.v1", Data: json.RawMessage(`{"event":"webhook-certify"}`)}, Error: protocol.CodeUnauthorized},
 		},
 	}, nil
 }

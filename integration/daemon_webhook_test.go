@@ -20,7 +20,7 @@ import (
 // (deduplicated by a header, threaded by the body's service) and a shell
 // binding that keeps a copy of each run's input file.
 func webhookDaemonConfig(root string) []byte {
-	script := `cp "$OS_INPUT_FILE" "$(mktemp "` + root + `/run-XXXXXX")" && os call webhook.delivery.read --data '{}' > "$(mktemp "` + root + `/read-XXXXXX")"`
+	script := `cp "$OS_INPUT_FILE" "$(mktemp "` + root + `/run-XXXXXX")" && os call webhook.delivery.read --data "{\"event\": \"$(grep -o 'webhook-[0-9a-f]\{40\}' "$OS_INPUT_FILE" | head -1)\"}" > "$(mktemp "` + root + `/read-XXXXXX")"`
 	ops := []string{"read_context", "webhook.delivery.read"}
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{}, "connections": []any{},

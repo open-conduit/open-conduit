@@ -727,7 +727,7 @@ Read a webhook delivery of this Work in full, body included.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `event` | string |  |  |
+| `event` | string | yes | the delivery's Event ID, as your turn names it (Event: …) |
 
 ## Installable packages
 

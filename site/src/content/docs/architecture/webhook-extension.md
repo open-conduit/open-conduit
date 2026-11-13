@@ -63,7 +63,7 @@ Once the Work has finished, later deliveries of its thread start nothing, as for
 
 An agent's turn reads the delivery rendered by the package: a heading naming the hook, the delivery's Event ID, the delivery and correlation values, the content type, then the body. A body over 8 KiB is cut, with a note naming the operation that returns it whole.
 
-`webhook.delivery.read {event?}` returns a delivery in full: its Event ID, receive time and `webhook.delivery.v1` payload, body included. Without `event` it returns the Work's latest delivery. It reads only the calling Work's own Events (those routed to it), bound from durable state, so a Work can't read another's. A binding needs the operation granted (in its `operations` and the scope's `authorization.operations`). A shell binding has the whole Event, payload and body included, in `OS_INPUT_FILE` as well.
+`webhook.delivery.read {event}` returns the delivery the turn names in full: its Event ID, receive time and `webhook.delivery.v1` payload, body included. It reads that one Event and returns it only when it is a delivery routed to the calling Work (bound from durable state), so a Work can't read another's. A binding needs the operation granted (in its `operations` and the scope's `authorization.operations`). A shell binding has the whole Event, payload and body included, in `OS_INPUT_FILE` as well.
 
 ## Doctor
 

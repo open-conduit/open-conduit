@@ -206,14 +206,14 @@ func TestReadReturnsTheWholeBodyOfTheWorksOwnDelivery(t *testing.T) {
 	if err != nil || json.Unmarshal(res.Output.Data, &out) != nil || string(out.Body) != big || out.Event != string(ev.ID) || out.Hook != "deploys" {
 		t.Fatalf("read: %s %v", res.Output.Data, err)
 	}
-	if res, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "mine"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{}`)}); err != nil || !strings.Contains(string(res.Output.Data), string(ev.ID)) {
-		t.Fatalf("latest: %s %v", res.Output.Data, err)
+	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "mine"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"nope"}`)}); err == nil {
+		t.Fatal("read an unknown Event")
 	}
 	// Another Work can't read it, and a Work the scope doesn't hold is refused.
 	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "theirs"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"` + string(ev.ID) + `"}`)}); err == nil {
 		t.Fatal("another Work read the delivery")
 	}
-	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "nope"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{}`)}); err == nil {
+	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "nope"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"` + string(ev.ID) + `"}`)}); err == nil {
 		t.Fatal("unknown Work read a delivery")
 	}
 }
