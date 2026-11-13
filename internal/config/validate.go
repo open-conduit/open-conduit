@@ -232,15 +232,28 @@ func Owned(path string, err error, fallback string) []Diagnostic {
 	return out
 }
 
-// withGrant are Owned's diagnostics for a binding config refused with a
-// grant applied, at the grant's config: the field may be the grant's or
-// the binding's own, so each message says so.
-func withGrant(path string, err error, fallback string) []Diagnostic {
-	out := Owned(path, err, fallback)
-	if len(extension.ConfigDiagnostics(err)) > 0 {
-		for i := range out {
-			out[i].Message = "with this grant applied: " + out[i].Message
+// withGrant are Owned's diagnostics for the config of binding p refused
+// with its grant k applied. The grant replaces only the top-level fields
+// it sets, so a diagnostic about one of those is at the grant's config,
+// and any other at the binding's own config, where the field is. Each
+// message names the grant.
+func withGrant(p string, k int, g Grant, err error, fallback string) []Diagnostic {
+	grantPath := fmt.Sprintf("%s/grants/%d/config", p, k)
+	ds := extension.ConfigDiagnostics(err)
+	if len(ds) == 0 {
+		return []Diagnostic{{grantPath, "invalid_config", fallback}}
+	}
+	var set map[string]json.RawMessage
+	_ = json.Unmarshal(g.Config, &set)
+	out := make([]Diagnostic, len(ds))
+	for i, d := range ds {
+		path := grantPath + d.Path
+		if first, _, _ := strings.Cut(strings.TrimPrefix(d.Path, "/"), "/"); d.Path != "" {
+			if _, ok := set[strings.NewReplacer("~1", "/", "~0", "~").Replace(first)]; !ok {
+				path = p + "/config" + d.Path
+			}
 		}
+		out[i] = Diagnostic{path, d.Code, fmt.Sprintf("with grant %s applied: %s", g.Name, d.Message)}
 	}
 	return out
 }
@@ -591,7 +604,7 @@ func (v *validator) registration(p string, b Binding) {
 		for k, g := range b.Grants {
 			granted, _ := base.Granted([]string{g.Name})
 			if err := owner.ValidateConfig(granted.Config.Data, b.SecretNames); err != nil {
-				v.diags = append(v.diags, withGrant(fmt.Sprintf("%s/grants/%d/config", p, k), err, fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))...)
+				v.diags = append(v.diags, withGrant(p, k, g, err, fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))...)
 			}
 		}
 	}
