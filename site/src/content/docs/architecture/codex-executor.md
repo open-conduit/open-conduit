@@ -48,7 +48,7 @@ Codex has no plugin skills to start a turn on, so the playbook's text starts the
 | Any later turn | `<args> events` | `## Since your last turn` + inputs |
 | A later turn on a new thread, after a large or cold one | `<args> handoff` | `## Handoff from your last session` + note + `## Since your last turn` + inputs |
 
-`args` and `branch` are the same templates (`{key}`, `{number}`, `{work}`). A project's additions in `.open-conduit/playbooks/<playbook>.md` in the turn's workspace are appended. Inputs are rendered by the generic renderer, which shows each Event's type and its common payload fields (author, kind, number, path, line, state, title, URL, body or text).
+`args` and `branch` are the same templates (`{key}`, `{number}`, `{work}`). A project's additions in `.open-conduit/playbooks/<playbook>.md` in the turn's workspace are appended. Inputs are rendered by the generic renderer, which shows each Event's type and its common payload fields (author, kind, number, path, line, state, title, URL, body or text), or, without a body or text, its other fields as compact JSON clipped at 2000 bytes.
 
 Injection follows the [generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement):
 

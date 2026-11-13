@@ -117,16 +117,21 @@ func renderEvent(e domain.Event) string {
 	}
 	var m map[string]any
 	_ = json.Unmarshal(e.Data.Data, &m)
+	shown := map[string]bool{}
 	str := func(k string) string {
-		switch v := m[k].(type) {
+		v := ""
+		switch x := m[k].(type) {
 		case string:
-			return strings.TrimSpace(v)
+			v = strings.TrimSpace(x)
 		case float64:
-			if v != 0 {
-				return fmt.Sprintf("%v", v)
+			if x != 0 {
+				v = fmt.Sprintf("%v", x)
 			}
 		}
-		return ""
+		if v != "" {
+			shown[k] = true
+		}
+		return v
 	}
 	head := "### " + e.Type
 	if kind := str("kind"); kind != "" {
@@ -165,8 +170,8 @@ func renderEvent(e domain.Event) string {
 	if text == "" {
 		text = str("text")
 	}
-	if text == "" && m == nil && len(e.Data.Data) > 0 {
-		text = truncate(string(e.Data.Data), 2000)
+	if text == "" {
+		text = unshown(e.Data.Data, shown)
 	}
 	out := strings.Join(lines, "\n")
 	if text != "" {
@@ -282,4 +287,41 @@ func spell(d time.Duration) string {
 		return unit(int64(d/time.Minute), "minute")
 	}
 	return d.String()
+}
+
+// payloadClip is the most of a payload's remaining JSON a turn shows.
+const payloadClip = 2000
+
+// unshown is the rest of a payload without a body or text, beyond the fields
+// renderEvent has already worded (shown), as compact JSON with each value's
+// exact bytes, so an Event whose schema no renderer knows still reaches the
+// turn with its data (#574). A common field the heading couldn't word (an
+// object author, a line without a path) stays in. A payload that isn't an
+// object is shown as it is. Either is clipped, and says so. It is empty when
+// nothing is left.
+func unshown(raw []byte, shown map[string]bool) string {
+	if t := strings.TrimSpace(string(raw)); t == "" || t == "null" {
+		return ""
+	}
+	text := string(raw)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		for k := range shown {
+			delete(fields, k)
+		}
+		if len(fields) == 0 {
+			return ""
+		}
+		var rest strings.Builder
+		enc := json.NewEncoder(&rest)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(fields) != nil {
+			return ""
+		}
+		text = strings.TrimSpace(rest.String())
+	}
+	if len(text) <= payloadClip {
+		return text
+	}
+	return truncate(text, payloadClip) + fmt.Sprintf("\n\n(clipped: the payload has %d bytes)", len(text))
 }
