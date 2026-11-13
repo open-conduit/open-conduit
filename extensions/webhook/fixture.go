@@ -65,6 +65,9 @@ func NewFixture() (protocol.Fixture, error) {
 	other := route
 	other.Config = domain.Payload{Data: json.RawMessage(`{"hooks":["forms"]}`)}
 	skip := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 3}, Scope: scope, Route: other}
+	targeted := route
+	targeted.Config = domain.Payload{Data: json.RawMessage(`{"targets":["audit"]}`)}
+	untargeted := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 5}, Scope: scope, Route: targeted}
 	return protocol.Fixture{
 		Entries: []protocol.ConfigEntry{{ScopeID: FixtureScope, Type: Name, Name: FixtureEntry, Config: FixtureConfig(), Secrets: []string{FixtureSecret}}},
 		Secrets: map[string]string{FixtureSecret: FixtureValue},
@@ -82,6 +85,8 @@ func NewFixture() (protocol.Fixture, error) {
 				Reason:     "a delivery to deploys after its thread's Work finished", Display: protocol.FromDisplay(Display(p))}},
 			// A route limited to other hooks takes nothing.
 			{Handler: Name, Input: protocol.FromRouteInput(skip), Want: protocol.RouteDecision{Reason: "a hook this route doesn't take"}},
+			// A route for a fan-out target takes no other delivery.
+			{Handler: Name, Input: protocol.FromRouteInput(untargeted), Want: protocol.RouteDecision{Reason: "a target this route doesn't take"}},
 		},
 		// Reading a delivery binds the calling Work from durable state: Work
 		// the scope doesn't hold is refused.

@@ -70,7 +70,16 @@ type Hook struct {
 	// it revokes this hook's URL alone, keeping its name, Work and threads;
 	// doctor --check-secrets prints the new URL.
 	Version int `json:"version,omitempty"`
+	// FanOut names the targets one delivery goes to. Ingress accepts one
+	// Event for each, with its own delivery ID and thread, so a route that
+	// takes a target gives it Work of its own: one POST can start Work for
+	// several bindings. Without it a delivery is one Event.
+	FanOut []string `json:"fan_out,omitempty"`
 }
+
+// MaxFanOut bounds a hook's targets. Each target's Event carries the whole
+// body, and every Event of a delivery is accepted in one ingress page.
+const MaxFanOut = 4
 
 // Key is a parsed delivery or correlation key: a header, or a JSON
 // pointer into the body.
@@ -162,8 +171,28 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 		if h.Version < 0 {
 			return s, fmt.Errorf("hook %s: version must not be negative", h.Name)
 		}
+		if err := checkTargets(h.FanOut); err != nil {
+			return s, fmt.Errorf("hook %s: fan_out: %w", h.Name, err)
+		}
 	}
 	return s, nil
+}
+
+func checkTargets(targets []string) error {
+	if len(targets) > MaxFanOut {
+		return fmt.Errorf("at most %d targets", MaxFanOut)
+	}
+	seen := map[string]bool{}
+	for _, t := range targets {
+		if !hookPattern.MatchString(t) {
+			return fmt.Errorf("target %q must be lower case letters, digits, _ and -, at most 64", t)
+		}
+		if seen[t] {
+			return fmt.Errorf("target %q is listed twice", t)
+		}
+		seen[t] = true
+	}
+	return nil
 }
 
 // RouteConfig is a webhook route's config.
@@ -171,6 +200,10 @@ type RouteConfig struct {
 	// Hooks limits the route to these hooks (every hook of the scope's
 	// webhook entries when empty).
 	Hooks []string `json:"hooks,omitempty"`
+	// Targets limits the route to these fan-out targets. A route with
+	// targets takes only a fan-out hook's deliveries for them; one without
+	// takes every delivery of its hooks, whatever the target.
+	Targets []string `json:"targets,omitempty"`
 }
 
 // ParseRoute parses a route's config.
@@ -182,6 +215,11 @@ func ParseRoute(raw json.RawMessage) (RouteConfig, error) {
 	for _, h := range c.Hooks {
 		if !hookPattern.MatchString(h) {
 			return c, fmt.Errorf("hook name %q is invalid", h)
+		}
+	}
+	for _, t := range c.Targets {
+		if !hookPattern.MatchString(t) {
+			return c, fmt.Errorf("target name %q is invalid", t)
 		}
 	}
 	return c, nil
@@ -285,11 +323,12 @@ func Build(o Options) *sdk.Extension {
 	ext.Manifest.Provides.Extensions[0].Fields = []protocol.FieldDecl{
 		{Name: "scope", Help: "the scope the entry is in", Required: true},
 		{Name: "webhook_secret", Help: "names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes every hook's URL", Required: true},
-		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "version": 0}]: each hook, the header or JSON pointer naming a delivery (a retry is the same delivery), the one threading it into one Work (a ticket's ID; once that Work finishes, the next delivery opens a successor), and a version signed into its URL (bump it to revoke that URL alone)`, Required: true},
+		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "fan_out": ["triage", "audit"], "version": 0}]: each hook, where a delivery's identity (a retry is the same delivery) and thread (one Work, a successor once it finishes) are read, the targets each delivery goes to, and a version signed into its URL (bump it to revoke that URL alone)`, Required: true},
 	}
 	ext.Route(Name, Route{}, sdk.RouteConfig())
 	ext.Manifest.Provides.Routes[len(ext.Manifest.Provides.Routes)-1].Fields = []protocol.FieldDecl{
 		{Name: "hooks", Help: "the hooks the route takes (every hook of the scope's webhook entries when empty)"},
+		{Name: "targets", Help: "the fan-out targets the route takes (every target when empty)"},
 	}
 	ext.WorkKind(WorkKind)
 	registerTools(ext, o.Now)

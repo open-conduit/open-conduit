@@ -37,6 +37,14 @@ const ContentType = "application/vnd.open-conduit.webhook-delivery+json"
 // MaxBody bounds a POST body.
 const MaxBody = 1 << 20
 
+// MaxEncoded bounds a delivery's Events together, encoded: each target's
+// Event carries the whole body, and JSON can escape a byte as six (<, >, &
+// and control characters become \u00XX), so a fan-out of an escape-heavy
+// body could outgrow the host's ingress page (8 MiB by default) and never
+// be accepted. A delivery over it is refused with 413. A hook without
+// fan-out is never over it: its one Event of a 1 MiB body is at most 6 MiB.
+const MaxEncoded = 7 << 20
+
 // MaxKey bounds a delivery or correlation key's value.
 const MaxKey = 256
 
@@ -54,6 +62,9 @@ func Families() []extension.EventFamily {
 // Payload is SchemaDelivery.
 type Payload struct {
 	Hook string `json:"hook"`
+	// Target is the fan-out target this Event is for, when the hook fans
+	// out.
+	Target string `json:"target,omitempty"`
 	// Delivery is the delivery key's value, when the hook has one.
 	Delivery string `json:"delivery,omitempty"`
 	// Correlation is the correlation key's value, when the delivery
@@ -87,11 +98,14 @@ var _ extension.Ingress = (*Ingress)(nil)
 
 func (in *Ingress) Spec() extension.IngressSpec { return extension.IngressSpec{Families: Families()} }
 
-// Push turns one verified POST into a delivery Event. Its delivery ID is
-// the hook and the delivery key's digest (or a fresh ID for a hook without
+// Push turns one verified POST into a delivery Event, or into one Event
+// for each target of a hook that fans out. Its delivery ID is the hook (and
+// target) and the delivery key's digest (or a fresh ID for a hook without
 // one), so the core's (source, delivery ID) deduplication makes a retry
-// the first delivery again. Its correlation key is the hook and the
-// correlation value's digest, or the delivery's own ID.
+// the first delivery again, target by target. Its correlation key is the
+// hook (and target) and the correlation value's digest, or the delivery's
+// own ID, so each target threads on its own. The host accepts every Event
+// of a delivery in one transaction, so the sender's 202 covers them all.
 func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Delivery) (extension.PushResult, error) {
 	var out extension.PushResult
 	if src.Namespace != in.Namespace || d.ContentType != ContentType || d.ID == "" || len(d.ID) > 200 {
@@ -114,27 +128,69 @@ func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Del
 		received = in.Now()
 	}
 	received = received.UTC()
-	p := Payload{Hook: hook.Name, Delivery: env.Delivery, Correlation: env.Correlation, ContentType: env.ContentType}
+	targets := hook.FanOut
+	if len(targets) == 0 {
+		targets = []string{""}
+	}
+	if encodedSize(hook, env) > MaxEncoded {
+		return out, extension.ErrInvalid
+	}
+	for _, target := range targets {
+		data := env.payload(target)
+		lane, id := hook.Name, digest(in.Namespace, hook.Name, d.ID)
+		if target != "" {
+			lane, id = hook.Name+"/"+target, digest(in.Namespace, hook.Name, target, d.ID)
+		}
+		out.Events = append(out.Events, domain.Event{ID: domain.ID("webhook-" + id[:40]), Type: TypeDelivery, Source: in.Namespace,
+			DeliveryID: lane + "/" + d.ID, OccurredAt: received, ReceivedAt: received,
+			CorrelationKey: &domain.CorrelationKey{Source: in.Namespace, ExternalID: Thread(hook.Name, target, env.Correlation, d.ID)},
+			Data:           domain.Payload{Schema: SchemaDelivery, Data: data}})
+	}
+	return out, nil
+}
+
+// payload is the delivery's payload for one target, encoded.
+func (env envelope) payload(target string) []byte {
+	p := Payload{Hook: env.Hook, Target: target, Delivery: env.Delivery, Correlation: env.Correlation, ContentType: env.ContentType}
 	if json.Valid(env.Body) {
 		p.Body = append(json.RawMessage(nil), env.Body...)
 	} else {
 		p.Text = string(env.Body)
 	}
 	data, _ := json.Marshal(p)
-	out.Events = []domain.Event{{ID: domain.ID("webhook-" + digest(in.Namespace, hook.Name, d.ID)[:40]), Type: TypeDelivery, Source: in.Namespace,
-		DeliveryID: hook.Name + "/" + d.ID, OccurredAt: received, ReceivedAt: received,
-		CorrelationKey: &domain.CorrelationKey{Source: in.Namespace, ExternalID: Thread(hook.Name, env.Correlation, d.ID)},
-		Data:           domain.Payload{Schema: SchemaDelivery, Data: data}}}
-	return out, nil
+	return data
 }
 
-// Thread is a delivery's correlation external ID: the hook and the
-// correlation value's digest, or the hook and the delivery's own ID.
-func Thread(hook, correlation, delivery string) string {
-	if correlation != "" {
-		return hook + "/c/" + digest(correlation)[:32]
+// eventOverhead bounds what an Event adds to its encoded payload (IDs,
+// source, times, correlation key).
+const eventOverhead = 1 << 10
+
+// encodedSize is the encoded size of the Events a delivery to the hook
+// becomes: one for each target, or one.
+func encodedSize(hook Hook, env envelope) int {
+	n := 0
+	targets := hook.FanOut
+	if len(targets) == 0 {
+		targets = []string{""}
 	}
-	return hook + "/d/" + delivery
+	for _, t := range targets {
+		n += len(env.payload(t)) + eventOverhead
+	}
+	return n
+}
+
+// Thread is a delivery's correlation external ID: the hook, the fan-out
+// target when there is one, and the correlation value's digest or else
+// the delivery's own ID.
+func Thread(hook, target, correlation, delivery string) string {
+	lane := hook
+	if target != "" {
+		lane += "/" + target
+	}
+	if correlation != "" {
+		return lane + "/c/" + digest(correlation)[:32]
+	}
+	return lane + "/d/" + delivery
 }
 
 // Reconcile has nothing to read: a POST leaves no backing history.
@@ -246,7 +302,8 @@ func splitPointer(p string) ([]string, error) {
 // strips the entry's mount). It checks the token in constant time before
 // reading the body, reads the hook's keys, then hands push the delivery,
 // which must accept it durably: 202 only after acceptance, 404 for an
-// unknown hook or a wrong token, 413 for a body over 1 MiB, 400 for a
+// unknown hook or a wrong token, 413 for a body over 1 MiB (or one whose
+// fan-out Events would together encode over MaxEncoded), 400 for a
 // delivery without the hook's delivery key or with a key over 256 bytes,
 // and 503 when the secret is unavailable or the delivery wasn't accepted.
 func WebhookHandler(namespace string, s Settings, secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) error, now func() time.Time) http.Handler {
@@ -306,6 +363,10 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context) (
 				return
 			}
 			env.Correlation = v
+		}
+		if encodedSize(hook, env) > MaxEncoded {
+			http.Error(w, fmt.Sprintf("body too large for %d fan-out targets", len(hook.FanOut)), http.StatusRequestEntityTooLarge)
+			return
 		}
 		raw, _ := json.Marshal(env)
 		if err := push(r.Context(), extension.Delivery{ID: id, ReceivedAt: received, ContentType: ContentType, Body: raw}); err != nil {

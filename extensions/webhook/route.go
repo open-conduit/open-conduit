@@ -41,6 +41,9 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if len(rc.Hooks) > 0 && !contains(rc.Hooks, p.Hook) {
 		return extension.Skip("a hook this route doesn't take"), nil
 	}
+	if len(rc.Targets) > 0 && !contains(rc.Targets, p.Target) {
+		return extension.Skip("a target this route doesn't take"), nil
+	}
 	if in.Work != nil {
 		if in.Work.Kind != WorkKind {
 			return extension.Skip("the thread is owned by other Work"), nil
@@ -80,8 +83,8 @@ func payload(e domain.Event) (Payload, bool) {
 	return p, true
 }
 
-// Display titles a delivery's Work with its hook and the correlation (or
-// delivery) value.
+// Display titles a delivery's Work with its hook, its fan-out target and
+// the correlation (or delivery) value.
 func Display(p Payload) *domain.WorkDisplay {
 	ref := p.Correlation
 	if ref == "" {
@@ -89,6 +92,9 @@ func Display(p Payload) *domain.WorkDisplay {
 	}
 	ref = strings.Join(strings.Fields(ref), " ")
 	title := "A delivery to " + p.Hook
+	if p.Target != "" {
+		title += " for " + p.Target
+	}
 	if ref != "" {
 		title += ": " + ref
 	}
@@ -100,14 +106,17 @@ func Display(p Payload) *domain.WorkDisplay {
 // binding's OS_INPUT_FILE.
 const renderBody = 8 << 10
 
-// RenderEvent renders a delivery for an agent's turn: the hook, its keys
-// and the body.
+// RenderEvent renders a delivery for an agent's turn: the hook, its
+// target, its keys and the body.
 func RenderEvent(e domain.Event) (string, bool) {
 	p, ok := payload(e)
 	if !ok {
 		return "", false
 	}
 	lines := []string{fmt.Sprintf("### A delivery to the %s webhook", p.Hook), "Event: " + string(e.ID)}
+	if p.Target != "" {
+		lines = append(lines, "Target: "+p.Target)
+	}
 	if p.Delivery != "" {
 		lines = append(lines, "Delivery: "+p.Delivery)
 	}

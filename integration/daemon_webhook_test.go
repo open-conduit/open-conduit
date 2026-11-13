@@ -249,7 +249,7 @@ func TestDaemonWebhookThreadGenerations(t *testing.T) {
 		}
 		return out
 	}
-	first := ns + "/" + webhook.Thread("tickets", "T-1", "")
+	first := ns + "/" + webhook.Thread("tickets", "", "T-1", "")
 	second := string(webhook.NextGeneration(domain.ID(first)))
 	post("t-1", `{"ticket":"T-1","step":"opened"}`)
 	d.until("the ticket's first Work finishes", 30*time.Second, func() bool { return works()[first] == "completed" })
