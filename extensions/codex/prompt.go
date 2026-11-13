@@ -118,7 +118,8 @@ func interjection(events []domain.Event) string {
 
 // RenderEvents is the generic renderer: it knows no service schema and
 // reads the common fields many payloads carry (author, kind, number, path,
-// line, state, url, title, body or text).
+// line, state, url, title, body or text) and otherwise shows the rest of
+// the payload as compact JSON.
 func RenderEvents(events []domain.Event) string {
 	parts := make([]string, 0, len(events))
 	for _, e := range events {
@@ -181,8 +182,8 @@ func renderEvent(e domain.Event) string {
 	if text == "" {
 		text = str("text")
 	}
-	if text == "" && m == nil && len(e.Data.Data) > 0 {
-		text = truncate(string(e.Data.Data), 2000)
+	if text == "" {
+		text = unshown(e.Data.Data)
 	}
 	out := strings.Join(lines, "\n")
 	if text != "" {
@@ -231,4 +232,42 @@ func spell(d time.Duration) string {
 		return unit(int64(d/time.Minute), "minute")
 	}
 	return d.String()
+}
+
+// commonFields are the payload fields renderEvent words itself.
+var commonFields = []string{"kind", "number", "path", "line", "author", "state", "title", "url", "body", "text"}
+
+// payloadClip is the most of a payload's remaining JSON a turn shows.
+const payloadClip = 2000
+
+// unshown is the rest of a payload without a body or text, beyond the common
+// fields, as compact JSON with each value's exact bytes, so an Event whose
+// schema no renderer knows still reaches the turn with its data (#574). A
+// payload that isn't an object is shown as it is. Either is clipped, and says
+// so. It is empty when nothing is left.
+func unshown(raw []byte) string {
+	if t := strings.TrimSpace(string(raw)); t == "" || t == "null" {
+		return ""
+	}
+	text := string(raw)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		for _, k := range commonFields {
+			delete(fields, k)
+		}
+		if len(fields) == 0 {
+			return ""
+		}
+		var rest strings.Builder
+		enc := json.NewEncoder(&rest)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(fields) != nil {
+			return ""
+		}
+		text = strings.TrimSpace(rest.String())
+	}
+	if len(text) <= payloadClip {
+		return text
+	}
+	return truncate(text, payloadClip) + fmt.Sprintf("\n\n(clipped: the payload has %d bytes)", len(text))
 }
