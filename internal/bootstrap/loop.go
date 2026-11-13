@@ -474,7 +474,7 @@ func (d *daemon) collectArtifacts(ctx context.Context) {
 			return err
 		}
 		for _, x := range xs {
-			for _, ref := range x.Artifacts {
+			for _, ref := range x.AllArtifacts() {
 				live[ref.ID] = true
 			}
 		}

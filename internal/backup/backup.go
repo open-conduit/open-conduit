@@ -80,7 +80,7 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 				if err != nil {
 					return err
 				}
-				for _, ref := range x.Artifacts {
+				for _, ref := range x.AllArtifacts() {
 					if old, ok := refs[ref.ID]; ok && old != ref {
 						return storage.ErrConflict
 					}
@@ -225,7 +225,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 				if err != nil {
 					return err
 				}
-				for _, ref := range x.Artifacts {
+				for _, ref := range x.AllArtifacts() {
 					if captured[ref.ID] == ref {
 						continue
 					}

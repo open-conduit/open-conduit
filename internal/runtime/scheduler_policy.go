@@ -156,7 +156,7 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 	result.Outcome.Kind = domain.OutcomeFailed
 	x.State = domain.ExecutionFailed
 	x.Outcome = &result.Outcome
-	x.Artifacts = append([]domain.ArtifactRef(nil), result.Artifacts...)
+	publishArtifacts(&x, result.Artifacts)
 	if err = tx.PutExecution(x, x.Revision); err != nil {
 		return err
 	}

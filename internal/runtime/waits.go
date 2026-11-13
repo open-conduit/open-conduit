@@ -235,7 +235,7 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 			x.State = domain.ExecutionParked
 		}
 		x.Outcome = &result.Outcome
-		x.Artifacts = append([]domain.ArtifactRef(nil), result.Artifacts...)
+		publishArtifacts(&x, result.Artifacts)
 		if err = tx.PutExecution(x, x.Revision); err != nil {
 			return err
 		}
@@ -264,6 +264,7 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		// process. It releases scheduling capacity while preserving the same attempt.
 		state.Excluded = true
 		state.Result = &result
+		state.turnArtifacts(result.Artifacts)
 		state.Declaration = nil
 		if err = putAttemptState(tx, state); err != nil {
 			return err
@@ -1300,7 +1301,7 @@ func (s *Scheduler) acknowledgeWaiting(ctx context.Context, ref domain.LeaseRef,
 		}
 		if x.State == domain.ExecutionParked {
 			x.Outcome = &result.Outcome
-			x.Artifacts = append([]domain.ArtifactRef(nil), result.Artifacts...)
+			publishArtifacts(&x, result.Artifacts)
 			if err = tx.PutExecution(x, x.Revision); err != nil {
 				return err
 			}
@@ -1311,6 +1312,7 @@ func (s *Scheduler) acknowledgeWaiting(ctx context.Context, ref domain.LeaseRef,
 			return storage.ErrConflict
 		}
 		state.Result = &result
+		state.turnArtifacts(result.Artifacts)
 		return putAttemptState(tx, state)
 	})
 }

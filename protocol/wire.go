@@ -263,23 +263,26 @@ type Execution struct {
 	ExecutorBinding string `json:"executor_binding"`
 	// Executor is the executor the attempt's binding named
 	// (domain.Execution.Executor), when recorded.
-	Executor   string        `json:"executor,omitempty"`
-	Attempt    uint32        `json:"attempt"`
-	State      string        `json:"state"`
-	TriggerID  string        `json:"trigger_id"`
-	Lease      Lease         `json:"lease"`
-	Outcome    *Outcome      `json:"outcome,omitempty"`
-	Artifacts  []ArtifactRef `json:"artifacts,omitempty"`
-	TraceID    string        `json:"trace_id,omitempty"`
-	StartedAt  *time.Time    `json:"started_at,omitempty"`
-	FinishedAt *time.Time    `json:"finished_at,omitempty"`
-	Revision   uint64        `json:"revision"`
-	CreatedAt  time.Time     `json:"created_at"`
-	UpdatedAt  time.Time     `json:"updated_at"`
+	Executor  string        `json:"executor,omitempty"`
+	Attempt   uint32        `json:"attempt"`
+	State     string        `json:"state"`
+	TriggerID string        `json:"trigger_id"`
+	Lease     Lease         `json:"lease"`
+	Outcome   *Outcome      `json:"outcome,omitempty"`
+	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+	// EarlierArtifacts are those the attempt's earlier turns published
+	// (domain.Execution.EarlierArtifacts).
+	EarlierArtifacts []ArtifactRef `json:"earlier_artifacts,omitempty"`
+	TraceID          string        `json:"trace_id,omitempty"`
+	StartedAt        *time.Time    `json:"started_at,omitempty"`
+	FinishedAt       *time.Time    `json:"finished_at,omitempty"`
+	Revision         uint64        `json:"revision"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
 }
 
 func FromExecution(x domain.Execution) Execution {
-	out := Execution{ID: string(x.ID), WorkID: string(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: string(x.State), TriggerID: string(x.TriggerID), Lease: Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: fromArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: uint64(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
+	out := Execution{ID: string(x.ID), WorkID: string(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: string(x.State), TriggerID: string(x.TriggerID), Lease: Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: fromArtifacts(x.Artifacts), EarlierArtifacts: fromArtifacts(x.EarlierArtifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: uint64(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
 	if x.Outcome != nil {
 		o := FromOutcome(*x.Outcome)
 		out.Outcome = &o
@@ -287,7 +290,7 @@ func FromExecution(x domain.Execution) Execution {
 	return out
 }
 func (x Execution) Domain() domain.Execution {
-	out := domain.Execution{ID: domain.ID(x.ID), WorkID: domain.ID(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: domain.ExecutionState(x.State), TriggerID: domain.ID(x.TriggerID), Lease: domain.Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: toArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: domain.Revision(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
+	out := domain.Execution{ID: domain.ID(x.ID), WorkID: domain.ID(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: domain.ExecutionState(x.State), TriggerID: domain.ID(x.TriggerID), Lease: domain.Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: toArtifacts(x.Artifacts), EarlierArtifacts: toArtifacts(x.EarlierArtifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: domain.Revision(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
 	if x.Outcome != nil {
 		o := x.Outcome.Domain()
 		out.Outcome = &o

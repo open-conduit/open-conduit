@@ -360,6 +360,10 @@ type Segment struct {
 	// Relaunched says a new owner recovered the attempt while its launch
 	// had started nothing, and launched it afresh (Recovered is set too).
 	Relaunched bool `json:",omitempty"`
+	// Artifacts are the ones the segment's turn published: its result's, a
+	// park's or the attempt's final one (#592). The execution keeps them
+	// all (domain.Execution.AllArtifacts); this names the turn of each.
+	Artifacts []domain.ArtifactRef `json:",omitempty"`
 	// Launch is the segment's launch, phase by phase, as it went: each
 	// phase is recorded as it begins and again as it ends.
 	Launch []LaunchPhase `json:",omitempty"`
@@ -1758,6 +1762,7 @@ func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extens
 		state.Excluded = excluded
 		state.LaunchState = "failed"
 		state.Result = &result
+		state.turnArtifacts(result.Artifacts)
 		if err = putAttemptState(tx, state); err != nil {
 			return err
 		}
@@ -1886,7 +1891,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 			x.State = domain.ExecutionHandoff
 		}
 		x.Outcome = &result.Outcome
-		x.Artifacts = append([]domain.ArtifactRef(nil), result.Artifacts...)
+		publishArtifacts(&x, result.Artifacts)
 		if err = tx.PutExecution(x, x.Revision); err != nil {
 			return err
 		}
@@ -1897,6 +1902,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		state.Excluded = true
 		state.LaunchState = string(x.State)
 		state.Result = &result
+		state.turnArtifacts(result.Artifacts)
 		if err = putAttemptState(tx, state); err != nil {
 			return err
 		}

@@ -162,6 +162,10 @@ type wireArtifact struct {
 	MediaType   string `json:"media_type,omitempty"`
 	WorkID      string `json:"work_id,omitempty"`
 	ExecutionID string `json:"execution_id,omitempty"`
+	// Segment is the number (from 1) of the run's segment whose turn
+	// published the artifact, in a listing; absent when the run no longer
+	// keeps that segment.
+	Segment int `json:"segment,omitempty"`
 }
 type wireLease struct {
 	Owner     string `json:"owner,omitempty"`
