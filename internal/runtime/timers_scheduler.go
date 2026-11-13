@@ -351,25 +351,9 @@ func (s *Scheduler) expireInTx(tx storage.Tx, x domain.Execution, state AttemptS
 		}
 		return "", tx.MarkRouted(event.Event.ID, "", RoutedExecutionTimeout)
 	}
-	w, err := tx.Work(x.WorkID)
-	if err != nil {
-		return "", err
-	}
-	x.State = domain.ExecutionCancelled
-	x.Outcome = nil
-	if err = tx.PutExecution(x, x.Revision); err != nil {
-		return "", err
-	}
-	if !w.State.Terminal() {
-		w.State = domain.WorkReady
-		if err = tx.PutWork(w, w.Revision); err != nil {
-			return "", err
-		}
-	}
-	state.Excluded = false
 	state.LaunchState = "turn_time_limit"
-	state.InterruptEventID = event.Event.ID
-	if err = putAttemptState(tx, state); err != nil {
+	w, err := fenceInterruptInTx(tx, &x, &state, event.Event.ID)
+	if err != nil {
 		return "", err
 	}
 	if err = putJSON(tx, queueNamespace, queueKey(w.ID, event.Sequence), QueuedInput{EventID: event.Event.ID, Sequence: event.Sequence, Binding: x.ExecutorBinding}); err != nil {

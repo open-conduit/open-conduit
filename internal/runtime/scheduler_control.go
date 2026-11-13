@@ -104,24 +104,7 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 				return extension.ErrUnsupported
 			}
 			if !state.Fenced {
-				work, er := tx.Work(x.WorkID)
-				if er != nil {
-					return er
-				}
-				x.State = domain.ExecutionCancelled
-				x.Outcome = nil
-				if er = tx.PutExecution(x, x.Revision); er != nil {
-					return er
-				}
-				if !work.State.Terminal() {
-					work.State = domain.WorkReady
-					if er = tx.PutWork(work, work.Revision); er != nil {
-						return er
-					}
-				}
-				attempt.Excluded = false
-				attempt.InterruptEventID = intent.EventID
-				if er = putAttemptState(tx, attempt); er != nil {
+				if _, er := fenceInterruptInTx(tx, &x, &attempt, intent.EventID); er != nil {
 					return er
 				}
 				state.Fenced = true
@@ -322,4 +305,33 @@ func consumeInjectedInTx(tx storage.Tx, x domain.Execution, ids []domain.ID) err
 func consumedInTx(tx storage.Tx, work domain.ID, sequence uint64) (bool, error) {
 	rows, err := tx.List(consumedNamespace, queueKey(work, sequence)+"/")
 	return len(rows) > 0, err
+}
+
+// fenceInterruptInTx fences a running attempt for an interrupt by eventID:
+// the execution is cancelled, its Work (unless terminal) goes back to
+// ready, and the attempt records the interrupting Event. Every interrupt
+// goes through here, whether an operator's, an input's or a turn's
+// deadline, so they all fence the same way. It returns the Work.
+func fenceInterruptInTx(tx storage.Tx, x *domain.Execution, attempt *AttemptState, eventID domain.ID) (domain.Work, error) {
+	work, err := tx.Work(x.WorkID)
+	if err != nil {
+		return domain.Work{}, err
+	}
+	x.State = domain.ExecutionCancelled
+	x.Outcome = nil
+	if err = tx.PutExecution(*x, x.Revision); err != nil {
+		return domain.Work{}, err
+	}
+	if !work.State.Terminal() {
+		work.State = domain.WorkReady
+		if err = tx.PutWork(work, work.Revision); err != nil {
+			return domain.Work{}, err
+		}
+	}
+	attempt.Excluded = false
+	attempt.InterruptEventID = eventID
+	if err = putAttemptState(tx, *attempt); err != nil {
+		return domain.Work{}, err
+	}
+	return work, nil
 }
