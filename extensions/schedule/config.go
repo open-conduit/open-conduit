@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/robfig/cron/v3"
 )
 
@@ -236,117 +237,112 @@ func parseHM(at string) (int, int, bool) {
 	return hh, mm, true
 }
 
-// Validate is what is wrong with the job (the run settings that
-// bindings own are not checked here).
-func (j Job) Validate() []string {
-	var errs []string
-	name := "job " + j.Name
+// Validate is what is wrong with the job, each at its field's JSON
+// pointer within the job (the run settings that bindings own are not
+// checked here). Messages never quote a configured value.
+func (j Job) Validate() *extension.ConfigError {
+	ce := &extension.ConfigError{}
 	if !namePattern.MatchString(j.Name) {
-		errs = append(errs, "every job needs a name matching [a-z][a-z0-9_-]{0,62}")
+		ce.Add("/name", "invalid_name", "every job needs a name matching [a-z][a-z0-9_-]{0,62}")
 	}
 	if j.EveryMinutes < 0 || j.EveryMinutes > 525600 {
-		errs = append(errs, name+": every_minutes must be 1 to 525600")
+		ce.Add("/every_minutes", "out_of_range", "every_minutes must be 1 to 525600")
 	}
 	if j.EveryMinutes > 0 && j.Timed() {
-		errs = append(errs, name+": every_minutes or at/cron, not both")
+		ce.Add("/every_minutes", "conflicting_fields", "set every_minutes or at/cron, not both")
 	}
 	if len(j.At) > 0 && j.Cron != "" {
-		errs = append(errs, name+": at or cron, not both")
+		ce.Add("/at", "conflicting_fields", "set at or cron, not both")
 	}
 	seen := map[string]bool{}
-	for _, at := range j.At {
+	for i, at := range j.At {
 		if _, _, ok := parseHM(at); !ok {
-			errs = append(errs, fmt.Sprintf("%s: at %q isn't HH:MM", name, at))
-		}
-		if seen[at] {
-			errs = append(errs, fmt.Sprintf("%s: at %q twice", name, at))
+			ce.Add(extension.ConfigPointer("at", i), "invalid_time", "at times must be HH:MM in UTC, such as 09:30")
+		} else if seen[at] {
+			ce.Add(extension.ConfigPointer("at", i), "duplicate_time", "this time is already in at; list each time once")
 		}
 		seen[at] = true
 	}
 	if j.Cron != "" {
 		if strings.HasPrefix(j.Cron, "TZ=") || strings.HasPrefix(j.Cron, "CRON_TZ=") {
-			errs = append(errs, name+": set the time zone with time_zone, not in cron")
+			ce.Add("/cron", "time_zone_in_cron", "set the time zone with time_zone, not in cron")
 		} else if _, err := j.Schedule(); err != nil {
-			errs = append(errs, name+": cron is not a standard five-field schedule")
+			ce.Add("/cron", "invalid_cron", "cron must be a standard five-field schedule (minute hour day-of-month month day-of-week), such as 0 9 * * 1-5")
 		}
 	}
 	if j.TimeZone != "" {
 		if j.Cron == "" {
-			errs = append(errs, name+": time_zone is for cron (at is UTC)")
+			ce.Add("/time_zone", "time_zone_without_cron", "time_zone is for cron; at times are UTC")
 		}
 		if _, err := j.Location(); err != nil {
-			errs = append(errs, name+": time_zone is not a known zone")
+			ce.Add("/time_zone", "unknown_time_zone", "time_zone must be an IANA time zone name, such as Europe/London")
 		}
 	}
 	if j.On != nil {
 		if len(j.On.Events) == 0 && !j.On.Webhook {
-			errs = append(errs, name+": on needs events or webhook")
+			ce.Add("/on", "missing_trigger", "on needs events or webhook")
 		}
-		for _, e := range j.On.Events {
+		for i, e := range j.On.Events {
 			ev, action, has := strings.Cut(e, ".")
 			if ev == "" || has && action == "" {
-				errs = append(errs, name+": an empty event name")
+				ce.Add(extension.ConfigPointer("on", "events", i), "empty_event", "an event is a code-host event name, optionally with an action, such as push or release.published")
 			}
 		}
-		for _, b := range j.On.Branches {
+		for i, b := range j.On.Branches {
 			if b == "" {
-				errs = append(errs, name+": an empty branch pattern")
+				ce.Add(extension.ConfigPointer("on", "branches", i), "empty_branch", "a branch pattern must not be empty")
 			}
 		}
-		for _, p := range j.On.Paths {
+		for i, p := range j.On.Paths {
 			if strings.TrimPrefix(p, "!") == "" {
-				errs = append(errs, name+": an empty path pattern")
+				ce.Add(extension.ConfigPointer("on", "paths", i), "empty_path", "a path pattern must not be empty")
 			}
 		}
-		for _, c := range j.On.Conclusions {
+		for i, c := range j.On.Conclusions {
 			if !slices.Contains(Conclusions, strings.ToLower(c)) {
-				errs = append(errs, fmt.Sprintf("%s: %q isn't a check conclusion; use %s", name, c, strings.Join(Conclusions, ", ")))
+				ce.Add(extension.ConfigPointer("on", "conclusions", i), "unknown_conclusion", "not a check conclusion; use "+strings.Join(Conclusions, ", "))
 			}
 		}
 		if (len(j.On.Branches) > 0 || len(j.On.Paths) > 0 || len(j.On.Conclusions) > 0) && len(j.On.Events) == 0 {
-			errs = append(errs, name+": branches, paths and conclusions filter events; add events")
+			ce.Add("/on/events", "filter_without_events", "branches, paths and conclusions filter events; add events")
 		}
 	}
-	return errs
+	return ce
 }
 
 // ParseExtension decodes and validates an entry. secretNames are the entry's
-// selected secret names.
+// selected secret names. Its refusal is an *extension.ConfigError.
 func ParseExtension(data []byte, secretNames []string) (Settings, error) {
 	var c ExtensionConfig
-	if err := strict(data, &c); err != nil {
-		return Settings{}, fmt.Errorf("schedule: %w", err)
+	if err := extension.DecodeConfig(data, &c); err != nil {
+		return Settings{}, err
 	}
-	var errs []string
+	ce := &extension.ConfigError{}
 	if c.Namespace == "" || len(c.Namespace) > 200 || strings.HasPrefix(c.Namespace, "core.") || strings.ContainsAny(c.Namespace, " \t\r\n\x00") {
-		errs = append(errs, "namespace must be a nonempty stable identifier (not core.*)")
+		ce.Add("/namespace", "invalid_namespace", "namespace must be a nonempty stable identifier of at most 200 characters, without spaces, not starting core.")
 	}
 	if !namePattern.MatchString(c.Scope) {
-		errs = append(errs, "scope must be the containing scope id")
+		ce.Add("/scope", "invalid_scope", "scope must be the containing scope id")
 	}
 	names := map[string]bool{}
 	webhooks := false
-	for _, j := range c.Jobs {
-		errs = append(errs, j.Validate()...)
+	for i, j := range c.Jobs {
+		ce.Merge(extension.ConfigPointer("jobs", i), j.Validate())
 		if names[j.Name] {
-			errs = append(errs, "job "+j.Name+": name used twice")
+			ce.Add(extension.ConfigPointer("jobs", i, "name"), "duplicate_name", "another job has this name; give each job its own")
 		}
 		names[j.Name] = true
 		webhooks = webhooks || j.Webhook()
 	}
 	if c.WebhookSecret != "" {
-		selected := false
-		for _, n := range secretNames {
-			selected = selected || n == c.WebhookSecret
-		}
-		if !selected {
-			errs = append(errs, "webhook_secret must name a selected secret (secret_names)")
+		if !slices.Contains(secretNames, c.WebhookSecret) {
+			ce.Add("/webhook_secret", "secret_not_selected", "webhook_secret must name one of the entry's selected secrets (secret_names)")
 		}
 	} else if webhooks {
-		errs = append(errs, "a job takes webhooks: set webhook_secret to a selected secret")
+		ce.Add("/webhook_secret", "missing_webhook_secret", "a job takes webhooks: set webhook_secret to one of the entry's selected secrets")
 	}
-	if len(errs) > 0 {
-		return Settings{}, errors.New("schedule: " + strings.Join(errs, "; "))
+	if err := ce.Err(); err != nil {
+		return Settings{}, err
 	}
 	return Settings{Namespace: c.Namespace, Scope: c.Scope, WebhookSecret: c.WebhookSecret, Jobs: c.Jobs}, nil
 }
@@ -372,22 +368,23 @@ type RouteConfig struct {
 // ParseRoute decodes a route config.
 func ParseRoute(data []byte) (RouteConfig, error) {
 	var c RouteConfig
-	if err := strict(data, &c); err != nil {
-		return c, fmt.Errorf("schedule route: %w", err)
+	if err := extension.DecodeConfig(data, &c); err != nil {
+		return c, err
 	}
-	for _, j := range c.Jobs {
+	ce := &extension.ConfigError{}
+	for i, j := range c.Jobs {
 		if !namePattern.MatchString(j) {
-			return c, errors.New("schedule route: jobs must be job names")
+			ce.Add(extension.ConfigPointer("jobs", i), "invalid_name", "jobs must be job names, matching [a-z][a-z0-9_-]{0,62}")
 		}
 	}
-	for _, k := range c.Triggers {
+	for i, k := range c.Triggers {
 		switch k {
 		case KindTimer, KindWebhook, KindEvent, KindManual:
 		default:
-			return c, errors.New("schedule route: triggers must be timer, webhook, event or manual")
+			ce.Add(extension.ConfigPointer("triggers", i), "unknown_trigger", "triggers must be timer, webhook, event or manual")
 		}
 	}
-	return c, nil
+	return c, ce.Err()
 }
 
 // ValidateRoute is the config.Registry route handler config validator.

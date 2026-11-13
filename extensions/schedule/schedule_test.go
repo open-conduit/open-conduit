@@ -26,25 +26,61 @@ func TestJobValidate(t *testing.T) {
 		{sc.Job{Name: "j", Cron: "0 9 * * FRI", On: &sc.Trigger{Events: []string{"push"}, Paths: []string{"data/*.json", "!data/posted.json"}}}, ""},
 		{sc.Job{Name: "j", At: []string{"05:17"}}, ""},
 		{sc.Job{Name: "j"}, ""}, // manual only
-		{sc.Job{Name: "j", Cron: "0 9 * *"}, "cron is not"},
-		{sc.Job{Name: "j", Cron: "0 9 * * *", TimeZone: "Mars/Olympus"}, "time_zone is not a known zone"},
-		{sc.Job{Name: "j", At: []string{"09:00"}, TimeZone: "Europe/London"}, "time_zone is for cron"},
-		{sc.Job{Name: "j", At: []string{"09:00"}, Cron: "0 9 * * *"}, "not both"},
-		{sc.Job{Name: "j", At: []string{"9am"}}, "isn't HH:MM"},
-		{sc.Job{Name: "j", EveryMinutes: 5, Cron: "0 9 * * *"}, "every_minutes or at/cron"},
-		{sc.Job{Name: "j", Cron: "CRON_TZ=Europe/London 0 9 * * *"}, "with time_zone"},
-		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"push"}, Paths: []string{"!"}}}, "empty path"},
-		{sc.Job{Name: "j", On: &sc.Trigger{}}, "on needs events or webhook"},
-		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Branches: []string{"main"}}}, "add events"},
-		{sc.Job{Name: "Post reels"}, "name matching"},
+		{sc.Job{Name: "j", Cron: "0 9 * *"}, "/cron: invalid_cron"},
+		{sc.Job{Name: "j", Cron: "0 9 * * *", TimeZone: "Mars/Olympus"}, "/time_zone: unknown_time_zone"},
+		{sc.Job{Name: "j", At: []string{"09:00"}, TimeZone: "Europe/London"}, "/time_zone: time_zone_without_cron"},
+		{sc.Job{Name: "j", At: []string{"09:00"}, Cron: "0 9 * * *"}, "/at: conflicting_fields"},
+		{sc.Job{Name: "j", At: []string{"09:00", "9am"}}, "/at/1: invalid_time"},
+		{sc.Job{Name: "j", At: []string{"09:00", "09:00"}}, "/at/1: duplicate_time"},
+		{sc.Job{Name: "j", EveryMinutes: 5, Cron: "0 9 * * *"}, "/every_minutes: conflicting_fields"},
+		{sc.Job{Name: "j", Cron: "CRON_TZ=Europe/London 0 9 * * *"}, "/cron: time_zone_in_cron"},
+		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"push"}, Paths: []string{"a", "!"}}}, "/on/paths/1: empty_path"},
+		{sc.Job{Name: "j", On: &sc.Trigger{}}, "/on: missing_trigger"},
+		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Branches: []string{"main"}}}, "/on/events: filter_without_events"},
+		{sc.Job{Name: "Post reels"}, "/name: invalid_name"},
 		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"check_suite.completed"}, Conclusions: []string{"failure", "Timed_Out"}}}, ""},
-		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"check_suite.completed"}, Conclusions: []string{"failed"}}}, `"failed" isn't a check conclusion; use success, failure`},
-		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Conclusions: []string{"failure"}}}, "add events"},
+		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"check_suite.completed"}, Conclusions: []string{"failed"}}}, "/on/conclusions/0: unknown_conclusion: not a check conclusion; use success, failure"},
+		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Conclusions: []string{"failure"}}}, "filter_without_events"},
 	} {
-		errs := strings.Join(c.job.Validate(), "; ")
+		var errs string
+		if err := c.job.Validate().Err(); err != nil {
+			errs = err.Error()
+		}
 		if c.want == "" && errs != "" || c.want != "" && !strings.Contains(errs, c.want) {
 			t.Errorf("case %d: %q; want %q", i, errs, c.want)
 		}
+	}
+}
+
+// TestParseExtensionDiagnostics checks an entry's refusal names each field
+// at its path with a stable code (issue #576), and never quotes a value.
+func TestParseExtensionDiagnostics(t *testing.T) {
+	for _, c := range []struct {
+		config, path, code string
+	}{
+		{`{"namespace":"n","scope":"demo","jobs":[{"name":"a"},{"name":"report","cron":"not a cron","time_zone":"Europe/London"}]}`, "/jobs/1/cron", "invalid_cron"},
+		{`{"namespace":"n","scope":"demo","jobs":[{"name":"a","command":["true"]}]}`, "/jobs/0/command", "unknown_field"},
+		{`{"namespace":"n","scope":"demo","jobs":[{"name":"a","every_minutes":"5"}]}`, "/jobs/0/every_minutes", "invalid_type"},
+		{`{"namespace":"n","scope":"demo","webhook_secret":"elsewhere","jobs":[]}`, "/webhook_secret", "secret_not_selected"},
+		{`{"namespace":"n","scope":"demo","jobs":[{"name":"a"},{"name":"a"}]}`, "/jobs/1/name", "duplicate_name"},
+		{`{"namespace":"core.x","scope":"demo","jobs":[]}`, "/namespace", "invalid_namespace"},
+		{`[1]`, "", "invalid_type"},
+		{`{"namespace":`, "", "malformed_config"},
+	} {
+		_, err := sc.ParseExtension([]byte(c.config), []string{"hook"})
+		ds := extension.ConfigDiagnostics(err)
+		if len(ds) == 0 || ds[0].Path != c.path || ds[0].Code != c.code {
+			t.Errorf("%s: %+v; want %s %s", c.config, ds, c.path, c.code)
+		}
+		for _, d := range ds {
+			if strings.Contains(d.Message, "not a cron") || strings.Contains(d.Message, "elsewhere") {
+				t.Errorf("%s: message quotes a value: %s", c.config, d.Message)
+			}
+		}
+	}
+	unknown := extension.ConfigDiagnostics(sc.ValidateRoute(json.RawMessage(`{"jobs":["a"],"job":"a"}`)))
+	if len(unknown) != 1 || unknown[0].Path != "/job" || !strings.Contains(unknown[0].Message, "jobs, triggers") {
+		t.Errorf("route unknown field: %+v", unknown)
 	}
 }
 

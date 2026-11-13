@@ -74,6 +74,26 @@ func TestConfigValidation(t *testing.T) {
 			t.Errorf("%s accepted: %v", bad, err)
 		}
 	}
+	// Each refusal names its field and why (issue #576).
+	for _, c := range []struct {
+		config  string
+		secrets []string
+		path    string
+		code    string
+	}{
+		{`{"extra_args":["--verbose","--mcp-config=/x.json"]}`, nil, "/extra_args/1", "reserved_argument"},
+		{`{"secret_env":{"key":"ANTHROPIC_API_KEY"}}`, nil, "/secret_env/key", "secret_not_selected"},
+		{`{"permision_mode":"plan"}`, nil, "/permision_mode", "unknown_field"},
+		{`{"handoff_minutes":"55"}`, nil, "/handoff_minutes", "invalid_type"},
+		{`{"env":{"OS_TOKEN":"x"}}`, nil, "/env/OS_TOKEN", "reserved_env"},
+		{`{"cold_turns":"draw"}`, nil, "/cold_turns", "unknown_cold_turns"},
+	} {
+		err := e.ValidateConfig(json.RawMessage(c.config), c.secrets)
+		ds := extension.ConfigDiagnostics(err)
+		if !errors.Is(err, claudecode.ErrConfig) || len(ds) != 1 || ds[0].Path != c.path || ds[0].Code != c.code || strings.Contains(ds[0].Message, "/x.json") {
+			t.Errorf("%s: %v %+v; want %s %s", c.config, err, ds, c.path, c.code)
+		}
+	}
 	if e.ResourceMode(json.RawMessage(`{}`)) != "work" || e.ResourceMode(json.RawMessage(`{"workspace_mode":"clone"}`)) != "clone" {
 		t.Error("the requested resource mode is not workspace_mode, work by default")
 	}

@@ -33,6 +33,24 @@ func (validatingExecutor) ValidateConfig(c json.RawMessage, names []string) erro
 	return nil
 }
 
+// toolsExecutor refuses a config whose builtin_tools is set while its
+// extra_args sets --tools, naming both fields.
+type toolsExecutor struct{ fakeExecutor }
+
+func (toolsExecutor) ValidateConfig(c json.RawMessage, _ []string) error {
+	var cfg struct {
+		BuiltinTools []string `json:"builtin_tools"`
+		ExtraArgs    []string `json:"extra_args"`
+	}
+	_ = json.Unmarshal(c, &cfg)
+	if cfg.BuiltinTools != nil && slices.Contains(cfg.ExtraArgs, "--tools") {
+		ce := extension.Invalid("/extra_args/0", "reserved_argument", "extra_args must not set --tools when builtin_tools is set")
+		ce.Add("/builtin_tools", "conflicting_fields", "builtin_tools conflicts with --tools in extra_args")
+		return ce
+	}
+	return nil
+}
+
 type injectExecutor struct{ fakeExecutor }
 
 func (injectExecutor) Inject(context.Context, domain.ID, domain.Event) error { return nil }
@@ -290,6 +308,27 @@ func TestIndependentDiagnostics(t *testing.T) {
 	}
 }
 
+// TestGrantDiagnosticsPointIntoTheDocument: a refusal with a grant applied
+// is reported at the grant's config for a field the grant sets, and at the
+// binding's own config for one the binding sets, so every path exists.
+func TestGrantDiagnosticsPointIntoTheDocument(t *testing.T) {
+	reg := registry()
+	reg.Executors["shell"] = toolsExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "cli"}}}
+	m := generic(t, example(t, "shell-job"))
+	b := entry(m, 0, "bindings", 0)
+	b["config"] = map[string]any{"extra_args": []any{"--tools"}}
+	b["grants"] = []any{map[string]any{"name": "narrow", "config": map[string]any{"builtin_tools": []any{"Read"}}}}
+	_, err := Validate(encode(t, m), reg)
+	got := diagnostics(t, err)
+	want := []Diagnostic{
+		{"scopes/0/bindings/0/config/extra_args/0", "reserved_argument", "with grant narrow applied: extra_args must not set --tools when builtin_tools is set"},
+		{"scopes/0/bindings/0/grants/0/config/builtin_tools", "conflicting_fields", "with grant narrow applied: builtin_tools conflicts with --tools in extra_args"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("diagnostics %v", got)
+	}
+}
+
 func TestOwnerValidationAndRegistrations(t *testing.T) {
 	reg := registry()
 	reg.Extensions["schedule"] = ExtensionType{Validate: func(c json.RawMessage, names []string) error {
@@ -306,6 +345,23 @@ func TestOwnerValidationAndRegistrations(t *testing.T) {
 	if got := diagnostics(t, err); len(got) != 2 || got[0].Path != "scopes/0/authorization/operations" || got[1].Path != "scopes/0/extensions/0/config" {
 		t.Fatalf("diagnostics %v", got)
 	}
+	// An owner's own diagnostics (extension.ConfigError) pass through at
+	// their fields' full paths (issue #576); the plain error above didn't.
+	reg.Extensions["schedule"] = ExtensionType{Validate: func(json.RawMessage, []string) error {
+		ce := extension.Invalid("/jobs/1/cron", "invalid_cron", "cron must be a five-field schedule")
+		ce.Add("/x", "Not A Code", "dropped")
+		return ce
+	}}
+	_, err = Validate(encode(t, m), reg)
+	if got := diagnostics(t, err); len(got) != 2 || got[1] != (Diagnostic{"scopes/0/extensions/0/config/jobs/1/cron", "invalid_cron", "cron must be a five-field schedule"}) {
+		t.Fatalf("owner diagnostics %v", got)
+	}
+	reg.Extensions["schedule"] = ExtensionType{Validate: func(c json.RawMessage, names []string) error {
+		if !strings.Contains(string(c), "every_seconds") {
+			return errors.New("bad")
+		}
+		return nil
+	}}
 	reg.Operations = []string{"custom.op"}
 	entry(m, 0, "extensions", 0)["config"].(map[string]any)["every_seconds"] = 60
 	if _, err := Validate(encode(t, m), reg); err != nil {

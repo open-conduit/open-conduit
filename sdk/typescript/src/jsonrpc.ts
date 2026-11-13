@@ -17,6 +17,7 @@ import type { Readable, Writable } from "node:stream";
 import {
   CancelledError,
   Code,
+  type ConfigDiagnostic,
   ProtocolError,
   TransportError,
   decode,
@@ -58,7 +59,18 @@ const WireError = t.object(
     message: t.string(),
     data: t.optional(
       t.object(
-        { code: t.string(), reset_at: t.optional(t.string()) },
+        {
+          code: t.string(),
+          reset_at: t.optional(t.string()),
+          diagnostics: t.optional(
+            t.array(
+              t.object(
+                { path: t.string(), code: t.string(), message: t.string() },
+                { open: true },
+              ),
+            ),
+          ),
+        },
         { open: true },
       ),
     ),
@@ -340,14 +352,29 @@ function encodeError(err: unknown, cancelled: boolean): WireError {
       : e.code === Code.Internal
         ? codeInternal
         : codeApplication;
-  const data: { code: string; reset_at?: string } = { code: e.code };
+  const data: {
+    code: string;
+    reset_at?: string;
+    diagnostics?: ConfigDiagnostic[];
+  } = { code: e.code };
   if (e.resetAt !== undefined) data.reset_at = e.resetAt;
+  if (e.diagnostics !== undefined) data.diagnostics = e.diagnostics;
   return { code, message: e.message, data };
 }
 
 function decodeError(e: WireError): Error {
   if (e.code === codeCancelled) return new CancelledError();
-  if (e.data?.code) return decode(e.data.code, e.message, e.data.reset_at);
+  if (e.data?.code)
+    return decode(
+      e.data.code,
+      e.message,
+      e.data.reset_at,
+      e.data.diagnostics?.map(({ path, code, message }) => ({
+        path,
+        code,
+        message,
+      })),
+    );
   if (e.code === codeMethodNotFound)
     return new ProtocolError(Code.MethodNotFound, e.message);
   if (

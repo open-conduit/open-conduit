@@ -5,6 +5,8 @@
 // config, and the host's own messages (openly, so a newer host's extra
 // fields are ignored rather than refused).
 
+import type { ConfigDiagnostic } from "./errors.ts";
+
 declare const phantom: unique symbol;
 // Symbol keys never reach JSON, so the marks stay out of the manifest.
 const optionalMark = Symbol("optional");
@@ -205,6 +207,101 @@ function checkObject(
     }
   }
   return undefined;
+}
+
+/**
+ * What about value does not match schema, as config diagnostics: each at
+ * its field's JSON pointer, with code invalid_type, invalid_value,
+ * missing_field or unknown_field. Empty when it matches. Messages never
+ * quote the value.
+ */
+export function diagnose(
+  schema: Readonly<Record<string, unknown>>,
+  value: unknown,
+  path = "",
+): ConfigDiagnostic[] {
+  const wrong = (what: string): ConfigDiagnostic[] => [
+    { path, code: "invalid_type", message: `must be ${what}` },
+  ];
+  if (Array.isArray(schema.anyOf)) {
+    const options = schema.anyOf.filter(isRecord);
+    return options.some((s) => check(s, value) === undefined)
+      ? []
+      : [{ path, code: "invalid_type", message: "has the wrong type" }];
+  }
+  if ("const" in schema && value !== schema.const)
+    return [
+      {
+        path,
+        code: "invalid_value",
+        message: `must be ${JSON.stringify(schema.const)}`,
+      },
+    ];
+  switch (schema.type) {
+    case "null":
+      return value === null ? [] : wrong("null");
+    case "string":
+      if (typeof value !== "string") return wrong("a string");
+      if (Array.isArray(schema.enum) && !schema.enum.includes(value))
+        return [
+          {
+            path,
+            code: "invalid_value",
+            message: `must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`,
+          },
+        ];
+      return [];
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value)
+        ? []
+        : wrong("a whole number");
+    case "number":
+      return typeof value === "number" ? [] : wrong("a number");
+    case "boolean":
+      return typeof value === "boolean" ? [] : wrong("true or false");
+    case "array": {
+      if (!Array.isArray(value)) return wrong("an array");
+      const items = isRecord(schema.items) ? schema.items : {};
+      return value.flatMap((item, i) =>
+        diagnose(items, item, pointer(path, i)),
+      );
+    }
+    case "object": {
+      if (!isRecord(value)) return wrong("an object");
+      const props = isRecord(schema.properties) ? schema.properties : {};
+      const required = Array.isArray(schema.required) ? schema.required : [];
+      const out: ConfigDiagnostic[] = [];
+      for (const k of required) {
+        if (typeof k === "string" && !(k in value))
+          out.push({
+            path: pointer(path, k),
+            code: "missing_field",
+            message: "required field is missing",
+          });
+      }
+      for (const [k, v] of Object.entries(value)) {
+        const p = props[k];
+        if (isRecord(p)) out.push(...diagnose(p, v, pointer(path, k)));
+        else if (schema.additionalProperties === false)
+          out.push({
+            path: pointer(path, k),
+            code: "unknown_field",
+            message: `unknown field; allowed fields are ${Object.keys(props).join(", ")}`,
+          });
+        else if (isRecord(schema.additionalProperties))
+          out.push(
+            ...diagnose(schema.additionalProperties, v, pointer(path, k)),
+          );
+      }
+      return out;
+    }
+    default:
+      return [];
+  }
+}
+
+function pointer(path: string, key: string | number): string {
+  return `${path}/${String(key).replaceAll("~", "~0").replaceAll("/", "~1")}`;
 }
 
 function join(path: string, key: string): string {

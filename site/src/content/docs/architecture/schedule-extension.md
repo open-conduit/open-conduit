@@ -37,7 +37,7 @@ A scope's `schedule` extension entry declares its jobs. Run settings are not her
 | `on.conclusions` | Conclusions a finished check suite or run must end in, case-insensitive: GitHub's `success`, `failure`, `neutral`, `cancelled`, `skipped`, `timed_out`, `action_required`, `stale` or `startup_failure`. Anything else is refused at validation, naming the allowed values. Other events carry none, so they never match a job that lists any. |
 | `on.webhook` | Custom POSTs to the job's signed URL. |
 
-A job with no timing and no `on` is manual only. Validation never echoes values.
+A job with no timing and no `on` is manual only. Validation reports every problem as a [config diagnostic](../extension-protocol/#config-diagnostics) at its field, such as `jobs/1/cron` with `invalid_cron`, `jobs/0/at/1` with `invalid_time`, `webhook_secret` with `secret_not_selected` or `unknown_field` for a field a job doesn't have. The messages never echo values.
 
 Routes use one registered handler, `schedule`. Its route config `{"jobs": [...], "triggers": [...]}` selects jobs and trigger kinds (`timer`, `webhook`, `event`, `manual`); empty selects every job of every schedule entry in the scope, and every kind. One route per binding gives each job its own command:
 

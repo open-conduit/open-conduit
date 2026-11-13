@@ -8,10 +8,17 @@
 // serves protocol version 1 on stdin and stdout until stdin closes.
 
 import { type Readable, Writable } from "node:stream";
-import { Code, OperationError, ProtocolError } from "./errors.ts";
+import { Code, ConfigError, OperationError, ProtocolError } from "./errors.ts";
 import { Host } from "./host.ts";
 import { Conn } from "./jsonrpc.ts";
-import { type Infer, type Type, check, isRecord, matches } from "./schema.ts";
+import {
+  type Infer,
+  type Type,
+  check,
+  diagnose,
+  isRecord,
+  matches,
+} from "./schema.ts";
 import {
   type Authority,
   type CertificationFile,
@@ -74,7 +81,12 @@ export interface EntryOf<C> {
 export interface EntryTypeSpec<S extends Type<unknown>> {
   /** The entry's config schema. A config it refuses is invalid before the daemon applies it. */
   config: S;
-  /** Checks the schema can't express; throw to refuse the config. */
+  /**
+   * Checks the schema can't express; throw to refuse the config. Throw a
+   * ConfigError to say which field is wrong and why: the host reports
+   * each of its diagnostics at the field's full path. Anything else
+   * thrown is reported only as invalid.
+   */
   validate?: (config: Infer<S>) => void | Promise<void>;
   /** Receives every entry of the type on each configuration generation. */
   configure?: (
@@ -120,7 +132,8 @@ type Run = (
 ) => Promise<{ schema: string; data: unknown }>;
 
 interface EntryType {
-  validate: (config: unknown) => Promise<boolean>;
+  /** Throws ConfigError (or a bare refusal) for a config it refuses. */
+  validate: (config: unknown) => Promise<void>;
   configure: (entries: ConfigEntry[], ctx: Context) => Promise<void>;
 }
 
@@ -207,12 +220,16 @@ export class Extension {
     this.#entryTypes.set(type, {
       validate: async (config) => {
         const c = config ?? {};
-        if (!matches(spec.config, c)) return false;
+        if (!matches(spec.config, c)) {
+          const diagnostics = diagnose(spec.config, c);
+          if (diagnostics.length > 0) throw new ConfigError(diagnostics);
+          throw new ProtocolError(Code.Invalid, "invalid extension config");
+        }
         try {
           await spec.validate?.(c);
-          return true;
-        } catch {
-          return false;
+        } catch (err) {
+          if (err instanceof ConfigError) throw err;
+          throw new ProtocolError(Code.Invalid, "invalid extension config");
         }
       },
       configure: async (entries, ctx) => {
@@ -397,9 +414,9 @@ export class Server {
         const p = params(ValidateParams, raw);
         const entryType =
           p.kind === "extension" ? served.entryTypes.get(p.type) : undefined;
-        // The host shows the operator only that the config is invalid, never why.
-        if (entryType !== undefined && !(await entryType.validate(p.config)))
-          throw new ProtocolError(Code.Invalid, `invalid ${p.kind} config`);
+        // The host shows the operator a ConfigError's diagnostics; of any
+        // other refusal, only that the config is invalid.
+        if (entryType !== undefined) await entryType.validate(p.config);
         return {};
       }
       case "operation.call":

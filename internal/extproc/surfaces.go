@@ -42,6 +42,11 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 		defer cancel()
 		var out protocol.ValidateResult
 		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: kind, Type: typ, Config: config, SecretNames: secretNames}, &out); err != nil {
+			// The package's own diagnostics (extension.ConfigError) pass
+			// through; any other refusal stays unexplained.
+			if ds := extension.ConfigDiagnostics(err); len(ds) > 0 {
+				return errors.Join(ErrInvalidConfig, &extension.ConfigError{Diagnostics: ds})
+			}
 			return ErrInvalidConfig
 		}
 		if kind == protocol.ValidateExtension || kind == protocol.ValidateRoute {

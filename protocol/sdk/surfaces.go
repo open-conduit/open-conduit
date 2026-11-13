@@ -35,6 +35,11 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 				if protocol.ErrorCode(err) != "" {
 					return nil, err
 				}
+				// The extension's own diagnostics (extension.ConfigError)
+				// cross: fixed text that says which field is wrong and why.
+				if len(extension.ConfigDiagnostics(err)) > 0 && p.Kind != protocol.ValidateBinding {
+					return nil, err
+				}
 				if p.Kind == protocol.ValidateBinding {
 					// The reason is what the operator reads.
 					return nil, protocol.Errorf(protocol.CodeInvalid, err.Error())

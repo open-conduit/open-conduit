@@ -7,8 +7,10 @@ import { test } from "node:test";
 import {
   CancelledError,
   Code,
+  ConfigError,
   OperationError,
   ProtocolError,
+  pointer,
 } from "./errors.ts";
 import { extension, type Extension } from "./extension.ts";
 import { text } from "./host.ts";
@@ -469,6 +471,57 @@ test("an entry's config is validated against its schema, then by its validate ho
       JSON.stringify(config),
     );
   }
+  end();
+});
+
+test("an entry's refusal names each field and why, as config diagnostics", async () => {
+  const ext = extension("weather", { version: "0.1.0" }).entryType("weather", {
+    config: t.object({
+      city: t.string(),
+      days: t.optional(t.array(t.integer())),
+    }),
+    validate: ({ city }) => {
+      if (city === "atlantis")
+        throw new ConfigError(
+          pointer("city"),
+          "unknown_city",
+          "city must be a place the forecast covers",
+        );
+    },
+  });
+  const { host, end } = await ready(ext);
+  for (const [config, want] of [
+    [
+      { city: "x", days: [1, "2"] },
+      [{ path: "/days/1", code: "invalid_type" }],
+    ],
+    [{ city: "x", town: "y" }, [{ path: "/town", code: "unknown_field" }]],
+    [{}, [{ path: "/city", code: "missing_field" }]],
+    [{ city: "atlantis" }, [{ path: "/city", code: "unknown_city" }]],
+  ] as const) {
+    await assert.rejects(
+      host.call("validate", { kind: "extension", type: "weather", config }),
+      (e: unknown) =>
+        e instanceof ProtocolError &&
+        e.code === Code.Invalid &&
+        e.diagnostics.length === want.length &&
+        e.diagnostics.every(
+          (d, i) =>
+            d.path === want[i]!.path &&
+            d.code === want[i]!.code &&
+            !d.message.includes("atlantis"),
+        ),
+      JSON.stringify(config),
+    );
+  }
+  end();
+});
+
+test("an entry's config is checked again on configure", async () => {
+  const ext = extension("weather", { version: "0.1.0" }).entryType("weather", {
+    config: t.object({ city: t.string() }),
+  });
+  const { host, end } = await ready(ext);
   await assert.rejects(
     host.call("configure", {
       generation: "g1",
