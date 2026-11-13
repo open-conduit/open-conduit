@@ -31,6 +31,7 @@ Commands:
   emit --type T --delivery-id D [--schema S] [--data JSON | --data-file PATH|-]
        [--key-source S --key-external-id X] [--occurred-at RFC3339]
   work create --kind K [--id ID] [--key-source S --key-external-id X]... [--schema S --data JSON]
+  work cancel --id ID [--reason TEXT]       cancel child Work this Work asked for
   wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N] [--description TEXT]
   outcome completed|failed|handoff [--summary TEXT] [--schema S --data JSON]
   call OPERATION [--schema S] [--data JSON | --data-file PATH|-]
@@ -84,7 +85,10 @@ func RunToolbelt(version, commit string, args []string, env Env, stdin io.Reader
 		if len(args) > 1 && args[1] == "create" {
 			return t.createWork(args[2:])
 		}
-		return t.usage("expected work create")
+		if len(args) > 1 && args[1] == "cancel" {
+			return t.cancelWork(args[2:])
+		}
+		return t.usage("expected work create or work cancel")
 	case "wait":
 		return t.wait(args[1:])
 	case "outcome":
@@ -296,6 +300,21 @@ func (t *toolbelt) createWork(args []string) int {
 		in["context"] = data
 	}
 	return t.do(f, "create_work", in, func(r client.ToolResult) any { return r.Work })
+}
+
+func (t *toolbelt) cancelWork(args []string) int {
+	f := newToolFlags("id", "reason")
+	if pos, err := f.parse(args); err != nil || len(pos) != 0 {
+		return t.usage("invalid work cancel flags")
+	}
+	if f.get("id") == "" {
+		return t.usage("work cancel requires --id")
+	}
+	in := map[string]any{"work_id": f.get("id")}
+	if r := f.get("reason"); r != "" {
+		in["reason"] = r
+	}
+	return t.do(f, "cancel_work", in, func(r client.ToolResult) any { return r.Work })
 }
 
 func (t *toolbelt) wait(args []string) int {

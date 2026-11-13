@@ -46,6 +46,7 @@ func TestCLIArgs(t *testing.T) {
 		{Call{Operation: "wait", Input: map[string]any{"match": map[string]any{"types": []string{"a", "b"}, "keys": []map[string]string{{"source": "s", "external_id": "x"}}}, "timeout_seconds": 60, "description": "d"}}, `wait --type a,b --key-source s --key-external-id x --timeout 60 --description d`},
 		{Call{Operation: "emit", Input: map[string]any{"type": "t", "delivery_id": "d1", "data": map[string]any{"schema": "s.v1", "data": map[string]any{"n": 1}}, "correlation_key": map[string]string{"source": "s", "external_id": "x"}}}, `emit --type t --delivery-id d1 --schema s.v1 --data {"n":1} --key-source s --key-external-id x`},
 		{Call{Operation: "create_work", Input: map[string]any{"kind": "k", "id": "w1", "context": map[string]any{"data": map[string]any{"n": 1}}}}, `work create --kind k --id w1 --data {"n":1}`},
+		{Call{Operation: "cancel_work", Input: map[string]any{"work_id": "w1", "reason": "moot"}}, `work cancel --id w1 --reason moot`},
 		{Call{Operation: "declare_outcome", Input: map[string]any{"kind": "failed", "summary": "no"}}, `outcome failed --summary no`},
 	} {
 		args, err := cliArgs(tc.call)

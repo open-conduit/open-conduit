@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -30,7 +31,7 @@ func NewToolbelt(s storage.Store, now func() time.Time) *Toolbelt {
 	return &Toolbelt{Store: s, Now: now, tokens: map[string]extension.Authority{}, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}}
 }
 func builtin(n string) bool {
-	return n == extension.Emit || n == extension.CreateWork || n == extension.Wait || n == extension.DeclareOutcome || n == extension.ReadContext
+	return n == extension.Emit || n == extension.CreateWork || n == extension.CancelWork || n == extension.Wait || n == extension.DeclareOutcome || n == extension.ReadContext
 }
 func (t *Toolbelt) Register(r extension.Registration) error {
 	t.mu.Lock()
@@ -192,6 +193,39 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 			out.Work = &saved
 			created := domain.Event{ID: domain.ID("child-created/" + string(child.ID)), Type: "core.work.created", Source: "execution/" + string(a.ExecutionID), DeliveryID: "child-created/" + string(child.ID), CausationID: a.TriggerID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, OccurredAt: t.Now(), ReceivedAt: t.Now()}
 			accepted, _, err := tx.AcceptEvent(created)
+			if err != nil {
+				return err
+			}
+			out.Event = &accepted
+		case extension.CancelWork:
+			if c.Cancel == nil || c.Cancel.Work == "" || len(c.Cancel.Reason) > extension.MaxCancelReason {
+				return extension.ErrInvalid
+			}
+			child, err := tx.Work(c.Cancel.Work)
+			if errors.Is(err, storage.ErrNotFound) || err == nil && (child.ParentID != a.WorkID || child.ScopeID != a.ScopeID) {
+				return extension.ErrUnauthorized
+			}
+			if err != nil {
+				return err
+			}
+			if child.State.Terminal() {
+				return &extension.OperationError{Code: extension.CodeWorkEnded, Message: "that Work has already ended"}
+			}
+			child.State = domain.WorkCancelled
+			if err := tx.PutWork(child, child.Revision); err != nil {
+				return err
+			}
+			saved, err := tx.Work(child.ID)
+			if err != nil {
+				return err
+			}
+			out.Work = &saved
+			data, err := json.Marshal(domain.ChildCancel{Parent: string(a.WorkID), Execution: string(a.ExecutionID), Reason: c.Cancel.Reason})
+			if err != nil {
+				return err
+			}
+			cancel := domain.Event{ID: domain.ID("child-cancel/" + string(child.ID)), Type: domain.TypeChildCancel, Source: domain.LineageSource, DeliveryID: "child-cancel/" + string(child.ID), CausationID: a.TriggerID, WorkID: child.ID, OccurredAt: t.Now(), ReceivedAt: t.Now(), Data: domain.Payload{Schema: domain.SchemaChildCancel, Data: data}}
+			accepted, _, err := tx.AcceptEvent(cancel)
 			if err != nil {
 				return err
 			}

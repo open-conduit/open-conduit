@@ -115,7 +115,7 @@ type chatTool struct {
 
 // coreOps are the toolbelt's builtin operations; any other is an
 // extension's.
-var coreOps = map[string]bool{"read_context": true, "emit": true, "wait": true, "declare_outcome": true, "create_work": true, "call": true}
+var coreOps = map[string]bool{"read_context": true, "emit": true, "wait": true, "declare_outcome": true, "create_work": true, "cancel_work": true, "call": true}
 
 // toolbeltServer is the toolbelt's MCP server name.
 const toolbeltServer = "open-conduit"

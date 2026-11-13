@@ -188,7 +188,7 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 	if init := replies[0]["result"].(map[string]any); init["protocolVersion"] != "2025-06-18" {
 		t.Fatalf("initialize %v", init)
 	}
-	if tools := replies[1]["result"].(map[string]any)["tools"].([]any); len(tools) != 6 {
+	if tools := replies[1]["result"].(map[string]any)["tools"].([]any); len(tools) != 7 {
 		t.Fatalf("tools %v", tools)
 	}
 	for _, r := range replies[2:] {

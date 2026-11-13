@@ -16,7 +16,7 @@ import (
 var ErrDenied = errors.New("configuration authority denied")
 
 // Builtins are always registered toolbelt operations.
-var Builtins = []string{"emit", "create_work", "wait", "declare_outcome", "read_context"}
+var Builtins = []string{"emit", "create_work", "cancel_work", "wait", "declare_outcome", "read_context"}
 
 // Registry is supplied in-process by first-party registration.
 type Registry struct {

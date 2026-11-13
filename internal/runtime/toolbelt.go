@@ -273,7 +273,7 @@ func (t *Toolbelt) ownerLocked(op, self string, mine map[string]bool) string {
 func (t *Toolbelt) Operations() []string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	out := []string{extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait}
+	out := []string{extension.CancelWork, extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait}
 	for name := range t.operations {
 		out = append(out, name)
 	}
@@ -315,7 +315,7 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 			}
 		}
 	}
-	if g := askGuidance(kinds); g != "" {
+	if g := askGuidance(kinds, contains(a.Operations, extension.CancelWork)); g != "" {
 		out = append(out, g)
 	}
 	var asked bool
@@ -338,8 +338,9 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 }
 
 // askGuidance tells an agent which kinds of child Work it may ask for, and
-// how to hand a task over and hear the answer; "" when it may ask for none.
-func askGuidance(kinds []extension.WorkKind) string {
+// how to hand a task over and hear the answer, and, when it may cancel
+// (cancel), how to stop one it no longer needs; "" when it may ask for none.
+func askGuidance(kinds []extension.WorkKind, cancel bool) string {
 	if len(kinds) == 0 {
 		return ""
 	}
@@ -354,6 +355,9 @@ func askGuidance(kinds []extension.WorkKind) string {
 	}
 	b.WriteString("\n\nTo ask, call `create_work` with the `kind` and the task as its `context`, for example `{\"kind\": \"" + kinds[0].Kind + "\", \"context\": {\"schema\": \"" + kinds[0].Kind + ".v1\", \"data\": {\"task\": \"…\"}}}`. Put everything the other agent needs in the task: it sees nothing else of your Work.\n\n")
 	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\"]}}` and end your turn; you are resumed when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer.")
+	if cancel {
+		b.WriteString("\n\nIf you no longer need an answer (you were resumed by something else and the task is moot), call `cancel_work` with the `work_id` `create_work` returned and a short `reason`. The other agent stops, and you still receive its end, in state `cancelled`. You can cancel only Work you asked for that hasn't ended.")
+	}
 	return b.String()
 }
 
@@ -1008,6 +1012,15 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 				return er
 			}
 			out.Work, out.Event = &saved, &created
+		case extension.CancelWork:
+			if c.Cancel == nil || c.Cancel.Work == "" || len(c.Cancel.Reason) > extension.MaxCancelReason {
+				return extension.ErrInvalid
+			}
+			child, er := cancelChildInTx(tx, now, t.options.CausalLimits, w, x, trigger, *c.Cancel)
+			if er != nil {
+				return er
+			}
+			out.Work, out.Event = &child.Work, &child.Event
 		case extension.DeclareOutcome:
 			if c.Outcome == nil {
 				return extension.ErrInvalid

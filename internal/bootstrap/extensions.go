@@ -175,7 +175,7 @@ func takenNames(reg config.Registry) extproc.Taken {
 		t.Add("name", name)
 	}
 	t.Add("operation", reg.Operations...)
-	t.Add("operation", extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait)
+	t.Add("operation", extension.CancelWork, extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait)
 	return t
 }
 

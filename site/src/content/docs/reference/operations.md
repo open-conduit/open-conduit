@@ -56,6 +56,16 @@ Hand a task to another agent as child Work in this scope, of a kind your grant l
 | `kind` | string | yes | A kind of child Work your toolbelt guidance lists; the host refuses any other. |
 | `request_id` | string |  | Optional idempotency key: retrying with the same ID never repeats the effect. |
 
+### `cancel_work`
+
+Cancel child Work you asked for with create_work that hasn't ended yet, when you no longer need its answer. You still receive its core.work.child.ended event, in state cancelled.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `reason` | string |  | Why you no longer need it, in a few words; recorded on the child's history. |
+| `request_id` | string |  | Optional idempotency key: retrying with the same ID never repeats the effect. |
+| `work_id` | string | yes | The child Work's ID, as create_work returned it. |
+
 ### `wait`
 
 Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. Finish your turn after calling it.

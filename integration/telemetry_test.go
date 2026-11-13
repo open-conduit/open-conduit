@@ -163,10 +163,14 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 	if emitted.Correlation.ExecutionID != first.Lease.ExecutionID || emitted.Correlation.TraceID != x1.TraceID || emitted.Attributes["event.causation_id"] != root.ID {
 		t.Fatalf("emission correlation: %+v (trace %s)", emitted, x1.TraceID)
 	}
-	child := rs.one(t, "work.created", func(r observability.Record) bool { return r.Attributes["work.parent_id"] == string(work) })
+	child := rs.one(t, "work.created", func(r observability.Record) bool {
+		return r.Attributes["work.parent_id"] == string(work) && r.Correlation.WorkID != "child/moot"
+	})
 	if child.Attributes["work.kind"] != "fixture.child" {
 		t.Fatalf("child work: %+v", child)
 	}
+	// The child it cancelled is seen to end cancelled.
+	rs.one(t, "work.transitioned", func(r observability.Record) bool { return r.Correlation.WorkID == "child/moot" && r.To == "cancelled" })
 	calls := map[string]bool{}
 	for _, r := range rs.where("toolbelt.called", forExecution(first.Lease.ExecutionID)) {
 		calls[r.Attributes["toolbelt.operation"]] = true
@@ -174,7 +178,7 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 			t.Fatalf("toolbelt call trace: %+v", r)
 		}
 	}
-	for _, op := range []string{"read_context", "emit", "create_work", "wait"} {
+	for _, op := range []string{"read_context", "emit", "create_work", "cancel_work", "wait"} {
 		if !calls[op] {
 			t.Fatalf("toolbelt call %s missing: %v", op, calls)
 		}
@@ -189,7 +193,7 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 		t.Fatalf("declaration: %+v", d)
 	}
 	stop1 := rs.one(t, "execution.waiting", forExecution(first.Lease.ExecutionID))
-	if stop1.Attributes["outcome.kind"] != "waiting" || stop1.Attributes["execution.artifacts"] != "5" {
+	if stop1.Attributes["outcome.kind"] != "waiting" || stop1.Attributes["execution.artifacts"] != "6" {
 		t.Fatalf("first stop: %+v", stop1)
 	}
 	registered := rs.one(t, "wait.registered", forExecution(first.Lease.ExecutionID))

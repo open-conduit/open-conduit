@@ -284,6 +284,11 @@ func cliArgs(c Call) ([]string, error) {
 			args = append(args, "--id", id)
 		}
 		args = append(append(args, keyFlags(in["correlation_keys"])...), payload(in["context"])...)
+	case "cancel_work":
+		args = []string{"work", "cancel", "--id", str("work_id")}
+		if r := str("reason"); r != "" {
+			args = append(args, "--reason", r)
+		}
 	case "wait":
 		var match struct {
 			Types []string        `json:"types"`

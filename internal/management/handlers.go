@@ -1422,6 +1422,21 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 			child.CorrelationKeys = append(child.CorrelationKeys, *k.domain())
 		}
 		call.Child = &child
+	case extension.CancelWork:
+		var w struct {
+			WorkID string `json:"work_id"`
+			Reason string `json:"reason"`
+		}
+		if err := strict(&w); err != nil {
+			return 0, nil, err
+		}
+		if w.WorkID == "" {
+			return 0, nil, fail(400, "malformed", "work_id is required")
+		}
+		if len(w.Reason) > extension.MaxCancelReason {
+			return 0, nil, fail(400, "malformed", "reason is too long")
+		}
+		call.Cancel = &extension.CancelRequest{Work: domain.ID(w.WorkID), Reason: w.Reason}
 	case extension.Wait:
 		var w struct {
 			Match struct {

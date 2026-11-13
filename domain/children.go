@@ -9,6 +9,10 @@ import "encoding/json"
 const (
 	TypeChildEnded   = "core.work.child.ended"
 	SchemaChildEnded = "core.work.child.ended.v1"
+	// TypeChildCancel records, on the child, that the Work that asked for
+	// it cancelled it (cancel_work), and why.
+	TypeChildCancel   = "core.work.child.cancel"
+	SchemaChildCancel = "core.work.child.cancel.v1"
 	// LineageSource is the correlation source of a Work's lineage key.
 	LineageSource = "core.work"
 )
@@ -31,4 +35,14 @@ type ChildEnded struct {
 	Outcome OutcomeKind     `json:"outcome,omitempty"`
 	Summary string          `json:"summary,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
+}
+
+// ChildCancel is a TypeChildCancel Event's payload: the parent that
+// cancelled the child, the execution of it that did, and the reason it
+// gave, if any. The Event's source is LineageSource, which no execution
+// can emit from, so the record is always the host's.
+type ChildCancel struct {
+	Parent    string `json:"parent"`
+	Execution string `json:"execution"`
+	Reason    string `json:"reason,omitempty"`
 }

@@ -113,6 +113,7 @@ When the attempt has a toolbelt token and the `os` binary is available, the segm
 - `read_context`
 - `emit`
 - `create_work`
+- `cancel_work`
 - `wait`
 - `declare_outcome`
 - `call` (registered extension operations)

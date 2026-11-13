@@ -184,7 +184,7 @@ func toolbeltFixtureGranting(extraKinds ...extension.WorkKind) conformance.Toolb
 	}}}}); err != nil {
 		panic(err)
 	}
-	a := extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: "execution", TriggerID: "trigger", Lease: lease, ExpiresAt: clock.Now().Add(time.Minute), Operations: []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo"}, EventTypes: []string{"fixture.changed.v1"}, WorkKinds: []extension.WorkKind{{Kind: "fixture.child"}}}
+	a := extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: "execution", TriggerID: "trigger", Lease: lease, ExpiresAt: clock.Now().Add(time.Minute), Operations: []string{extension.Emit, extension.CreateWork, extension.CancelWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo"}, EventTypes: []string{"fixture.changed.v1"}, WorkKinds: []extension.WorkKind{{Kind: "fixture.child"}}}
 	issued := a
 	issued.WorkKinds = append(append([]extension.WorkKind(nil), a.WorkKinds...), extraKinds...)
 	token, err := belt.Issue(ctx, issued)
@@ -281,6 +281,18 @@ func (b unsafeBelt) Call(ctx context.Context, token string, c extension.ToolCall
 	return b.Toolbelt.Call(ctx, token, c)
 }
 
+// anyCancelBelt accepts a cancel_work its toolbelt refuses as
+// unauthorized, as a toolbelt that didn't check parentage would.
+type anyCancelBelt struct{ extension.Toolbelt }
+
+func (b anyCancelBelt) Call(ctx context.Context, token string, c extension.ToolCall) (extension.ToolResult, error) {
+	out, err := b.Toolbelt.Call(ctx, token, c)
+	if c.Operation == extension.CancelWork && errors.Is(err, extension.ErrUnauthorized) {
+		return extension.ToolResult{}, nil
+	}
+	return out, err
+}
+
 // squattableRegistrar accepts what the namespace rule refuses, as a
 // toolbelt that let the first registrant take any name would.
 type squattableRegistrar struct{ extension.Registrar }
@@ -358,6 +370,14 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 			f := toolbeltFixtureGranting(extension.WorkKind{Kind: "fixture.ungranted"})
 			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "doesn't grant accepted") {
 				t.Fatalf("ungranted child kind undetected: %v", err)
+			}
+		}
+		if c.Name == "cancel_child" {
+			// A toolbelt that cancels whatever Work it is asked to.
+			f := toolbeltFixture()
+			f.Belt = anyCancelBelt{f.Belt}
+			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "isn't the caller's child accepted") {
+				t.Fatalf("cancel of foreign Work undetected: %v", err)
 			}
 		}
 		if c.Name == "cross_scope_work_execution" {
