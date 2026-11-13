@@ -371,3 +371,58 @@ func TestRouteAttachesAPostedThread(t *testing.T) {
 		t.Fatalf("a conversation's input left the route's binding: %+v", d)
 	}
 }
+
+// A person's message in the thread of a finished Work's post opens its
+// successor, run where that Work ran, with a generation key naming the
+// thread; the generation after it numbers on. A finished conversation, an
+// edit, another Work's reply or a deletion opens nothing.
+func TestRouteSucceedsAFinishedPoster(t *testing.T) {
+	sc := scopeWith(t, `,"post":[{"binding":"nightly","channels":["`+chanA+`"]}]`)
+	written := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	ts := slack.TS(written)
+	thread := domain.CorrelationKey{Source: ns, ExternalID: slack.ThreadKey(chanA, ts)}
+	job := &domain.Work{ID: "job", Kind: "schedule.job", State: domain.WorkCompleted, CorrelationKeys: []domain.CorrelationKey{thread},
+		Context: domain.Payload{Schema: "json", Data: json.RawMessage(`{"model":"m"}`)}, Grants: []string{"g"}}
+	reply := slack.MessagePayload{TS: slack.TS(written.Add(time.Minute)), Thread: ts, User: alice, Text: "Which tests failed?"}
+	d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), job)
+	gen := domain.CorrelationKey{Source: ns, ExternalID: slack.GenerationKey(chanA, ts, 2)}
+	if !d.Match || !d.Successor || d.CreateID != "job/g2" || d.Kind != "schedule.job" || d.Deliver != extension.DeliverCurrent ||
+		len(d.AttachKeys) != 1 || d.AttachKeys[0] != gen || string(d.Context.Data) != `{"model":"m"}` || len(d.Grants) != 1 || d.Display == nil {
+		t.Fatalf("a reply to a finished job's post did not open its successor: %+v", d)
+	}
+	if c, th, ok := slack.ParseOwnedKey(gen.ExternalID); !ok || c != chanA || th != ts {
+		t.Fatalf("the generation key does not name the thread: %q %q %v", c, th, ok)
+	}
+	second := &domain.Work{ID: "job/g2", Kind: "schedule.job", State: domain.WorkCompleted, CorrelationKeys: []domain.CorrelationKey{gen}}
+	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), second); !d.Successor || d.CreateID != "job/g3" ||
+		d.AttachKeys[0].ExternalID != slack.GenerationKey(chanA, ts, 3) {
+		t.Fatalf("the next generation is not numbered on: %+v", d)
+	}
+	running := *job
+	running.State = domain.WorkRunning
+	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), &running); d.Successor || d.Deliver != extension.DeliverCurrent {
+		t.Fatalf("a reply to live Work's post opened a successor: %+v", d)
+	}
+	conversation := &domain.Work{ID: "conv", Kind: slack.WorkKind, State: domain.WorkCompleted, Display: &domain.WorkDisplay{Title: "x"}}
+	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), conversation); d.Successor {
+		t.Fatalf("a finished conversation was succeeded: %+v", d)
+	}
+	edited := reply
+	edited.Edited = slack.TS(written.Add(2 * time.Minute))
+	other := reply
+	other.Agent = &slack.Agent{Work: "w2", Intent: "i2"}
+	for name, e := range map[string]domain.AcceptedEvent{
+		"edit":            event(t, slack.TypeMessageHuman, edited, written.Add(2*time.Minute)),
+		"another's reply": event(t, slack.TypeMessageAgent, other, written.Add(time.Minute)),
+		"deletion":        event(t, slack.TypeMessageDeleted, reply, written.Add(time.Minute)),
+	} {
+		if d := match(t, sc, e, job); d.Successor {
+			t.Fatalf("%s opened a successor: %+v", name, d)
+		}
+	}
+	for _, k := range []string{slack.ThreadKey(chanA, ts) + "/generation/1", slack.ThreadKey(chanA, ts) + "/generation/02", slack.ThreadKey(chanA, ts) + "/g2"} {
+		if _, _, ok := slack.ParseOwnedKey(k); ok {
+			t.Fatalf("%q parsed as a thread owner's key", k)
+		}
+	}
+}

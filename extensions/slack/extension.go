@@ -329,7 +329,7 @@ func (x *Extension) activeThreads(s Settings) func(context.Context) (map[string]
 					if k.Source != s.Namespace {
 						continue
 					}
-					if channel, thread, ok := ParseThreadKey(k.ExternalID); ok {
+					if channel, thread, ok := ParseOwnedKey(k.ExternalID); ok {
 						out[channel] = append(out[channel], thread)
 					}
 				}

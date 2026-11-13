@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -95,7 +96,8 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 // attached to that Work without being its input. Later messages in a thread
 // owned by Work that is not a conversation (a job that posted its report)
 // are input on the binding that Work runs on, not this route's, so the
-// agent that wrote the post answers.
+// agent that wrote the post answers; once that Work has finished, a
+// person's message opens its successor (followUp).
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	if e.Type == TypeThreadOpened {
@@ -149,6 +151,9 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if p.Deleted {
 			return extension.Skip("the message was deleted"), nil
 		}
+		if posted && in.Work.State.Terminal() {
+			return followUp(in.Work, e, channel, p), nil
+		}
 		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
 		if posted {
 			d.Reason, d.Deliver = "a person replied to a post of this Work", extension.DeliverCurrent
@@ -172,6 +177,44 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return d, nil
 	}
 	return extension.Skip(e.Type + " is not passed to the agent"), nil
+}
+
+// followUp opens the next generation of a finished Work that posted the
+// thread a person has now written in (RouteDecision.Successor): Work of the
+// same kind, context and grants, run where the finished Work ran
+// (deliver current), so the job that wrote the post answers questions
+// about it. Its generation key names the thread, so the Slack tools act on
+// it, and the thread's own key reaches it through the Work it succeeds;
+// once it finishes, the next message opens the generation after it. The
+// post is its handoff: it is the thread's first message, which slack.thread
+// reads, marked with the Work that wrote it. An edit of an earlier reply
+// opens nothing: only a new message is a question. A finished
+// conversation (slack.conversation) is never succeeded: its thread ended
+// when a person said it was resolved.
+func followUp(w *domain.Work, e domain.Event, channel string, p MessagePayload) extension.RouteDecision {
+	if p.Edited != "" {
+		return extension.Skip("an edit in the thread of a finished Work's post")
+	}
+	thread := p.Thread
+	if thread == "" {
+		thread = p.TS
+	}
+	next, n := nextGeneration(w.ID)
+	return extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: w.Kind, Context: w.Context, Grants: append([]string(nil), w.Grants...),
+		AttachKeys: []domain.CorrelationKey{{Source: e.Source, ExternalID: GenerationKey(channel, thread, n)}},
+		Display:    Display(p), Deliver: extension.DeliverCurrent, Reason: "a person replied to a post of Work that has finished"}
+}
+
+// nextGeneration is the ID and number of the Work that succeeds finished
+// Work id: <id>/g2 for the first, then /g3 and on.
+func nextGeneration(id domain.ID) (domain.ID, int) {
+	base, n := string(id), 1
+	if i := strings.LastIndex(base, "/g"); i >= 0 {
+		if g, err := strconv.Atoi(base[i+2:]); err == nil && g > 1 && base[i+2:] == strconv.Itoa(g) {
+			base, n = base[:i], g
+		}
+	}
+	return domain.ID(base + "/g" + strconv.Itoa(n+1)), n + 1
 }
 
 // opened attaches the thread of a message a Work posted to that Work. Only

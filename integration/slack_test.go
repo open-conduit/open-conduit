@@ -1143,7 +1143,7 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 	var belt *runtime.Toolbelt
 	belt, err := runtime.NewToolbelt(e.store, e.clock.Now, e.router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
-			return runtime.ToolbeltGrant{Operations: []string{sl.OpPost, sl.OpReply, extension.Emit}, EventTypes: belt.EventTypes()}, nil
+			return runtime.ToolbeltGrant{Operations: []string{sl.OpPost, sl.OpReply, sl.OpThread, extension.Emit}, EventTypes: belt.EventTypes()}, nil
 		}})
 	if err != nil {
 		t.Fatal(err)
@@ -1158,13 +1158,16 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	var token string
+	var bindings []string
+	outcome := domain.OutcomeHandoff
 	executor := &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
 	executor.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		token = r.Context.ToolbeltToken
+		bindings = append(bindings, r.Execution.ExecutorBinding)
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "reported"}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: outcome, Summary: "reported"}}}, nil
 	}
 	scheduler, err := runtime.NewScheduler(e.store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "test", LeaseDuration: time.Hour, Generation: "1",
 		Executors: map[string]extension.Executor{"fixture": executor}, Toolbelt: belt, ToolbeltEndpoints: fixtureEndpoint("unix:///fixture.sock")})
@@ -1273,5 +1276,103 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 		if w.Kind == sl.WorkKind {
 			t.Fatalf("the reply started a conversation: %+v", w)
 		}
+	}
+
+	// The job answers and finishes. A question after that opens its
+	// successor on the job's binding, which reads the post in the thread
+	// and answers there; once it has finished too, the next question opens
+	// the generation after it.
+	outcome = domain.OutcomeCompleted
+	finish := func(work domain.ID) {
+		t.Helper()
+		a, err := scheduler.Start(ctx, work)
+		if err != nil {
+			t.Fatalf("start %s: %v", work, err)
+		}
+		if err := scheduler.Observe(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		e.read(func(tx storage.Tx) error {
+			w, err := tx.Work(work)
+			if err == nil && w.State != domain.WorkCompleted {
+				t.Fatalf("%s is %s, want completed", work, w.State)
+			}
+			return err
+		})
+	}
+	finish(job.ID)
+	ask := func(user, text string) string {
+		t.Helper()
+		ts := e.fake.Reply(slChannel, ts, user, text)
+		e.sync()
+		e.reconcile()
+		e.route()
+		return ts
+	}
+	late := ask(slAlice, "And the flaky one?")
+	g2 := job.ID + "/g2"
+	if q := e.queued(g2); len(q) != 1 || q[0] != sl.TypeMessageHuman+":"+late {
+		t.Fatalf("the question after the job finished did not open its successor: %v", q)
+	}
+	if inputs, err := e.router.PendingInputs(ctx, g2); err != nil || len(inputs) != 1 || inputs[0].Binding != "nightly" {
+		t.Fatalf("the successor is not on the job's binding: %+v %v", inputs, err)
+	}
+	e.read(func(tx storage.Tx) error {
+		w, err := tx.Work(g2)
+		if err != nil {
+			return err
+		}
+		if w.Kind != "fixture.job" || len(w.CorrelationKeys) != 1 || w.CorrelationKeys[0].ExternalID != sl.GenerationKey(slChannel, ts, 2) {
+			t.Fatalf("the successor is not the job's next generation: %+v", w)
+		}
+		old, err := tx.Work(job.ID)
+		if err == nil && old.State != domain.WorkCompleted {
+			t.Fatalf("the finished job changed: %+v", old)
+		}
+		return err
+	})
+	outcome = domain.OutcomeHandoff
+	a, err := scheduler.Start(ctx, g2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindings[len(bindings)-1] != "nightly" {
+		t.Fatalf("the successor ran on %s", bindings[len(bindings)-1])
+	}
+	read, err := belt.CallRequest(ctx, token, "read", extension.ToolCall{Operation: sl.OpThread, Input: domain.Payload{Schema: "json", Data: json.RawMessage(`{}`)}})
+	if err != nil || !strings.Contains(string(read.Output.Data), "Nightly report: 3 failures") || !strings.Contains(string(read.Output.Data), "agent on "+string(job.ID)) {
+		t.Fatalf("the successor does not read the job's post in its thread: %s %v", read.Output.Data, err)
+	}
+	answer, err := belt.CallRequest(ctx, token, "answer", extension.ToolCall{Operation: sl.OpReply, Input: domain.Payload{Schema: "json", Data: json.RawMessage(`{"text":"testFlaky"}`)}})
+	if err != nil || !strings.Contains(string(answer.Output.Data), sl.IntentPosted) {
+		t.Fatalf("the successor's answer: %s %v", answer.Output.Data, err)
+	}
+	if err := scheduler.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	e.sync()
+	e.reconcile()
+	e.route()
+	if q := e.queued(g2); len(q) != 0 {
+		t.Fatalf("the successor's own answer became its input: %v", q)
+	}
+	outcome = domain.OutcomeCompleted
+	e.read(func(tx storage.Tx) error {
+		w, err := tx.Work(g2)
+		if err == nil && w.State != domain.WorkReady {
+			t.Fatalf("the successor is %s, want ready", w.State)
+		}
+		return err
+	})
+	// A handoff with nothing queued needs a fresh input to run again; the
+	// next question finds it live, so it is its input, not a successor's.
+	fixed := ask(slBob, "Is it fixed?")
+	if q := e.queued(g2); len(q) != 1 || q[0] != sl.TypeMessageHuman+":"+fixed {
+		t.Fatalf("a question for the live successor did not reach it: %v", q)
+	}
+	finish(g2)
+	last := ask(slAlice, "Thanks")
+	if q := e.queued(job.ID + "/g3"); len(q) != 1 || q[0] != sl.TypeMessageHuman+":"+last {
+		t.Fatalf("a question after the successor finished did not open the next generation: %v", q)
 	}
 }

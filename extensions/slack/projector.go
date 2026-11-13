@@ -375,7 +375,7 @@ func (p *Projector) Thread(w domain.Work) (channel, thread string, ok bool) {
 		if k.Source != p.o.Settings.Namespace {
 			continue
 		}
-		if c, t, ok := ParseThreadKey(k.ExternalID); ok {
+		if c, t, ok := ParseOwnedKey(k.ExternalID); ok {
 			return c, t, true
 		}
 	}

@@ -112,6 +112,7 @@ var (
 	tsPattern      = regexp.MustCompile(`^[0-9]{1,12}\.[0-9]{1,9}$`)
 	mentionPattern = regexp.MustCompile(`<@([A-Z0-9]{2,32})(?:\|[^>]*)?>`)
 	threadKey      = regexp.MustCompile(`^channel/([A-Z0-9]{2,32})/thread/([0-9]{1,12}\.[0-9]{1,9})$`)
+	generationKey  = regexp.MustCompile(`^(channel/[A-Z0-9]{2,32}/thread/[0-9]{1,12}\.[0-9]{1,9})/generation/([2-9]|[1-9][0-9]{1,8})$`)
 )
 
 // ThreadKey is the correlation identity of a thread within a namespace.
@@ -124,6 +125,23 @@ func ParseThreadKey(key string) (channel, thread string, ok bool) {
 		return "", "", false
 	}
 	return m[1], m[2], true
+}
+
+// GenerationKey is the key of the nth generation of Work that owns a
+// thread (n from 2): Work that succeeds the thread's finished owner. No
+// message carries it; the thread's own key reaches that Work through the
+// Work it succeeds.
+func GenerationKey(channel, thread string, n int) string {
+	return ThreadKey(channel, thread) + "/generation/" + strconv.Itoa(n)
+}
+
+// ParseOwnedKey is the thread a key of a thread's owner names: a
+// ThreadKey, or a GenerationKey of a successor.
+func ParseOwnedKey(key string) (channel, thread string, ok bool) {
+	if m := generationKey.FindStringSubmatch(key); m != nil {
+		key = m[1]
+	}
+	return ParseThreadKey(key)
 }
 
 func itemID(channel, thread, ts string) string {

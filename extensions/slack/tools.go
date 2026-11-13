@@ -175,7 +175,7 @@ func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error)
 		return nil, extension.ErrUnauthorized
 	}
 	for _, k := range w.CorrelationKeys {
-		channel, thread, ok := ParseThreadKey(k.ExternalID)
+		channel, thread, ok := ParseOwnedKey(k.ExternalID)
 		if !ok {
 			continue
 		}
