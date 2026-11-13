@@ -615,7 +615,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `scope` |  | Required. the scope the entry is in |
 | `webhook_secret` |  | Required. names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes the URLs |
-| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"}]: each hook, the header or JSON pointer that identifies a delivery (a retry is the same delivery), and the one that threads it into one Work; a thread must end, such as a ticket, since deliveries after its Work finishes are dropped |
+| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"}]: each hook, the header or JSON pointer that identifies a delivery (a retry is the same delivery), and the one that threads it into one Work (a ticket's ID: once that Work finishes, the thread's next delivery opens a successor) |
 
 Route `config`:
 

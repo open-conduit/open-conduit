@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extensions/webhook"
 )
 
@@ -171,4 +172,118 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 		d.until("the added hook "+p+" takes a delivery", 30*time.Second, func() bool { return post(p, "", `{"n":1}`) == http.StatusAccepted })
 	}
 	d.until("each added hook's delivery has run", 30*time.Second, func() bool { return len(works()) == 4 })
+}
+
+// TestDaemonWebhookThreadGenerations drives the composed daemon through a
+// thread that ends and starts again. A ticket's first delivery has Work of
+// its own, which finishes. The ticket's next delivery opens a successor,
+// linked to it, which parks on a type-only wait. The delivery after that
+// wakes the successor rather than starting more Work, and the first Work
+// keeps the ticket's key.
+func TestDaemonWebhookThreadGenerations(t *testing.T) {
+	t.Setenv("OC_TEST_HOOK_SECRET", "hook-secret")
+	d := newDrill(t)
+	runs := filepath.Join(d.root, "runs")
+	if err := os.MkdirAll(runs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The run that is handed the ticket's "again" delivery waits for more of
+	// the thread; every other run ends.
+	script := `cp "$OS_INPUT_FILE" "$(mktemp "` + runs + `/run-XXXXXX")"; if grep -q again "$OS_INPUT_FILE" && [ ! -e "` + runs + `/waited" ]; then touch "` + runs + `/waited"; os wait --type webhook.delivery --timeout 3600 --request-id more > /dev/null; fi`
+	ops := []string{"read_context", "wait"}
+	cfg := map[string]any{
+		"version": 1, "settings": map[string]any{}, "connections": []any{},
+		"scopes": []any{map[string]any{
+			"id": "ops", "name": "Operations", "secret_refs": map[string]any{"hook": "env:OC_TEST_HOOK_SECRET"},
+			"authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
+			"extensions": []any{map[string]any{"name": "inbox", "type": "webhook", "secret_names": []string{"hook"},
+				"config": map[string]any{"scope": "ops", "webhook_secret": "hook", "hooks": []any{
+					map[string]any{"name": "tickets", "delivery_key": "header:X-Delivery-Id", "correlation_key": "body:/ticket"}}}}},
+			"bindings": []any{map[string]any{"name": "triage", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": ops, "secret_names": []any{},
+				"config": map[string]any{"command": script}}},
+			"routes": []any{map[string]any{"name": "deliveries", "handler": "webhook", "binding": "triage", "active_policy": "queue", "config": map[string]any{}}},
+		}},
+	}
+	b, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.extra = []string{"--webhook-addr", "127.0.0.1:0", "--public-url", "https://hooks.example.test"}
+	d.start("")
+	ctx := context.Background()
+	var addr string
+	d.until("webhook listener", 30*time.Second, func() bool {
+		r, err := d.c.Doctor(ctx, false)
+		if err != nil {
+			return false
+		}
+		m := listenerAddr.FindStringSubmatch(check(r, "webhooks").Detail)
+		if m != nil {
+			addr = m[1]
+		}
+		return m != nil
+	})
+	ns := webhook.Namespace("ops", "inbox")
+	path := "/" + ns + "/tickets/" + webhook.Token("hook-secret", ns, "tickets")
+	post := func(id, body string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+path, bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Delivery-Id", id)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s: %d", id, res.StatusCode)
+		}
+	}
+	works := func() map[string]string {
+		page, err := d.c.Works(ctx, url.Values{"kind": {webhook.WorkKind}})
+		out := map[string]string{}
+		if err == nil {
+			for _, w := range page.Items {
+				out[w.ID] = w.State
+			}
+		}
+		return out
+	}
+	first := ns + "/" + webhook.Thread("tickets", "T-1", "")
+	second := string(webhook.NextGeneration(domain.ID(first)))
+	post("t-1", `{"ticket":"T-1","step":"opened"}`)
+	d.until("the ticket's first Work finishes", 30*time.Second, func() bool { return works()[first] == "completed" })
+	post("t-2", `{"ticket":"T-1","step":"again"}`)
+	d.until("its successor parks on the thread", 30*time.Second, func() bool { w := works(); return w[first] == "completed" && w[second] == "waiting" })
+	post("t-3", `{"ticket":"T-1","step":"more"}`)
+	d.until("the next delivery wakes the successor", 30*time.Second, func() bool { return works()[second] == "completed" })
+	if w := works(); len(w) != 2 {
+		t.Fatalf("works: %v", w)
+	}
+	page, err := d.c.Events(ctx, url.Values{"type": {webhook.TypeDelivery}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed := map[string]string{}
+	for _, e := range page.Items {
+		var p webhook.Payload
+		if e.Data != nil {
+			_ = json.Unmarshal(e.Data.Data, &p)
+		}
+		routed[p.Delivery] = e.RoutedWorkID
+	}
+	if routed["t-1"] != first || routed["t-2"] != second || routed["t-3"] != second {
+		t.Fatalf("routed: %v", routed)
+	}
+	created, err := d.c.Events(ctx, url.Values{"type": {"core.work.created"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := false
+	for _, e := range created.Items {
+		linked = linked || e.WorkID == second && e.Data != nil && strings.Contains(string(e.Data.Data), `"PredecessorID":"`+first+`"`)
+	}
+	if !linked {
+		t.Fatalf("no core.work.created links %s to %s: %+v", second, first, created.Items)
+	}
 }

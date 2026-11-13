@@ -155,6 +155,21 @@ func TestRouteOpensWorkPerThread(t *testing.T) {
 	if err := extension.ValidateDisplay(d.Display); err != nil {
 		t.Fatal(err)
 	}
+	// Once the thread's Work has finished, its next delivery opens the
+	// thread's next generation, and that one's the next.
+	done := domain.Work{ID: want, ScopeID: scope, Kind: webhook.WorkKind, State: domain.WorkCompleted}
+	d, err = h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: ev, Scope: s, Route: r, Work: &done})
+	if err != nil || !d.Match || !d.Successor || d.CreateID != want+"/g2" || d.Kind != webhook.WorkKind || len(d.AttachKeys) != 1 ||
+		d.AttachKeys[0] != (domain.CorrelationKey{Source: ev.Event.Source, ExternalID: ev.Event.CorrelationKey.ExternalID + "/g2"}) {
+		t.Fatalf("successor decision %+v %v", d, err)
+	}
+	if got := webhook.NextGeneration(want + "/g2"); got != want+"/g3" {
+		t.Fatalf("third generation %s", got)
+	}
+	running := domain.Work{ID: want, ScopeID: scope, Kind: webhook.WorkKind, State: domain.WorkRunning}
+	if d, _ := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: ev, Scope: s, Route: r, Work: &running}); !d.Match || d.Successor {
+		t.Fatalf("live thread: %+v", d)
+	}
 	other := domain.Work{ID: "x", ScopeID: scope, Kind: "manual.work"}
 	if d, _ := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: ev, Scope: s, Route: r, Work: &other}); d.Match {
 		t.Fatalf("joined other Work: %+v", d)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -13,9 +14,10 @@ import (
 
 // Route is the `webhook` route handler. A delivery whose thread no Work
 // owns opens webhook.delivery Work; a later delivery of the same thread
-// (the same correlation value) is that Work's input. Once the Work has
-// finished, later deliveries of its thread start nothing, as for any
-// finished Work.
+// (the same correlation value) is that Work's input. Once the thread's Work
+// has finished, its next delivery opens a successor (the thread's next
+// generation), which the core links to the finished Work and routes the
+// thread's later deliveries to.
 type Route struct{}
 
 var _ extension.RouteHandler = Route{}
@@ -43,10 +45,31 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if in.Work.Kind != WorkKind {
 			return extension.Skip("the thread is owned by other Work"), nil
 		}
+		if in.Work.State.Terminal() {
+			// The successor's generation key names the thread and the
+			// generation; no delivery carries it, so the thread's own key
+			// still reaches it, through the finished Work.
+			next := NextGeneration(in.Work.ID)
+			key := domain.CorrelationKey{Source: e.Source, ExternalID: strings.TrimPrefix(string(next), e.Source+"/")}
+			return extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: WorkKind, AttachKeys: []domain.CorrelationKey{key},
+				Display: Display(p), Reason: "a delivery to " + p.Hook + " after its thread's Work finished"}, nil
+		}
 		return extension.RouteDecision{Match: true, Reason: "a later delivery of the thread"}, nil
 	}
 	return extension.RouteDecision{Match: true, CreateID: domain.ID(e.Source + "/" + e.CorrelationKey.ExternalID), Kind: WorkKind,
 		Display: Display(p), Reason: "a new delivery to " + p.Hook}, nil
+}
+
+// NextGeneration is the ID of the Work that succeeds a thread's finished
+// Work: <thread Work>/g2 for the first, then /g3 and on.
+func NextGeneration(id domain.ID) domain.ID {
+	base, n := string(id), 1
+	if i := strings.LastIndex(base, "/g"); i >= 0 {
+		if g, err := strconv.Atoi(base[i+2:]); err == nil && g > 1 {
+			base, n = base[:i], g
+		}
+	}
+	return domain.ID(base + "/g" + strconv.Itoa(n+1))
 }
 
 func payload(e domain.Event) (Payload, bool) {

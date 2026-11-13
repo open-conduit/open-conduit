@@ -59,6 +59,9 @@ func NewFixture() (protocol.Fixture, error) {
 	open := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 1}, Scope: scope, Route: route}
 	work := domain.Work{ID: domain.ID(ev.Source + "/" + ev.CorrelationKey.ExternalID), ScopeID: FixtureScope, Kind: WorkKind, State: domain.WorkRunning}
 	follow := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 2}, Scope: scope, Route: route, Work: &work}
+	finished := work
+	finished.State = domain.WorkCompleted
+	again := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 4}, Scope: scope, Route: route, Work: &finished}
 	other := route
 	other.Config = domain.Payload{Data: json.RawMessage(`{"hooks":["forms"]}`)}
 	skip := extension.RouteInput{Event: domain.AcceptedEvent{Event: ev, Sequence: 3}, Scope: scope, Route: other}
@@ -72,6 +75,11 @@ func NewFixture() (protocol.Fixture, error) {
 				Reason: "a new delivery to deploys", Display: protocol.FromDisplay(Display(p))}},
 			// A later delivery of the thread is its Work's input.
 			{Handler: Name, Input: protocol.FromRouteInput(follow), Want: protocol.RouteDecision{Match: true, Reason: "a later delivery of the thread"}},
+			// Once the thread's Work has finished, a delivery opens its
+			// successor.
+			{Handler: Name, Input: protocol.FromRouteInput(again), Want: protocol.RouteDecision{Match: true, Successor: true, CreateID: string(work.ID) + "/g2", Kind: WorkKind,
+				AttachKeys: []protocol.Key{{Source: ev.Source, ExternalID: ev.CorrelationKey.ExternalID + "/g2"}},
+				Reason:     "a delivery to deploys after its thread's Work finished", Display: protocol.FromDisplay(Display(p))}},
 			// A route limited to other hooks takes nothing.
 			{Handler: Name, Input: protocol.FromRouteInput(skip), Want: protocol.RouteDecision{Reason: "a hook this route doesn't take"}},
 		},
