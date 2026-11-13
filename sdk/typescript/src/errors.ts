@@ -52,13 +52,70 @@ export class ProtocolError extends Error {
   /** The message as it crossed the wire. */
   readonly detail: string;
   readonly resetAt: string | undefined;
-  constructor(code: string, detail = "", resetAt?: string) {
+  /** A config refusal's diagnostics (ConfigError), as they crossed. */
+  readonly diagnostics: ConfigDiagnostic[];
+  constructor(
+    code: string,
+    detail = "",
+    resetAt?: string,
+    diagnostics: ConfigDiagnostic[] = [],
+  ) {
     super(detail === "" ? `protocol: ${code}` : `protocol: ${code}: ${detail}`);
     this.name = "ProtocolError";
     this.code = code;
     this.detail = detail;
     this.resetAt = resetAt;
+    this.diagnostics = diagnostics;
   }
+}
+
+/**
+ * One thing wrong with a config object (extension.ConfigDiagnostic): the
+ * JSON pointer of the field within the object ("/jobs/1/cron", "" for the
+ * object itself), a stable snake_case code and a message saying what is
+ * wrong and what is allowed. The host shows it to the operator, so the
+ * message must never quote a configured value.
+ */
+export interface ConfigDiagnostic {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/**
+ * A refusal of a config object that says why: throw one from an entry
+ * type's validate hook and the host reports each diagnostic at its field's
+ * full path. Anything else thrown is reported only as invalid.
+ */
+export class ConfigError extends Error {
+  readonly diagnostics: ConfigDiagnostic[];
+  constructor(diagnostics: ConfigDiagnostic[]);
+  constructor(path: string, code: string, message: string);
+  constructor(
+    first: ConfigDiagnostic[] | string,
+    code?: string,
+    message?: string,
+  ) {
+    const diagnostics =
+      typeof first === "string"
+        ? [{ path: first, code: code ?? "", message: message ?? "" }]
+        : first;
+    super(
+      "invalid config: " +
+        diagnostics
+          .map((d) => `${d.path || "config"}: ${d.code}: ${d.message}`)
+          .join("; "),
+    );
+    this.name = "ConfigError";
+    this.diagnostics = diagnostics;
+  }
+}
+
+/** The JSON pointer of a path of object keys and array indexes. */
+export function pointer(...parts: (string | number)[]): string {
+  return parts
+    .map((p) => "/" + String(p).replaceAll("~", "~0").replaceAll("/", "~1"))
+    .join("");
 }
 
 /**
@@ -92,9 +149,19 @@ export class TransportError extends Error {
 }
 
 /** Decode returns the error for an authored error received from the host. */
-export function decode(code: string, message: string, resetAt?: string): Error {
+export function decode(
+  code: string,
+  message: string,
+  resetAt?: string,
+  diagnostics: ConfigDiagnostic[] = [],
+): Error {
   return isProtocolCode(code)
-    ? new ProtocolError(code, message, resetAt)
+    ? new ProtocolError(
+        code,
+        message,
+        resetAt,
+        code === Code.Invalid ? diagnostics : [],
+      )
     : new OperationError(code, message);
 }
 
@@ -103,7 +170,14 @@ export function encode(err: unknown): {
   code: string;
   message: string;
   resetAt?: string;
+  diagnostics?: ConfigDiagnostic[];
 } {
+  if (err instanceof ConfigError && err.diagnostics.length > 0)
+    return {
+      code: Code.Invalid,
+      message: "invalid config",
+      diagnostics: err.diagnostics,
+    };
   if (err instanceof ProtocolError) {
     const message = err.detail === "" ? err.code : err.detail;
     return err.resetAt === undefined

@@ -27,16 +27,19 @@ export type {
 } from "./extension.ts";
 export { Host, text } from "./host.ts";
 export type { Accept, Batch, Caller, Entry, Put, Value } from "./host.ts";
-export { t, check, matches, isRecord } from "./schema.ts";
+export { t, check, diagnose, matches, isRecord } from "./schema.ts";
 export type { Infer, Type } from "./schema.ts";
 export {
   Code,
   OperationError,
   ProtocolError,
+  ConfigError,
+  pointer,
   CancelledError,
   TransportError,
   isProtocolCode,
 } from "./errors.ts";
+export type { ConfigDiagnostic } from "./errors.ts";
 export {
   Conn,
   MaxMessageBytes,

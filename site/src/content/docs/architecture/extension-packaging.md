@@ -159,7 +159,7 @@ Schemas are built with `t` (`string`, `enum`, `literal`, `integer`, `number`, `b
 | Registration | Declares |
 | --- | --- |
 | `operation(name, { input, summary, guidance, serves, output, handler })` | `operations[]`, kind `handler`, with `summary`, `guidance`, `serves` and `input` |
-| `entryType(type, { config, validate, configure })` | `extensions[]`: a scope entry type. A config that `config` refuses, or that `validate` throws on, is invalid before the daemon applies it., and `configure` receives each generation's entries with their config typed |
+| `entryType(type, { config, validate, configure })` | `extensions[]`: a scope entry type. A config that `config` refuses, or that `validate` throws on, is invalid before the daemon applies it. The host reports what `config` refuses at each field, and a `ConfigError` thrown from `validate` with its own diagnostics ([config diagnostics](../extension-protocol/#config-diagnostics)), and `configure` receives each generation's entries with their config typed |
 | `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
 | `task(name, intervalSeconds, fn)` | `tasks[]` |
 | `family(...families)` | `families[]`, for Events derived with `host.accept` |
