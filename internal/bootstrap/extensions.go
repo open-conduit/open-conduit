@@ -233,6 +233,21 @@ func (e manifestExecutor) FolderConfig(raw json.RawMessage, folder string, resou
 	return r.ExecutorFolderConfig(e.decl.Name)(raw, folder, resource)
 }
 
+// ValidateConfig asks the package to check a binding's executor config
+// (config.ConfigValidator), so offline validation refuses what the daemon
+// refuses, with the package's own diagnostics. A package that cannot
+// start refuses it.
+func (e manifestExecutor) ValidateConfig(raw json.RawMessage, secretNames []string) error {
+	if e.x == nil {
+		return nil
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return err
+	}
+	return r.Validator(protocol.ValidateExecutor, e.decl.Name)(raw, secretNames)
+}
+
 // ConfigWarnings asks the package for its warnings about a binding config
 // (config.ConfigWarner): validate with kind executor, whose answer an older
 // package leaves without any.
