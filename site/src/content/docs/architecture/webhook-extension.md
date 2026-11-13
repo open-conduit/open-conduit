@@ -13,7 +13,7 @@ A [job webhook](../schedule-extension/) is a different kind of POST. It triggers
 {"name": "inbox", "type": "webhook", "secret_names": ["hook"], "config": {
   "scope": "ops", "webhook_secret": "hook",
   "hooks": [
-    {"name": "deploys", "delivery_key": "header:X-Delivery-Id", "correlation_key": "body:/service"},
+    {"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"},
     {"name": "forms"}
   ]}}
 ```
@@ -24,7 +24,7 @@ A [job webhook](../schedule-extension/) is a different kind of POST. It triggers
 | `webhook_secret` | A selected secret name. Each hook's URL token is derived from it, so rotating it revokes every URL of the entry. |
 | `hooks[].name` | Lower case letters, digits, `_` and `-`, at most 64. It is in the URL and in the Work's title. |
 | `hooks[].delivery_key` | Optional. Where a delivery's identity is read: `header:<name>` or `body:<JSON pointer>`. |
-| `hooks[].correlation_key` | Optional. Where a delivery's thread is read, in the same form. |
+| `hooks[].correlation_key` | Optional. Where a delivery's thread is read, in the same form. The value must name something that ends, such as a ticket or an incident (see [Routing and Work](#routing-and-work)). |
 
 A key is `header:<name>` (the header's value) or `body:<pointer>` (an RFC 6901 pointer into a JSON body, naming a string, number or boolean). A value is at most 256 bytes.
 
@@ -55,7 +55,7 @@ For a delivery to one of the scope's webhook entries, of a hook the route takes:
 - with a `webhook.delivery` owner, it is that Work's input, as a Slack reply is its thread's;
 - with any other owner, it is skipped.
 
-Once the Work has finished, later deliveries of its thread start nothing, as for any finished Work. An agent that expects more of the thread should park on a wait for `webhook.delivery`, with a timeout, while the thread may continue.
+Once the Work has finished, later deliveries of its thread start nothing, as for any finished Work: the sender still gets 202, and the drop shows only in the delivery's route record. A correlation value must therefore name something that ends, such as a ticket's or an incident's ID (`body:/ticket/id`), never something long-lived such as a service name, or every delivery after the first Work finishes is lost. An agent that expects more of the thread should park on a wait for `webhook.delivery`, with a timeout, while the thread may continue.
 
 ## The run
 
