@@ -75,6 +75,11 @@ func NewFixture() (protocol.Fixture, error) {
 			// A route limited to other hooks takes nothing.
 			{Handler: Name, Input: protocol.FromRouteInput(skip), Want: protocol.RouteDecision{Reason: "a hook this route doesn't take"}},
 		},
+		// Reading a delivery binds the calling Work from durable state: Work
+		// the scope doesn't hold is refused.
+		Operations: []protocol.OperationCase{
+			{Operation: OpRead, Input: protocol.Payload{Schema: OpRead + ".request.v1", Data: json.RawMessage(`{}`)}, Error: protocol.CodeUnauthorized},
+		},
 	}, nil
 }
 

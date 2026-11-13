@@ -73,7 +73,8 @@ func Display(p Payload) *domain.WorkDisplay {
 }
 
 // renderBody caps the bytes of a body a rendered delivery shows; the
-// whole body stays on the Event (and a shell binding's OS_INPUT_FILE).
+// whole body stays on the Event, for webhook.delivery.read and a shell
+// binding's OS_INPUT_FILE.
 const renderBody = 8 << 10
 
 // RenderEvent renders a delivery for an agent's turn: the hook, its keys
@@ -83,7 +84,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	lines := []string{fmt.Sprintf("### A delivery to the %s webhook", p.Hook)}
+	lines := []string{fmt.Sprintf("### A delivery to the %s webhook", p.Hook), "Event: " + string(e.ID)}
 	if p.Delivery != "" {
 		lines = append(lines, "Delivery: "+p.Delivery)
 	}
@@ -104,7 +105,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 			for n > 0 && !utf8.RuneStart(body[n]) {
 				n--
 			}
-			body = body[:n] + fmt.Sprintf("…\n\n(The body is %d bytes; this shows the first %d. The whole body is in the triggering Event.)", len(p.Body)+len(p.Text), n)
+			body = body[:n] + fmt.Sprintf("…\n\n(The body is %d bytes; this shows the first %d. Call %s with {\"event\": %q} for the whole body.)", len(body), n, OpRead, string(e.ID))
 		}
 		out += "\n\n" + body
 	}

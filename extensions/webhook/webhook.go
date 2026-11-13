@@ -285,6 +285,7 @@ func Build(o Options) *sdk.Extension {
 		{Name: "hooks", Help: "the hooks the route takes (every hook of the scope's webhook entries when empty)"},
 	}
 	ext.WorkKind(WorkKind)
+	registerTools(ext, o.Now)
 	ext.Check(Name, func(ctx context.Context, _ *sdk.Host, _ bool) (string, error) { return st.check(ctx, false) })
 	ext.Check(Name+"-urls", func(ctx context.Context, _ *sdk.Host, _ bool) (string, error) { return st.check(ctx, true) }, sdk.Deep())
 	ext.Validate = func(_ context.Context, p protocol.ValidateParams) error {

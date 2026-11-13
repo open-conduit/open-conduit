@@ -172,8 +172,9 @@ func TestRenderAndChecks(t *testing.T) {
 		t.Fatal(got)
 	}
 	text, ok := webhook.RenderEvent(h.Events()[0].Event)
-	if !ok || !strings.HasPrefix(text, "### A delivery to the deploys webhook\nDelivery: d-1\nCorrelation: checkout\nContent type: application/json\n\n{") ||
-		!strings.Contains(text, "The whole body is in the triggering Event.") || len(text) > 9000 {
+	id := string(h.Events()[0].Event.ID)
+	if !ok || !strings.HasPrefix(text, "### A delivery to the deploys webhook\nEvent: "+id+"\nDelivery: d-1\nCorrelation: checkout\nContent type: application/json\n\n{") ||
+		!strings.Contains(text, `Call webhook.delivery.read with {"event": "`+id+`"} for the whole body.`) || len(text) > 9000 {
 		t.Fatalf("render: %q", text)
 	}
 	plain, err := h.Check(context.Background(), webhook.Name)
@@ -183,5 +184,36 @@ func TestRenderAndChecks(t *testing.T) {
 	deep, err := h.Check(context.Background(), webhook.Name+"-urls")
 	if err != nil || !strings.Contains(deep.Detail, url("forms")) {
 		t.Fatalf("deep check: %+v %v", deep, err)
+	}
+}
+
+func TestReadReturnsTheWholeBodyOfTheWorksOwnDelivery(t *testing.T) {
+	big := `{"service":"checkout","log":"` + strings.Repeat("x", 9000) + `"}`
+	h0 := harness(t)
+	if got := post(t, h0, url("deploys"), http.Header{"X-Delivery-Id": {"d-1"}}, big); got != http.StatusAccepted {
+		t.Fatal(got)
+	}
+	ev := h0.Events()[0].Event
+	key := *ev.CorrelationKey
+	own := domain.Work{ID: "mine", ScopeID: scope, Kind: webhook.WorkKind, State: domain.WorkRunning, CorrelationKeys: []domain.CorrelationKey{key}}
+	other := domain.Work{ID: "theirs", ScopeID: scope, Kind: webhook.WorkKind, State: domain.WorkRunning}
+	// The runtime lists a Work's routed input among its Events; the SDK host
+	// lists the Events that name it.
+	ev.WorkID = own.ID
+	h := sdktest.New(t, webhook.Build(webhook.Options{}), sdktest.WithWorks(own, other), sdktest.WithEvents(scope, ev))
+	res, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "mine"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"` + string(ev.ID) + `"}`)})
+	var out webhook.ReadOutput
+	if err != nil || json.Unmarshal(res.Output.Data, &out) != nil || string(out.Body) != big || out.Event != string(ev.ID) || out.Hook != "deploys" {
+		t.Fatalf("read: %s %v", res.Output.Data, err)
+	}
+	if res, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "mine"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{}`)}); err != nil || !strings.Contains(string(res.Output.Data), string(ev.ID)) {
+		t.Fatalf("latest: %s %v", res.Output.Data, err)
+	}
+	// Another Work can't read it, and a Work the scope doesn't hold is refused.
+	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "theirs"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"` + string(ev.ID) + `"}`)}); err == nil {
+		t.Fatal("another Work read the delivery")
+	}
+	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "nope"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("unknown Work read a delivery")
 	}
 }

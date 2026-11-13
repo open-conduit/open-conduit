@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -19,16 +20,17 @@ import (
 // (deduplicated by a header, threaded by the body's service) and a shell
 // binding that keeps a copy of each run's input file.
 func webhookDaemonConfig(root string) []byte {
-	script := `cp "$OS_INPUT_FILE" "$(mktemp "` + root + `/run-XXXXXX")"`
+	script := `cp "$OS_INPUT_FILE" "$(mktemp "` + root + `/run-XXXXXX")" && os call webhook.delivery.read --data '{}' > "$(mktemp "` + root + `/read-XXXXXX")"`
+	ops := []string{"read_context", "webhook.delivery.read"}
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{}, "connections": []any{},
 		"scopes": []any{map[string]any{
 			"id": "ops", "name": "Operations", "secret_refs": map[string]any{"hook": "env:OC_TEST_HOOK_SECRET"},
-			"authorization": map[string]any{"connections": []any{}, "operations": []string{"read_context"}, "read_scopes": []any{}},
+			"authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
 			"extensions": []any{map[string]any{"name": "inbox", "type": "webhook", "secret_names": []string{"hook"},
 				"config": map[string]any{"scope": "ops", "webhook_secret": "hook", "hooks": []any{
 					map[string]any{"name": "deploys", "delivery_key": "header:X-Delivery-Id", "correlation_key": "body:/service"}}}}},
-			"bindings": []any{map[string]any{"name": "triage", "executor": "shell", "requires": map[string]any{}, "operations": []string{"read_context"}, "secret_names": []any{},
+			"bindings": []any{map[string]any{"name": "triage", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": ops, "secret_names": []any{},
 				"config": map[string]any{"command": script}}},
 			"routes": []any{map[string]any{"name": "deliveries", "handler": "webhook", "binding": "triage", "active_policy": "queue", "config": map[string]any{}}},
 		}},
@@ -120,8 +122,53 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 	if !strings.Contains(all, `\"status\":\"failed\"`) && !strings.Contains(all, `"status":"failed"`) || !strings.Contains(all, "checkout") || !strings.Contains(all, "billing") {
 		t.Fatalf("input files: %s", all)
 	}
+	// Each run read its own delivery, whole, through the toolbelt.
+	reads, _ := filepath.Glob(filepath.Join(runs, "read-*"))
+	var services []string
+	for _, f := range reads {
+		var res struct {
+			Data webhook.ReadOutput `json:"data"`
+		}
+		b, _ := os.ReadFile(f)
+		if json.Unmarshal(b, &res) != nil || res.Data.Hook != "deploys" {
+			t.Fatalf("read output %s: %q", f, b)
+		}
+		var body struct{ Service string }
+		_ = json.Unmarshal(res.Data.Body, &body)
+		services = append(services, body.Service)
+	}
+	if sort.Strings(services); strings.Join(services, ",") != "billing,checkout" {
+		t.Fatalf("read services: %v", services)
+	}
 	r, err := d.c.Doctor(ctx, true)
 	if err != nil || !strings.Contains(check(r, "webhook-urls").Detail, "https://hooks.example.test"+path) {
 		t.Fatalf("doctor --check-secrets: %+v %v", check(r, "webhook-urls"), err)
 	}
+
+	// A hook added to the entry, and a second entry, by config apply serve
+	// their URLs at once, without a restart.
+	var cfg map[string]any
+	_ = json.Unmarshal(webhookDaemonConfig(runs), &cfg)
+	scope := cfg["scopes"].([]any)[0].(map[string]any)
+	inbox := scope["extensions"].([]any)[0].(map[string]any)
+	ic := inbox["config"].(map[string]any)
+	ic["hooks"] = append(ic["hooks"].([]any), map[string]any{"name": "forms"})
+	scope["extensions"] = append(scope["extensions"].([]any), map[string]any{"name": "alerts", "type": "webhook", "secret_names": []string{"hook"},
+		"config": map[string]any{"scope": "ops", "webhook_secret": "hook", "hooks": []any{map[string]any{"name": "pages"}}}})
+	next, _ := json.Marshal(cfg)
+	v, err := d.c.ValidateConfig(ctx, next)
+	if err != nil || !v.Valid {
+		t.Fatalf("validate: %+v %v", v, err)
+	}
+	if applied, err := d.c.ApplyConfig(ctx, next, v.CandidateHash, "1", "apply-hooks"); err != nil || applied.Generation != "2" {
+		t.Fatalf("apply: %+v %v", applied, err)
+	}
+	alerts := webhook.Namespace("ops", "alerts")
+	added := []string{"/" + ns + "/forms/" + webhook.Token("hook-secret", ns, "forms"), "/" + alerts + "/pages/" + webhook.Token("hook-secret", alerts, "pages")}
+	// Neither added hook has a delivery key, so each accepted POST is a
+	// delivery: post to each until one is accepted, and no more.
+	for _, p := range added {
+		d.until("the added hook "+p+" takes a delivery", 30*time.Second, func() bool { return post(p, "", `{"n":1}`) == http.StatusAccepted })
+	}
+	d.until("each added hook's delivery has run", 30*time.Second, func() bool { return len(works()) == 4 })
 }

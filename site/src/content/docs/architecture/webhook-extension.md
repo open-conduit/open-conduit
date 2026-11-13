@@ -3,7 +3,7 @@ title: "Webhook extension"
 description: "How a signed HTTP POST becomes Work of its own: hooks, token URLs, delivery keys, correlation keys and routing."
 ---
 
-The [`webhook` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/webhook) turns each accepted POST to a signed URL into Work of its own. It is first-party, runs out of process as a package bundled with the release (`open-conduit extension-run webhook`), and is written only on `protocol/sdk`, as a third party would write it. It uses only public hooks: an ingress type with one one-shot family, webhook paths, a route handler, a Work kind, an Event renderer and two doctor checks.
+The [`webhook` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/webhook) turns each accepted POST to a signed URL into Work of its own. It is first-party, runs out of process as a package bundled with the release (`open-conduit extension-run webhook`), and is written only on `protocol/sdk`, as a third party would write it. It uses only public hooks: an ingress type with one one-shot family, webhook paths, a route handler, a Work kind, an Event renderer, one toolbelt operation and two doctor checks.
 
 A [job webhook](../schedule-extension/) is a different kind of POST. It triggers the job's one standing Work, so POSTs that arrive while a run is active or waiting join one batch, and the batch sees only the newest body. That is right for a job, which is one recurring task. Use a webhook entry when each delivery is a task of its own, such as one alert for each failed deploy or one form submission for each request. Each delivery then has its own history, retries and outcome, and deliveries run in parallel up to the binding's capacity.
 
@@ -39,6 +39,8 @@ The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The 
 3. Reads the hook's keys. A hook with a delivery key refuses a POST without it, or with a value over 256 bytes, with 400. A missing correlation value is not an error: that delivery is a thread of its own.
 4. Hands the delivery to the host and answers 202 only after durable acceptance, or 503 when it wasn't accepted (or the secret is unavailable).
 
+Hooks and entries follow the configuration: one added by `config apply` serves its URL as soon as the apply is done, and one removed answers 404, with no restart.
+
 Ingress turns it into one `webhook.delivery` Event with payload `webhook.delivery.v1`: `{hook, delivery?, correlation?, content_type?, body | text}`. A JSON body is kept as JSON, and any other body as text.
 
 **Deduplication.** The Event's delivery ID is the hook and a digest of the delivery key's value, so the core's `(source, delivery_id)` deduplication ([event ingress](../event-ingress/)) makes a sender's retry the first delivery again, and the first envelope is kept even when a retry's body differs. A hook without a delivery key gives each POST a fresh ID, so each POST is a new delivery. A sender that retries needs a delivery key.
@@ -59,7 +61,9 @@ Once the Work has finished, later deliveries of its thread start nothing, as for
 
 ## The run
 
-An agent's turn reads the delivery rendered by the package: a heading naming the hook, the delivery and correlation values, the content type, then the body, cut at 8 KiB with a note that the whole body is in the triggering Event. A shell binding reads the whole Event, payload and body included, from `OS_INPUT_FILE`.
+An agent's turn reads the delivery rendered by the package: a heading naming the hook, the delivery's Event ID, the delivery and correlation values, the content type, then the body. A body over 8 KiB is cut, with a note naming the operation that returns it whole.
+
+`webhook.delivery.read {event?}` returns a delivery in full: its Event ID, receive time and `webhook.delivery.v1` payload, body included. Without `event` it returns the Work's latest delivery. It reads only the calling Work's own Events (those routed to it), bound from durable state, so a Work can't read another's. A binding needs the operation granted (in its `operations` and the scope's `authorization.operations`). A shell binding has the whole Event, payload and body included, in `OS_INPUT_FILE` as well.
 
 ## Doctor
 
@@ -68,10 +72,10 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 
 ## Evidence
 
-- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, a missing or long delivery key, a wrong token, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering and the doctor lines.
+- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, a missing or long delivery key, a wrong token, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
 - [`TestWebhookDeliveriesThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): the real runtime ingress and router over SQLite. A retry with another body is the first delivery, a delivery with the same correlation value is routed to the first one's Work, and every other delivery has Work of its own.
-- [`TestDaemonWebhookDeliveries`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): the composed daemon. Two deliveries and a retry run as two Works, each with its body in `OS_INPUT_FILE`; a wrong token is refused, and `doctor --check-secrets` prints the URL.
-- `TestCertificationFirstPartyPackages/webhook`: ingress conformance and the route's decisions.
+- [`TestDaemonWebhookDeliveries`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): the composed daemon. A hook and an entry added by `config apply` take deliveries with no restart. Two deliveries and a retry run as two Works, each with its body in `OS_INPUT_FILE` and read back whole through `os call webhook.delivery.read`; a wrong token is refused, and `doctor --check-secrets` prints the URL.
+- `TestCertificationFirstPartyPackages/webhook`: ingress conformance, the route's decisions and the operation's refusal of unbound Work.
 
 ## History
 
