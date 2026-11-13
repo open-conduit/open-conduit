@@ -73,6 +73,7 @@ func RuntimeCases() []RuntimeCase {
 		{"first_match_replay_and_drop_audit", runtimePolicies},
 		{"multi_key_attachment_conflict_and_order", runtimeKeys},
 		{"uncorrelated_and_terminal_successor", runtimeTerminal},
+		{"route_opened_successor", runtimeRouteSuccessor},
 		{"scope_route_inheritance", runtimeScopes},
 		{"unsupported_policy_explicit_fallback", runtimeFallback},
 		{"wait_event_registration_orders", runtimeWaitOrders},
@@ -378,6 +379,126 @@ func runtimeTerminal(factory RuntimeFactory) error {
 		}
 		if old.State != domain.WorkCompleted || next.ID == old.ID || free.RoutedWorkID == "" {
 			return fmt.Errorf("terminal ownership or explicit uncorrelated creation broken")
+		}
+		return nil
+	})
+}
+
+// runtimeRouteSuccessor: a route may answer input for finished Work with
+// a successor. The successor is new Work linked to its predecessor by a
+// core.work.created Event, the input is its first input, and the
+// predecessor's key routes to it from then on, through every generation,
+// while the predecessor keeps the key and stays finished.
+func runtimeRouteSuccessor(factory RuntimeFactory) error {
+	succeed := routeFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		if in.Work != nil && in.Work.State.Terminal() {
+			next := in.Work.ID + "/next"
+			return extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: "fixture.work",
+				AttachKeys: []domain.CorrelationKey{{Source: runtimeKey.Source, ExternalID: string(next)}}}, nil
+		}
+		return extension.RouteDecision{Match: true, CreateID: runtimeWork, Kind: "fixture.work"}, nil
+	})
+	f, ref, err := runtimeSeed(factory, RuntimeOptions{Routes: []RuntimeRoute{{Route: domain.Route{Name: "default", ActivePolicy: "queue"}, Handler: succeed}}})
+	if err != nil {
+		return err
+	}
+	if err := f.Driver.Complete(ref); err != nil {
+		return err
+	}
+	// pending routes what is unrouted in acceptance order, as the daemon's
+	// router does: a successor's core.work.created Event names it, and is
+	// routed (unmatched or as context) before later input for it.
+	pending := func() error {
+		var ids []domain.ID
+		if err := RuntimeRead(f, func(tx storage.Tx) error {
+			events, err := tx.UnroutedEvents(0, 0)
+			for _, a := range events {
+				ids = append(ids, a.Event.ID)
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := f.Driver.Route(id); err != nil {
+				return fmt.Errorf("route %s: %w", id, err)
+			}
+		}
+		return nil
+	}
+	route := func(id string) (domain.AcceptedEvent, error) {
+		var a domain.AcceptedEvent
+		if err := pending(); err != nil {
+			return a, err
+		}
+		if err := f.Driver.Accept(runtimeEvent(f, id, &runtimeKey)); err != nil {
+			return a, err
+		}
+		if err := f.Driver.Route(domain.ID(id)); err != nil {
+			return a, fmt.Errorf("route %s: %w", id, err)
+		}
+		err := RuntimeRead(f, func(tx storage.Tx) error { var e error; a, e = tx.Event(domain.ID(id)); return e })
+		return a, err
+	}
+	second := runtimeWork + "/next"
+	for _, id := range []string{"reopened", "more"} {
+		a, err := route(id)
+		if err != nil {
+			return err
+		}
+		if a.RoutedWorkID != second {
+			return fmt.Errorf("successor not opened: %s routed to %q", id, a.RoutedWorkID)
+		}
+	}
+	if err := pending(); err != nil {
+		return err
+	}
+	next, err := f.Driver.Start(second)
+	if err != nil {
+		return fmt.Errorf("start the successor: %w", err)
+	}
+	if err := f.Driver.Complete(next); err != nil {
+		return fmt.Errorf("complete the successor: %w", err)
+	}
+	third := second + "/next"
+	if a, err := route("again"); err != nil {
+		return err
+	} else if a.RoutedWorkID != third {
+		return fmt.Errorf("successor not opened: again routed to %q", a.RoutedWorkID)
+	}
+	return RuntimeRead(f, func(tx storage.Tx) error {
+		owner, err := tx.WorkByCorrelation(runtimeKey)
+		if err != nil {
+			return err
+		}
+		if owner.ID != runtimeWork || owner.State != domain.WorkCompleted {
+			return fmt.Errorf("the predecessor lost its key or changed: %+v", owner)
+		}
+		works, err := tx.ListWorks()
+		if err != nil {
+			return err
+		}
+		if len(works) != 3 {
+			return fmt.Errorf("successor chain has %d works", len(works))
+		}
+		events, err := tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		links := map[domain.ID]string{}
+		for _, a := range events {
+			if a.Event.Type == "core.work.created" {
+				links[a.Event.WorkID] = string(a.Event.Data.Data) + " caused by " + string(a.Event.CausationID)
+			}
+		}
+		want := map[domain.ID]string{
+			second: `{"WorkID":"` + string(second) + `","ParentID":"","PredecessorID":"` + string(runtimeWork) + `"} caused by reopened`,
+			third:  `{"WorkID":"` + string(third) + `","ParentID":"","PredecessorID":"` + string(second) + `"} caused by again`,
+		}
+		for id, link := range want {
+			if links[id] != link {
+				return fmt.Errorf("successor %s link %q, want %q", id, links[id], link)
+			}
 		}
 		return nil
 	})

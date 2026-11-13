@@ -45,6 +45,18 @@ type RouteDecision struct {
 	// (domain.Work.Grants), by name. Only a decision that creates Work sets
 	// them; a name the binding does not offer is ignored when it runs.
 	Grants []string
+	// Successor, on a match for an Event whose Work has finished
+	// (RouteInput.Work terminal), opens new Work that succeeds it: CreateID,
+	// Kind, Display, Context and Grants describe it as for any created
+	// Work, and AttachKeys are its own keys, at least one: the first is its
+	// generation key, distinct from every key of the finished Work. The
+	// Event is its first input, a core.work.created Event names its
+	// predecessor, and the finished Work's keys route to it from then on;
+	// its Waits see input arriving that way as carrying its generation key.
+	// The finished Work keeps its keys and stays as it was. Without
+	// Successor, input for finished Work is checkpointed as terminal; on
+	// Work that hasn't finished it means nothing.
+	Successor bool
 }
 
 // RouteHandler decides whether its route takes an Event. Match must be free

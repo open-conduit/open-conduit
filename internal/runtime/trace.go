@@ -73,6 +73,8 @@ type traceWait struct {
 	wait domain.Wait
 	meta waitMetadata
 	work domain.Work
+	// inherited are the keys that route to work from the Work it succeeds.
+	inherited []domain.CorrelationKey
 	// wakes: the Event itself wakes the Work. first: another input (an
 	// earlier accepted Event or the due timeout) wakes it first. refused:
 	// the causal limits would refuse the wake's core.wait.woken bridge
@@ -195,7 +197,7 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 			return out, err
 		}
 		keeps := string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait)
-		if p.selected == nil && !waitMatches(waiting.wait, s.event) && !timeoutMatches(waiting.meta, s.event) {
+		if p.selected == nil && !waitMatches(waiting.wait, asSuccessorInput(waiting.inherited, waiting.work, s.event)) && !timeoutMatches(waiting.meta, s.event) {
 			out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: "no route matched; the event is recorded as unmatched; " + keeps}
 			return out, nil
 		}
@@ -211,8 +213,21 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		s.work = &w
 	}
 	if s.work != nil && s.work.State.Terminal() {
+		// Only a route asking for a successor acts on finished Work.
+		steps := append([]RouteStep(nil), out.Routes...)
+		p, err := r.evaluate(ctx, s, traceVerdicts(steps))
+		if err == nil && p.selected != nil && !p.addressed && p.decision.Successor {
+			next, e := successorWork(s.event.Event.ID, *s.work, p.decision)
+			if e != nil {
+				return out, e
+			}
+			out.Routes = steps
+			out.Effect = RouteEffect{Kind: EffectStart, WorkID: next.ID, Binding: p.selected.Binding,
+				Detail: string(s.work.ID) + " is " + string(s.work.State) + "; " + p.selected.Name + " starts new " + next.Kind + " Work " + string(next.ID) + " to succeed it on " + p.selected.Binding}
+			return out, nil
+		}
 		for i := range out.Routes {
-			out.Routes[i].Verdict, out.Routes[i].Reason = VerdictBypassed, string(s.work.ID)+" is "+string(s.work.State)+"; later input is never routed"
+			out.Routes[i].Verdict, out.Routes[i].Reason = VerdictBypassed, string(s.work.ID)+" is "+string(s.work.State)+"; no route asks for a successor"
 		}
 		out.Effect = RouteEffect{Kind: EffectDrop, WorkID: s.work.ID, Detail: string(s.work.ID) + " is " + string(s.work.State) + "; the event is recorded as terminal"}
 		return out, nil
@@ -323,6 +338,9 @@ func (r *Router) waitOutcomeInTx(tx storage.Tx, w domain.Work, a domain.Accepted
 	for _, wait := range waits {
 		if wait.State == domain.WaitActive {
 			out = &traceWait{wait: wait, work: w}
+			if out.inherited, err = inheritedKeysInTx(tx, w); err != nil {
+				return nil, err
+			}
 			break
 		}
 	}
