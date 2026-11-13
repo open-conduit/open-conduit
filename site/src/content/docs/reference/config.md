@@ -123,7 +123,7 @@ Each entry of a scope's `bindings`.
 | `sandbox` | object |  |  | Process sandbox provider and its config. |
 | `secret_names` | array of string |  |  | Scope secrets the executor may resolve. |
 | `timeout_seconds` | integer |  |  | Replaces settings.timeout_seconds, the time limit of one turn, for this binding's attempts. |
-| `work_kinds` | array of string |  |  | Kinds of child Work the binding's runs may ask for with create_work, within the scope's authorization.work_kinds. Needs create_work in operations. The host refuses any other kind. |
+| `work_kinds` | array of string |  |  | Kinds of child Work the binding's runs may ask for with create_work, within the scope's authorization.work_kinds, each bound by an enabled route of the scope (a work route that lists it). Needs create_work in operations. The host refuses any other kind. |
 
 ## requires
 

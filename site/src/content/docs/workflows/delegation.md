@@ -36,7 +36,7 @@ A front agent in a Slack thread answers simple questions itself. For the rest it
 ```
 
 - `authorization.work_kinds` is the scope's ceiling: the kinds any of its bindings may be granted. A child scope's can only narrow its parent's.
-- A binding's `work_kinds` are the kinds its runs may ask for. It needs `create_work` in its operations.
+- A binding's `work_kinds` are the kinds its runs may ask for. It needs `create_work` in its operations, and each kind needs an enabled route that binds it: a kind nothing would run is refused when the config is validated.
 - A `work` route binds child Work of the kinds its config lists to its binding, and its `description` of each kind is what an asking agent is shown. Only child Work an agent asked for is taken; nothing else reaches the route.
 
 ## What the agents do

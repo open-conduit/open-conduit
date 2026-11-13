@@ -68,7 +68,7 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 		if err = tx.PutWork(w, w.Revision); err != nil {
 			return err
 		}
-		return childEndedInTx(tx, r.now(), r.options.CausalLimits, w)
+		return childEndedInTx(tx, r.now(), w)
 	})
 }
 
@@ -162,7 +162,7 @@ func cancelWorkInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain
 		if err = tx.PutWork(w, w.Revision); err != nil {
 			return err
 		}
-		return childEndedInTx(tx, now, limits, w)
+		return childEndedInTx(tx, now, w)
 	}
 }
 

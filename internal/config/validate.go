@@ -66,6 +66,11 @@ type Registry struct {
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
+	// HandlerWorkKinds optionally names, for a route handler that binds
+	// child Work, the kinds a route's config binds. A binding's work_kinds
+	// must each be bound by an enabled route of its scope, so a kind an
+	// agent may ask for always has a binding to run it.
+	HandlerWorkKinds map[string]func(json.RawMessage) []string
 	// HandlerBinding optionally checks the binding a route with this handler
 	// binds (extension.RouteBinding). Its error is a fixed, secret-free
 	// reason, shown in the diagnostic.
@@ -370,6 +375,22 @@ func (v *validator) resolve(id string) *effective {
 	return e
 }
 
+// routedKind reports whether an enabled route of e binds child Work of kind
+// (Registry.HandlerWorkKinds).
+func (v *validator) routedKind(e *effective, kind string) bool {
+	for _, name := range e.routes.names {
+		s := e.routes.byName[name]
+		kinds := v.reg.HandlerWorkKinds[s.value.Handler]
+		if s.disabled || kinds == nil {
+			continue
+		}
+		if slices.Contains(kinds(s.value.Config), kind) {
+			return true
+		}
+	}
+	return false
+}
+
 // check revalidates every effective entry. Context-free registration checks run
 // only where an entry is declared; inherited entries resolve against this
 // scope's ceiling, secrets and bindings.
@@ -415,6 +436,11 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		for k, kind := range b.WorkKinds {
 			if !slices.Contains(e.auth.WorkKinds, kind) {
 				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_denied", "kind is not in the scope authorization's work_kinds; add it there or remove it here")
+			}
+		}
+		for k, kind := range b.WorkKinds {
+			if !v.routedKind(e, kind) {
+				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_unrouted", "no enabled route in this scope binds child Work of this kind, so it would never run; add a work route that lists it or remove it here")
 			}
 		}
 		if len(b.WorkKinds) > 0 && !resolved.Operation("create_work") {

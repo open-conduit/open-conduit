@@ -1914,7 +1914,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		if err = tx.PutWork(w, w.Revision); err != nil {
 			return err
 		}
-		if err = childEndedInTx(tx, s.now(), s.options.CausalLimits, w); err != nil {
+		if err = childEndedInTx(tx, s.now(), w); err != nil {
 			return err
 		}
 		if err = resetRetryInTx(tx, w.ID); err != nil {

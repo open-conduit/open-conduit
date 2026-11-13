@@ -453,7 +453,7 @@
                 "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
               },
               "uniqueItems": true,
-              "description": "Kinds of child Work the binding's runs may ask for with create_work, within the scope's authorization.work_kinds. Needs create_work in operations. The host refuses any other kind."
+              "description": "Kinds of child Work the binding's runs may ask for with create_work, within the scope's authorization.work_kinds, each bound by an enabled route of the scope (a work route that lists it). Needs create_work in operations. The host refuses any other kind."
             },
             "secret_names": {
               "type": "array",

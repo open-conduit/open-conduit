@@ -15,8 +15,10 @@ import (
 // childOptions routes a child's creation to its existing Work (as the
 // bundled work route does) and leaves its end to the parent's Wait;
 // everything else creates Work as usual.
-func childOptions() conformance.RuntimeOptions {
-	return waitOptionsWith(routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+func childOptions() conformance.RuntimeOptions { return childOptionsResuming(false) }
+
+func childOptionsResuming(resume bool) conformance.RuntimeOptions {
+	return waitOptionsWith(resume, routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
 		e := in.Event.Event
 		if e.Type == "core.work.created" && in.Work != nil && in.Work.ParentID != "" {
 			return extension.RouteDecision{Match: true, Reason: "child Work"}, nil
@@ -28,8 +30,8 @@ func childOptions() conformance.RuntimeOptions {
 	}))
 }
 
-func waitOptionsWith(h extension.RouteHandler) conformance.RuntimeOptions {
-	o := waitOptions(false)
+func waitOptionsWith(resume bool, h extension.RouteHandler) conformance.RuntimeOptions {
+	o := waitOptions(resume)
 	o.Routes[0].Handler = h
 	return o
 }
@@ -38,6 +40,11 @@ func waitOptionsWith(h extension.RouteHandler) conformance.RuntimeOptions {
 // parent on its children's ends. It returns the parent, the child and the
 // child's creation Event.
 func askChild(t *testing.T, f conformance.RuntimeFixture, name string) (domain.ID, domain.ID) {
+	t.Helper()
+	return askChildResuming(t, f, name, false)
+}
+
+func askChildResuming(t *testing.T, f conformance.RuntimeFixture, name string, resume bool) (domain.ID, domain.ID) {
 	t.Helper()
 	ctx := context.Background()
 	parent, ref, _ := waitForWork(t, f, name, false)
@@ -76,7 +83,7 @@ func askChild(t *testing.T, f conformance.RuntimeFixture, name string) (domain.I
 	})
 	requireRoute(t, f.Driver, created.Event.ID)
 	wait := domain.Wait{ID: domain.ID("wait/" + name), AfterSequence: after, Match: domain.EventMatch{Keys: []domain.CorrelationKey{domain.LineageKey(parent)}, Types: []string{domain.TypeChildEnded}}}
-	if err = f.Driver.Wait(ref, wait, false); err != nil {
+	if err = f.Driver.Wait(ref, wait, resume); err != nil {
 		t.Fatal(err)
 	}
 	return parent, child.ID
@@ -213,5 +220,48 @@ func TestUnaskedChildNeedsNoResult(t *testing.T) {
 			t.Fatal("a parent that never asked heard its child end")
 		}
 		return e
+	})
+}
+
+// A child's end is recorded whatever the causal limits say, with its
+// causation, so the parent's answer is never lost. When the end is too deep
+// for the parked parent's wake, the parent is held with core.wait.blocked,
+// visibly and releasably, rather than left waiting.
+func TestChildEndBeyondTheDepthLimitHoldsItsParent(t *testing.T) {
+	o := childOptionsResuming(true)
+	// The trigger is depth 0 and the child's creation 1, within the limit;
+	// the child's end, 2, and the parked parent's wake bridge, 3, are over
+	// it.
+	o.MaxDepth = 1
+	f := waitFixture(t, "reopen", o)
+	ctx := context.Background()
+	parent, child := askChildResuming(t, f, "deep", true)
+	driver := f.Driver.(*waitDriver)
+	cref, err := f.Driver.Start(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := domain.Payload{Schema: domain.TurnSchema, Data: []byte(`{"status":"finished","result":"42"}`)}
+	if err = driver.Scheduler.Complete(ctx, cref, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Data: turn}}); err != nil {
+		t.Fatal(err)
+	}
+	ended, c := childEnded(t, f, child)
+	if string(c.Result) != `"42"` || ended.Event.CausationID == "" {
+		t.Fatalf("the child's end was not recorded with its result and causation: %+v %+v", ended.Event, c)
+	}
+	requireRoute(t, f.Driver, ended.Event.ID)
+	routingRead(t, f, func(tx storage.Tx) error {
+		h, held, e := runtime.HoldInTx(tx, parent)
+		if e != nil {
+			return e
+		}
+		if !held || h.EventID == "" {
+			t.Fatalf("a parent whose wake the limits refused is not held: %v %+v", held, h)
+		}
+		a, e := tx.Event(h.EventID)
+		if e != nil || a.Event.Type != "core.wait.blocked" {
+			t.Fatalf("the hold is not in history: %+v %v", a, e)
+		}
+		return nil
 	})
 }

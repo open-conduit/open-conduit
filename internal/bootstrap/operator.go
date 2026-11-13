@@ -32,7 +32,7 @@ import (
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames(), HandlerConfig: map[string]func(json.RawMessage) error{
 		"work": func(raw json.RawMessage) error { _, err := parseWorkRoute(raw); return err },
-	}}
+	}, HandlerWorkKinds: map[string]func(json.RawMessage) []string{"work": workRouteKinds}}
 	return reg
 }
 

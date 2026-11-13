@@ -29,13 +29,20 @@ func claimLineageInTx(tx storage.Tx, parent domain.Work) (domain.Work, error) {
 // childEndedInTx tells a child's parent that the child ended, in the
 // transaction that made it terminal: a domain.TypeChildEnded Event on the
 // parent's lineage key, carrying the child's state and its last attempt's
-// outcome and result. It is derived from the child's last trigger (its
+// outcome and result. Its causation is the child's last trigger (its
 // latest attempt's, else its creation), so a chain of Work asking Work stays
-// one causal chain and the causal depth limit ends a loop. Work with no
-// parent, Work that is not terminal, and a parent that never claimed its
-// lineage key (Work an operator made a child of another) get nothing. A
-// refusal by the causal limits is recorded and never blocks the child's end.
-func childEndedInTx(tx storage.Tx, now time.Time, limits CausalLimits, child domain.Work) error {
+// one causal chain. Work with no parent, Work that is not terminal, and a
+// parent that never claimed its lineage key (Work an operator made a child
+// of another) get nothing.
+//
+// The child's end is a fact, recorded whatever the causal limits say: it is
+// produced once, and refusing it would leave the parent waiting for an
+// answer that never comes. It is accepted with its causation but charges no
+// budget; the limits apply to what it causes. A loop is refused where Work
+// asks for Work (create_work's derived creation), and a parent woken by an
+// end too deep for its wake bridge is held with core.wait.blocked, which an
+// operator can release (blockWaitInTx).
+func childEndedInTx(tx storage.Tx, now time.Time, child domain.Work) error {
 	if child.ParentID == "" || !child.State.Terminal() {
 		return nil
 	}
@@ -80,15 +87,8 @@ func childEndedInTx(tx storage.Tx, now time.Time, limits CausalLimits, child dom
 	}
 	delivery := "child-ended/" + string(child.ID)
 	e := domain.Event{ID: domain.ID("child-ended/" + identity(string(child.ID))), Type: domain.TypeChildEnded, Source: domain.LineageSource, DeliveryID: delivery,
-		CorrelationKey: &key, WorkID: parent.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildEnded, Data: data}}
-	if trigger == "" {
-		_, _, err = AcceptInTx(tx, parent.ScopeID, e)
-		return err
-	}
-	_, _, err = AcceptDerivedInTx(tx, now, limits, parent.ScopeID, trigger, e)
-	if errors.Is(err, ErrCausalRejected) {
-		return nil
-	}
+		CorrelationKey: &key, WorkID: parent.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildEnded, Data: data}}
+	_, _, err = AcceptInTx(tx, parent.ScopeID, e)
 	return err
 }
 

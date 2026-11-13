@@ -46,6 +46,20 @@ func (c workRouteConfig) takes(kind string) (workRouteKind, bool) {
 	return workRouteKind{}, false
 }
 
+// workRouteKinds are the kinds a work route's config binds
+// (config.Registry.HandlerWorkKinds); none when the config is invalid.
+func workRouteKinds(raw json.RawMessage) []string {
+	c, err := parseWorkRoute(raw)
+	if err != nil {
+		return nil
+	}
+	kinds := make([]string, 0, len(c.Kinds))
+	for _, k := range c.Kinds {
+		kinds = append(kinds, k.Kind)
+	}
+	return kinds
+}
+
 // describeWorkKind is what kind is for in scope: the description of the
 // first enabled work route that takes it, or "".
 func describeWorkKind(scope config.EffectiveScope, kind string) string {
