@@ -119,6 +119,10 @@ type Intent struct {
 	// Cause is the Event a top-level post derives from (the posting
 	// attempt's trigger), so the thread's attachment joins its chain.
 	Cause domain.ID
+	// Binding is the binding the posting attempt ran on, read from its
+	// stored Execution: the thread's attachment names it, so a reply's
+	// follow-up is checked against that binding's post config.
+	Binding string
 }
 
 type intentRecord struct {
@@ -137,6 +141,7 @@ type intentRecord struct {
 	TS          string    `json:"ts,omitempty"`
 	Text        string    `json:"text,omitempty"`
 	Cause       domain.ID `json:"cause,omitempty"`
+	Binding     string    `json:"binding,omitempty"`
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -191,7 +196,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
-				Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause}
+				Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding}
 			if in.Durable {
 				rec.Text = in.Text
 			}
@@ -333,7 +338,7 @@ func (p *Projector) opened(tx storage.Tx, rec intentRecord) error {
 	if p.o.Open == nil || rec.Work == "" || rec.TS == "" {
 		return storage.ErrInvalid
 	}
-	data, err := json.Marshal(ThreadOpened{Namespace: p.o.Settings.Namespace, Team: p.o.Settings.Team, Channel: rec.Channel, TS: rec.TS})
+	data, err := json.Marshal(ThreadOpened{Namespace: p.o.Settings.Namespace, Team: p.o.Settings.Team, Channel: rec.Channel, TS: rec.TS, Binding: rec.Binding})
 	if err != nil {
 		return err
 	}
@@ -375,7 +380,7 @@ func (p *Projector) Thread(w domain.Work) (channel, thread string, ok bool) {
 		if k.Source != p.o.Settings.Namespace {
 			continue
 		}
-		if c, t, ok := ParseThreadKey(k.ExternalID); ok {
+		if c, t, ok := ParseOwnedKey(k.ExternalID); ok {
 			return c, t, true
 		}
 	}

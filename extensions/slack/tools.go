@@ -175,7 +175,7 @@ func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error)
 		return nil, extension.ErrUnauthorized
 	}
 	for _, k := range w.CorrelationKeys {
-		channel, thread, ok := ParseThreadKey(k.ExternalID)
+		channel, thread, ok := ParseOwnedKey(k.ExternalID)
 		if !ok {
 			continue
 		}
@@ -404,7 +404,7 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	if cause == "" {
 		cause = x.TriggerID
 	}
-	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true, Cause: cause}
+	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true, Cause: cause, Binding: x.ExecutorBinding}
 	state, err := src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err

@@ -236,9 +236,28 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 			if e != nil {
 				return out, e
 			}
+			binding := p.selected.Binding
+			if p.decision.Deliver == extension.DeliverCurrent {
+				// The successor runs where its predecessor did
+				// (deliveryRouteInTx).
+				if e = r.transact(ctx, nil, func(tx storage.Tx) error {
+					b, e := workBindingInTx(tx, *s.work)
+					if e == nil && b == "" {
+						b, e = predecessorBindingInTx(tx, s.work.ID)
+					}
+					if e == nil && b != "" {
+						if _, be := r.binding(s.scope, b); be == nil {
+							binding = b
+						}
+					}
+					return e
+				}); e != nil {
+					return out, e
+				}
+			}
 			out.Routes = steps
-			out.Effect = RouteEffect{Kind: EffectStart, WorkID: next.ID, Binding: p.selected.Binding,
-				Detail: string(s.work.ID) + " is " + string(s.work.State) + "; " + p.selected.Name + " starts new " + next.Kind + " Work " + string(next.ID) + " to succeed it on " + p.selected.Binding}
+			out.Effect = RouteEffect{Kind: EffectStart, WorkID: next.ID, Binding: binding,
+				Detail: string(s.work.ID) + " is " + string(s.work.State) + "; " + p.selected.Name + " starts new " + next.Kind + " Work " + string(next.ID) + " to succeed it on " + binding}
 			return out, nil
 		}
 		for i := range out.Routes {

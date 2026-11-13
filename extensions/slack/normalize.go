@@ -54,6 +54,8 @@ type ThreadOpened struct {
 	Team      string `json:"team"`
 	Channel   string `json:"channel"`
 	TS        string `json:"ts"`
+	// Binding is the binding the posting attempt ran on.
+	Binding string `json:"binding,omitempty"`
 }
 
 // RemovedLoss is the declared loss limitation of TypeMessageRemoved.
@@ -112,6 +114,7 @@ var (
 	tsPattern      = regexp.MustCompile(`^[0-9]{1,12}\.[0-9]{1,9}$`)
 	mentionPattern = regexp.MustCompile(`<@([A-Z0-9]{2,32})(?:\|[^>]*)?>`)
 	threadKey      = regexp.MustCompile(`^channel/([A-Z0-9]{2,32})/thread/([0-9]{1,12}\.[0-9]{1,9})$`)
+	postedKey      = regexp.MustCompile(`^(channel/[A-Z0-9]{2,32}/thread/[0-9]{1,12}\.[0-9]{1,9})/posted/([a-z][a-z0-9_-]{0,62})(?:/generation/([2-9]|[1-9][0-9]{1,8}))?$`)
 )
 
 // ThreadKey is the correlation identity of a thread within a namespace.
@@ -124,6 +127,44 @@ func ParseThreadKey(key string) (channel, thread string, ok bool) {
 		return "", "", false
 	}
 	return m[1], m[2], true
+}
+
+// PostedKey says that Work on binding posted the thread: the posting Work
+// holds it beside the thread's key. No message carries it.
+func PostedKey(channel, thread, binding string) string {
+	return ThreadKey(channel, thread) + "/posted/" + binding
+}
+
+// GenerationKey is the key of the nth generation (n from 2) of Work that
+// answers a thread binding's Work posted: Work that succeeds the thread's
+// finished owner. No message carries it; the thread's own key reaches
+// that Work through the Work it succeeds.
+func GenerationKey(channel, thread, binding string, n int) string {
+	return PostedKey(channel, thread, binding) + "/generation/" + strconv.Itoa(n)
+}
+
+// ParsePostedKey splits a PostedKey or GenerationKey: the thread, the
+// binding whose Work posted it, and the generation (1 for a PostedKey).
+func ParsePostedKey(key string) (channel, thread, binding string, generation int, ok bool) {
+	m := postedKey.FindStringSubmatch(key)
+	if m == nil {
+		return "", "", "", 0, false
+	}
+	channel, thread, ok = ParseThreadKey(m[1])
+	generation = 1
+	if m[3] != "" {
+		generation, _ = strconv.Atoi(m[3])
+	}
+	return channel, thread, m[2], generation, ok
+}
+
+// ParseOwnedKey is the thread a key of a thread's owner names: a
+// ThreadKey, a PostedKey, or a GenerationKey of a successor.
+func ParseOwnedKey(key string) (channel, thread string, ok bool) {
+	if channel, thread, _, _, ok = ParsePostedKey(key); ok {
+		return channel, thread, true
+	}
+	return ParseThreadKey(key)
 }
 
 func itemID(channel, thread, ts string) string {
