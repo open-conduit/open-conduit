@@ -77,8 +77,9 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `history_hours` | Default 336 (14 days), 1–2160. The reconcile window. |
 | `refresh_minutes` | Default 60. How long an unchanged thread's replies are taken from memory. |
 | `projection` | `disabled`, `dry_run`. `serve --dry-run` forces a dry run. |
+| `post` | Which bindings may post a new message (`slack.post`) and where: `[{"binding": "nightly", "channels": ["C0123"]}]`. Each channel must be one of `channels`, so the new thread's replies are observed. Empty: no binding may post. |
 
-The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread` and `slack.reply`.
+The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread`, `slack.reply` and `slack.post`.
 
 `init slack` stores the tokens through the secret store (the keyring by default) and writes `keyring:` references. `env:` references work the same way.
 
@@ -98,6 +99,7 @@ One entry is one namespace. A thread's correlation key is `channel/<C>/thread/<t
 | `slack.message.agent` | A message carrying this app's marker, or the app's own unmarked message (`bot_user_id`) | Yes |
 | `slack.message.deleted` | A deleted parent Slack keeps as a tombstone | Yes |
 | `slack.message.removed` | A push-only deletion notice for a message Slack no longer shows | **No** (declared loss) |
+| `slack.thread.opened` | A message a Work posted with `slack.post`; its thread is attached to that Work. Sealed: only `slack.post` emits it | **No** (declared loss) |
 
 Push and reconcile share one normalizer. The version hashes the whole normalized envelope: type, key, occurrence time (the edit time for an edit) and payload. The delivery ID is `item@version`. Equal external state from either transport therefore has one identity, and the canonical-identity check deduplicates overlap. An edit is a new version of the same item.
 
@@ -169,6 +171,18 @@ Handler `slack` reads only the detached Event, Scope and Work, and its own route
   A reply therefore cannot start an event loop. Ingress Events are external roots, so provenance travels in the marker instead, and the core chain limits still bound every derived Event.
 
 Completed Work keeps its thread key, and later messages are checkpointed against the terminal Work.
+
+## Posting from other Work
+
+Work that did not start in Slack (a scheduled job, a webhook's Work) can post to a channel with `slack.post {channel, text}`, and the thread it opens becomes the Work's, so the agent that wrote the post answers the replies to it.
+
+- **Authority at the host.** The operation reads the caller's binding from its stored Execution, never from the input, and refuses a channel the entry's `post` does not list for that binding (`channel_not_allowed`). A prompt therefore can't make an agent post wherever the bot is a member.
+- **Once.** The post is a durable intent marked like a reply. With a request ID its intent is `post/<work>/<request id>`, so a retried call, in this turn or a retried one, posts it once; without one it is a digest of the input within the attempt. A lost answer is found again in the channel's history by its marker. A post not yet confirmed is refused as `post_pending`, and calling again with the same request ID returns it once it is.
+- **The thread becomes the Work's.** Once posted, the operation emits `slack.thread.opened` `{namespace, team, channel, ts}` for the calling Work. The `slack` route answers it with the thread's key and `deliver: none` ([routing](../routing-lifecycle/)): the Work owns the thread, and the attachment is in its history but is not input, so it doesn't give the job another turn. The scope needs a `slack` route for this, whatever binding it names. The family is sealed, so an executor can't claim a thread by emitting the Event itself with the builtin `emit`, and the route attaches only threads in a channel `post` lists.
+- **Replies reach the agent that posted.** A person's message in a thread owned by Work that is not `slack.conversation` is that Work's input on the binding it already runs on (`deliver: current`), not the route's binding and its `slack-thread` playbook, and every `slack` route takes it whatever `channels` its config lists. `slack.reply`, `slack.thread`, `slack.context` and the `human.ask` prompts then act on the posted thread.
+- **Finished Work.** A reply after the Work has completed is checkpointed as `terminal`, as for any completed Work. The post's own message is the app's, which is never input.
+
+`TestSlackPostOpensAThreadTheJobOwns` covers it through the real toolbelt and router: a refused channel, a retried post written once, a refused forgery through the builtin `emit`, the attachment recorded as `attach` with no input, and a person's reply queued on the job's binding without starting a conversation.
 
 ## Thread execution and conversation lifecycle
 
@@ -252,6 +266,7 @@ Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take 
 ## Limitations
 
 - **Real Slack.** Real Slack has been exercised by one short run (see [History](#history)). Not covered on real Slack: a rate limit, `app_mention` duplication, the HTTP Events API, the `slack-cli` setup path, a reply missed by push and recovered by reconcile, a SIGKILL during an active turn, and a multi-day wait. The drills cover the missed reply and the SIGKILL, and the fake-clock scenario covers the multi-day wait in CI.
+- **Posting.** `slack.post` has not been run on real Slack. A Work that posts several threads owns them all, but `slack.reply` and `slack.thread` act on the first thread key it holds. A reply after the posting Work has completed is checkpointed as `terminal` and starts nothing: the route does not yet ask for a successor (`RouteDecision.Successor`) for it.
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
 - **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
 

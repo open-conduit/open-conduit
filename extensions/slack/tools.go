@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,14 +18,17 @@ import (
 // Registrar. An agent reaches them as `call {operation, input}` (MCP) or
 // `os call <operation> --data <json>` (CLI). Every handler receives validated
 // authority, reads the Work it serves from durable state, and acts only on
-// that Work's own thread. Replies are marked, intent-backed and re-driven, so
-// each is written once.
+// that Work's own thread, except slack.post, which opens one: it posts in a
+// channel the entry's post config lets the calling binding post in, and the
+// new thread becomes the Work's. Posts and replies are marked, intent-backed
+// and re-driven, so each is written once.
 
 // Operation names.
 const (
 	OpContext = "slack.context"
 	OpThread  = "slack.thread"
 	OpReply   = "slack.reply"
+	OpPost    = "slack.post"
 )
 
 // Operations lists every tool operation (for binding operation lists).
@@ -40,8 +44,13 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[threadInput]()},
 		{Name: OpReply, Summary: "Post a reply in this Work's Slack thread; a retried call posts it once.",
 			Input: extension.InputSchema[replyInput]()},
+		{Name: OpPost, Summary: "Post a new message to a Slack channel; its thread becomes this Work's, so replies there reach it.",
+			Input: extension.InputSchema[postInput](), Guidance: postGuidance},
 	}
 }
+
+// postGuidance tells an agent granted slack.post when to use it.
+const postGuidance = "Use `slack.post` to send what you have to say to a Slack channel when this Work did not start in Slack, for example a report at the end of a job: `call slack.post {\"channel\": \"C…\", \"text\": \"…\"}` with a `request_id`, so a retried call posts once. You may post only in the channels your binding is allowed; a refusal says which. The message's thread becomes this Work's: a person's reply there is your next input, and `slack.reply`, `slack.thread` and `slack.context` then act on that thread. Post once per thread you want; reply in it rather than posting again."
 
 // Source is one registered Slack extension entry the tools can act on.
 type Source struct {
@@ -72,7 +81,9 @@ func NewTools(o ToolsOptions) (*Tools, error) {
 	return &Tools{o: o}, nil
 }
 
-// Registration is the toolbelt registration. The tools emit no Events.
+// Registration is the toolbelt registration. Only slack.post emits an
+// Event, TypeThreadOpened, which it seals so no executor can emit one with
+// the builtin emit.
 func (t *Tools) Registration() extension.Registration {
 	h := func(f func(context.Context, *bound, json.RawMessage) (any, error)) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
@@ -91,11 +102,20 @@ func (t *Tools) Registration() extension.Registration {
 			return domain.Payload{Schema: "slack.tool.v1", Data: data}, nil
 		}
 	}
-	return extension.Registration{Version: extension.ContractVersion, Name: Type, Operations: []extension.Operation{
-		{Name: OpContext, Handler: h(t.context)},
-		{Name: OpThread, Handler: h(t.thread)},
-		{Name: OpReply, Handler: h(t.reply)},
-	}}
+	return extension.Registration{Version: extension.ContractVersion, Name: Type,
+		EventTypes: []string{TypeThreadOpened}, SealedEventTypes: []string{TypeThreadOpened},
+		Operations: []extension.Operation{
+			{Name: OpContext, Handler: h(t.context)},
+			{Name: OpThread, Handler: h(t.thread)},
+			{Name: OpReply, Handler: h(t.reply)},
+			{Name: OpPost, Emit: func(ctx context.Context, a extension.Authority, in domain.Payload) (extension.EmitPlan, error) {
+				plan, err := t.post(ctx, a, in.Data)
+				if err != nil {
+					return plan, refusal(err)
+				}
+				return plan, nil
+			}},
+		}}
 }
 
 func refuse(code, format string, args ...any) error {
@@ -306,4 +326,106 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 	// An ambiguous or deferred post is finished by the projector, confirmed
 	// through its marker, so it is never repeated; the agent need not retry.
 	return map[string]any{"state": "pending", "note": "the reply is being confirmed and will appear once; do not post it again"}, nil
+}
+
+// postInput is slack.post's input.
+type postInput struct {
+	Channel string `json:"channel" doc:"the Slack channel ID (C… or G…) to post in; it must be one your binding may post in"`
+	Text    string `json:"text" doc:"the message as Slack mrkdwn text, not blank and at most 40000 bytes"`
+}
+
+// post posts a new top-level message for the calling Work in a channel its
+// binding may post in, and plans TypeThreadOpened for that Work, which the
+// slack route answers by attaching the thread to it. The binding comes from
+// the stored Execution, never the caller. The post is intent-backed: with
+// a request ID its identity is the Work's, so a retried turn posts once, and
+// the Event's Once is the same, so it is accepted once.
+func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMessage) (extension.EmitPlan, error) {
+	var in postInput
+	if err := decode(data, &in); err != nil {
+		return extension.EmitPlan{}, err
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return extension.EmitPlan{}, refuse("empty_text", "the text is empty")
+	}
+	if len(in.Text) > maxText {
+		return extension.EmitPlan{}, refuse("text_too_long", "the text is longer than Slack's 40,000 characters")
+	}
+	var w domain.Work
+	var binding string
+	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		var err error
+		if w, err = tx.Work(a.WorkID); err != nil {
+			return err
+		}
+		// The caller's own Work's executions: one read, where a lookup by
+		// execution alone lists every Work's.
+		xs, err := tx.ListExecutions(a.WorkID)
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(xs, func(x domain.Execution) bool { return x.ID == a.ExecutionID })
+		if i < 0 {
+			return storage.ErrNotFound
+		}
+		binding = xs[i].ExecutorBinding
+		return nil
+	}); err != nil || w.ScopeID != a.ScopeID {
+		return extension.EmitPlan{}, extension.ErrUnauthorized
+	}
+	var src *Source
+	entries := 0
+	for _, s := range t.o.Sources() {
+		if s.Settings.Scope != string(w.ScopeID) {
+			continue
+		}
+		entries++
+		if s.Settings.MayPost(binding, in.Channel) {
+			src = &s
+			break
+		}
+	}
+	if src == nil {
+		if entries == 0 {
+			return extension.EmitPlan{}, refuse("no_slack_entry", "this scope has no Slack entry to post through")
+		}
+		return extension.EmitPlan{}, refuse("channel_not_allowed", "binding %s may not post in channel %s; the Slack entry's post config lists the channels each binding may post in", binding, in.Channel)
+	}
+	id := "post/" + string(a.ExecutionID) + "/" + digest(string(data))[:24]
+	if r := extension.CallRequestID(ctx); r != "" {
+		id = "post/" + string(w.ID) + "/" + r
+	}
+	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true}
+	state, err := src.Projector.Deliver(ctx, intent)
+	if err != nil && state != IntentAttempted && state != IntentPending {
+		return extension.EmitPlan{}, err
+	}
+	st, e := src.Projector.Lookup(ctx, intent.ID)
+	switch {
+	case e != nil:
+		return extension.EmitPlan{}, e
+	case st.State == IntentFailed:
+		return extension.EmitPlan{}, refuse("slack_refused", "Slack refused the post (%s)", st.Code)
+	case src.Settings.Projection.DryRun:
+		return extension.EmitPlan{}, refuse("dry_run", "dry run: nothing was posted")
+	case st.State != IntentPosted:
+		// An ambiguous or deferred post is finished through its marker and
+		// never repeated; the thread is the Work's once the call is made
+		// again with the same request ID and finds it.
+		return extension.EmitPlan{}, refuse("post_pending", "the post is being confirmed and will appear once; call slack.post again with the same request_id and input in a minute to get its thread, and do not post it under a new one")
+	}
+	opened, err := json.Marshal(ThreadOpened{Namespace: src.Settings.Namespace, Team: src.Settings.Team, Channel: in.Channel, TS: st.TS})
+	if err != nil {
+		return extension.EmitPlan{}, err
+	}
+	thread := ThreadKey(in.Channel, st.TS)
+	return extension.EmitPlan{
+		Event: domain.Event{Type: TypeThreadOpened, DeliveryID: "thread/" + digest(src.Settings.Namespace, thread)[:32], Data: domain.Payload{Schema: SchemaThreadOpened, Data: opened}},
+		Once:  id,
+		Commit: func(extension.Emitted) (extension.EmitCommit, error) {
+			out, err := json.Marshal(map[string]any{"state": IntentPosted, "channel": in.Channel, "ts": st.TS,
+				"reply": fmt.Sprintf("call %s {\"text\": …}", OpReply)})
+			return extension.EmitCommit{Output: domain.Payload{Schema: "slack.tool.v1", Data: out}}, err
+		},
+	}, nil
 }

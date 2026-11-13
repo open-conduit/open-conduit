@@ -710,6 +710,15 @@ Show the Slack thread this Work serves and how to read it, reply in it and wait 
 
 Takes no input.
 
+#### `slack.post`
+
+Post a new message to a Slack channel; its thread becomes this Work's, so replies there reach it.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `channel` | string | yes | the Slack channel ID (C… or G…) to post in; it must be one your binding may post in |
+| `text` | string | yes | the message as Slack mrkdwn text, not blank and at most 40000 bytes |
+
 #### `slack.reply`
 
 Post a reply in this Work's Slack thread; a retried call posts it once.
@@ -790,6 +799,15 @@ Works support conversations in Slack channels over Socket Mode or the Events API
 Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.
 
 Takes no input.
+
+#### `slack.post`
+
+Post a new message to a Slack channel; its thread becomes this Work's, so replies there reach it.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `channel` | string | yes | the Slack channel ID (C… or G…) to post in; it must be one your binding may post in |
+| `text` | string | yes | the message as Slack mrkdwn text, not blank and at most 40000 bytes |
 
 #### `slack.reply`
 

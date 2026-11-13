@@ -32,7 +32,7 @@ const PlaybooksDir = "playbooks"
 // extension lists them) and its playbooks.
 func base() protocol.Manifest {
 	p := protocol.Provides{
-		Schemas:   []protocol.SchemaDecl{{Name: "slack.message", Versions: []int{1}}, {Name: "slack.message.removed", Versions: []int{1}}, {Name: "slack.reply", Versions: []int{1}}, {Name: "slack.tool", Versions: []int{1}}},
+		Schemas:   []protocol.SchemaDecl{{Name: "slack.message", Versions: []int{1}}, {Name: "slack.message.removed", Versions: []int{1}}, {Name: "slack.reply", Versions: []int{1}}, {Name: "slack.tool", Versions: []int{1}}, {Name: "slack.thread.opened", Versions: []int{1}}},
 		WorkKinds: []protocol.WorkKindDecl{{Kind: sl.WorkKind}},
 		Checks:    []protocol.CheckDecl{{Name: Name}, {Name: Name + "-auth"}},
 		Playbooks: PlaybooksDir,
@@ -40,8 +40,14 @@ func base() protocol.Manifest {
 	for _, f := range sl.Families() {
 		p.Families = append(p.Families, protocol.Family{Type: f.Type, ReDerivable: f.ReDerivable, Loss: f.Loss})
 	}
+	// slack.post's family: sealed, so only slack.post emits it.
+	p.Families = append(p.Families, protocol.Family{Type: sl.TypeThreadOpened, Loss: sl.ThreadOpenedLoss, Sealed: true})
 	for _, op := range sl.Operations() {
-		p.Operations = append(p.Operations, protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler})
+		d := protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler}
+		if op == sl.OpPost {
+			d.Kind, d.Commit = protocol.OperationEmit, true
+		}
+		p.Operations = append(p.Operations, d)
 	}
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Slack",
 		Summary: "Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work.",

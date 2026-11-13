@@ -93,8 +93,9 @@ func NewProjector(o ProjectorOptions) (*Projector, error) {
 // Settings returns the bound settings.
 func (p *Projector) Settings() Settings { return p.o.Settings }
 
-// Intent is one non-re-derivable reply. ID must be stable across retries and
-// restarts (for example "outcome/<execution id>").
+// Intent is one non-re-derivable reply, or with no Thread a new top-level
+// message (slack.post). ID must be stable across retries and restarts (for
+// example "outcome/<execution id>").
 type Intent struct {
 	ID              string
 	Work, Execution domain.ID
@@ -166,7 +167,8 @@ func Marker(work, execution domain.ID, intent string) *Metadata {
 // pending while delivery is in progress or waiting for its marker search, or
 // failed after a definitive refusal.
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
-	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || !tsPattern.MatchString(in.Thread) {
+	// No Thread posts a new top-level message, which can't be broadcast.
+	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && in.Broadcast {
 		return "", storage.ErrInvalid
 	}
 	key, textDigest := intentKey(in.ID), digest(in.Text)
@@ -197,7 +199,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if p.o.Now().Sub(rec.AttemptedAt) < p.o.SearchDelay {
 			return rec.State, nil
 		}
-		messages, _, err := p.o.Client.Thread(ctx, in.Channel, in.Thread, TS(rec.CreatedAt.Add(-time.Minute)), "")
+		messages, err := p.since(ctx, in.Channel, in.Thread, TS(rec.CreatedAt.Add(-time.Minute)))
 		if err != nil {
 			return rec.State, err
 		}
@@ -243,6 +245,29 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		p.o.AfterPost(in.ID)
 	}
 	return p.finish(ctx, key, IntentPosted, ts, "", false)
+}
+
+// since lists the messages a post may have created since oldest: the
+// thread's, or for a top-level post the channel's own messages.
+func (p *Projector) since(ctx context.Context, channel, thread, oldest string) ([]Message, error) {
+	if thread != "" {
+		messages, _, err := p.o.Client.Thread(ctx, channel, thread, oldest, "")
+		return messages, err
+	}
+	var out []Message
+	cursor := ""
+	for range 10 {
+		page, next, err := p.o.Client.History(ctx, channel, oldest, "", cursor, 200)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return out, nil
 }
 
 // find locates a published reply: by its metadata marker, or, when Slack

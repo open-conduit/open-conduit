@@ -137,6 +137,16 @@ type ExtensionConfig struct {
 	// used to verify HTTP Events API deliveries (receiver http).
 	SigningSecret string     `json:"signing_secret,omitempty"`
 	Projection    Projection `json:"projection,omitempty"`
+	// Post lists the bindings whose Work may post a new top-level message
+	// (slack.post) and the channels each may post in. A channel must be one
+	// the entry watches, so replies in the new thread are observed.
+	Post []PostGrant `json:"post,omitempty"`
+}
+
+// PostGrant lets Work running on Binding post to Channels (slack.post).
+type PostGrant struct {
+	Binding  string   `json:"binding"`
+	Channels []string `json:"channels"`
 }
 
 // Settings is a parsed, defaulted extension entry.
@@ -149,6 +159,24 @@ type Settings struct {
 	History, Refresh       time.Duration
 	SigningSecret          string
 	Projection             Projection
+	// Post maps each binding that may post (slack.post) to the sorted
+	// channels it may post in.
+	Post map[string][]string
+}
+
+// MayPost reports whether Work running on binding may post to channel.
+func (s Settings) MayPost(binding, channel string) bool {
+	return slices.Contains(s.Post[binding], channel)
+}
+
+// Posts reports whether any binding may post to channel.
+func (s Settings) Posts(channel string) bool {
+	for _, chs := range s.Post {
+		if slices.Contains(chs, channel) {
+			return true
+		}
+	}
+	return false
 }
 
 // Watches reports whether channel is observed.
@@ -233,6 +261,34 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("slack extension: refresh_minutes must be 1-1440")
 		}
 		s.Refresh = time.Duration(c.RefreshMinutes) * time.Minute
+	}
+	if len(c.Post) > 100 {
+		return s, errors.New("slack extension: post must list at most 100 bindings")
+	}
+	for _, g := range c.Post {
+		if !idPattern.MatchString(g.Binding) {
+			return s, errors.New("slack extension: each post entry must name a binding")
+		}
+		if _, dup := s.Post[g.Binding]; dup {
+			return s, fmt.Errorf("slack extension: post lists binding %s more than once", g.Binding)
+		}
+		if len(g.Channels) == 0 || len(g.Channels) > 100 {
+			return s, fmt.Errorf("slack extension: post for binding %s must list 1-100 channels", g.Binding)
+		}
+		chs := slices.Clone(g.Channels)
+		sort.Strings(chs)
+		if len(slices.Compact(slices.Clone(chs))) != len(chs) {
+			return s, fmt.Errorf("slack extension: post for binding %s lists a channel more than once", g.Binding)
+		}
+		for _, ch := range chs {
+			if !s.Watches(ch) {
+				return s, fmt.Errorf("slack extension: post for binding %s names channel %q, which channels does not list; a posted thread's replies are only seen in a watched channel", g.Binding, ch)
+			}
+		}
+		if s.Post == nil {
+			s.Post = map[string][]string{}
+		}
+		s.Post[g.Binding] = chs
 	}
 	s.Receiver = c.Receiver
 	switch s.Receiver {
