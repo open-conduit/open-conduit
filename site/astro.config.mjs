@@ -130,6 +130,7 @@ export default defineConfig({
 								{ label: 'Scheduled jobs', slug: 'architecture/schedule-extension' },
 								{ label: 'Introspection', slug: 'architecture/issue-reporting' },
 								{ label: 'Observed sources', slug: 'architecture/observe-extension' },
+								{ label: 'Webhooks', slug: 'architecture/webhook-extension' },
 								{ label: 'Operator setup', slug: 'architecture/operator-setup' },
 								{ label: 'Installed integrations', slug: 'architecture/installed-integrations' },
 								{ label: 'Backup and recovery', slug: 'architecture/recovery' },

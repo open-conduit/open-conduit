@@ -5,7 +5,7 @@ description: Run commands or agent turns on cron, at fixed times, every N minute
 
 Open Conduit runs commands on a cron schedule, at fixed times, every N minutes, on code-host events, on a signed webhook or by hand.
 
-- Each job keeps one run going and at most one waiting.
+- Each job keeps one run going and at most one waiting. A job's webhook POSTs therefore join one run, which sees the newest body; for one Work for each POST, use a [webhook entry](../../architecture/webhook-extension/).
 - A slot missed while the daemon was down is caught up if it is less than six hours late.
 - A job can run an agent turn instead of a command: point its route at a `claude-code` binding instead of a `shell` one. [Fix red CI on main](../red-ci/) runs one when the default branch's checks fail.
 

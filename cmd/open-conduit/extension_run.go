@@ -31,6 +31,7 @@ import (
 	sshext "github.com/open-conduit/open-conduit/extensions/ssh/pkg"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
 	tunnelext "github.com/open-conduit/open-conduit/extensions/tunnel/pkg"
+	"github.com/open-conduit/open-conduit/extensions/webhook"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
@@ -73,6 +74,7 @@ var runnable = map[string]struct {
 	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
 	"srt":           {srtext.Main, srtext.Manifest, nil, true},
 	"ssh":           {sshext.Main, sshext.Manifest, nil, true},
+	"webhook":       {webhook.Main, webhook.Manifest, nil, true},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the

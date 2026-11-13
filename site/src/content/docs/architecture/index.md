@@ -51,6 +51,7 @@ Each page separates three kinds of material:
 - [Slack ingress, conversations and marked replies](slack-extension/)
 - [Scheduled jobs](schedule-extension/)
 - [Observed sources](observe-extension/)
+- [Webhooks: one Work for each delivery](webhook-extension/)
 - [Introspection: reporting, sweep, triage and fixes](issue-reporting/)
 - [Operator setup, doctor and engineering controls](operator-setup/)
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](installed-integrations/)
