@@ -401,6 +401,31 @@ func workBindingInTx(tx storage.Tx, w domain.Work) (string, error) {
 	return last.Binding, nil
 }
 
+// predecessorBindingInTx is the binding the Work w succeeds ran on, or
+// that one's predecessor's when it never ran, and so on back: "" when w
+// succeeds nothing or no generation before it ran.
+func predecessorBindingInTx(tx storage.Tx, w domain.ID) (string, error) {
+	for range maxSuccessors {
+		var prev domain.ID
+		err := getJSON(tx, predecessorNamespace, identity(string(w)), &prev)
+		if errors.Is(err, storage.ErrNotFound) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		pw, err := tx.Work(prev)
+		if err != nil {
+			return "", err
+		}
+		if b, err := workBindingInTx(tx, pw); err != nil || b != "" {
+			return b, err
+		}
+		w = prev
+	}
+	return "", storage.ErrInvalid
+}
+
 // routeContext fills in s.event's Scope chain and its effective routes and
 // bindings.
 func routeContext(tx storage.Tx, s *routeSnapshot) error {
@@ -1096,6 +1121,11 @@ func (r *Router) deliveryRouteInTx(tx storage.Tx, p routePlan, w domain.Work, sc
 		return route, nil
 	}
 	current, err := workBindingInTx(tx, w)
+	if err == nil && current == "" {
+		// A successor that hasn't run yet carries on its predecessor's
+		// Work, so it runs where its predecessor did.
+		current, err = predecessorBindingInTx(tx, w.ID)
+	}
 	if err != nil || current == "" || current == route.Binding {
 		return route, err
 	}

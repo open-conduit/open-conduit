@@ -78,8 +78,10 @@ const (
 	DeliverNone RouteDelivery = "none"
 	// DeliverCurrent queues the Event as input on the binding the Work runs
 	// on next (its queued input's, its retry's, or its last rebind's or
-	// attempt's), with the route's active policy. Work that has not run yet
-	// takes it on the route's binding, as with DeliverRoute.
+	// attempt's), with the route's active policy. A successor that has not
+	// run yet takes it on the binding its predecessor ran on; other Work
+	// that has not run yet takes it on the route's binding, as with
+	// DeliverRoute.
 	DeliverCurrent RouteDelivery = "current"
 )
 

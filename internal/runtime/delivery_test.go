@@ -142,3 +142,80 @@ func TestUnknownDeliveryFailsTheRoute(t *testing.T) {
 		t.Fatalf("unknown delivery was not refused: %v", err)
 	}
 }
+
+// A successor a route opens with DeliverCurrent has not run, so it takes
+// its first input on the binding its predecessor ran on; a successor
+// delivered on the route's binding (DeliverRoute, the negative control)
+// takes it there. The trace shows the same.
+func TestSuccessorDeliversOnItsPredecessorsBinding(t *testing.T) {
+	keys := map[string]domain.CorrelationKey{
+		"report": {Source: "fixture/account", ExternalID: "report"},
+		"plain":  {Source: "fixture/account", ExternalID: "plain"},
+	}
+	start := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		if in.Work != nil {
+			return extension.Skip("owned"), nil
+		}
+		return routingDecision(in)
+	})
+	reply := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		if in.Work == nil || !in.Work.State.Terminal() {
+			return extension.Skip("not finished Work"), nil
+		}
+		next := in.Work.ID + "/g2"
+		d := extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: in.Work.Kind,
+			AttachKeys: []domain.CorrelationKey{{Source: "fixture/account", ExternalID: string(next)}}}
+		if in.Work.ID == "work/report" {
+			d.Deliver = extension.DeliverCurrent
+		}
+		return d, nil
+	})
+	o := conformance.RuntimeOptions{Routes: []conformance.RuntimeRoute{
+		{Route: domain.Route{Name: "start", Binding: "job"}, Handler: start},
+		{Route: domain.Route{Name: "reply"}, Handler: reply},
+	}}
+	f, executor := schedulerFixture(t, "reopen", o)
+	executor.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "reported"}}}, nil
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		scope, e := tx.Scope("routing-scope")
+		if e != nil {
+			return e
+		}
+		scope.Bindings = append(scope.Bindings, domain.Binding{Name: "job", Executor: "fixture"})
+		return tx.PutScope(scope, scope.Revision)
+	})
+	driver := f.Driver.(*schedulerDriver)
+	ctx := context.Background()
+	for _, c := range []struct{ name, binding string }{{"report", "job"}, {"plain", "fixture"}} {
+		key := keys[c.name]
+		requireAccept(t, f, "started-"+c.name, &key)
+		requireRoute(t, f.Driver, domain.ID("started-"+c.name))
+		work := domain.ID("work/" + c.name)
+		a, err := driver.Scheduler.Start(ctx, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = driver.Scheduler.Observe(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		trace, err := driver.Router.Trace(ctx, "routing-scope", domain.Event{Type: "fixture.reply", Source: "fixture/account", CorrelationKey: &key}, nil)
+		if err != nil || trace.Effect.Kind != runtime.EffectStart || trace.Effect.Binding != c.binding {
+			t.Fatalf("%s: trace does not start the successor on %s: %+v %v", c.name, c.binding, trace.Effect, err)
+		}
+		e := routingEvent(f, "reply-"+c.name, &key)
+		e.Type = "fixture.reply"
+		if err := f.Driver.Accept(e); err != nil {
+			t.Fatal(err)
+		}
+		requireRoute(t, f.Driver, e.ID)
+		pending, err := driver.Router.PendingInputs(ctx, work+"/g2")
+		if err != nil || len(pending) != 1 || pending[0].Binding != c.binding {
+			t.Fatalf("%s: the successor's input is not on %s: %+v %v", c.name, c.binding, pending, err)
+		}
+	}
+}
