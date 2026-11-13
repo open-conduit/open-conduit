@@ -72,7 +72,7 @@ func TestProductionTurnLimitEndsAResumableTurn(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if run.Execution.State != domain.ExecutionCancelled || run.Interrupt == nil || run.Interrupt.Type != runtime.TypeExecutionTimeout || run.InterruptEventID != run.Interrupt.ID {
+		if run.Execution.State != domain.ExecutionCancelled || run.Interrupt == nil || run.Interrupt.Type != domain.TypeExecutionTimeout || run.InterruptEventID != run.Interrupt.ID {
 			t.Fatalf("run at its time limit: %s interrupted by %+v, want cancelled by its deadline", run.Execution.State, run.Interrupt)
 		}
 		if run.Retry != nil {
@@ -117,10 +117,10 @@ func TestProductionTurnLimitEndsAResumableTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next attempt after the limit: %v", err)
 	}
-	if next.Request.Execution.Attempt != 2 || next.Request.Trigger.ID != deadline || next.Request.Trigger.Type != runtime.TypeExecutionTimeout {
+	if next.Request.Execution.Attempt != 2 || next.Request.Trigger.ID != deadline || next.Request.Trigger.Type != domain.TypeExecutionTimeout {
 		t.Fatalf("next attempt %d triggered by %s %s, want attempt 2 carrying on from the deadline", next.Request.Execution.Attempt, next.Request.Trigger.Type, next.Request.Trigger.ID)
 	}
-	var p runtime.ExecutionTimeoutPayload
+	var p domain.ExecutionTimeout
 	if err = json.Unmarshal(next.Request.Trigger.Data.Data, &p); err != nil || p.TimeoutSeconds != 30 || p.ExecutionID != execution {
 		t.Fatalf("deadline payload: %+v (%v)", p, err)
 	}

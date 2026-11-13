@@ -105,7 +105,7 @@ func RenderEvents(events []domain.Event) string {
 }
 
 func renderEvent(e domain.Event) string {
-	if e.Type == typeExecutionTimeout {
+	if e.Type == domain.TypeExecutionTimeout {
 		return renderTurnLimit(e)
 	}
 	var m map[string]any
@@ -204,15 +204,10 @@ func withAdditions(body, extra string) string {
 	return body + "\n\n" + add
 }
 
-// typeExecutionTimeout is the runtime's deadline Event. An executor that can
-// be interrupted and resumed gets it as input when its last turn reached its
-// time limit and was stopped (#564).
-const typeExecutionTimeout = "core.execution.timeout"
-
 // renderTurnLimit tells the agent its last turn was cut off at its time
 // limit, so it can pick up where it left off.
 func renderTurnLimit(e domain.Event) string {
-	var p struct{ TimeoutSeconds int64 }
+	var p domain.ExecutionTimeout
 	_ = json.Unmarshal(e.Data.Data, &p)
 	limit := "its time limit"
 	if p.TimeoutSeconds > 0 {

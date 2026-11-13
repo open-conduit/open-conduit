@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 type Payload struct {
@@ -1372,7 +1374,7 @@ type Run struct {
 // could be interrupted and resumed, so the deadline ended the turn rather
 // than failing the run, and the Work carried on with a new attempt.
 func (r Run) TurnTimeLimit() bool {
-	return r.Interrupt != nil && r.Interrupt.Type == "core.execution.timeout"
+	return r.Interrupt != nil && r.Interrupt.Type == domain.TypeExecutionTimeout
 }
 
 // Active is the run's active time as of now: ActiveMS plus the segment

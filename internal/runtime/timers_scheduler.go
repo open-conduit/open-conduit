@@ -13,25 +13,13 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// ExecutionTimeoutPayload is a core.execution.timeout Event's data: the
-// execution, the deadline its turn passed and, when known, that turn's time
-// limit in seconds.
-type ExecutionTimeoutPayload struct {
-	ExecutionID    domain.ID
-	Deadline       time.Time
-	TimeoutSeconds int64 `json:",omitempty"`
-}
-
-// TypeExecutionTimeout is the Event a turn's deadline delivers.
-const TypeExecutionTimeout = "core.execution.timeout"
-
 func ExecutionDeadlineTimerID(id domain.ID) domain.ID {
 	return domain.ID("execution-deadline/" + identity(string(id)))
 }
 func executionTimeoutEvent(state AttemptState, parent domain.ID) domain.Event {
 	key := identity(string(state.ExecutionID), state.Deadline.UTC().Format(time.RFC3339Nano), string(parent))
-	data, _ := json.Marshal(ExecutionTimeoutPayload{state.ExecutionID, state.Deadline, int64(state.TurnTimeout / time.Second)})
-	return domain.Event{ID: domain.ID("execution-timeout/" + key), Type: TypeExecutionTimeout, Source: "core.execution", DeliveryID: "timeout/" + key, OccurredAt: state.Deadline, ReceivedAt: state.Deadline, WorkID: state.WorkID, ExecutionID: state.ExecutionID, CausationID: parent, Data: domain.Payload{Schema: "core.execution.timeout.v1", Data: data}}
+	data, _ := json.Marshal(domain.ExecutionTimeout{ExecutionID: state.ExecutionID, Deadline: state.Deadline, TimeoutSeconds: int64(state.TurnTimeout / time.Second)})
+	return domain.Event{ID: domain.ID("execution-timeout/" + key), Type: domain.TypeExecutionTimeout, Source: "core.execution", DeliveryID: "timeout/" + key, OccurredAt: state.Deadline, ReceivedAt: state.Deadline, WorkID: state.WorkID, ExecutionID: state.ExecutionID, CausationID: parent, Data: domain.Payload{Schema: domain.SchemaExecutionTimeout, Data: data}}
 }
 
 // ArmExecutionDeadlineInTx pins the active segment deadline to a durable Event
@@ -86,7 +74,7 @@ func CancelExecutionDeadlineInTx(tx storage.Tx, id domain.ID) error {
 	return tx.Delete(timerNamespace, timerKey(timerID))
 }
 func executionTimeoutMatchesInTx(tx storage.Tx, event domain.Event, state AttemptState) (bool, error) {
-	if event.Type != TypeExecutionTimeout || event.Source != "core.execution" || event.ExecutionID != state.ExecutionID || state.Deadline.IsZero() {
+	if event.Type != domain.TypeExecutionTimeout || event.Source != "core.execution" || event.ExecutionID != state.ExecutionID || state.Deadline.IsZero() {
 		return false, nil
 	}
 	x, err := tx.Execution(state.ExecutionID)
@@ -105,7 +93,7 @@ func executionTimeoutMatchesInTx(tx storage.Tx, event domain.Event, state Attemp
 // causal event budget refuses the branch. It emits no runnable Event or retry
 // Timer; a fresh authorized manual retry is required to clear this hold.
 func rejectExecutionTimeoutInTx(tx storage.Tx, now time.Time, event domain.Event) error {
-	if event.Type != TypeExecutionTimeout || event.ExecutionID == "" {
+	if event.Type != domain.TypeExecutionTimeout || event.ExecutionID == "" {
 		return nil
 	}
 	state, err := attemptState(tx, event.ExecutionID)
@@ -188,7 +176,7 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 		if event.Routed {
 			return nil
 		}
-		if event.Event.Type != TypeExecutionTimeout || event.Event.ExecutionID == "" {
+		if event.Event.Type != domain.TypeExecutionTimeout || event.Event.ExecutionID == "" {
 			return storage.ErrInvalid
 		}
 		x, e = tx.Execution(event.Event.ExecutionID)
@@ -476,7 +464,7 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 					return e
 				}
 				for _, a := range events {
-					if !a.Routed && (a.Event.Type == "core.retry.due" || a.Event.Type == TypeExecutionTimeout) {
+					if !a.Routed && (a.Event.Type == "core.retry.due" || a.Event.Type == domain.TypeExecutionTimeout) {
 						ids = append(ids, a.Event.ID)
 					}
 				}
