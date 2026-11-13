@@ -35,16 +35,13 @@ func (r *Router) displayOnly(ctx context.Context, s routeSnapshot) *domain.WorkD
 	return p.decision.Display
 }
 
-// waitingDecision is what the routes say about s.event for its waiting
-// Work: the display they give it, or nil, and the record of their skipping
-// it when no route matched, or nil. A handler error is never surfaced and
-// skips nothing, so the input is kept as the wait's context as before.
-func (r *Router) waitingDecision(ctx context.Context, s routeSnapshot) (*domain.WorkDisplay, *RouteRecord) {
-	if s.work == nil || s.work.State.Terminal() {
-		return nil, nil
-	}
-	p, err := r.evaluate(ctx, s, nil)
-	if err != nil {
+// waitingDecision is what the routes' plan p (or their error) says about
+// s.event for its waiting Work: the display they give it, or nil, and the
+// record of their skipping it when no route matched, or nil. A handler error
+// is never surfaced and skips nothing, so the input is kept as the wait's
+// context as before.
+func (r *Router) waitingDecision(s routeSnapshot, p routePlan, err error) (*domain.WorkDisplay, *RouteRecord) {
+	if s.work == nil || s.work.State.Terminal() || err != nil {
 		return nil, nil
 	}
 	if p.selected == nil {

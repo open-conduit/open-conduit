@@ -140,6 +140,7 @@ type Toolbelt struct {
 	gates         map[string]extension.Gate // registration name → gate
 	startGates    map[string]extension.StartGate
 	events        map[string]string // emitted family → registration name
+	sealed        map[string]bool   // families only their registration's Emit operations emit
 }
 
 type tokenRecord struct {
@@ -182,7 +183,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -237,6 +238,11 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		}
 		events[name] = true
 	}
+	for _, name := range r.SealedEventTypes {
+		if !events[name] {
+			return fmt.Errorf("%w: sealed event type %q is not one of the registration's event types", extension.ErrInvalid, name)
+		}
+	}
 	t.registrations[r.Name] = true
 	for _, op := range r.Operations {
 		t.operations[op.Name] = op
@@ -253,6 +259,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	}
 	for name := range events {
 		t.events[name] = r.Name
+	}
+	for _, name := range r.SealedEventTypes {
+		t.sealed[name] = true
 	}
 	return nil
 }
@@ -452,6 +461,15 @@ func (t *Toolbelt) DependencyFilter(namespace string, filter domain.Payload, e d
 	t.mu.RUnlock()
 	return f != nil && f(filter, e)
 }
+
+// sealedEvent reports whether only its registration's Emit operations may
+// emit name (extension.Registration.SealedEventTypes).
+func (t *Toolbelt) sealedEvent(name string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.sealed[name]
+}
+
 func (t *Toolbelt) declaredEvent(name string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -952,6 +970,10 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 			ev := *c.Event
 			if !t.declaredEvent(ev.Type) || !contains(a.EventTypes, ev.Type) {
 				return extension.ErrUndeclared
+			}
+			if t.sealedEvent(ev.Type) {
+				// Only the declaring registration's operations emit it.
+				return extension.ErrUnauthorized
 			}
 			if ev.CausationID != "" && ev.CausationID != trigger || ev.WorkID != "" && ev.WorkID != w.ID || ev.ExecutionID != "" && ev.ExecutionID != x.ID || ev.Source != "" && ev.Source != "execution/"+string(x.ID) {
 				return extension.ErrUnauthorized

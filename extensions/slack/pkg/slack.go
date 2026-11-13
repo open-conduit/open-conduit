@@ -32,7 +32,7 @@ const PlaybooksDir = "playbooks"
 // extension lists them) and its playbooks.
 func base() protocol.Manifest {
 	p := protocol.Provides{
-		Schemas:   []protocol.SchemaDecl{{Name: "slack.message", Versions: []int{1}}, {Name: "slack.message.removed", Versions: []int{1}}, {Name: "slack.reply", Versions: []int{1}}, {Name: "slack.tool", Versions: []int{1}}},
+		Schemas:   []protocol.SchemaDecl{{Name: "slack.message", Versions: []int{1}}, {Name: "slack.message.removed", Versions: []int{1}}, {Name: "slack.reply", Versions: []int{1}}, {Name: "slack.tool", Versions: []int{1}}, {Name: "slack.thread.opened", Versions: []int{1}}},
 		WorkKinds: []protocol.WorkKindDecl{{Kind: sl.WorkKind}},
 		Checks:    []protocol.CheckDecl{{Name: Name}, {Name: Name + "-auth"}},
 		Playbooks: PlaybooksDir,
@@ -40,6 +40,9 @@ func base() protocol.Manifest {
 	for _, f := range sl.Families() {
 		p.Families = append(p.Families, protocol.Family{Type: f.Type, ReDerivable: f.ReDerivable, Loss: f.Loss})
 	}
+	// A post's thread attachment: the projector accepts it, and it is
+	// sealed, so no executor can emit it with the builtin emit.
+	p.Families = append(p.Families, protocol.Family{Type: sl.TypeThreadOpened, Loss: sl.ThreadOpenedLoss, Sealed: true})
 	for _, op := range sl.Operations() {
 		p.Operations = append(p.Operations, protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler})
 	}

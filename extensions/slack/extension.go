@@ -137,6 +137,21 @@ func (x *Extension) Registration() extension.Registration {
 	return x.tools.Registration()
 }
 
+// open accepts a posted thread's TypeThreadOpened through the host, derived
+// from the post's cause when it has one (ProjectorOptions.Open).
+func (x *Extension) open(tx storage.Tx, scope, parent domain.ID, e domain.Event) error {
+	var err error
+	switch {
+	case parent != "" && x.h.AcceptDerivedInTx != nil:
+		_, _, err = x.h.AcceptDerivedInTx(tx, scope, parent, e)
+	case x.h.AcceptInTx != nil:
+		_, _, err = x.h.AcceptInTx(tx, scope, e)
+	default:
+		err = storage.ErrInvalid
+	}
+	return err
+}
+
 func (x *Extension) now() time.Time {
 	if x.h.Now != nil {
 		return x.h.Now()
@@ -239,7 +254,7 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 		settings.Projection.DryRun = true
 	}
 	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now,
-		Actions: x.h.Actions, Act: x.h.Act})
+		Actions: x.h.Actions, Act: x.h.Act, Open: x.open})
 	if err != nil {
 		return err
 	}

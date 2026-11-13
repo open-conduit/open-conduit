@@ -333,7 +333,13 @@ type Registration struct {
 	// name, which follows the same rule.
 	Name       string
 	EventTypes []string
-	Operations []Operation
+	// SealedEventTypes are those of EventTypes only this registration's
+	// own Emit operations may emit: the builtin emit refuses them, as it
+	// would an undeclared type, though the caller's authority lists them.
+	// A route can then trust that such an Event passed the operation's
+	// checks, so an executor can't forge one with the builtin emit.
+	SealedEventTypes []string
+	Operations       []Operation
 	// DependencyFilter evaluates the opaque Filter of this registration's
 	// dependencies against a type-matching source Event. It must be pure and
 	// deterministic: core calls it inside coordination transactions.

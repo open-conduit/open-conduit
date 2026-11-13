@@ -201,10 +201,19 @@ func TestConfigValidation(t *testing.T) {
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"history_hours":12,"start_window_hours":24}`,
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"signing_secret":"unselected"}`,
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"unknown":1}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":["C9"]}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":[]}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":["C1","C1"]}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"Nightly","channels":["C1"]}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":["C1"]},{"binding":"nightly","channels":["C1"]}]}`,
 	} {
 		if _, err := slack.ParseExtension([]byte(bad), nil); err == nil {
 			t.Fatalf("accepted %s", bad)
 		}
+	}
+	posting, err := slack.ParseExtension([]byte(`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C2","C1"],"post":[{"binding":"nightly","channels":["C2"]}]}`), nil)
+	if err != nil || !posting.MayPost("nightly", "C2") || posting.MayPost("nightly", "C1") || posting.MayPost("other", "C2") || !posting.Posts("C2") || posting.Posts("C1") {
+		t.Fatalf("post grants: %+v %v", posting.Post, err)
 	}
 	if _, err := slack.ParseConnection([]byte(`{"api_url":"https://user:pw@slack.com/api"}`)); err == nil {
 		t.Fatal("credentials in api_url accepted")
@@ -314,4 +323,51 @@ func TestRouteDisplay(t *testing.T) {
 
 func slackTS(at time.Time) string {
 	return strconv.FormatInt(at.Unix(), 10) + "." + fmt.Sprintf("%06d", at.Nanosecond()/1000)
+}
+
+func openedEvent(t *testing.T, channel, ts string) domain.AcceptedEvent {
+	t.Helper()
+	data, _ := json.Marshal(slack.ThreadOpened{Namespace: ns, Team: team, Channel: channel, TS: ts})
+	return domain.AcceptedEvent{Event: domain.Event{ID: "opened", Type: slack.TypeThreadOpened, Source: ns, DeliveryID: "d", WorkID: "job",
+		Data: domain.Payload{Schema: slack.SchemaThreadOpened, Data: data}}}
+}
+
+// A thread a Work posted is attached to it without being its input, only in
+// a channel the entry lets a binding post in; replies in it then go to the
+// binding that Work runs on, whichever slack route takes them.
+func TestRouteAttachesAPostedThread(t *testing.T) {
+	sc := scopeWith(t, `,"post":[{"binding":"nightly","channels":["`+chanA+`"]}]`)
+	job := &domain.Work{ID: "job", Kind: "schedule.job", State: domain.WorkRunning}
+	written := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	ts := slack.TS(written)
+	d := match(t, sc, openedEvent(t, chanA, ts), job)
+	want := domain.CorrelationKey{Source: ns, ExternalID: slack.ThreadKey(chanA, ts)}
+	if !d.Match || d.Deliver != extension.DeliverNone || len(d.AttachKeys) != 1 || d.AttachKeys[0] != want {
+		t.Fatalf("a posted thread was not attached alone: %+v", d)
+	}
+	if d := match(t, sc, openedEvent(t, chanA, ts), nil); d.Match {
+		t.Fatalf("a posted thread with no Work to attach to matched: %+v", d)
+	}
+	forged := openedEvent(t, chanA, ts)
+	forged.Event.Source = "execution/x"
+	if d := match(t, sc, forged, job); d.Match {
+		t.Fatalf("a posted thread from an execution's emit was attached: %+v", d)
+	}
+	if d := match(t, scopeWith(t, ""), openedEvent(t, chanA, ts), job); d.Match {
+		t.Fatalf("a thread in a channel no binding may post in was attached: %+v", d)
+	}
+
+	reply := slack.MessagePayload{TS: slack.TS(written.Add(time.Minute)), Thread: ts, User: alice, Text: "why?"}
+	owned := *job
+	owned.CorrelationKeys = []domain.CorrelationKey{want}
+	narrowed := extension.RouteInput{Event: event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), Scope: sc, Work: &owned,
+		Route: domain.Route{Config: domain.Payload{Data: json.RawMessage(`{"channels":["C0OTHER"]}`)}}}
+	d, err := slack.Route{}.Match(context.Background(), narrowed)
+	if err != nil || !d.Match || d.Deliver != extension.DeliverCurrent {
+		t.Fatalf("a reply to a job's post did not go to its binding: %+v %v", d, err)
+	}
+	conversation := &domain.Work{ID: "conv", Kind: slack.WorkKind, State: domain.WorkReady, Display: &domain.WorkDisplay{Title: "x"}}
+	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), conversation); !d.Match || d.Deliver != extension.DeliverRoute {
+		t.Fatalf("a conversation's input left the route's binding: %+v", d)
+	}
 }

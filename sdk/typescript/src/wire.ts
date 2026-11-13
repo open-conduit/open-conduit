@@ -482,6 +482,8 @@ export const Family = t.object(
     // Whether a lost Event can be derived again, which tells the host how to recover.
     re_derivable: t.boolean(),
     loss: t.optional(t.string()),
+    // Only the extension's own emit operations may emit it; the builtin emit refuses it.
+    sealed: t.optional(t.boolean()),
   },
   open,
 );

@@ -28,13 +28,33 @@ const (
 	// TypeMessageRemoved is a push-only deletion notice for a message Slack
 	// no longer shows at all. It is not re-derivable.
 	TypeMessageRemoved = "slack.message.removed"
+	// TypeThreadOpened is a new top-level message Work posted (slack.post):
+	// the route attaches its thread to that Work. The projector accepts it
+	// when the post is made; the family is sealed, so no executor can emit
+	// one with the builtin emit and claim a thread.
+	TypeThreadOpened = "slack.thread.opened"
 )
 
 // Payload schemas.
 const (
 	SchemaMessage = "slack.message.v1"
 	SchemaRemoved = "slack.message.removed.v1"
+	// SchemaThreadOpened is TypeThreadOpened's payload (ThreadOpened).
+	SchemaThreadOpened = "slack.thread.opened.v1"
 )
+
+// ThreadOpenedLoss is the declared loss limitation of TypeThreadOpened.
+const ThreadOpenedLoss = "accepted by the projector when a post it made is confirmed; Slack's history does not say which Work posted a message, so nothing upstream re-derives it"
+
+// ThreadOpened is the SchemaThreadOpened payload: the entry (by namespace)
+// and the channel and ts of the message a Work posted, which is its
+// thread's root.
+type ThreadOpened struct {
+	Namespace string `json:"namespace"`
+	Team      string `json:"team"`
+	Channel   string `json:"channel"`
+	TS        string `json:"ts"`
+}
 
 // RemovedLoss is the declared loss limitation of TypeMessageRemoved.
 const RemovedLoss = "a message deleted without a remaining tombstone is only announced by push; reconcile shows it as generic core.ingress.absent within history_hours, without its deletion time"

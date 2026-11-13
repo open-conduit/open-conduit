@@ -74,6 +74,61 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 }
 ```
 
+## Post a job's report to a channel
+
+Work that didn't start in Slack can post there too: a nightly job's findings, or a summary of a failed deploy. Grant its binding `slack.post` and list in the Slack entry's `post` the channels that binding may post in. Each must also be in the entry's `channels`. The agent calls `slack.post {"channel": "C0123456789", "text": "…"}`, and the message's thread becomes the job's Work: a person's reply there reaches the same agent, on its own binding, and it answers with `slack.reply`. The daemon refuses any channel the binding isn't allowed, whatever the prompt says. The scope still needs a `slack` route; it takes the replies in posted threads whatever binding it names.
+
+A reply after the job's Work has completed is recorded and starts nothing, as for any completed Work.
+
+```json
+{
+  "version": 1,
+  "settings": {},
+  "connections": [
+    {"id": "slack", "type": "slack", "config": {},
+     "secret_refs": {"bot_token": "keyring:slack-bot-token", "app_token": "keyring:slack-app-token"}}
+  ],
+  "scopes": [
+    {
+      "id": "ops",
+      "name": "Nightly report",
+      "secret_refs": {},
+      "authorization": {
+        "connections": ["slack"],
+        "operations": ["read_context", "wait", "declare_outcome", "slack.post", "slack.reply", "slack.thread"],
+        "read_scopes": []
+      },
+      "extensions": [
+        {"name": "jobs", "type": "schedule", "secret_names": [],
+         "config": {"namespace": "schedule/ops", "scope": "ops", "jobs": [
+           {"name": "nightly-report", "cron": "0 7 * * *", "time_zone": "Europe/London"}
+         ]}},
+        {"name": "team", "type": "slack", "connection": "slack", "secret_names": [],
+         "config": {"namespace": "slack/T0123456789", "scope": "ops", "team": "T0123456789",
+                    "channels": ["C0123456789"], "start": "mention", "bot_user_id": "U0123456789", "receiver": "socket",
+                    "post": [{"binding": "report", "channels": ["C0123456789"]}]}}
+      ],
+      "routes": [
+        {"name": "report", "handler": "schedule", "binding": "report", "active_policy": "queue",
+         "config": {"jobs": ["nightly-report"]}},
+        {"name": "threads", "handler": "slack", "binding": "report", "active_policy": "queue", "config": {}}
+      ],
+      "bindings": [
+        {
+          "name": "report",
+          "executor": "claude-code",
+          "connection": "slack",
+          "requires": {"toolbelt": "mcp", "workspace": false},
+          "operations": ["read_context", "wait", "declare_outcome", "slack.post", "slack.reply", "slack.thread"],
+          "secret_names": [],
+          "config": {"dir": "/path/to/report-instructions"}
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## Start a different playbook per channel
 
 One Slack entry can watch several channels and start each channel's threads on its own binding, and so its own playbook. Give a `slack` route `channels` in its config: it claims only threads in those channels. Routes are tried in order and the first match wins, so list the narrow routes first and a catch-all route (no `channels`) last. A route only sees the channels the entry watches, so list each channel in the entry's `channels` too. `config check` rejects a route config whose `channels` are not distinct Slack channel IDs.

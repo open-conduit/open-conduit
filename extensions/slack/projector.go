@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -59,6 +60,12 @@ type ProjectorOptions struct {
 	Actions ActionsFunc
 	// Act takes a prompt's button press for the person who pressed it.
 	Act ActFunc
+	// Open accepts the TypeThreadOpened Event that gives a posting Work the
+	// thread of its new top-level message, in the transaction that records
+	// the post as made: derived from parent when there is one, else a root
+	// (inproc.Host.AcceptDerivedInTx and AcceptInTx). nil: top-level posts
+	// are refused, since their thread could not become the Work's.
+	Open func(tx storage.Tx, scope, parent domain.ID, e domain.Event) error
 }
 
 // Projector publishes conversation replies. A reply is not re-derivable: each
@@ -93,8 +100,9 @@ func NewProjector(o ProjectorOptions) (*Projector, error) {
 // Settings returns the bound settings.
 func (p *Projector) Settings() Settings { return p.o.Settings }
 
-// Intent is one non-re-derivable reply. ID must be stable across retries and
-// restarts (for example "outcome/<execution id>").
+// Intent is one non-re-derivable reply, or with no Thread a new top-level
+// message (slack.post). ID must be stable across retries and restarts (for
+// example "outcome/<execution id>").
 type Intent struct {
 	ID              string
 	Work, Execution domain.ID
@@ -108,6 +116,9 @@ type Intent struct {
 	// Blocks lay the message out (a prompt's buttons); they are derived
 	// again on every pass, never stored.
 	Blocks []map[string]any
+	// Cause is the Event a top-level post derives from (the posting
+	// attempt's trigger), so the thread's attachment joins its chain.
+	Cause domain.ID
 }
 
 type intentRecord struct {
@@ -125,6 +136,7 @@ type intentRecord struct {
 	AttemptedAt time.Time `json:"attempted_at,omitempty"`
 	TS          string    `json:"ts,omitempty"`
 	Text        string    `json:"text,omitempty"`
+	Cause       domain.ID `json:"cause,omitempty"`
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -166,7 +178,8 @@ func Marker(work, execution domain.ID, intent string) *Metadata {
 // pending while delivery is in progress or waiting for its marker search, or
 // failed after a definitive refusal.
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
-	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || !tsPattern.MatchString(in.Thread) {
+	// No Thread posts a new top-level message, which can't be broadcast.
+	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && (in.Broadcast || in.Work == "" || p.o.Open == nil) {
 		return "", storage.ErrInvalid
 	}
 	key, textDigest := intentKey(in.ID), digest(in.Text)
@@ -178,7 +191,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
-				Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC()}
+				Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause}
 			if in.Durable {
 				rec.Text = in.Text
 			}
@@ -197,7 +210,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if p.o.Now().Sub(rec.AttemptedAt) < p.o.SearchDelay {
 			return rec.State, nil
 		}
-		messages, _, err := p.o.Client.Thread(ctx, in.Channel, in.Thread, TS(rec.CreatedAt.Add(-time.Minute)), "")
+		messages, err := p.since(ctx, in.Channel, in.Thread, TS(rec.CreatedAt.Add(-time.Minute)))
 		if err != nil {
 			return rec.State, err
 		}
@@ -245,6 +258,29 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	return p.finish(ctx, key, IntentPosted, ts, "", false)
 }
 
+// since lists the messages a post may have created since oldest: the
+// thread's, or for a top-level post the channel's own messages.
+func (p *Projector) since(ctx context.Context, channel, thread, oldest string) ([]Message, error) {
+	if thread != "" {
+		messages, _, err := p.o.Client.Thread(ctx, channel, thread, oldest, "")
+		return messages, err
+	}
+	var out []Message
+	cursor := ""
+	for range 10 {
+		page, next, err := p.o.Client.History(ctx, channel, oldest, "", cursor, 200)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return out, nil
+}
+
 // find locates a published reply: by its metadata marker, or, when Slack
 // returned no metadata at all for the app's messages (a token or workspace
 // that withholds it), by the app's bot user posting exactly this text.
@@ -271,6 +307,13 @@ func (p *Projector) finish(ctx context.Context, key, state, ts, code string, rec
 			return err
 		}
 		cur.State, cur.TS, cur.Code = state, ts, code
+		if state == IntentPosted && cur.Thread == "" {
+			// A top-level post is made: its thread becomes the posting
+			// Work's in the same transaction, however it was confirmed.
+			if err := p.opened(tx, cur); err != nil {
+				return err
+			}
+		}
 		return p.put(tx, key, cur)
 	})
 	if err != nil {
@@ -280,6 +323,29 @@ func (p *Projector) finish(ctx context.Context, key, state, ts, code string, rec
 		return IntentRecovered, nil
 	}
 	return state, nil
+}
+
+// opened accepts TypeThreadOpened for the Work that made post rec. Its
+// delivery is the thread's, so it is accepted once however many passes
+// confirm the post. A chain over its causal bounds is recorded by the host
+// and does not undo the post.
+func (p *Projector) opened(tx storage.Tx, rec intentRecord) error {
+	if p.o.Open == nil || rec.Work == "" || rec.TS == "" {
+		return storage.ErrInvalid
+	}
+	data, err := json.Marshal(ThreadOpened{Namespace: p.o.Settings.Namespace, Team: p.o.Settings.Team, Channel: rec.Channel, TS: rec.TS})
+	if err != nil {
+		return err
+	}
+	thread := ThreadKey(rec.Channel, rec.TS)
+	at := p.o.Now().UTC()
+	e := domain.Event{Type: TypeThreadOpened, Source: p.o.Settings.Namespace, DeliveryID: "thread/" + digest(p.o.Settings.Namespace, thread)[:32],
+		WorkID: rec.Work, OccurredAt: at, ReceivedAt: at, Data: domain.Payload{Schema: SchemaThreadOpened, Data: data}}
+	err = p.o.Open(tx, domain.ID(p.o.Settings.Scope), rec.Cause, e)
+	if errors.Is(err, inproc.ErrCausalLimit) {
+		return nil
+	}
+	return err
 }
 
 // IntentState is an intent's durable record: its state, the posted
@@ -375,7 +441,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Text != "" && rec.State != IntentPosted && rec.State != IntentFailed {
-				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Broadcast: rec.Broadcast, Durable: true})
+				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause})
 			}
 		}
 		return err

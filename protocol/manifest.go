@@ -553,6 +553,9 @@ type Family struct {
 	Type        string `json:"type"`
 	ReDerivable bool   `json:"re_derivable"`
 	Loss        string `json:"loss,omitempty"`
+	// Sealed marks a family only the extension's own emit operations may
+	// emit: the builtin emit refuses it (extension.Registration.SealedEventTypes).
+	Sealed bool `json:"sealed,omitempty"`
 }
 type RouteDecl struct {
 	Handler string `json:"handler"`

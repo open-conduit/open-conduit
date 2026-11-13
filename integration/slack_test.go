@@ -22,6 +22,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -114,7 +115,7 @@ func (e *slEnv) open() {
 	if e.ingress, err = runtime.NewIngress(store, e.clock.Now, runtime.IngressOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", Handlers: map[string]extension.RouteHandler{"slack": sl.Route{}},
+	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", Handlers: map[string]extension.RouteHandler{"slack": sl.Route{}, "jobs": slJobRoute{}},
 		Bindings: map[string]runtime.RouteBinding{"fixture": e.binding}}); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +158,17 @@ func (e *slEnv) open() {
 				return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing here"}
 			}
 			return e.act(ctx, r)
+		},
+		// As the host accepts an extension's own Event in its transaction.
+		Open: func(tx storage.Tx, scope, parent domain.ID, ev domain.Event) error {
+			ev.ID = domain.ID(protocol.EmittedEventID(ev.Source, ev.DeliveryID))
+			var err error
+			if parent != "" {
+				_, _, err = runtime.AcceptDerivedInTx(tx, e.clock.Now(), runtime.CausalLimits{MaxDepth: 32, PerMinute: 128}, scope, parent, ev)
+			} else {
+				_, _, err = runtime.AcceptInTx(tx, scope, ev)
+			}
+			return err
 		}}); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +313,16 @@ func (e *slEnv) queued(work domain.ID) []string {
 
 func (e *slEnv) startAttempt(work domain.ID) domain.ID {
 	e.t.Helper()
+	id, _ := e.startAttemptOn(work, "agent")
+	return id
+}
+
+// startAttemptOn claims a new attempt of work on binding from its first
+// pending input, returning the attempt and its lease.
+func (e *slEnv) startAttemptOn(work domain.ID, binding string) (domain.ID, domain.LeaseRef) {
+	e.t.Helper()
 	var id domain.ID
+	var ref domain.LeaseRef
 	e.read(func(tx storage.Tx) error {
 		xs, err := tx.ListExecutions(work)
 		if err != nil {
@@ -312,13 +333,13 @@ func (e *slEnv) startAttempt(work domain.ID) domain.ID {
 			return errors.New("no input to start from")
 		}
 		id = domain.ID(string(work) + "/attempt/" + strconv.Itoa(len(xs)+1))
-		if err := tx.PutExecution(domain.Execution{ID: id, WorkID: work, ExecutorBinding: "agent", Attempt: uint32(len(xs) + 1), State: domain.ExecutionPending, TriggerID: inputs[0].EventID}, 0); err != nil {
+		if err := tx.PutExecution(domain.Execution{ID: id, WorkID: work, ExecutorBinding: binding, Attempt: uint32(len(xs) + 1), State: domain.ExecutionPending, TriggerID: inputs[0].EventID}, 0); err != nil {
 			return err
 		}
-		_, err = tx.Claim(id, "test", time.Hour)
+		ref, err = tx.Claim(id, "test", time.Hour)
 		return err
 	})
-	return id
+	return id, ref
 }
 
 // finishAttempt ends the attempt (optionally declaring a reply) and moves
@@ -1084,5 +1105,173 @@ func TestSlackPromptsReadyWork(t *testing.T) {
 	}
 	if res := e.converge(); res.Posted != 1 {
 		t.Fatalf("ready Work not prompted: %+v", res)
+	}
+}
+
+// slJobRoute starts a job's Work for a fixture.tick, standing in for a
+// schedule: Work that did not start in Slack.
+type slJobRoute struct{}
+
+func (slJobRoute) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+	if in.Event.Event.Type != "fixture.tick" {
+		return extension.Skip("not a tick"), nil
+	}
+	return extension.RouteDecision{Match: true, CreateID: "job/nightly", Kind: "fixture.job"}, nil
+}
+
+// TestSlackPostOpensAThreadTheJobOwns: Work that did not start in Slack
+// posts its report to a channel its binding may post in, through the real
+// toolbelt; the thread becomes the job's without giving it another turn, a
+// retried call posts once, and a person's reply in the thread is the job's
+// input on its own binding, not the conversation route's. A channel the
+// binding may not post in is refused, and the builtin emit cannot forge
+// the thread's attachment.
+func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
+	ctx := context.Background()
+	e := newSlackEnvWith(t, `,"post":[{"binding":"nightly","channels":["`+slChannel+`"]}]`, sl.IngressOptions{}, []string{slChannel},
+		[]domain.Binding{{Name: "agent", Executor: "fixture"}, {Name: "nightly", Executor: "fixture"}},
+		[]domain.Route{{Name: "jobs", Handler: "jobs", Binding: "nightly"}, {Name: "threads", Handler: "slack", Binding: "agent", ActivePolicy: "queue"}})
+	tick := domain.Event{ID: "tick-1", Type: "fixture.tick", Source: "fixture/jobs", DeliveryID: "tick-1", OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now(),
+		CorrelationKey: &domain.CorrelationKey{Source: "fixture/jobs", ExternalID: "nightly"}}
+	if _, _, err := e.ingress.Accept(ctx, slScope, tick); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+
+	// As the daemon grants it: every registered family is in every
+	// execution's authority, so only the seal keeps the builtin emit off it.
+	var belt *runtime.Toolbelt
+	belt, err := runtime.NewToolbelt(e.store, e.clock.Now, e.router, runtime.ToolbeltOptions{
+		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+			return runtime.ToolbeltGrant{Operations: []string{sl.OpPost, sl.OpReply, extension.Emit}, EventTypes: belt.EventTypes()}, nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := sl.NewTools(sl.ToolsOptions{Store: e.store, Now: e.clock.Now, Sources: func() []sl.Source {
+		return []sl.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := belt.Register(tools.Registration()); err != nil {
+		t.Fatal(err)
+	}
+	var token string
+	executor := &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
+	executor.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		token = r.Context.ToolbeltToken
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "reported"}}}, nil
+	}
+	scheduler, err := runtime.NewScheduler(e.store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "test", LeaseDuration: time.Hour, Generation: "1",
+		Executors: map[string]extension.Executor{"fixture": executor}, Toolbelt: belt, ToolbeltEndpoints: fixtureEndpoint("unix:///fixture.sock")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := scheduler.Start(ctx, "job/nightly")
+	if err != nil || token == "" {
+		t.Fatalf("start: %v (token %q)", err, token)
+	}
+	post := func(request, input string) (map[string]any, error) {
+		out, err := belt.CallRequest(ctx, token, request, extension.ToolCall{Operation: sl.OpPost, Input: domain.Payload{Schema: "json", Data: json.RawMessage(input)}})
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		_ = json.Unmarshal(out.Output.Data, &m)
+		return m, nil
+	}
+	var op *extension.OperationError
+	if _, err := post("elsewhere", `{"channel":"C0OTHER","text":"Nightly report"}`); !errors.As(err, &op) || op.Code != "channel_not_allowed" {
+		t.Fatalf("a channel the binding may not post in: %v", err)
+	}
+	first, err := post("report", `{"channel":"`+slChannel+`","text":"Nightly report: 3 failures"}`)
+	if err != nil || first["state"] != sl.IntentPosted || first["ts"] == "" {
+		t.Fatalf("post: %v %v", first, err)
+	}
+	ts, _ := first["ts"].(string)
+	if m, ok := e.fake.Message(slChannel, ts); !ok || m.ThreadTS != "" && m.ThreadTS != ts || m.Text != "Nightly report: 3 failures" {
+		t.Fatalf("the report is not a top-level message: %+v %v", m, ok)
+	}
+	again, err := post("report", `{"channel":"`+slChannel+`","text":"Nightly report: 3 failures"}`)
+	if err != nil || again["ts"] != ts || len(e.events(sl.TypeThreadOpened)) != 1 {
+		t.Fatalf("a retried post wrote again: %v %v", again, err)
+	}
+	forged := domain.Event{Type: sl.TypeThreadOpened, DeliveryID: "forged", Data: domain.Payload{Schema: sl.SchemaThreadOpened, Data: json.RawMessage(`{"namespace":"` + slNS + `","channel":"` + slChannel + `","ts":"1.000001"}`)}}
+	if _, err := belt.Call(ctx, token, extension.ToolCall{Operation: extension.Emit, Event: &forged}); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("the builtin emit forged a posted thread: %v", err)
+	}
+
+	e.sync()
+	e.reconcile()
+	e.route()
+	job, ok := e.workFor(ts)
+	if !ok || job.ID != "job/nightly" {
+		t.Fatalf("the posted thread is not the job's: %+v %v", job, ok)
+	}
+	if q := e.queued(job.ID); len(q) != 0 {
+		t.Fatalf("the attachment or the post itself became input: %v", q)
+	}
+	if opened := e.events(sl.TypeThreadOpened); len(opened) != 1 || !opened[0].Routed || opened[0].Disposition != extension.DispositionAttach || opened[0].RoutedWorkID != job.ID {
+		t.Fatalf("the posted thread's attachment was not recorded on the job: %+v", opened)
+	}
+	// A post whose answer is lost answers pending and needs no second call:
+	// the projector finds it after the turn has ended, and its thread is
+	// still the job's.
+	e.fake.FailNextPost("lost")
+	lost, err := post("follow-up", `{"channel":"`+slChannel+`","text":"Also: one flaky test"}`)
+	if err != nil || lost["state"] != "pending" {
+		t.Fatalf("a lost post: %v %v", lost, err)
+	}
+	if err := scheduler.Observe(ctx, attempt); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Add(31 * time.Second)
+	if res := e.converge(); res.Recovered != 1 {
+		t.Fatalf("the lost post was not recovered: %+v", res)
+	}
+	if opened := e.events(sl.TypeThreadOpened); len(opened) != 2 {
+		t.Fatalf("the recovered post's thread was not opened: %+v", opened)
+	}
+	e.converge()
+	if opened := e.events(sl.TypeThreadOpened); len(opened) != 2 {
+		t.Fatalf("a second pass opened the thread again: %+v", opened)
+	}
+
+	reply := e.fake.Reply(slChannel, ts, slAlice, "Which tests failed?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	var followUp string
+	e.read(func(tx storage.Tx) error {
+		w, err := tx.Work(job.ID)
+		for _, k := range w.CorrelationKeys {
+			if _, th, ok := sl.ParseThreadKey(k.ExternalID); ok && th != ts {
+				followUp = th
+			}
+		}
+		return err
+	})
+	if followUp == "" {
+		t.Fatal("the recovered post's thread is not the job's")
+	}
+	second := e.fake.Reply(slChannel, followUp, slBob, "Which one?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	if q := e.queued(job.ID); len(q) != 2 || q[0] != sl.TypeMessageHuman+":"+reply || q[1] != sl.TypeMessageHuman+":"+second {
+		t.Fatalf("the replies did not reach the job: %v", q)
+	}
+	inputs, err := e.router.PendingInputs(ctx, job.ID)
+	if err != nil || len(inputs) != 2 || inputs[0].Binding != "nightly" || inputs[1].Binding != "nightly" {
+		t.Fatalf("the replies are not on the job's binding: %+v %v", inputs, err)
+	}
+	for _, w := range e.works() {
+		if w.Kind == sl.WorkKind {
+			t.Fatalf("the reply started a conversation: %+v", w)
+		}
 	}
 }

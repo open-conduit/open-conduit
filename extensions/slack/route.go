@@ -90,8 +90,17 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 //     unmarked app messages and other bots' messages never are, so a reply
 //     cannot start an event loop.
 //   - Deletions are recorded but are not input.
+//
+// A thread a Work posted (TypeThreadOpened, which the projector accepts when a post is made) is
+// attached to that Work without being its input. Later messages in a thread
+// owned by Work that is not a conversation (a job that posted its report)
+// are input on the binding that Work runs on, not this route's, so the
+// agent that wrote the post answers.
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
+	if e.Type == TypeThreadOpened {
+		return opened(in)
+	}
 	if !strings.HasPrefix(e.Type, "slack.message.") {
 		return extension.Skip("not a Slack message"), nil
 	}
@@ -106,7 +115,11 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !ok {
 		return extension.Skip("the key is not a Slack thread"), nil
 	}
-	if len(in.Route.Config.Data) > 0 {
+	// A route's channels choose the binding a conversation runs on. A
+	// thread a posting Work owns runs on that Work's binding instead, so
+	// every slack route takes its messages.
+	posted := in.Work != nil && in.Work.Kind != WorkKind
+	if len(in.Route.Config.Data) > 0 && !posted {
 		rc, err := ParseRoute(in.Route.Config.Data)
 		if err != nil {
 			return extension.Skip("the route config is unreadable"), nil
@@ -137,6 +150,9 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 			return extension.Skip("the message was deleted"), nil
 		}
 		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
+		if posted {
+			d.Reason, d.Deliver = "a person replied to a post of this Work", extension.DeliverCurrent
+		}
 		// The thread's first message says what the Work is when it was
 		// edited, or when the Work has no display yet: Work from before
 		// displays, which the router's backfill replays.
@@ -149,9 +165,43 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if self {
 			return extension.Skip("the conversation's own reply"), nil
 		}
-		return extension.RouteDecision{Match: true, Reason: "another Work's reply in the thread"}, nil
+		d := extension.RouteDecision{Match: true, Reason: "another Work's reply in the thread"}
+		if posted {
+			d.Deliver = extension.DeliverCurrent
+		}
+		return d, nil
 	}
 	return extension.Skip(e.Type + " is not passed to the agent"), nil
+}
+
+// opened attaches the thread of a message a Work posted to that Work. Only
+// the projector accepts it, from the entry's own source, for a post
+// slack.post checked against the post config; the family is sealed, so no
+// executor can emit it, and the source and channel are checked again here.
+// The attachment is not input: nobody has replied yet, and the post's own
+// turn may still be running. The route's channel selection is not
+// consulted, since no binding takes the Event.
+func opened(in extension.RouteInput) (extension.RouteDecision, error) {
+	e := in.Event.Event
+	if in.Work == nil {
+		return extension.Skip("a posted thread is attached only to the Work that posted it"), nil
+	}
+	var p ThreadOpened
+	if e.Data.Schema != SchemaThreadOpened || json.Unmarshal(e.Data.Data, &p) != nil {
+		return extension.Skip("not a posted thread payload"), nil
+	}
+	if e.Source != p.Namespace {
+		return extension.Skip("a posted thread comes only from its entry's own source"), nil
+	}
+	s, ok := settingsFor(in.Scope, p.Namespace)
+	if !ok {
+		return extension.Skip("no slack entry in this scope reads " + p.Namespace), nil
+	}
+	if !s.Posts(p.Channel) || !tsPattern.MatchString(p.TS) {
+		return extension.Skip("channel " + p.Channel + " is not one the entry lets any binding post in"), nil
+	}
+	key := domain.CorrelationKey{Source: s.Namespace, ExternalID: ThreadKey(p.Channel, p.TS)}
+	return extension.RouteDecision{Match: true, AttachKeys: []domain.CorrelationKey{key}, Deliver: extension.DeliverNone, Reason: "a thread this Work posted"}, nil
 }
 
 // startReason says what let a message start a conversation.
