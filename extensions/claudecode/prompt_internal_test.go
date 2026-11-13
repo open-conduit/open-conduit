@@ -62,8 +62,8 @@ func TestRenderTurnLimit(t *testing.T) {
 
 // An Event whose payload has no body or text, such as an operator's
 // chat.message sent to a Work, shows the rest of its data under its heading
-// rather than the heading alone (#574). The controls: the common fields are
-// not repeated, a body still stands in for the payload, and a long payload
+// rather than the heading alone (#574). The controls: the common fields the
+// heading shows are not repeated, those it can't show are kept, a body still stands in for the payload, and a long payload
 // says it was clipped.
 func TestRenderUnknownPayload(t *testing.T) {
 	at := time.Date(2026, 11, 13, 16, 26, 34, 0, time.UTC)
@@ -80,6 +80,17 @@ func TestRenderUnknownPayload(t *testing.T) {
 	}
 	if got := RenderEvents([]domain.Event{ev(`{"author": "sam"}`)}); strings.Contains(got, "{") {
 		t.Fatalf("only common fields rendered as %q", got)
+	}
+	// A common field the heading can't word is kept, not dropped.
+	for data, want := range map[string]string{
+		`{"body": {"md": "hi"}}`:                       `{"body":{"md":"hi"}}`,
+		`{"author": {"login": "sam"}, "message": "x"}`: `{"author":{"login":"sam"},"message":"x"}`,
+		`{"line": 12, "message": "x"}`:                 `{"line":12,"message":"x"}`,
+		`{"number": 0, "note": "x"}`:                   `{"note":"x","number":0}`,
+	} {
+		if got := RenderEvents([]domain.Event{ev(data)}); !strings.HasSuffix(got, "\n\n"+want) {
+			t.Errorf("%s rendered as %q", data, got)
+		}
 	}
 	if got := RenderEvents([]domain.Event{ev(`"plain"`)}); !strings.HasSuffix(got, "\n\n\"plain\"") {
 		t.Fatalf("a non-object payload rendered as %q", got)

@@ -134,16 +134,21 @@ func renderEvent(e domain.Event) string {
 	}
 	var m map[string]any
 	_ = json.Unmarshal(e.Data.Data, &m)
+	shown := map[string]bool{}
 	str := func(k string) string {
-		switch v := m[k].(type) {
+		v := ""
+		switch x := m[k].(type) {
 		case string:
-			return strings.TrimSpace(v)
+			v = strings.TrimSpace(x)
 		case float64:
-			if v != 0 {
-				return fmt.Sprintf("%v", v)
+			if x != 0 {
+				v = fmt.Sprintf("%v", x)
 			}
 		}
-		return ""
+		if v != "" {
+			shown[k] = true
+		}
+		return v
 	}
 	head := "### " + e.Type
 	if kind := str("kind"); kind != "" {
@@ -183,7 +188,7 @@ func renderEvent(e domain.Event) string {
 		text = str("text")
 	}
 	if text == "" {
-		text = unshown(e.Data.Data)
+		text = unshown(e.Data.Data, shown)
 	}
 	out := strings.Join(lines, "\n")
 	if text != "" {
@@ -234,25 +239,24 @@ func spell(d time.Duration) string {
 	return d.String()
 }
 
-// commonFields are the payload fields renderEvent words itself.
-var commonFields = []string{"kind", "number", "path", "line", "author", "state", "title", "url", "body", "text"}
-
 // payloadClip is the most of a payload's remaining JSON a turn shows.
 const payloadClip = 2000
 
-// unshown is the rest of a payload without a body or text, beyond the common
-// fields, as compact JSON with each value's exact bytes, so an Event whose
-// schema no renderer knows still reaches the turn with its data (#574). A
-// payload that isn't an object is shown as it is. Either is clipped, and says
-// so. It is empty when nothing is left.
-func unshown(raw []byte) string {
+// unshown is the rest of a payload without a body or text, beyond the fields
+// renderEvent has already worded (shown), as compact JSON with each value's
+// exact bytes, so an Event whose schema no renderer knows still reaches the
+// turn with its data (#574). A common field the heading couldn't word (an
+// object author, a line without a path) stays in. A payload that isn't an
+// object is shown as it is. Either is clipped, and says so. It is empty when
+// nothing is left.
+func unshown(raw []byte, shown map[string]bool) string {
 	if t := strings.TrimSpace(string(raw)); t == "" || t == "null" {
 		return ""
 	}
 	text := string(raw)
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) == nil {
-		for _, k := range commonFields {
+		for k := range shown {
 			delete(fields, k)
 		}
 		if len(fields) == 0 {

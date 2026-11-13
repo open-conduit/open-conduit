@@ -610,11 +610,16 @@ func TestRenderTurnLimit(t *testing.T) {
 }
 
 // An Event whose payload has no body or text shows the rest of its data, not
-// the heading alone (#574); the common fields are not repeated.
+// the heading alone (#574); the common fields the heading shows are not
+// repeated, and those it can't show are kept.
 func TestRenderUnknownPayload(t *testing.T) {
 	e := domain.Event{Type: "chat.message", Data: domain.Payload{Schema: "chat.v1", Data: []byte(`{"message": "ship it & tell <me>", "author": "sam"}`)}}
 	if got := codex.RenderEvents([]domain.Event{e}); got != "### chat.message by sam\n\n{\"message\":\"ship it & tell <me>\"}" {
 		t.Fatalf("rendered as %q", got)
+	}
+	kept := domain.Event{Type: "chat.message", Data: domain.Payload{Data: []byte(`{"body": {"md": "hi"}, "line": 12}`)}}
+	if got := codex.RenderEvents([]domain.Event{kept}); got != "### chat.message\n\n{\"body\":{\"md\":\"hi\"},\"line\":12}" {
+		t.Fatalf("common fields the heading can't word rendered as %q", got)
 	}
 	if got := codex.RenderEvents([]domain.Event{{Type: "core.retry.due"}}); got != "### core.retry.due" {
 		t.Fatalf("an empty payload rendered as %q", got)
