@@ -247,6 +247,36 @@ func TestFanOutAcceptsAnEventForEachTarget(t *testing.T) {
 	}
 }
 
+func TestFanOutRefusesABodyItsEventsCannotCarry(t *testing.T) {
+	h := sdktest.New(t, webhook.Build(webhook.Options{}), sdktest.WithSecrets(scope, map[string]string{webhook.FixtureSecret: webhook.FixtureValue}))
+	cfg := json.RawMessage(`{"scope":"` + scope + `","webhook_secret":"` + webhook.FixtureSecret + `","hooks":[` +
+		`{"name":"wide","fan_out":["a","b","c","d"]},{"name":"narrow"}]}`)
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: webhook.Name,
+		Name: webhook.FixtureEntry, Config: cfg, Secrets: []string{webhook.FixtureSecret}}}}); err != nil {
+		t.Fatal(err)
+	}
+	// JSON escapes each < as six bytes, in text and in a JSON body alike.
+	markup := strings.Repeat("<", 400<<10)
+	text := http.Header{"Content-Type": {"text/html"}}
+	if got := post(t, h, url("wide"), text, markup); got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("escape-heavy text to 4 targets: %d", got)
+	}
+	if got := post(t, h, url("wide"), nil, `{"html":"`+markup+`"}`); got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("escape-heavy JSON to 4 targets: %d", got)
+	}
+	// A plain 1 MiB body fits 4 targets, and a hook without fan-out takes
+	// the most escape-heavy body it can be sent.
+	if got := post(t, h, url("wide"), text, strings.Repeat("x", webhook.MaxBody)); got != http.StatusAccepted {
+		t.Fatalf("plain body to 4 targets: %d", got)
+	}
+	if got := post(t, h, url("narrow"), text, strings.Repeat("<", webhook.MaxBody)); got != http.StatusAccepted {
+		t.Fatalf("escape-heavy body without fan-out: %d", got)
+	}
+	if n := len(h.Events()); n != 5 {
+		t.Fatalf("%d events", n)
+	}
+}
+
 func TestRoutesSelectByTarget(t *testing.T) {
 	h := fanOut(t)
 	if got := post(t, h, url("tickets"), http.Header{"X-Delivery-Id": {"d-1"}}, `{"ticket":"T-1"}`); got != http.StatusAccepted {

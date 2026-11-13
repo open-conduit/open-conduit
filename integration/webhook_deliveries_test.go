@@ -94,25 +94,39 @@ func TestWebhookFanOutThroughRuntime(t *testing.T) {
 		return tx.PutScope(s, s.Revision)
 	})
 	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.push, e.clock.Now))
-	post := func(id, body string) {
+	send := func(id, body string) int {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/tickets/"+webhook.Token("s", webhook.FixtureSource, "tickets", 0), strings.NewReader(body))
 		req.Header = http.Header{"Content-Type": {"application/json"}, "X-Delivery-Id": {id}}
 		w := httptest.NewRecorder()
 		hook.ServeHTTP(w, req)
-		if w.Code != http.StatusAccepted {
-			t.Fatalf("%s: %d", id, w.Code)
+		return w.Code
+	}
+	post := func(id, body string) {
+		t.Helper()
+		if code := send(id, body); code != http.StatusAccepted {
+			t.Fatalf("%s: %d", id, code)
 		}
 	}
 	post("d-1", `{"ticket":"T-1"}`)
 	post("d-1", `{"ticket":"T-1"}`)
 	post("d-2", `{"ticket":"T-1","note":"more"}`)
+	// Each < encodes as six bytes in each target's Event. Just under the
+	// bound, the real ingress accepts the delivery in one page; just over,
+	// the sender is told it is too large rather than to retry.
+	markup := func(kib int) string { return `{"ticket":"T-2","html":"` + strings.Repeat("<", kib<<10) + `"}` }
+	if code := send("d-big", markup(590)); code != http.StatusAccepted {
+		t.Fatalf("a delivery under the bound: %d", code)
+	}
+	if code := send("d-bigger", markup(610)); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a delivery over the bound: %d", code)
+	}
 	e.route()
 	deliveries := e.events(webhook.TypeDelivery)
-	if len(deliveries) != 4 {
+	if len(deliveries) != 6 {
 		t.Fatalf("%d deliveries", len(deliveries))
 	}
-	if works := e.works(); len(works) != 2 {
+	if works := e.works(); len(works) != 4 {
 		t.Fatalf("works: %+v", works)
 	}
 	for _, target := range []string{"triage", "audit"} {
