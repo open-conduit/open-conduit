@@ -91,8 +91,8 @@ func shellConfig(t *testing.T, binding map[string]any) string {
   "version": 1, "settings": {}, "connections": [],
   "scopes": [{
     "id": "ops", "name": "Operations",
-    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes": []},
-    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
+    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes": [], "work_kinds": ["fixture.child"]},
+    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "work_kinds": ["fixture.child"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
     "routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}}],
     "secret_refs": {"api": "cmd:printf shell-secret"}
   }]
@@ -241,7 +241,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		t.Fatal(err)
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }), Observer: observer})
+	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }, nil), Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}

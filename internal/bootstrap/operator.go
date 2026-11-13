@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -29,7 +30,9 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
+	reg := config.Registry{Executors: executors, Handlers: handlerNames(), HandlerConfig: map[string]func(json.RawMessage) error{
+		"work": func(raw json.RawMessage) error { _, err := parseWorkRoute(raw); return err },
+	}}
 	return reg
 }
 

@@ -58,7 +58,29 @@ type Authority struct {
 	// connection's type resolve its config and secrets in the scope (see
 	// the extension protocol's configure and secret.resolve).
 	Connection string
+	// WorkKinds are the kinds of child Work the execution may ask for with
+	// create_work, each with what to ask it for; the host refuses any
+	// other kind. Empty grants none.
+	WorkKinds []WorkKind `json:",omitempty"`
 }
+
+// WorkKind is one kind of child Work an execution may ask for, and the
+// operator's description of what to ask it for.
+type WorkKind struct {
+	Kind, Description string
+}
+
+// GrantsWorkKind reports whether a lets its execution ask for child Work of
+// kind.
+func (a Authority) GrantsWorkKind(kind string) bool {
+	for _, k := range a.WorkKinds {
+		if k.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 type ToolCall struct {
 	Operation string
 	// Optional assertions may narrow authority, never select another target.

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,9 @@ type AuthorityCheck struct {
 	ScopeID, WorkID, ExecutionID domain.ID
 	Binding, Generation          string
 	Operation                    string
+	// WorkKind is, for create_work, the kind of child Work asked for; the
+	// ceiling must still grant the binding that kind.
+	WorkKind string
 }
 
 // ToolbeltGrant is the pinned operation/event allowlist for one new token,
@@ -46,6 +50,8 @@ type AuthorityCheck struct {
 type ToolbeltGrant struct {
 	Operations, EventTypes []string
 	Connection             string
+	// WorkKinds are the kinds of child Work the binding may ask for.
+	WorkKinds []extension.WorkKind
 }
 
 // RefusalConfigDrift classifies a refused call whose operation the
@@ -280,6 +286,10 @@ func (t *Toolbelt) Operations() []string {
 // repeats. It reveals nothing beyond what the grant already names. A token
 // that is revoked, expired or issued to another execution than the asserted
 // one is unauthorized.
+//
+// The host adds its own guidance on child Work: the kinds the grant lets the
+// execution ask for, each with its description, and, when the execution's
+// Work is itself child Work, that its result is what the asker receives.
 func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.ID) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
@@ -289,8 +299,67 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 			out = append(out, op.Guidance)
 		}
 	})
+	if err != nil {
+		return out, err
+	}
+	record, err := t.load(ctx, token)
+	if err != nil {
+		return out, err
+	}
+	a := record.Authority
+	var kinds []extension.WorkKind
+	if contains(a.Operations, extension.CreateWork) {
+		for _, k := range a.WorkKinds {
+			if t.options.Authorize == nil || t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: extension.CreateWork, WorkKind: k.Kind}) == nil {
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	if g := askGuidance(kinds); g != "" {
+		out = append(out, g)
+	}
+	var asked bool
+	err = storage.View(ctx, t.store, t.now(), func(tx storage.Tx) error {
+		w, e := tx.Work(a.WorkID)
+		if e != nil || w.ParentID == "" {
+			return e
+		}
+		parent, e := tx.Work(w.ParentID)
+		if errors.Is(e, storage.ErrNotFound) {
+			return nil
+		}
+		asked = e == nil && slices.Contains(parent.CorrelationKeys, domain.LineageKey(parent.ID))
+		return e
+	})
+	if asked {
+		out = append(out, childGuidance)
+	}
 	return out, err
 }
+
+// askGuidance tells an agent which kinds of child Work it may ask for, and
+// how to hand a task over and hear the answer; "" when it may ask for none.
+func askGuidance(kinds []extension.WorkKind) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Ask another agent (`create_work`)\n\n")
+	b.WriteString("You can hand a task to another agent. It works on it as its own Work, with its own history, and you hear its answer when it ends. You may ask for these kinds, and no others:\n")
+	for _, k := range kinds {
+		fmt.Fprintf(&b, "\n- `%s`", k.Kind)
+		if d := strings.TrimSpace(k.Description); d != "" {
+			b.WriteString(": " + d)
+		}
+	}
+	b.WriteString("\n\nTo ask, call `create_work` with the `kind` and the task as its `context`, for example `{\"kind\": \"" + kinds[0].Kind + "\", \"context\": {\"schema\": \"" + kinds[0].Kind + ".v1\", \"data\": {\"task\": \"…\"}}}`. Put everything the other agent needs in the task: it sees nothing else of your Work.\n\n")
+	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\"]}}` and end your turn; you are resumed when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer.")
+	return b.String()
+}
+
+// childGuidance tells the agent of child Work how its answer reaches the
+// Work that asked for it.
+const childGuidance = "## You are answering another agent\n\nAnother agent asked for this Work, and is waiting for your answer. Give it as your turn's `result` (the `result` field of your status, or of `core.turn.v1` data when you declare the outcome): that, not your summary or your final text, is what the agent that asked receives. Put the whole answer in it. If you complete without a result, your attempt fails and is tried again."
 
 // Described is each operation the token's pinned grant includes and current
 // config still enables that declares a Summary or Input, in grant order,
@@ -542,7 +611,7 @@ func (t *Toolbelt) issueForAttempt(ctx context.Context, ref domain.LeaseRef, sta
 			expires = candidate
 		}
 	}
-	return t.Issue(ctx, extension.Authority{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID, Lease: ref, ExpiresAt: expires, Operations: grant.Operations, EventTypes: grant.EventTypes, Connection: grant.Connection})
+	return t.Issue(ctx, extension.Authority{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID, Lease: ref, ExpiresAt: expires, Operations: grant.Operations, EventTypes: grant.EventTypes, Connection: grant.Connection, WorkKinds: grant.WorkKinds})
 }
 
 // Revoke is idempotent; unknown tokens are already unusable.
@@ -773,8 +842,16 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if !contains(a.Operations, c.Operation) {
 		return out, unauthorized(RefusalNotGranted)
 	}
+	kind := ""
+	if c.Operation == extension.CreateWork && c.Child != nil {
+		// Child Work of a kind the binding isn't granted is refused here,
+		// whatever the agent was told (fail closed: no kinds, no children).
+		if kind = c.Child.Kind; !a.GrantsWorkKind(kind) {
+			return out, unauthorized(RefusalNotGranted)
+		}
+	}
 	if t.options.Authorize != nil {
-		if e := t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: c.Operation}); e != nil {
+		if e := t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: c.Operation, WorkKind: kind}); e != nil {
 			return out, unauthorized(RefusalNotGranted)
 		}
 	}
@@ -921,6 +998,10 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 			if rejected != nil {
 				refusal = rejected
 				return nil
+			}
+			// The parent hears when the child ends on its lineage key.
+			if _, er = claimLineageInTx(tx, w); er != nil {
+				return er
 			}
 			created, er := tx.Event(domain.ID("work-created/" + identity(string(child.ID))))
 			if er != nil {

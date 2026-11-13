@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/storage"
@@ -64,7 +65,10 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 		if len(pending) > 0 {
 			w.State = domain.WorkReady
 		}
-		return tx.PutWork(w, w.Revision)
+		if err = tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		return childEndedInTx(tx, r.now(), r.options.CausalLimits, w)
 	})
 }
 
@@ -72,9 +76,12 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 // Physical process cleanup is performed by later scheduler/executor dispatch.
 // Historical accepted inputs and control intents remain available for audit.
 func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
-	return r.transact(ctx, nil, func(tx storage.Tx) error { return cancelWorkInTx(tx, id) })
+	return r.transact(ctx, nil, func(tx storage.Tx) error { return cancelWorkInTx(tx, r.now(), r.options.CausalLimits, id) })
 }
-func cancelWorkInTx(tx storage.Tx, id domain.ID) error {
+
+// cancelWorkInTx cancels Work and tells its parent, if it has one
+// (childEndedInTx).
+func cancelWorkInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.ID) error {
 	{
 		w, err := tx.Work(id)
 		if err != nil {
@@ -152,7 +159,10 @@ func cancelWorkInTx(tx storage.Tx, id domain.ID) error {
 			return err
 		}
 		w.State = domain.WorkCancelled
-		return tx.PutWork(w, w.Revision)
+		if err = tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		return childEndedInTx(tx, now, limits, w)
 	}
 }
 
@@ -185,6 +195,10 @@ func (r *Router) CreateChild(ctx context.Context, ref domain.LeaseRef, request C
 			return e
 		}
 		out, e = r.createLinked(tx, parent.ScopeID, parent.ID, "", trigger, request, &rejected)
+		if e != nil || rejected != nil {
+			return e
+		}
+		_, e = claimLineageInTx(tx, parent)
 		return e
 	})
 	if err != nil {
@@ -252,7 +266,21 @@ func (r *Router) createLinked(tx storage.Tx, scope, parent, predecessor, trigger
 	if eventID == "" {
 		eventID = domain.ID("work-created/" + identity(string(request.ID)))
 	}
-	data, err := json.Marshal(struct{ WorkID, ParentID, PredecessorID domain.ID }{request.ID, parent, predecessor})
+	// Child Work's creation carries what it was asked: its kind and
+	// context, so the turn it starts reads the task like any trigger.
+	created := struct {
+		WorkID, ParentID, PredecessorID domain.ID
+		Kind                            string          `json:",omitempty"`
+		Context                         *domain.Payload `json:",omitempty"`
+	}{WorkID: request.ID, ParentID: parent, PredecessorID: predecessor}
+	if parent != "" {
+		created.Kind = request.Kind
+		if request.Context.Schema != "" || len(request.Context.Data) > 0 {
+			ctx := request.Context
+			created.Context = &ctx
+		}
+	}
+	data, err := json.Marshal(created)
 	if err != nil {
 		return domain.Work{}, err
 	}

@@ -157,7 +157,7 @@ func (e *toolsEnv) compose() {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			if e.configs != nil {
-				g, err := e.configs.Grant(belt.EventTypes)(ctx, s)
+				g, err := e.configs.Grant(belt.EventTypes, nil)(ctx, s)
 				g.Connection = e.connection
 				return g, err
 			}

@@ -22,6 +22,17 @@ const (
 type TurnDeclaration struct {
 	Status  string `json:"status,omitempty"`
 	Comment string `json:"comment,omitempty"`
+	// Result is what the turn hands back to whoever asked for the Work:
+	// for child Work, the parent receives it in its TypeChildEnded Event.
+	// Any JSON value (a string answer, an object of the caller's shape).
+	Result json.RawMessage `json:"result,omitempty"`
+}
+
+// HasResult reports whether the declaration carries a result: present, not
+// null and not an empty string.
+func (d TurnDeclaration) HasResult() bool {
+	r := string(d.Result)
+	return r != "" && r != "null" && r != `""`
 }
 
 // TurnEnded is a TypeTurnEnded Event's payload.

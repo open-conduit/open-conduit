@@ -124,7 +124,7 @@ func (c *Control) SettleGateHold(ctx context.Context, gate string, workID domain
 			return e
 		}
 		if !admit {
-			return cancelWorkInTx(tx, w.ID)
+			return cancelWorkInTx(tx, c.now(), c.limits, w.ID)
 		}
 		if e = putJSON(tx, gatePassNamespace, identity(string(w.ID)), event); e != nil {
 			return e

@@ -129,6 +129,8 @@ export const Authority = t.object(
     trigger_id: t.optional(t.string()),
     // The connection the execution's binding names, whose secrets the operation may resolve.
     connection: t.optional(t.string()),
+    // The kinds of child Work the execution may ask for, each with what to ask it for.
+    work_kinds: t.optional(t.array(t.object({ kind: t.string(), description: t.optional(t.string()) }, open))),
   },
   open,
 );

@@ -36,7 +36,10 @@ func (s *Scheduler) turnEndedInTx(tx storage.Tx, x domain.Execution, now time.Ti
 	data, _ := json.Marshal(domain.TurnEnded{Status: d.Status, Work: string(w.ID), Execution: string(x.ID)})
 	keys := make([]*domain.CorrelationKey, 0, len(w.CorrelationKeys))
 	for i := range w.CorrelationKeys {
-		keys = append(keys, &w.CorrelationKeys[i])
+		// The lineage key is for the Work's children's news, not its turns.
+		if w.CorrelationKeys[i].Source != domain.LineageSource {
+			keys = append(keys, &w.CorrelationKeys[i])
+		}
 	}
 	if len(keys) == 0 {
 		keys = append(keys, nil)

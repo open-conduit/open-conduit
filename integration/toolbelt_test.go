@@ -74,7 +74,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}, records: new([]observability.Record)}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
-			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection"}, nil
+			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection", WorkKinds: fixtureWorkKinds}, nil
 		},
 		Authorize: func(_ context.Context, c runtime.AuthorityCheck) error {
 			h.mu.Lock()
@@ -174,8 +174,12 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	return h
 }
 func (h *toolbeltHarness) authority() extension.Authority {
-	return extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, TriggerID: "trigger", Connection: "fixture-connection"}
+	return extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, TriggerID: "trigger", Connection: "fixture-connection", WorkKinds: fixtureWorkKinds}
 }
+
+// fixtureWorkKinds are the kinds of child Work the harness's grant lets
+// its execution ask for.
+var fixtureWorkKinds = []extension.WorkKind{{Kind: "fixture.child"}}
 
 // TestProductionToolbeltReplayWindow drills the crash window between an
 // extension handler's effect and the commit of its replay record: the call
@@ -300,7 +304,9 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
 	got, err := h.belt.Guidance(ctx, h.token, "")
-	if err != nil || len(got) != 1 || got[0] != "Echo with fixture.echo." {
+	// The host's own guidance follows: the kinds of child Work the grant
+	// lets the execution ask for.
+	if err != nil || len(got) != 2 || got[0] != "Echo with fixture.echo." || !strings.Contains(got[1], "- `fixture.child`") {
 		t.Fatalf("guidance = %q, %v", got, err)
 	}
 	if _, err = h.belt.Guidance(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {

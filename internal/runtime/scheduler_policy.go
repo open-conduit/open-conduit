@@ -193,6 +193,9 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 	if err = tx.PutWork(w, w.Revision); err != nil {
 		return err
 	}
+	if err = childEndedInTx(tx, now, s.options.CausalLimits, w); err != nil {
+		return err
+	}
 	if old.TimerID != "" {
 		timer, er := tx.Timer(old.TimerID)
 		if er == nil {

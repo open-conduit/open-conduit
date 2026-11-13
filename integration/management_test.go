@@ -151,7 +151,7 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 		t.Fatal(err)
 	}
 	h.router = router
-	h.belt, err = runtime.NewToolbelt(db, h.clock.Now, router, runtime.ToolbeltOptions{Authorize: h.configs.Authorize, Grant: h.configs.Grant(func() []string { return h.belt.EventTypes() })})
+	h.belt, err = runtime.NewToolbelt(db, h.clock.Now, router, runtime.ToolbeltOptions{Authorize: h.configs.Authorize, Grant: h.configs.Grant(func() []string { return h.belt.EventTypes() }, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -944,7 +944,7 @@ func TestManagementGrantsBindingGrantsTheWorkTook(t *testing.T) {
 	cfg := strings.Replace(managementConfig, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "secret_names": ["api"], "config": {}`,
 		`"operations": ["read_context", "declare_outcome"], "secret_names": ["api"], "config": {}, "grants": [{"name": "children", "operations": ["create_work", "wait"]}, {"name": "events", "operations": ["emit"]}]`, 1)
 	h := newManagementHarnessWith(t, cfg, nil)
-	grant := h.configs.Grant(nil)
+	grant := h.configs.Grant(nil, nil)
 	for _, c := range []struct {
 		grants []string
 		want   []string
@@ -980,7 +980,7 @@ func TestManagementGrantPinsBindingConnection(t *testing.T) {
 		}
 		r.Connections["acme"] = nil
 	})
-	g, err := h.configs.Grant(nil)(context.Background(), runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}})
+	g, err := h.configs.Grant(nil, nil)(context.Background(), runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}})
 	if err != nil || g.Connection != "acme-reviewer" {
 		t.Fatalf("grant connection %q: %v", g.Connection, err)
 	}

@@ -514,6 +514,12 @@ func ToolbeltCases() []ToolbeltCase {
 				return fmt.Errorf("cross-scope child accepted: %v", err)
 			}
 			child.ScopeID = ""
+			// Authority names the kinds of child Work it may ask for; any
+			// other kind is refused, whatever the caller was told.
+			ungranted := domain.Work{ID: "ungranted", Kind: "fixture.ungranted"}
+			if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CreateWork, Child: &ungranted}); !errors.Is(err, extension.ErrUnauthorized) {
+				return fmt.Errorf("child of a kind the authority doesn't grant accepted: %v", err)
+			}
 			out, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CreateWork, Child: &child})
 			if err != nil {
 				return err

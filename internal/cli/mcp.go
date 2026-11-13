@@ -58,11 +58,11 @@ var mcpTools = []mcpTool{
 		"correlation_key": keySchema,
 		"occurred_at":     map[string]any{"type": "string", "description": "RFC 3339."},
 	}, "type", "delivery_id")},
-	{Name: "create_work", Description: "Create follow-up child Work in this scope.", InputSchema: object(map[string]any{
-		"kind":             map[string]any{"type": "string"},
+	{Name: "create_work", Description: "Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result; wait for it.", InputSchema: object(map[string]any{
+		"kind":             map[string]any{"type": "string", "description": "A kind of child Work your toolbelt guidance lists; the host refuses any other."},
 		"id":               map[string]any{"type": "string"},
 		"correlation_keys": map[string]any{"type": "array", "items": keySchema},
-		"context":          payloadSchema,
+		"context":          map[string]any{"type": "object", "description": "The task, as a payload: {schema, data}, for example {\"schema\": \"<kind>.v1\", \"data\": {\"task\": \"…\"}}.", "properties": payloadSchema["properties"]},
 	}, "kind")},
 	{Name: "wait", Description: "Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. Finish your turn after calling it.", InputSchema: object(map[string]any{
 		"match": map[string]any{"type": "object", "properties": map[string]any{

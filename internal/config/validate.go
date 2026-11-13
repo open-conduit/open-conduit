@@ -285,7 +285,7 @@ func (v *validator) resolve(id string) *effective {
 		}
 	}
 	e := &effective{enabled: true, concurrency: v.doc.Settings.Concurrency, admission: v.doc.Settings.AdmissionLimit,
-		auth: Authorization{[]string{}, []string{}, []string{}, []string{}}, refs: map[string]string{}}
+		auth: Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}, refs: map[string]string{}}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
 			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil}
@@ -300,6 +300,7 @@ func (v *validator) resolve(id string) *effective {
 			{"connections", a.Connections, e.auth.Connections, func(s string) bool { return v.connections[s] }},
 			{"read_scopes", a.ReadScopes, e.auth.ReadScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
 			{"file_scopes", a.FileScopes, e.auth.FileScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
+			{"work_kinds", a.WorkKinds, e.auth.WorkKinds, func(string) bool { return true }},
 		}
 		for _, c := range categories {
 			p := path + "/authorization/" + c.key
@@ -410,6 +411,14 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		}
 		if b.Connection != "" && !slices.Contains(e.auth.Connections, b.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
+		}
+		for k, kind := range b.WorkKinds {
+			if !slices.Contains(e.auth.WorkKinds, kind) {
+				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_denied", "kind is not in the scope authorization's work_kinds; add it there or remove it here")
+			}
+		}
+		if len(b.WorkKinds) > 0 && !resolved.Operation("create_work") {
+			v.fail(p+"/work_kinds", "work_kinds_unused", "the binding names work_kinds but isn't granted create_work; add create_work to its operations")
 		}
 	}
 	for _, name := range e.routes.names {
@@ -937,6 +946,21 @@ func (s *Snapshot) AuthorizeOperation(scope domain.ID, binding, operation string
 	}
 	b, ok := e.Binding(binding)
 	if !ok || !b.Operation(operation) || !slices.Contains(e.Authorization.Operations, operation) {
+		return ErrDenied
+	}
+	return nil
+}
+
+// AuthorizeWorkKind allows a binding to ask for child Work of kind: the
+// binding names it in work_kinds and the scope authorization's work_kinds
+// still has it.
+func (s *Snapshot) AuthorizeWorkKind(scope domain.ID, binding, kind string) error {
+	e, ok := s.Scopes[scope]
+	if !ok || !e.Enabled {
+		return ErrDenied
+	}
+	b, ok := e.Binding(binding)
+	if !ok || !slices.Contains(e.Authorization.WorkKinds, kind) || !slices.Contains(b.WorkKinds, kind) {
 		return ErrDenied
 	}
 	return nil

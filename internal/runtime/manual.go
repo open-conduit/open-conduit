@@ -271,7 +271,7 @@ func (c *Control) CancelWork(ctx context.Context, workID domain.ID, expected dom
 		if e = tx.MarkRouted(event, "", "control"); e != nil {
 			return e
 		}
-		return cancelWorkInTx(tx, w.ID)
+		return cancelWorkInTx(tx, c.now(), c.limits, w.ID)
 	})
 	return
 }
