@@ -146,11 +146,18 @@ func (in *Ingress) Reconcile(_ context.Context, scan extension.Scan) (extension.
 }
 
 // Token is a hook's URL token: an HMAC of the entry's webhook secret over
-// the namespace and hook, so it is stable across restarts, distinct per
-// hook and revoked by rotating the secret.
-func Token(secret, namespace, hook string) string {
+// the namespace, the hook and its version, so it is stable across
+// restarts and distinct per hook. Rotating the secret revokes every hook's
+// URL; bumping a hook's version revokes that hook's alone. Version 0 signs
+// only the namespace and hook, so a hook's first URL is the same as it was
+// before versions existed.
+func Token(secret, namespace, hook string, version int) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(namespace + "\x00" + hook))
+	msg := namespace + "\x00" + hook
+	if version != 0 {
+		msg += "\x00" + strconv.Itoa(version)
+	}
+	mac.Write([]byte(msg))
 	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
@@ -267,7 +274,7 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context) (
 			http.Error(w, "webhook secret unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		if !hmac.Equal([]byte(parts[1]), []byte(Token(key, namespace, hook.Name))) {
+		if !hmac.Equal([]byte(parts[1]), []byte(Token(key, namespace, hook.Name, hook.Version))) {
 			http.NotFound(w, r)
 			return
 		}

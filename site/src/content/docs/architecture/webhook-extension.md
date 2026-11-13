@@ -21,10 +21,11 @@ A [job webhook](../schedule-extension/) is a different kind of POST. It triggers
 | Field | Meaning |
 | --- | --- |
 | `scope` | The scope the entry is in. |
-| `webhook_secret` | A selected secret name. Each hook's URL token is derived from it, so rotating it revokes every URL of the entry. |
+| `webhook_secret` | A selected secret name. Each hook's URL token is derived from it, so rotating it revokes every URL of the entry. To revoke one hook's URL, bump that hook's `version`. |
 | `hooks[].name` | Lower case letters, digits, `_` and `-`, at most 64. It is in the URL and in the Work's title. |
 | `hooks[].delivery_key` | Optional. Where a delivery's identity is read: `header:<name>` or `body:<JSON pointer>`. |
 | `hooks[].correlation_key` | Optional. Where a delivery's thread is read, in the same form. Best a value that names something that ends and may start again, such as a ticket or an incident (see [Routing and Work](#routing-and-work)). |
+| `hooks[].version` | Optional, an integer, 0 by default. It is signed into the hook's URL token, so bumping it revokes that hook's URL alone, keeping its name, its Work IDs and its threads. After applying the bump, `doctor --check-secrets` prints the new URL to hand to the sender. |
 
 A key is `header:<name>` (the header's value) or `body:<pointer>` (an RFC 6901 pointer into a JSON body, naming a string, number or boolean). A value is at most 256 bytes.
 
@@ -32,7 +33,7 @@ The route is `{"handler": "webhook", "config": {"hooks": ["deploys"]}}`. `hooks`
 
 ## Ingress
 
-The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The token is an HMAC of the entry's secret over the namespace (`webhook/<scope>/<entry>`) and the hook, so it is stable across restarts and distinct for each hook. The handler:
+The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The token is an HMAC of the entry's secret over the namespace (`webhook/<scope>/<entry>`), the hook and the hook's version, so it is stable across restarts and distinct for each hook. Version 0 signs only the namespace and the hook, so a hook that never sets a version keeps the URL it had before versions existed. The handler:
 
 1. Answers 404 for an unknown hook or a wrong token, compared in constant time before the body is read.
 2. Answers 413 for a body over 1 MiB.
@@ -69,11 +70,11 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 ## Doctor
 
 - `webhook` lists each hook's path, with `<token>`.
-- `webhook-urls` (`doctor --check-secrets`) prints each hook's signed URL, and fails when an entry's secret is unavailable.
+- `webhook-urls` (`doctor --check-secrets`) prints each hook's signed URL at its current version, and fails when an entry's secret is unavailable.
 
 ## Evidence
 
-- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, a missing or long delivery key, a wrong token, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
+- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, a missing or long delivery key, a wrong token, a version bump revoking one hook's URL while the entry's other hook keeps its own, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
 - [`TestWebhookDeliveriesThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): the real runtime ingress and router over SQLite. A retry with another body is the first delivery, a delivery with the same correlation value is routed to the first one's Work, and every other delivery has Work of its own.
 - [`TestDaemonWebhookThreadGenerations`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): a ticket's Work finishes, its next delivery opens a linked successor that parks on a type-only wait, and the delivery after that wakes the successor rather than starting more Work.
 - [`TestDaemonWebhookDeliveries`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): the composed daemon. A hook and an entry added by `config apply` take deliveries with no restart. Two deliveries and a retry run as two Works, each with its body in `OS_INPUT_FILE` and read back whole through `os call webhook.delivery.read`; a wrong token is refused, and `doctor --check-secrets` prints the URL.

@@ -66,6 +66,10 @@ type Hook struct {
 	// of the Work the first one opened. A delivery without it, or a hook
 	// without a correlation key, opens Work of its own.
 	CorrelationKey string `json:"correlation_key,omitempty"`
+	// Version is signed into the hook's URL token (0 when unset). Bumping
+	// it revokes this hook's URL alone, keeping its name, Work and threads;
+	// doctor --check-secrets prints the new URL.
+	Version int `json:"version,omitempty"`
 }
 
 // Key is a parsed delivery or correlation key: a header, or a JSON
@@ -154,6 +158,9 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 		}
 		if _, err := ParseKey(h.CorrelationKey); err != nil {
 			return s, fmt.Errorf("hook %s: correlation_key: %w", h.Name, err)
+		}
+		if h.Version < 0 {
+			return s, fmt.Errorf("hook %s: version must not be negative", h.Name)
 		}
 	}
 	return s, nil
@@ -277,8 +284,8 @@ func Build(o Options) *sdk.Extension {
 	ext.Manifest.Title = "Webhook"
 	ext.Manifest.Provides.Extensions[0].Fields = []protocol.FieldDecl{
 		{Name: "scope", Help: "the scope the entry is in", Required: true},
-		{Name: "webhook_secret", Help: "names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes the URLs", Required: true},
-		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"}]: each hook, the header or JSON pointer that identifies a delivery (a retry is the same delivery), and the one that threads it into one Work (a ticket's ID: once that Work finishes, the thread's next delivery opens a successor)`, Required: true},
+		{Name: "webhook_secret", Help: "names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes every hook's URL", Required: true},
+		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "version": 0}]: each hook, the header or JSON pointer naming a delivery (a retry is the same delivery), the one threading it into one Work (a ticket's ID; once that Work finishes, the next delivery opens a successor), and a version signed into its URL (bump it to revoke that URL alone)`, Required: true},
 	}
 	ext.Route(Name, Route{}, sdk.RouteConfig())
 	ext.Manifest.Provides.Routes[len(ext.Manifest.Provides.Routes)-1].Fields = []protocol.FieldDecl{
@@ -380,7 +387,7 @@ func (st *state) check(ctx context.Context, deep bool) (string, error) {
 					failed = errors.New("a webhook secret is unavailable")
 					continue
 				}
-				token = Token(secret, e.namespace, h.Name)
+				token = Token(secret, e.namespace, h.Name, h.Version)
 			}
 			line := fmt.Sprintf("%s: hook %s: POST %s/%s/%s/%s", e.namespace, h.Name, public, e.namespace, h.Name, token)
 			if !deep {

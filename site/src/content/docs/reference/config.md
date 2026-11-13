@@ -614,8 +614,8 @@ Extension entry `config`:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `scope` |  | Required. the scope the entry is in |
-| `webhook_secret` |  | Required. names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes the URLs |
-| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id"}]: each hook, the header or JSON pointer that identifies a delivery (a retry is the same delivery), and the one that threads it into one Work (a ticket's ID: once that Work finishes, the thread's next delivery opens a successor) |
+| `webhook_secret` |  | Required. names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes every hook's URL |
+| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "version": 0}]: each hook, the header or JSON pointer naming a delivery (a retry is the same delivery), the one threading it into one Work (a ticket's ID; once that Work finishes, the next delivery opens a successor), and a version signed into its URL (bump it to revoke that URL alone) |
 
 Route `config`:
 

@@ -72,7 +72,7 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 		return strings.Contains(check(r, "webhook").Detail, "hook deploys: POST https://hooks.example.test/webhook/ops/inbox/deploys/<token>")
 	})
 	ns := webhook.Namespace("ops", "inbox")
-	path := "/" + ns + "/deploys/" + webhook.Token("hook-secret", ns, "deploys")
+	path := "/" + ns + "/deploys/" + webhook.Token("hook-secret", ns, "deploys", 0)
 	post := func(path, id, body string) int {
 		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+path, bytes.NewReader([]byte(body)))
 		req.Header.Set("Content-Type", "application/json")
@@ -165,7 +165,7 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 		t.Fatalf("apply: %+v %v", applied, err)
 	}
 	alerts := webhook.Namespace("ops", "alerts")
-	added := []string{"/" + ns + "/forms/" + webhook.Token("hook-secret", ns, "forms"), "/" + alerts + "/pages/" + webhook.Token("hook-secret", alerts, "pages")}
+	added := []string{"/" + ns + "/forms/" + webhook.Token("hook-secret", ns, "forms", 0), "/" + alerts + "/pages/" + webhook.Token("hook-secret", alerts, "pages", 0)}
 	// Neither added hook has a delivery key, so each accepted POST is a
 	// delivery: post to each until one is accepted, and no more.
 	for _, p := range added {
@@ -224,7 +224,7 @@ func TestDaemonWebhookThreadGenerations(t *testing.T) {
 		return m != nil
 	})
 	ns := webhook.Namespace("ops", "inbox")
-	path := "/" + ns + "/tickets/" + webhook.Token("hook-secret", ns, "tickets")
+	path := "/" + ns + "/tickets/" + webhook.Token("hook-secret", ns, "tickets", 0)
 	post := func(id, body string) {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+path, bytes.NewReader([]byte(body)))
