@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1128,7 +1129,7 @@ func (slJobRoute) Match(_ context.Context, in extension.RouteInput) (extension.R
 // the thread's attachment.
 func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 	ctx := context.Background()
-	e := newSlackEnvWith(t, `,"post":[{"binding":"nightly","channels":["`+slChannel+`"]}]`, sl.IngressOptions{}, []string{slChannel},
+	e := newSlackEnvWith(t, `,"post":[{"binding":"nightly","channels":["`+slChannel+`"],"follow_up":{}}]`, sl.IngressOptions{}, []string{slChannel},
 		[]domain.Binding{{Name: "agent", Executor: "fixture"}, {Name: "nightly", Executor: "fixture"}},
 		[]domain.Route{{Name: "jobs", Handler: "jobs", Binding: "nightly"}, {Name: "threads", Handler: "slack", Binding: "agent", ActivePolicy: "queue"}})
 	tick := domain.Event{ID: "tick-1", Type: "fixture.tick", Source: "fixture/jobs", DeliveryID: "tick-1", OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now(),
@@ -1215,6 +1216,9 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 	if !ok || job.ID != "job/nightly" {
 		t.Fatalf("the posted thread is not the job's: %+v %v", job, ok)
 	}
+	if !slices.ContainsFunc(job.CorrelationKeys, func(k domain.CorrelationKey) bool { return k.ExternalID == sl.PostedKey(slChannel, ts, "nightly") }) {
+		t.Fatalf("the job's thread does not say nightly posted it: %+v", job.CorrelationKeys)
+	}
 	if q := e.queued(job.ID); len(q) != 0 {
 		t.Fatalf("the attachment or the post itself became input: %v", q)
 	}
@@ -1278,10 +1282,10 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 		}
 	}
 
-	// The job answers and finishes. A question after that opens its
-	// successor on the job's binding, which reads the post in the thread
-	// and answers there; once it has finished too, the next question opens
-	// the generation after it.
+	// The post config opts nightly's posts into follow-ups. The job answers
+	// and finishes. A question after that opens its successor on the job's
+	// binding, which reads the post in the thread and answers there; once
+	// it has finished too, the next question opens the generation after it.
 	outcome = domain.OutcomeCompleted
 	finish := func(work domain.ID) {
 		t.Helper()
@@ -1322,7 +1326,7 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if w.Kind != "fixture.job" || len(w.CorrelationKeys) != 1 || w.CorrelationKeys[0].ExternalID != sl.GenerationKey(slChannel, ts, 2) {
+		if w.Kind != "fixture.job" || len(w.CorrelationKeys) != 1 || w.CorrelationKeys[0].ExternalID != sl.GenerationKey(slChannel, ts, "nightly", 2) || len(w.Grants) != 0 {
 			t.Fatalf("the successor is not the job's next generation: %+v", w)
 		}
 		old, err := tx.Work(job.ID)

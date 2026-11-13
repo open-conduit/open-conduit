@@ -404,7 +404,7 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	if cause == "" {
 		cause = x.TriggerID
 	}
-	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true, Cause: cause}
+	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true, Cause: cause, Binding: x.ExecutorBinding}
 	state, err := src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err

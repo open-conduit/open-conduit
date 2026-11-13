@@ -113,7 +113,7 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !ok {
 		return extension.Skip("no slack entry in this scope reads " + e.Source), nil
 	}
-	channel, _, ok := ParseThreadKey(e.CorrelationKey.ExternalID)
+	channel, thread, ok := ParseThreadKey(e.CorrelationKey.ExternalID)
 	if !ok {
 		return extension.Skip("the key is not a Slack thread"), nil
 	}
@@ -121,6 +121,17 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	// thread a posting Work owns runs on that Work's binding instead, so
 	// every slack route takes its messages.
 	posted := in.Work != nil && in.Work.Kind != WorkKind
+	var poster string
+	if posted {
+		// Only a thread the Work itself holds a key for: a successor
+		// answers the thread that opened it, and the Slack tools act on
+		// that thread, so a message in another thread of its
+		// predecessor's would be answered in the wrong one.
+		var answers bool
+		if answers, poster = holds(*in.Work, e.Source, channel, thread); !answers {
+			return extension.Skip("a thread of an earlier generation's post, which this Work does not answer"), nil
+		}
+	}
 	if len(in.Route.Config.Data) > 0 && !posted {
 		rc, err := ParseRoute(in.Route.Config.Data)
 		if err != nil {
@@ -152,7 +163,7 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 			return extension.Skip("the message was deleted"), nil
 		}
 		if posted && in.Work.State.Terminal() {
-			return followUp(in.Work, e, channel, p), nil
+			return s.followUp(in.Work, e, channel, thread, poster, p), nil
 		}
 		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
 		if posted {
@@ -180,29 +191,53 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 }
 
 // followUp opens the next generation of a finished Work that posted the
-// thread a person has now written in (RouteDecision.Successor): Work of the
-// same kind, context and grants, run where the finished Work ran
-// (deliver current), so the job that wrote the post answers questions
-// about it. Its generation key names the thread, so the Slack tools act on
-// it, and the thread's own key reaches it through the Work it succeeds;
-// once it finishes, the next message opens the generation after it. The
-// post is its handoff: it is the thread's first message, which slack.thread
-// reads, marked with the Work that wrote it. An edit of an earlier reply
-// opens nothing: only a new message is a question. A finished
-// conversation (slack.conversation) is never succeeded: its thread ended
-// when a person said it was resolved.
-func followUp(w *domain.Work, e domain.Event, channel string, p MessagePayload) extension.RouteDecision {
+// thread a person has now written in (RouteDecision.Successor), when the
+// post config of the binding that posted it opts in (follow_up): without
+// it, a message lets nobody start that binding, and the Event stays
+// terminal. The successor is Work of the same kind and context with only
+// the grants follow_up names, run where the finished Work ran (deliver
+// current), so the job that wrote the post answers questions about it. Its
+// generation key names the thread and the binding, so the Slack tools act
+// on the thread and the next generation is checked against the same post
+// config; the thread's own key reaches it through the Work it succeeds.
+// The post is its handoff: it is the thread's first message, which
+// slack.thread reads, marked with the Work that wrote it. An edit of an
+// earlier reply opens nothing: only a new message is a question. A
+// finished conversation (slack.conversation) is never succeeded: its
+// thread ended when a person said it was resolved.
+func (s Settings) followUp(w *domain.Work, e domain.Event, channel, thread, binding string, p MessagePayload) extension.RouteDecision {
 	if p.Edited != "" {
 		return extension.Skip("an edit in the thread of a finished Work's post")
 	}
-	thread := p.Thread
-	if thread == "" {
-		thread = p.TS
+	if binding == "" {
+		return extension.Skip("the thread's post names no binding whose config allows follow-ups")
+	}
+	grants, ok := s.FollowsUp(binding, channel)
+	if !ok {
+		return extension.Skip("binding " + binding + "'s post config does not let a reply follow up once its Work has finished")
 	}
 	next, n := nextGeneration(w.ID)
-	return extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: w.Kind, Context: w.Context, Grants: append([]string(nil), w.Grants...),
-		AttachKeys: []domain.CorrelationKey{{Source: e.Source, ExternalID: GenerationKey(channel, thread, n)}},
+	return extension.RouteDecision{Match: true, Successor: true, CreateID: next, Kind: w.Kind, Context: w.Context, Grants: grants,
+		AttachKeys: []domain.CorrelationKey{{Source: e.Source, ExternalID: GenerationKey(channel, thread, binding, n)}},
 		Display:    Display(p), Deliver: extension.DeliverCurrent, Reason: "a person replied to a post of Work that has finished"}
+}
+
+// holds reports whether Work w holds a key for the thread (its own thread
+// key, the key saying it posted it, or a generation key naming it), and
+// the binding whose Work posted it when a key says.
+func holds(w domain.Work, source, channel, thread string) (bool, string) {
+	held, binding := false, ""
+	for _, k := range w.CorrelationKeys {
+		if k.Source != source {
+			continue
+		}
+		if c, t, b, _, ok := ParsePostedKey(k.ExternalID); ok && c == channel && t == thread {
+			held, binding = true, b
+		} else if c, t, ok := ParseThreadKey(k.ExternalID); ok && c == channel && t == thread {
+			held = true
+		}
+	}
+	return held, binding
 }
 
 // nextGeneration is the ID and number of the Work that succeeds finished
@@ -243,8 +278,13 @@ func opened(in extension.RouteInput) (extension.RouteDecision, error) {
 	if !s.Posts(p.Channel) || !tsPattern.MatchString(p.TS) {
 		return extension.Skip("channel " + p.Channel + " is not one the entry lets any binding post in"), nil
 	}
-	key := domain.CorrelationKey{Source: s.Namespace, ExternalID: ThreadKey(p.Channel, p.TS)}
-	return extension.RouteDecision{Match: true, AttachKeys: []domain.CorrelationKey{key}, Deliver: extension.DeliverNone, Reason: "a thread this Work posted"}, nil
+	keys := []domain.CorrelationKey{{Source: s.Namespace, ExternalID: ThreadKey(p.Channel, p.TS)}}
+	if p.Binding != "" && s.MayPost(p.Binding, p.Channel) {
+		// Which binding posted it, so a reply after the Work finishes is
+		// checked against that binding's post config (followUp).
+		keys = append(keys, domain.CorrelationKey{Source: s.Namespace, ExternalID: PostedKey(p.Channel, p.TS, p.Binding)})
+	}
+	return extension.RouteDecision{Match: true, AttachKeys: keys, Deliver: extension.DeliverNone, Reason: "a thread this Work posted"}, nil
 }
 
 // startReason says what let a message start a conversation.

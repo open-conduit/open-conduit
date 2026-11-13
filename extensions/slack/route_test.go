@@ -348,6 +348,15 @@ func TestRouteAttachesAPostedThread(t *testing.T) {
 	if d := match(t, sc, openedEvent(t, chanA, ts), nil); d.Match {
 		t.Fatalf("a posted thread with no Work to attach to matched: %+v", d)
 	}
+	// The binding that posted it is recorded beside the thread, when its
+	// post config lets it post there.
+	for binding, keys := range map[string]int{"nightly": 2, "other": 1} {
+		e := openedEvent(t, chanA, ts)
+		e.Event.Data.Data, _ = json.Marshal(slack.ThreadOpened{Namespace: ns, Team: team, Channel: chanA, TS: ts, Binding: binding})
+		if d := match(t, sc, e, job); !d.Match || len(d.AttachKeys) != keys || keys == 2 && d.AttachKeys[1].ExternalID != slack.PostedKey(chanA, ts, binding) {
+			t.Fatalf("a thread %s posted: %+v", binding, d)
+		}
+	}
 	forged := openedEvent(t, chanA, ts)
 	forged.Event.Source = "execution/x"
 	if d := match(t, sc, forged, job); d.Match {
@@ -373,38 +382,61 @@ func TestRouteAttachesAPostedThread(t *testing.T) {
 }
 
 // A person's message in the thread of a finished Work's post opens its
-// successor, run where that Work ran, with a generation key naming the
-// thread; the generation after it numbers on. A finished conversation, an
-// edit, another Work's reply or a deletion opens nothing.
+// successor only when the post config of the binding that posted it opts
+// in (follow_up), with only the grants it names, run where that Work ran,
+// with a generation key naming the thread and binding; the generation
+// after it numbers on. Without the opt-in, for a thread whose poster is
+// unknown, in a finished conversation, and for an edit, another Work's
+// reply or a deletion, nothing opens. A successor answers only the thread
+// that opened it.
 func TestRouteSucceedsAFinishedPoster(t *testing.T) {
-	sc := scopeWith(t, `,"post":[{"binding":"nightly","channels":["`+chanA+`"]}]`)
+	sc := scopeWith(t, `,"post":[{"binding":"nightly","channels":["`+chanA+`"],"follow_up":{"grants":["read"]}},{"binding":"quiet","channels":["`+chanA+`"]}]`)
 	written := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	ts := slack.TS(written)
 	thread := domain.CorrelationKey{Source: ns, ExternalID: slack.ThreadKey(chanA, ts)}
-	job := &domain.Work{ID: "job", Kind: "schedule.job", State: domain.WorkCompleted, CorrelationKeys: []domain.CorrelationKey{thread},
-		Context: domain.Payload{Schema: "json", Data: json.RawMessage(`{"model":"m"}`)}, Grants: []string{"g"}}
-	reply := slack.MessagePayload{TS: slack.TS(written.Add(time.Minute)), Thread: ts, User: alice, Text: "Which tests failed?"}
-	d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), job)
-	gen := domain.CorrelationKey{Source: ns, ExternalID: slack.GenerationKey(chanA, ts, 2)}
-	if !d.Match || !d.Successor || d.CreateID != "job/g2" || d.Kind != "schedule.job" || d.Deliver != extension.DeliverCurrent ||
-		len(d.AttachKeys) != 1 || d.AttachKeys[0] != gen || string(d.Context.Data) != `{"model":"m"}` || len(d.Grants) != 1 || d.Display == nil {
-		t.Fatalf("a reply to a finished job's post did not open its successor: %+v", d)
+	posted := func(binding string) domain.CorrelationKey {
+		return domain.CorrelationKey{Source: ns, ExternalID: slack.PostedKey(chanA, ts, binding)}
 	}
-	if c, th, ok := slack.ParseOwnedKey(gen.ExternalID); !ok || c != chanA || th != ts {
-		t.Fatalf("the generation key does not name the thread: %q %q %v", c, th, ok)
+	job := &domain.Work{ID: "job", Kind: "schedule.job", State: domain.WorkCompleted, CorrelationKeys: []domain.CorrelationKey{thread, posted("nightly")},
+		Context: domain.Payload{Schema: "json", Data: json.RawMessage(`{"model":"m"}`)}, Grants: []string{"write"}}
+	reply := slack.MessagePayload{TS: slack.TS(written.Add(time.Minute)), Thread: ts, User: alice, Text: "Which tests failed?"}
+	ask := func(w *domain.Work) extension.RouteDecision {
+		return match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), w)
+	}
+	d := ask(job)
+	gen := domain.CorrelationKey{Source: ns, ExternalID: slack.GenerationKey(chanA, ts, "nightly", 2)}
+	if !d.Match || !d.Successor || d.CreateID != "job/g2" || d.Kind != "schedule.job" || d.Deliver != extension.DeliverCurrent ||
+		len(d.AttachKeys) != 1 || d.AttachKeys[0] != gen || string(d.Context.Data) != `{"model":"m"}` || len(d.Grants) != 1 || d.Grants[0] != "read" || d.Display == nil {
+		t.Fatalf("a reply to a finished job's post did not open its successor with the follow-up's grants: %+v", d)
+	}
+	if c, th, b, n, ok := slack.ParsePostedKey(gen.ExternalID); !ok || c != chanA || th != ts || b != "nightly" || n != 2 {
+		t.Fatalf("the generation key does not name the thread and binding: %q %q %q %d %v", c, th, b, n, ok)
 	}
 	second := &domain.Work{ID: "job/g2", Kind: "schedule.job", State: domain.WorkCompleted, CorrelationKeys: []domain.CorrelationKey{gen}}
-	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), second); !d.Successor || d.CreateID != "job/g3" ||
-		d.AttachKeys[0].ExternalID != slack.GenerationKey(chanA, ts, 3) {
+	if d := ask(second); !d.Successor || d.CreateID != "job/g3" || d.AttachKeys[0].ExternalID != slack.GenerationKey(chanA, ts, "nightly", 3) {
 		t.Fatalf("the next generation is not numbered on: %+v", d)
+	}
+	// The negative controls: a binding that did not opt in, a post whose
+	// binding is unknown, and the same post once the opt-in is removed.
+	quiet := *job
+	quiet.CorrelationKeys = []domain.CorrelationKey{thread, posted("quiet")}
+	unknown := *job
+	unknown.CorrelationKeys = []domain.CorrelationKey{thread}
+	for name, w := range map[string]*domain.Work{"a binding without follow_up": &quiet, "an unknown poster": &unknown} {
+		if d := ask(w); d.Successor || d.Match {
+			t.Fatalf("%s opened a successor: %+v", name, d)
+		}
+	}
+	if d := match(t, scopeWith(t, `,"post":[{"binding":"nightly","channels":["`+chanA+`"]}]`), event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), job); d.Successor {
+		t.Fatalf("a follow-up opened once the opt-in was removed: %+v", d)
 	}
 	running := *job
 	running.State = domain.WorkRunning
-	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), &running); d.Successor || d.Deliver != extension.DeliverCurrent {
+	if d := ask(&running); d.Successor || d.Deliver != extension.DeliverCurrent {
 		t.Fatalf("a reply to live Work's post opened a successor: %+v", d)
 	}
 	conversation := &domain.Work{ID: "conv", Kind: slack.WorkKind, State: domain.WorkCompleted, Display: &domain.WorkDisplay{Title: "x"}}
-	if d := match(t, sc, event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), conversation); d.Successor {
+	if d := ask(conversation); d.Successor {
 		t.Fatalf("a finished conversation was succeeded: %+v", d)
 	}
 	edited := reply
@@ -420,7 +452,19 @@ func TestRouteSucceedsAFinishedPoster(t *testing.T) {
 			t.Fatalf("%s opened a successor: %+v", name, d)
 		}
 	}
-	for _, k := range []string{slack.ThreadKey(chanA, ts) + "/generation/1", slack.ThreadKey(chanA, ts) + "/generation/02", slack.ThreadKey(chanA, ts) + "/g2"} {
+	// A live successor answers its own thread, not another thread its
+	// predecessor posted, whose question the Slack tools would answer in
+	// the wrong one.
+	live := *second
+	live.State = domain.WorkReady
+	if d := ask(&live); !d.Match || d.Deliver != extension.DeliverCurrent {
+		t.Fatalf("a question in the successor's own thread did not reach it: %+v", d)
+	}
+	elsewhere := slack.MessagePayload{TS: slack.TS(written.Add(2 * time.Hour)), Thread: slack.TS(written.Add(time.Hour)), User: alice, Text: "And this one?"}
+	if d := match(t, sc, event(t, slack.TypeMessageHuman, elsewhere, written.Add(2*time.Hour)), &live); d.Match {
+		t.Fatalf("a question in another thread of the job's reached its successor: %+v", d)
+	}
+	for _, k := range []string{slack.PostedKey(chanA, ts, "nightly") + "/generation/1", slack.PostedKey(chanA, ts, "nightly") + "/generation/02", slack.ThreadKey(chanA, ts) + "/g2", slack.ThreadKey(chanA, ts) + "/posted/Bad"} {
 		if _, _, ok := slack.ParseOwnedKey(k); ok {
 			t.Fatalf("%q parsed as a thread owner's key", k)
 		}

@@ -147,6 +147,17 @@ type ExtensionConfig struct {
 type PostGrant struct {
 	Binding  string   `json:"binding"`
 	Channels []string `json:"channels"`
+	// FollowUp, when set, lets a person's message in the thread of a post
+	// made by this binding's Work, once that Work has finished, open its
+	// successor on the binding. Without it such a message starts nothing.
+	FollowUp *FollowUpGrant `json:"follow_up,omitempty"`
+}
+
+// FollowUpGrant is what a successor a reply opens may use: only the
+// binding grants it names (domain.Binding.Grants), none by default, never
+// the finished Work's own.
+type FollowUpGrant struct {
+	Grants []string `json:"grants,omitempty"`
 }
 
 // Settings is a parsed, defaulted extension entry.
@@ -162,6 +173,19 @@ type Settings struct {
 	// Post maps each binding that may post (slack.post) to the sorted
 	// channels it may post in.
 	Post map[string][]string
+	// FollowUp maps each binding whose posts' replies open a successor
+	// once its Work has finished to the grants that successor gets.
+	FollowUp map[string][]string
+}
+
+// FollowsUp reports whether a reply to binding's post in channel, once
+// the posting Work has finished, opens a successor, and with which grants.
+func (s Settings) FollowsUp(binding, channel string) ([]string, bool) {
+	grants, ok := s.FollowUp[binding]
+	if !ok || !s.MayPost(binding, channel) {
+		return nil, false
+	}
+	return slices.Clone(grants), true
 }
 
 // MayPost reports whether Work running on binding may post to channel.
@@ -289,6 +313,22 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			s.Post = map[string][]string{}
 		}
 		s.Post[g.Binding] = chs
+		if g.FollowUp != nil {
+			grants := slices.Clone(g.FollowUp.Grants)
+			sort.Strings(grants)
+			if len(grants) > 100 || len(slices.Compact(slices.Clone(grants))) != len(grants) {
+				return s, fmt.Errorf("slack extension: follow_up for binding %s must list at most 100 grants, each once", g.Binding)
+			}
+			for _, name := range grants {
+				if strings.TrimSpace(name) == "" {
+					return s, fmt.Errorf("slack extension: follow_up for binding %s names an empty grant", g.Binding)
+				}
+			}
+			if s.FollowUp == nil {
+				s.FollowUp = map[string][]string{}
+			}
+			s.FollowUp[g.Binding] = append([]string{}, grants...)
+		}
 	}
 	s.Receiver = c.Receiver
 	switch s.Receiver {
