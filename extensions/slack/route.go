@@ -91,7 +91,7 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 //     cannot start an event loop.
 //   - Deletions are recorded but are not input.
 //
-// A thread a Work posted (TypeThreadOpened, which only slack.post emits) is
+// A thread a Work posted (TypeThreadOpened, which the projector accepts when a post is made) is
 // attached to that Work without being its input. Later messages in a thread
 // owned by Work that is not a conversation (a job that posted its report)
 // are input on the binding that Work runs on, not this route's, so the
@@ -174,12 +174,13 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	return extension.Skip(e.Type + " is not passed to the agent"), nil
 }
 
-// opened attaches the thread of a message a Work posted to that Work. The
-// family is sealed, so only slack.post emits it, after checking the post
-// config; the channel is checked against it again here. The attachment is
-// not input: the post's own turn is still running, and nobody has replied.
-// The route's channel selection is not consulted, since no binding takes
-// the Event.
+// opened attaches the thread of a message a Work posted to that Work. Only
+// the projector accepts it, from the entry's own source, for a post
+// slack.post checked against the post config; the family is sealed, so no
+// executor can emit it, and the source and channel are checked again here.
+// The attachment is not input: nobody has replied yet, and the post's own
+// turn may still be running. The route's channel selection is not
+// consulted, since no binding takes the Event.
 func opened(in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	if in.Work == nil {
@@ -188,6 +189,9 @@ func opened(in extension.RouteInput) (extension.RouteDecision, error) {
 	var p ThreadOpened
 	if e.Data.Schema != SchemaThreadOpened || json.Unmarshal(e.Data.Data, &p) != nil {
 		return extension.Skip("not a posted thread payload"), nil
+	}
+	if e.Source != p.Namespace {
+		return extension.Skip("a posted thread comes only from its entry's own source"), nil
 	}
 	s, ok := settingsFor(in.Scope, p.Namespace)
 	if !ok {

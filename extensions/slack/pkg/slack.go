@@ -40,14 +40,11 @@ func base() protocol.Manifest {
 	for _, f := range sl.Families() {
 		p.Families = append(p.Families, protocol.Family{Type: f.Type, ReDerivable: f.ReDerivable, Loss: f.Loss})
 	}
-	// slack.post's family: sealed, so only slack.post emits it.
+	// A post's thread attachment: the projector accepts it, and it is
+	// sealed, so no executor can emit it with the builtin emit.
 	p.Families = append(p.Families, protocol.Family{Type: sl.TypeThreadOpened, Loss: sl.ThreadOpenedLoss, Sealed: true})
 	for _, op := range sl.Operations() {
-		d := protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler}
-		if op == sl.OpPost {
-			d.Kind, d.Commit = protocol.OperationEmit, true
-		}
-		p.Operations = append(p.Operations, d)
+		p.Operations = append(p.Operations, protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler})
 	}
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Slack",
 		Summary: "Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work.",

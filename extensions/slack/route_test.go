@@ -328,7 +328,7 @@ func slackTS(at time.Time) string {
 func openedEvent(t *testing.T, channel, ts string) domain.AcceptedEvent {
 	t.Helper()
 	data, _ := json.Marshal(slack.ThreadOpened{Namespace: ns, Team: team, Channel: channel, TS: ts})
-	return domain.AcceptedEvent{Event: domain.Event{ID: "opened", Type: slack.TypeThreadOpened, Source: "execution/x", DeliveryID: "d", WorkID: "job",
+	return domain.AcceptedEvent{Event: domain.Event{ID: "opened", Type: slack.TypeThreadOpened, Source: ns, DeliveryID: "d", WorkID: "job",
 		Data: domain.Payload{Schema: slack.SchemaThreadOpened, Data: data}}}
 }
 
@@ -347,6 +347,11 @@ func TestRouteAttachesAPostedThread(t *testing.T) {
 	}
 	if d := match(t, sc, openedEvent(t, chanA, ts), nil); d.Match {
 		t.Fatalf("a posted thread with no Work to attach to matched: %+v", d)
+	}
+	forged := openedEvent(t, chanA, ts)
+	forged.Event.Source = "execution/x"
+	if d := match(t, sc, forged, job); d.Match {
+		t.Fatalf("a posted thread from an execution's emit was attached: %+v", d)
 	}
 	if d := match(t, scopeWith(t, ""), openedEvent(t, chanA, ts), job); d.Match {
 		t.Fatalf("a thread in a channel no binding may post in was attached: %+v", d)

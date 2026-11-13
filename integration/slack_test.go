@@ -22,6 +22,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -157,6 +158,17 @@ func (e *slEnv) open() {
 				return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing here"}
 			}
 			return e.act(ctx, r)
+		},
+		// As the host accepts an extension's own Event in its transaction.
+		Open: func(tx storage.Tx, scope, parent domain.ID, ev domain.Event) error {
+			ev.ID = domain.ID(protocol.EmittedEventID(ev.Source, ev.DeliveryID))
+			var err error
+			if parent != "" {
+				_, _, err = runtime.AcceptDerivedInTx(tx, e.clock.Now(), runtime.CausalLimits{MaxDepth: 32, PerMinute: 128}, scope, parent, ev)
+			} else {
+				_, _, err = runtime.AcceptInTx(tx, scope, ev)
+			}
+			return err
 		}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1206,20 +1218,56 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 	if opened := e.events(sl.TypeThreadOpened); len(opened) != 1 || !opened[0].Routed || opened[0].Disposition != extension.DispositionAttach || opened[0].RoutedWorkID != job.ID {
 		t.Fatalf("the posted thread's attachment was not recorded on the job: %+v", opened)
 	}
+	// A post whose answer is lost answers pending and needs no second call:
+	// the projector finds it after the turn has ended, and its thread is
+	// still the job's.
+	e.fake.FailNextPost("lost")
+	lost, err := post("follow-up", `{"channel":"`+slChannel+`","text":"Also: one flaky test"}`)
+	if err != nil || lost["state"] != "pending" {
+		t.Fatalf("a lost post: %v %v", lost, err)
+	}
 	if err := scheduler.Observe(ctx, attempt); err != nil {
 		t.Fatal(err)
+	}
+	e.clock.Add(31 * time.Second)
+	if res := e.converge(); res.Recovered != 1 {
+		t.Fatalf("the lost post was not recovered: %+v", res)
+	}
+	if opened := e.events(sl.TypeThreadOpened); len(opened) != 2 {
+		t.Fatalf("the recovered post's thread was not opened: %+v", opened)
+	}
+	e.converge()
+	if opened := e.events(sl.TypeThreadOpened); len(opened) != 2 {
+		t.Fatalf("a second pass opened the thread again: %+v", opened)
 	}
 
 	reply := e.fake.Reply(slChannel, ts, slAlice, "Which tests failed?")
 	e.sync()
 	e.reconcile()
 	e.route()
-	if q := e.queued(job.ID); len(q) != 1 || q[0] != sl.TypeMessageHuman+":"+reply {
-		t.Fatalf("the reply did not reach the job: %v", q)
+	var followUp string
+	e.read(func(tx storage.Tx) error {
+		w, err := tx.Work(job.ID)
+		for _, k := range w.CorrelationKeys {
+			if _, th, ok := sl.ParseThreadKey(k.ExternalID); ok && th != ts {
+				followUp = th
+			}
+		}
+		return err
+	})
+	if followUp == "" {
+		t.Fatal("the recovered post's thread is not the job's")
+	}
+	second := e.fake.Reply(slChannel, followUp, slBob, "Which one?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	if q := e.queued(job.ID); len(q) != 2 || q[0] != sl.TypeMessageHuman+":"+reply || q[1] != sl.TypeMessageHuman+":"+second {
+		t.Fatalf("the replies did not reach the job: %v", q)
 	}
 	inputs, err := e.router.PendingInputs(ctx, job.ID)
-	if err != nil || len(inputs) != 1 || inputs[0].Binding != "nightly" {
-		t.Fatalf("the reply is not on the job's binding: %+v %v", inputs, err)
+	if err != nil || len(inputs) != 2 || inputs[0].Binding != "nightly" || inputs[1].Binding != "nightly" {
+		t.Fatalf("the replies are not on the job's binding: %+v %v", inputs, err)
 	}
 	for _, w := range e.works() {
 		if w.Kind == sl.WorkKind {

@@ -29,9 +29,9 @@ const (
 	// no longer shows at all. It is not re-derivable.
 	TypeMessageRemoved = "slack.message.removed"
 	// TypeThreadOpened is a new top-level message Work posted (slack.post):
-	// the route attaches its thread to that Work. Only slack.post emits it
-	// (a sealed family), so no executor can claim a thread with the
-	// builtin emit.
+	// the route attaches its thread to that Work. The projector accepts it
+	// when the post is made; the family is sealed, so no executor can emit
+	// one with the builtin emit and claim a thread.
 	TypeThreadOpened = "slack.thread.opened"
 )
 
@@ -44,7 +44,7 @@ const (
 )
 
 // ThreadOpenedLoss is the declared loss limitation of TypeThreadOpened.
-const ThreadOpenedLoss = "a post's thread is attached to the Work that posted it only when slack.post confirms the post; nothing upstream re-derives it"
+const ThreadOpenedLoss = "accepted by the projector when a post it made is confirmed; Slack's history does not say which Work posted a message, so nothing upstream re-derives it"
 
 // ThreadOpened is the SchemaThreadOpened payload: the entry (by namespace)
 // and the channel and ts of the message a Work posted, which is its
