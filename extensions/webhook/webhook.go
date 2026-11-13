@@ -75,6 +75,9 @@ type Hook struct {
 	// takes a target gives it Work of its own: one POST can start Work for
 	// several bindings. Without it a delivery is one Event.
 	FanOut []string `json:"fan_out,omitempty"`
+	// Signature, when set, also checks the sender's own signature of each
+	// delivery, refusing one that doesn't verify with 401.
+	Signature *Signature `json:"signature,omitempty"`
 }
 
 // MaxFanOut bounds a hook's targets. Each target's Event carries the whole
@@ -173,6 +176,14 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 		}
 		if err := checkTargets(h.FanOut); err != nil {
 			return s, fmt.Errorf("hook %s: fan_out: %w", h.Name, err)
+		}
+		if h.Signature != nil {
+			if _, err := h.Signature.parse(); err != nil {
+				return s, fmt.Errorf("hook %s: signature: %w", h.Name, err)
+			}
+			if secrets != nil && !contains(secrets, h.Signature.Secret) {
+				return s, fmt.Errorf("hook %s: signature: secret must be one of the entry's secret_names", h.Name)
+			}
 		}
 	}
 	return s, nil
@@ -277,17 +288,19 @@ func (st *state) list() ([]*entry, string) {
 	return out, st.public
 }
 
-func (st *state) secret(e *entry) func(context.Context) (string, error) {
-	return func(ctx context.Context) (string, error) {
+// secret resolves one of the entry's secrets by name: the webhook secret,
+// or a hook's signature secret.
+func (st *state) secret(e *entry) func(context.Context, string) (string, error) {
+	return func(ctx context.Context, name string) (string, error) {
 		h := st.host.Load()
 		if h == nil {
 			return "", ErrCredential
 		}
-		values, err := h.Secrets(ctx, domain.ID(e.scope), e.settings.WebhookSecret)
-		if err != nil || values[e.settings.WebhookSecret] == "" {
+		values, err := h.Secrets(ctx, domain.ID(e.scope), name)
+		if err != nil || values[name] == "" {
 			return "", ErrCredential
 		}
-		return values[e.settings.WebhookSecret], nil
+		return values[name], nil
 	}
 }
 
@@ -323,7 +336,7 @@ func Build(o Options) *sdk.Extension {
 	ext.Manifest.Provides.Extensions[0].Fields = []protocol.FieldDecl{
 		{Name: "scope", Help: "the scope the entry is in", Required: true},
 		{Name: "webhook_secret", Help: "names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes every hook's URL", Required: true},
-		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "fan_out": ["triage", "audit"], "version": 0}]: each hook, where a delivery's identity (a retry is the same delivery) and thread (one Work, a successor once it finishes) are read, the targets each delivery goes to, and a version signed into its URL (bump it to revoke that URL alone)`, Required: true},
+		{Name: "hooks", Help: `[{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "fan_out": ["triage"], "version": 0, "signature": {"secret": "gh", "header": "X-Hub-Signature-256", "prefix": "sha256="}}]: each hook, its delivery identity and thread, its targets, a version signed into its URL, and a sender signature to check as well`, Required: true},
 	}
 	ext.Route(Name, Route{}, sdk.RouteConfig())
 	ext.Manifest.Provides.Routes[len(ext.Manifest.Provides.Routes)-1].Fields = []protocol.FieldDecl{
@@ -411,7 +424,8 @@ func (st *state) configure(_ context.Context, h *sdk.Host, p protocol.ConfigureP
 
 // check lists each hook's path (doctor's webhook check); with urls
 // (webhook-urls, doctor --check-secrets) it prints each hook's signed URL,
-// which is a capability derived from the entry's secret.
+// which is a capability derived from the entry's secret, and fails when the
+// entry's secret or a hook's signature secret is unavailable.
 func (st *state) check(ctx context.Context, deep bool) (string, error) {
 	entries, public := st.list()
 	var items []string
@@ -420,13 +434,22 @@ func (st *state) check(ctx context.Context, deep bool) (string, error) {
 		for _, h := range e.settings.Hooks {
 			token := "<token>"
 			if deep {
-				secret, err := st.secret(e)(ctx)
+				secret, err := st.secret(e)(ctx, e.settings.WebhookSecret)
 				if err != nil {
 					items = append(items, fmt.Sprintf("%s: hook %s: webhook secret unavailable", e.namespace, h.Name))
 					failed = errors.New("a webhook secret is unavailable")
 					continue
 				}
 				token = Token(secret, e.namespace, h.Name, h.Version)
+				// A hook whose signature secret is unset would answer every
+				// delivery 503, leaving no Event to notice it by.
+				if h.Signature != nil {
+					if _, err := st.secret(e)(ctx, h.Signature.Secret); err != nil {
+						items = append(items, fmt.Sprintf("%s: hook %s: signature secret unavailable", e.namespace, h.Name))
+						failed = errors.New("a webhook signature secret is unavailable")
+						continue
+					}
+				}
 			}
 			line := fmt.Sprintf("%s: hook %s: POST %s/%s/%s/%s", e.namespace, h.Name, public, e.namespace, h.Name, token)
 			if !deep {

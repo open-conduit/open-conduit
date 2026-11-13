@@ -29,7 +29,7 @@ func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 	var e *incidentEnv
 	adapter := &webhook.Ingress{Namespace: webhook.FixtureSource, Settings: settings, Now: func() time.Time { return e.clock.Now() }}
 	e = newIncidentEnv(t, webhook.FixtureScope, webhook.FixtureEntry, webhook.Name, webhook.FixtureConfig(), webhook.Route{}, webhook.FixtureSource, webhook.FixtureSource, adapter)
-	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
+	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context, string) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
 	post := func(name string, header http.Header, body string) webhook.Receipt {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/"+name+"/"+webhook.Token("s", webhook.FixtureSource, name, 0), strings.NewReader(body))
@@ -110,7 +110,7 @@ func TestWebhookFanOutThroughRuntime(t *testing.T) {
 		}
 		return tx.PutScope(s, s.Revision)
 	})
-	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
+	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context, string) (string, error) { return "s", nil }, e.receipt, e.clock.Now))
 	send := func(id, body string) int {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/tickets/"+webhook.Token("s", webhook.FixtureSource, "tickets", 0), strings.NewReader(body))

@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -484,5 +487,147 @@ func TestReadReturnsTheWholeBodyOfTheWorksOwnDelivery(t *testing.T) {
 	}
 	if _, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "nope"}, webhook.OpRead, domain.Payload{Data: json.RawMessage(`{"event":"` + string(ev.ID) + `"}`)}); err == nil {
 		t.Fatal("unknown Work read a delivery")
+	}
+}
+
+// signed is a harness whose hooks also check the sender's own signature,
+// each in the way a known sender signs, with the clock at sdktest.Start.
+func signed(t *testing.T) *sdktest.Host {
+	t.Helper()
+	h := sdktest.New(t, webhook.Build(webhook.Options{Now: func() time.Time { return sdktest.Start }}),
+		sdktest.WithSecrets(scope, map[string]string{webhook.FixtureSecret: webhook.FixtureValue, "sender": "sender-secret"}))
+	cfg := json.RawMessage(`{"scope":"` + scope + `","webhook_secret":"` + webhook.FixtureSecret + `","hooks":[` +
+		`{"name":"github","signature":{"secret":"sender","header":"X-Hub-Signature-256","prefix":"sha256="}},` +
+		`{"name":"shopify","signature":{"secret":"sender","header":"X-Shopify-Hmac-Sha256","encoding":"base64"}},` +
+		`{"name":"slack","signature":{"secret":"sender","header":"X-Slack-Signature","prefix":"v0=","signed":"v0:{timestamp}:{body}","timestamp":"header:X-Slack-Request-Timestamp"}},` +
+		`{"name":"stripe","signature":{"secret":"sender","header":"Stripe-Signature","prefix":"v1=","signed":"{timestamp}.{body}","timestamp":"signature:t=","tolerance_seconds":60}},` +
+		`{"name":"linear","signature":{"secret":"sender","header":"Linear-Signature","timestamp":"body:/webhookTimestamp","tolerance_seconds":600}}]}`)
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: webhook.Name,
+		Name: webhook.FixtureEntry, Config: cfg, Secrets: []string{webhook.FixtureSecret, "sender"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func mac(secret, msg string) []byte {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(msg))
+	return m.Sum(nil)
+}
+
+func hexMAC(secret, msg string) string { return hex.EncodeToString(mac(secret, msg)) }
+
+// A hook with a signature check takes a delivery its sender signed and
+// refuses, with 401 and before acceptance, one that is unsigned, signed
+// with another secret, tampered with or signed too long ago, whatever
+// scheme the sender signs with. The URL token is still checked first.
+func TestSignatureIsCheckedBeforeAcceptance(t *testing.T) {
+	h := signed(t)
+	const body = `{"action":"opened"}`
+	now := strconv.FormatInt(sdktest.Start.Unix(), 10)
+	stale := strconv.FormatInt(sdktest.Start.Add(-301*time.Second).Unix(), 10)
+	ahead := strconv.FormatInt(sdktest.Start.Add(301*time.Second).Unix(), 10)
+	slack := func(ts, signedTS, secret string) http.Header {
+		return http.Header{"X-Slack-Request-Timestamp": {ts}, "X-Slack-Signature": {"v0=" + hexMAC(secret, "v0:"+signedTS+":"+body)}}
+	}
+	linear := func(at time.Time) string { return `{"webhookTimestamp":` + strconv.FormatInt(at.UnixMilli(), 10) + `}` }
+	accepted := 0
+	for _, c := range []struct {
+		name, hook string
+		header     http.Header
+		body       string
+		want       int
+	}{
+		{"github signed", "github", http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("sender-secret", body)}}, body, http.StatusAccepted},
+		{"github upper-case hex", "github", http.Header{"X-Hub-Signature-256": {"sha256=" + strings.ToUpper(hexMAC("sender-secret", body))}}, body, http.StatusAccepted},
+		{"github unsigned", "github", nil, body, http.StatusUnauthorized},
+		{"github other secret", "github", http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("webhook-secret", body)}}, body, http.StatusUnauthorized},
+		{"github tampered body", "github", http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("sender-secret", body)}}, `{"action":"closed"}`, http.StatusUnauthorized},
+		{"github without prefix", "github", http.Header{"X-Hub-Signature-256": {hexMAC("sender-secret", body)}}, body, http.StatusUnauthorized},
+		{"shopify base64", "shopify", http.Header{"X-Shopify-Hmac-Sha256": {base64.StdEncoding.EncodeToString(mac("sender-secret", body))}}, body, http.StatusAccepted},
+		{"shopify hex where base64 is due", "shopify", http.Header{"X-Shopify-Hmac-Sha256": {hexMAC("sender-secret", body)}}, body, http.StatusUnauthorized},
+		{"slack fresh", "slack", slack(now, now, "sender-secret"), body, http.StatusAccepted},
+		{"slack stale", "slack", slack(stale, stale, "sender-secret"), body, http.StatusUnauthorized},
+		{"slack ahead", "slack", slack(ahead, ahead, "sender-secret"), body, http.StatusUnauthorized},
+		{"slack replayed under a fresh timestamp", "slack", slack(now, stale, "sender-secret"), body, http.StatusUnauthorized},
+		{"slack no timestamp", "slack", http.Header{"X-Slack-Signature": {"v0=" + hexMAC("sender-secret", "v0::"+body)}}, body, http.StatusUnauthorized},
+		{"stripe rolling secret", "stripe", http.Header{"Stripe-Signature": {"t=" + now + ",v1=" + hexMAC("old-secret", now+"."+body) + ",v1=" + hexMAC("sender-secret", now+"."+body) + ",v0=ignored"}}, body, http.StatusAccepted},
+		{"stripe beyond its tolerance", "stripe", http.Header{"Stripe-Signature": {"t=" + strconv.FormatInt(sdktest.Start.Add(-61*time.Second).Unix(), 10) + ",v1=" + hexMAC("sender-secret", strconv.FormatInt(sdktest.Start.Add(-61*time.Second).Unix(), 10)+"."+body)}}, body, http.StatusUnauthorized},
+		{"linear body timestamp in ms", "linear", http.Header{"Linear-Signature": {hexMAC("sender-secret", linear(sdktest.Start.Add(-9*time.Minute)))}}, linear(sdktest.Start.Add(-9 * time.Minute)), http.StatusAccepted},
+		{"linear stale", "linear", http.Header{"Linear-Signature": {hexMAC("sender-secret", linear(sdktest.Start.Add(-11*time.Minute)))}}, linear(sdktest.Start.Add(-11 * time.Minute)), http.StatusUnauthorized},
+	} {
+		if got := post(t, h, url(c.hook), c.header, c.body); got != c.want {
+			t.Fatalf("%s: %d, want %d", c.name, got, c.want)
+		}
+		if c.want == http.StatusAccepted {
+			accepted++
+		}
+		if n := len(h.Events()); n != accepted {
+			t.Fatalf("%s: %d events, want %d", c.name, n, accepted)
+		}
+	}
+	// A wrong URL token is still a 404, signature or not.
+	wrong := "/" + webhook.FixtureSource + "/github/" + strings.Repeat("0", 32)
+	if got := post(t, h, wrong, http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("sender-secret", body)}}, body); got != http.StatusNotFound {
+		t.Fatalf("wrong token: %d", got)
+	}
+}
+
+// A hook whose signature secret can't be resolved refuses with 503, so the
+// sender retries, rather than taking the delivery unchecked.
+func TestSignatureSecretUnavailable(t *testing.T) {
+	h := sdktest.New(t, webhook.Build(webhook.Options{}), sdktest.WithSecrets(scope, map[string]string{webhook.FixtureSecret: webhook.FixtureValue}))
+	cfg := json.RawMessage(`{"scope":"` + scope + `","webhook_secret":"` + webhook.FixtureSecret + `","hooks":[{"name":"github","signature":{"secret":"sender","header":"X-Hub-Signature-256","prefix":"sha256="}}]}`)
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: webhook.Name,
+		Name: webhook.FixtureEntry, Config: cfg, Secrets: []string{webhook.FixtureSecret, "sender"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(t, h, url("github"), http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("", "{}")}}, `{}`); got != http.StatusServiceUnavailable || len(h.Events()) != 0 {
+		t.Fatalf("%d, %d events", got, len(h.Events()))
+	}
+	// doctor --check-secrets names it, since the 503s leave no Event.
+	deep, err := h.Check(context.Background(), webhook.Name+"-urls")
+	if err != nil || deep.OK || !strings.Contains(deep.Detail, "hook github: signature secret unavailable") {
+		t.Fatalf("deep check: %+v %v", deep, err)
+	}
+}
+
+// doctor --check-secrets passes a hook whose signature secret is set.
+func TestSignatureSecretPassesDoctor(t *testing.T) {
+	deep, err := signed(t).Check(context.Background(), webhook.Name+"-urls")
+	if err != nil || !deep.OK || !strings.Contains(deep.Detail, url("github")) {
+		t.Fatalf("deep check: %+v %v", deep, err)
+	}
+}
+
+func TestSignatureSettings(t *testing.T) {
+	hook := func(sig string) string {
+		return `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","signature":` + sig + `}]}`
+	}
+	for name, sig := range map[string]string{
+		"no secret":              `{"header":"X-Sig"}`,
+		"secret unnamed":         `{"secret":"other","header":"X-Sig"}`,
+		"no header":              `{"secret":"sender"}`,
+		"bad algorithm":          `{"secret":"sender","header":"X-Sig","algorithm":"md5"}`,
+		"bad encoding":           `{"secret":"sender","header":"X-Sig","encoding":"base32"}`,
+		"prefix with a comma":    `{"secret":"sender","header":"X-Sig","prefix":"a,b"}`,
+		"no body":                `{"secret":"sender","header":"X-Sig","signed":"{timestamp}","timestamp":"header:X-Ts"}`,
+		"body twice":             `{"secret":"sender","header":"X-Sig","signed":"{body}{body}"}`,
+		"unknown placeholder":    `{"secret":"sender","header":"X-Sig","signed":"{id}.{body}"}`,
+		"unclosed":               `{"secret":"sender","header":"X-Sig","signed":"{body"}`,
+		"timestamp unset":        `{"secret":"sender","header":"X-Sig","signed":"{timestamp}.{body}"}`,
+		"timestamp unsigned":     `{"secret":"sender","header":"X-Sig","timestamp":"header:X-Ts"}`,
+		"tolerance alone":        `{"secret":"sender","header":"X-Sig","tolerance_seconds":60}`,
+		"tolerance over a day":   `{"secret":"sender","header":"X-Sig","signed":"{timestamp}.{body}","timestamp":"header:X-Ts","tolerance_seconds":86401}`,
+		"bad timestamp key":      `{"secret":"sender","header":"X-Sig","signed":"{timestamp}.{body}","timestamp":"query:t"}`,
+		"timestamp as signature": `{"secret":"sender","header":"X-Sig","prefix":"v1=","signed":"{timestamp}.{body}","timestamp":"signature:v1="}`,
+		"unknown field":          `{"secret":"sender","header":"X-Sig","scheme":"github"}`,
+	} {
+		if _, err := webhook.ParseSettings(json.RawMessage(hook(sig)), []string{"hook", "sender"}); err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+	}
+	if _, err := webhook.ParseSettings(json.RawMessage(hook(`{"secret":"sender","header":"X-Sig","algorithm":"hmac-sha1","signed":"{header:X-Id}.{timestamp}.{body}","timestamp":"header:X-Ts"}`)), []string{"hook", "sender"}); err != nil {
+		t.Fatal(err)
 	}
 }

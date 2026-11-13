@@ -1,6 +1,6 @@
 ---
 title: "Webhook extension"
-description: "How a signed HTTP POST becomes Work of its own: hooks, token URLs, delivery keys, correlation keys and routing."
+description: "How a signed HTTP POST becomes Work of its own: hooks, token URLs, sender signatures, delivery keys, correlation keys and routing."
 ---
 
 The [`webhook` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/webhook) turns each accepted POST to a signed URL into Work of its own. It is first-party, runs out of process as a package bundled with the release (`open-conduit extension-run webhook`), and is written only on `protocol/sdk`, as a third party would write it. It uses only public hooks: an ingress type with one one-shot family, webhook paths, a route handler (which asks for successors), a Work kind, an Event renderer, one toolbelt operation and two doctor checks.
@@ -27,6 +27,7 @@ A [job webhook](../schedule-extension/) is a different kind of POST. It triggers
 | `hooks[].correlation_key` | Optional. Where a delivery's thread is read, in the same form. Best a value that names something that ends and may start again, such as a ticket or an incident (see [Routing and Work](#routing-and-work)). |
 | `hooks[].version` | Optional, an integer, 0 by default. It is signed into the hook's URL token, so bumping it revokes that hook's URL alone, keeping its name, its Work IDs and its threads. After applying the bump, `doctor --check-secrets` prints the new URL to hand to the sender. |
 | `hooks[].fan_out` | Optional. Up to 4 targets, named like hooks, that each delivery goes to (see [Fan-out](#fan-out)). |
+| `hooks[].signature` | Optional. The sender's own signature of each delivery, checked as well as the URL token (see [Sender signatures](#sender-signatures)). |
 
 A key is `header:<name>` (the header's value) or `body:<pointer>` (an RFC 6901 pointer into a JSON body, naming a string, number or boolean). A value is at most 256 bytes.
 
@@ -38,8 +39,9 @@ The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The 
 
 1. Answers 404 for an unknown hook or a wrong token, compared in constant time before the body is read.
 2. Answers 413 for a body over 1 MiB, or for one the hook's fan-out Events couldn't carry (see [Fan-out](#fan-out)).
-3. Reads the hook's keys. A hook with a delivery key refuses a POST without it, or with a value over 256 bytes, with 400. A missing correlation value is not an error: that delivery is a thread of its own.
-4. Hands the delivery to the host and answers 202 only after durable acceptance, or 503 when it wasn't accepted (or the secret is unavailable). The 202's body is the delivery's receipt (`application/json`), which names its Events.
+3. For a hook with a `signature`, answers 401 for a delivery whose signature doesn't verify or whose signed timestamp is outside the hook's tolerance, and 503 when the signature's secret is unavailable (see [Sender signatures](#sender-signatures)).
+4. Reads the hook's keys. A hook with a delivery key refuses a POST without it, or with a value over 256 bytes, with 400. A missing correlation value is not an error: that delivery is a thread of its own.
+5. Hands the delivery to the host and answers 202 only after durable acceptance, or 503 when it wasn't accepted (or the secret is unavailable). The 202's body is the delivery's receipt (`application/json`), which names its Events.
 
 Hooks and entries follow the configuration: one added by `config apply` serves its URL as soon as the apply is done, and one removed answers 404, with no restart.
 
@@ -50,6 +52,39 @@ Ingress turns it into one `webhook.delivery` Event, or one for each target of a 
 **Correlation.** The Event's correlation key is `webhook/<scope>/<entry>` with the external ID `<hook>/c/<digest of the correlation value>`, or `<hook>/d/<delivery ID>` when there is none. A delivery with a correlation value already seen therefore names the Work the first one opened.
 
 **The receipt.** The 202's body lists the delivery's Events, one for each [fan-out](#fan-out) target or else one, in target order: `{"events": [{"id": "<id>", "target": "triage", "duplicate": false}], "duplicate": false}`. `target` is left out for a hook that doesn't fan out. The host's `ingress.deliver` reports whether the delivery added each Event. An Event's `duplicate` is true when it was already accepted, and its `id` is then the first delivery's. The top-level `duplicate` is true only when every Event was, as with a sender's retry of the same delivery key, so a retrying sender can stop. A host that doesn't report it is taken to have added each Event, so a delivery is never claimed as a duplicate wrongly. The receipt doesn't name the Work: routing happens after the 202, and the route decides which Work an Event reaches, even when a correlation value has Work already. An operator follows each Event to its Work with `GET /v1/events/{id}/route` (or `open-conduit events get`). A sender without an operator token has no read of its own delivery's route yet.
+
+### Sender signatures
+
+The URL token proves the sender was handed the URL. Senders such as GitHub, Slack, Stripe, Jira and Shopify also sign each body with a secret of their own, and a hook can check that signature too, so a leaked URL alone can't send a delivery:
+
+```json
+{"name": "github", "delivery_key": "header:X-GitHub-Delivery",
+ "signature": {"secret": "github_hook", "header": "X-Hub-Signature-256", "prefix": "sha256="}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `secret` | Required. The secret the sender signs with, one of the entry's `secret_names`. |
+| `header` | Required. The header the signature is in. Its value is split on commas and spaces, and each item that starts with `prefix` is a signature; one must verify, so a sender that sends several while it rolls its secret is taken. |
+| `algorithm` | `hmac-sha256` (the default), `hmac-sha1` or `hmac-sha512`. |
+| `encoding` | How the MAC is written: `hex` (the default, either case) or `base64`. |
+| `prefix` | What comes before each signature, such as `sha256=`, `v0=` or `v1=`. |
+| `signed` | What the sender signs: `{body}`, `{timestamp}`, `{header:<name>}` and literal text, `{body}` by default. It must hold `{body}` once. |
+| `timestamp` | For a sender that signs its time of sending: where it is read, `header:<name>`, `body:<JSON pointer>` or `signature:<prefix>` (an item of the signature header, such as Stripe's `t=`). Unix seconds, or milliseconds when over 10^11. It must be signed: in `signed` as `{timestamp}`, or in the body. |
+| `tolerance_seconds` | How far the timestamp may be from the listener's clock, either way: 300 by default, at most 86400. It needs `timestamp`. |
+
+The check runs after the token and the body's size, and before the keys are read or the delivery is accepted, so a delivery that fails it leaves no Event. A 401 says only which check failed; the secret is never in it. Some senders written this way:
+
+| Sender | `signature` |
+| --- | --- |
+| GitHub | `{"header": "X-Hub-Signature-256", "prefix": "sha256="}` |
+| Jira | `{"header": "X-Hub-Signature", "prefix": "sha256="}` |
+| Shopify | `{"header": "X-Shopify-Hmac-Sha256", "encoding": "base64"}` |
+| Slack | `{"header": "X-Slack-Signature", "prefix": "v0=", "signed": "v0:{timestamp}:{body}", "timestamp": "header:X-Slack-Request-Timestamp"}` |
+| Stripe | `{"header": "Stripe-Signature", "prefix": "v1=", "signed": "{timestamp}.{body}", "timestamp": "signature:t="}` |
+| Linear | `{"header": "Linear-Signature", "timestamp": "body:/webhookTimestamp", "tolerance_seconds": 600}` |
+
+each with its `secret`. A sender that signs no timestamp (GitHub, Jira, Shopify) can have a captured delivery sent again under a fresh delivery ID; a hook threads it to the same Work by its correlation key, but nothing refuses it. A sender whose secret isn't the raw HMAC key (Standard Webhooks' base64 `whsec_` secrets) isn't covered yet.
 
 ### Fan-out
 
@@ -92,11 +127,12 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 ## Doctor
 
 - `webhook` lists each hook's path, with `<token>`.
-- `webhook-urls` (`doctor --check-secrets`) prints each hook's signed URL at its current version, and fails when an entry's secret is unavailable.
+- `webhook-urls` (`doctor --check-secrets`) prints each hook's signed URL at its current version, and fails when an entry's secret, or a hook's signature secret, is unavailable. A missing signature secret would otherwise only show as 503s to the sender, with no Event to notice it by.
 
 ## Evidence
 
 - [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, fan-out Events, routes selecting by target, a 413 for an escape-heavy body a 4-target hook's Events couldn't carry, a missing or long delivery key, a wrong token, a version bump revoking one hook's URL while the entry's other hook keeps its own, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
+- `TestSignatureIsCheckedBeforeAcceptance` in the same suite: hooks signed the way GitHub, Shopify, Slack, Stripe and Linear sign take a signed delivery and refuse, with 401 and no Event, one unsigned, signed with another secret, tampered with, missing its prefix, stale, ahead of the clock or replayed under a fresh timestamp; Stripe's rolled secrets verify on either signature, and a wrong token is still 404. Mutating the verifier to pass a bad MAC or skip the tolerance fails it. `TestSignatureSecretUnavailable` answers 503 rather than taking the delivery unchecked and fails `doctor --check-secrets`, and `TestSignatureSettings` refuses unsigned timestamps, a `signed` without `{body}` and the other bad declarations.
 - [`TestWebhookDeliveriesThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): the real runtime ingress and router over SQLite. A retry with another body is the first delivery, a delivery with the same correlation value is routed to the first one's Work, and every other delivery has Work of its own.
 - [`TestWebhookFanOutThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): a hook that fans out to two targets, with a route and binding for each. One POST, its retry and a later delivery of the same ticket give two Works, one on each binding, each with that target's two deliveries. An escape-heavy delivery just under the encoded bound is accepted in one ingress page, and one just over it is refused with 413.
 - [`TestDaemonWebhookThreadGenerations`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): a ticket's Work finishes, its next delivery opens a linked successor that parks on a type-only wait, and the delivery after that wakes the successor rather than starting more Work.
@@ -107,3 +143,4 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 
 - Issue #566 added the extension, so that a POST can be Work of its own rather than a trigger merged into a job's one run.
 - Issue #572 added fan-out, so that one delivery can start Work for more than one binding without the core broadcasting it.
+- Issue #569 added sender signatures, so that a hook can take GitHub, Slack, Stripe and similar senders directly, with the URL token kept as well and a signed timestamp's tolerance declared on the hook.
