@@ -77,7 +77,7 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 				}
 				if c.WorkKinds != nil {
 					if reg.HandlerWorkKinds == nil {
-						reg.HandlerWorkKinds = map[string]func(json.RawMessage) []string{}
+						reg.HandlerWorkKinds = map[string]func(json.RawMessage) []extension.WorkKind{}
 					}
 					reg.HandlerWorkKinds[c.Type] = c.WorkKinds
 				}

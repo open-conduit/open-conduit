@@ -64,7 +64,7 @@ func (r *Remote) Described(kind, typ string, config json.RawMessage) (lines []pr
 // handler typ binds when it last validated that config
 // (protocol.ValidateResult.WorkKinds); ok is false when it has not
 // validated it.
-func (r *Remote) WorkKinds(typ string, config json.RawMessage) (kinds []string, ok bool) {
+func (r *Remote) WorkKinds(typ string, config json.RawMessage) (kinds []protocol.WorkKind, ok bool) {
 	v, ok := r.described.get(describeKey(protocol.ValidateRoute, typ, config))
 	return v.kinds, ok
 }
@@ -72,7 +72,7 @@ func (r *Remote) WorkKinds(typ string, config json.RawMessage) (kinds []string, 
 // validated is what the package said about a config object it validated.
 type validated struct {
 	lines []protocol.DescribeLine
-	kinds []string
+	kinds []protocol.WorkKind
 }
 
 // describedCap bounds each of describedCache's two maps.

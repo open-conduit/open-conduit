@@ -66,7 +66,7 @@ type configType struct {
 	Binding   func(extension.RouteBinding) error
 	Settings  func(config json.RawMessage) []extension.Setting
 	Describe  func(config json.RawMessage) []config.Entry
-	WorkKinds func(config json.RawMessage) []string
+	WorkKinds func(config json.RawMessage) []extension.WorkKind
 }
 
 // ingressSource is an ingress source a package's configure result
@@ -668,8 +668,8 @@ func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []
 // what the package said when it validated that config
 // (protocol.ValidateResult.WorkKinds), else none. It never calls the
 // package; validation does, before a binding's work_kinds are checked.
-func (x *installed) workKinds(handler string) func(json.RawMessage) []string {
-	return func(raw json.RawMessage) []string {
+func (x *installed) workKinds(handler string) func(json.RawMessage) []extension.WorkKind {
+	return func(raw json.RawMessage) []extension.WorkKind {
 		r := x.r
 		if r == nil && x.offline != nil && x.offline.started {
 			r = x.offline.r
@@ -678,7 +678,11 @@ func (x *installed) workKinds(handler string) func(json.RawMessage) []string {
 			return nil
 		}
 		kinds, _ := r.WorkKinds(handler, raw)
-		return kinds
+		out := make([]extension.WorkKind, 0, len(kinds))
+		for _, k := range kinds {
+			out = append(out, extension.WorkKind{Kind: k.Kind, Description: k.Description})
+		}
+		return out
 	}
 }
 

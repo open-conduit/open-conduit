@@ -67,10 +67,11 @@ type Registry struct {
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
 	// HandlerWorkKinds optionally names, for a route handler that binds
-	// child Work, the kinds a route's config binds. A binding's work_kinds
-	// must each be bound by an enabled route of its scope, so a kind an
-	// agent may ask for always has a binding to run it.
-	HandlerWorkKinds map[string]func(json.RawMessage) []string
+	// child Work, the kinds a route's config binds, each with what it is
+	// for. A binding's work_kinds must each be bound by an enabled route of
+	// its scope, so a kind an agent may ask for always has a binding to run
+	// it; the description is what an asking agent is shown.
+	HandlerWorkKinds map[string]func(json.RawMessage) []extension.WorkKind
 	// HandlerBinding optionally checks the binding a route with this handler
 	// binds (extension.RouteBinding). Its error is a fixed, secret-free
 	// reason, shown in the diagnostic.
@@ -379,16 +380,28 @@ func (v *validator) resolve(id string) *effective {
 // (Registry.HandlerWorkKinds).
 func (v *validator) routedKind(e *effective, kind string) bool {
 	for _, name := range e.routes.names {
-		s := e.routes.byName[name]
-		kinds := v.reg.HandlerWorkKinds[s.value.Handler]
-		if s.disabled || kinds == nil {
-			continue
-		}
-		if slices.Contains(kinds(s.value.Config), kind) {
-			return true
+		if s := e.routes.byName[name]; !s.disabled {
+			if _, ok := RoutedWorkKind(v.reg, s.value, kind); ok {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// RoutedWorkKind is kind as route binds it, with its description, when the
+// route's handler binds child Work of that kind (Registry.HandlerWorkKinds).
+func RoutedWorkKind(reg Registry, route Route, kind string) (extension.WorkKind, bool) {
+	kinds := reg.HandlerWorkKinds[route.Handler]
+	if kinds == nil {
+		return extension.WorkKind{}, false
+	}
+	for _, k := range kinds(route.Config) {
+		if k.Kind == kind {
+			return k, true
+		}
+	}
+	return extension.WorkKind{}, false
 }
 
 // check revalidates every effective entry. Context-free registration checks run

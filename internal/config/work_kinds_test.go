@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // workKindsConfig is one scope whose authorization lets its bindings ask for
@@ -22,10 +24,14 @@ func workKindsConfig(ceiling, asks, ops, routed []string) []byte {
 func workRegistry() Registry {
 	reg := registry()
 	reg.Handlers["work"] = true
-	reg.HandlerWorkKinds = map[string]func(json.RawMessage) []string{"work": func(raw json.RawMessage) []string {
+	reg.HandlerWorkKinds = map[string]func(json.RawMessage) []extension.WorkKind{"work": func(raw json.RawMessage) []extension.WorkKind {
 		var c struct{ Kinds []string }
 		_ = json.Unmarshal(raw, &c)
-		return c.Kinds
+		var out []extension.WorkKind
+		for _, k := range c.Kinds {
+			out = append(out, extension.WorkKind{Kind: k})
+		}
+		return out
 	}}
 	return reg
 }

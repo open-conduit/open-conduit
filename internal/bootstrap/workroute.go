@@ -48,32 +48,31 @@ func (c workRouteConfig) takes(kind string) (workRouteKind, bool) {
 
 // workRouteKinds are the kinds a work route's config binds
 // (config.Registry.HandlerWorkKinds); none when the config is invalid.
-func workRouteKinds(raw json.RawMessage) []string {
+func workRouteKinds(raw json.RawMessage) []extension.WorkKind {
 	c, err := parseWorkRoute(raw)
 	if err != nil {
 		return nil
 	}
-	kinds := make([]string, 0, len(c.Kinds))
+	kinds := make([]extension.WorkKind, 0, len(c.Kinds))
 	for _, k := range c.Kinds {
-		kinds = append(kinds, k.Kind)
+		kinds = append(kinds, extension.WorkKind{Kind: k.Kind, Description: k.Description})
 	}
 	return kinds
 }
 
-// describeWorkKind is what kind is for in scope: the description of the
-// first enabled work route that takes it, or "".
-func describeWorkKind(scope config.EffectiveScope, kind string) string {
-	for _, r := range scope.Routes {
-		if r.Handler != "work" {
-			continue
-		}
-		if c, err := parseWorkRoute(r.Config); err == nil {
-			if k, ok := c.takes(kind); ok && k.Description != "" {
+// describeWorkKind is what a kind is for in a scope: the description the
+// first route of the scope that binds it gives, whatever its handler
+// (config.Registry.HandlerWorkKinds: the bundled work route's or an
+// installed package's), or "".
+func describeWorkKind(reg config.Registry) func(config.EffectiveScope, string) string {
+	return func(scope config.EffectiveScope, kind string) string {
+		for _, r := range scope.Routes {
+			if k, ok := config.RoutedWorkKind(reg, r, kind); ok && k.Description != "" {
 				return k.Description
 			}
 		}
+		return ""
 	}
-	return ""
 }
 
 // parseWorkRoute decodes and checks a work route's config: one or more

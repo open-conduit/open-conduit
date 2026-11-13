@@ -257,10 +257,14 @@ func TestStartGateOverTheWire(t *testing.T) {
 // route config binds, which the host needs before it lets a binding ask
 // for them; other kinds of object carry none.
 func TestValidateReturnsARouteWorkKinds(t *testing.T) {
-	ext := &sdk.Extension{Manifest: manifest(), WorkKinds: func(p protocol.ValidateParams) []string {
+	ext := &sdk.Extension{Manifest: manifest(), WorkKinds: func(p protocol.ValidateParams) []protocol.WorkKind {
 		var c struct{ Kinds []string }
 		_ = json.Unmarshal(p.Config, &c)
-		return c.Kinds
+		var out []protocol.WorkKind
+		for _, k := range c.Kinds {
+			out = append(out, protocol.WorkKind{Kind: k, Description: "answers " + k})
+		}
+		return out
 	}}
 	host, _, _ := serve(t, ext)
 	ctx := context.Background()
@@ -268,7 +272,7 @@ func TestValidateReturnsARouteWorkKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out protocol.ValidateResult
-	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateRoute, Type: "chat", Config: json.RawMessage(`{"kinds":["chat.task.answer"]}`)}, &out); err != nil || len(out.WorkKinds) != 1 || out.WorkKinds[0] != "chat.task.answer" {
+	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateRoute, Type: "chat", Config: json.RawMessage(`{"kinds":["chat.task.answer"]}`)}, &out); err != nil || len(out.WorkKinds) != 1 || out.WorkKinds[0] != (protocol.WorkKind{Kind: "chat.task.answer", Description: "answers chat.task.answer"}) {
 		t.Fatalf("route: %+v %v", out, err)
 	}
 	out = protocol.ValidateResult{}

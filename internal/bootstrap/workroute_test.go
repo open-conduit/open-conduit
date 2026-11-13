@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -55,16 +56,26 @@ func TestWorkRouteConfig(t *testing.T) {
 	}
 }
 
-// What a kind is for is the description of the work route that takes it.
+// What a kind is for is the description of the route that binds it,
+// whichever handler's: the bundled work route's or an installed package's.
 func TestDescribeWorkKind(t *testing.T) {
+	reg := registry(nil)
+	reg.HandlerWorkKinds["acme"] = func(json.RawMessage) []extension.WorkKind {
+		return []extension.WorkKind{{Kind: "acme.task.triage", Description: "Acme's triage agent."}}
+	}
 	scope := config.EffectiveScope{Routes: []config.Route{
 		{Name: "manual", Handler: "manual", Config: []byte(`{}`)},
 		{Name: "engineer", Handler: "work", Config: []byte(engineerRoute)},
+		{Name: "triage", Handler: "acme", Config: []byte(`{}`)},
 	}}
-	if got := describeWorkKind(scope, "agent.task.engineer"); !strings.HasPrefix(got, "The engineering agent") {
+	describe := describeWorkKind(reg)
+	if got := describe(scope, "agent.task.engineer"); !strings.HasPrefix(got, "The engineering agent") {
 		t.Fatalf("description = %q", got)
 	}
-	if got := describeWorkKind(scope, "agent.task.sales"); got != "" {
+	if got := describe(scope, "acme.task.triage"); got != "Acme's triage agent." {
+		t.Fatalf("an installed handler's kind = %q", got)
+	}
+	if got := describe(scope, "agent.task.sales"); got != "" {
 		t.Fatalf("an unrouted kind was described: %q", got)
 	}
 }

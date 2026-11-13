@@ -239,14 +239,10 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		handlerNames[name] = true
 	}
 	registry := config.Registry{Executors: executors, Handlers: handlerNames, Extensions: o.extensions, Operations: o.operations,
-		HandlerWorkKinds: map[string]func(json.RawMessage) []string{"work": func(raw json.RawMessage) []string {
-			var c struct{ Kinds []struct{ Kind string } }
+		HandlerWorkKinds: map[string]func(json.RawMessage) []extension.WorkKind{"work": func(raw json.RawMessage) []extension.WorkKind {
+			var c struct{ Kinds []extension.WorkKind }
 			_ = json.Unmarshal(raw, &c)
-			var kinds []string
-			for _, k := range c.Kinds {
-				kinds = append(kinds, k.Kind)
-			}
-			return kinds
+			return c.Kinds
 		}}}
 	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"), nil)
 	if err != nil {

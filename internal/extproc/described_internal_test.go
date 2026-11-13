@@ -25,7 +25,7 @@ func TestDescribedCacheIsBounded(t *testing.T) {
 		t.Fatal("the oldest object's lines were kept")
 	}
 	// Validating an object again keeps its lines however many follow.
-	c.put("current", validated{lines: []protocol.DescribeLine{{Detail: "now"}}, kinds: []string{"agent.task.x"}})
+	c.put("current", validated{lines: []protocol.DescribeLine{{Detail: "now"}}, kinds: []protocol.WorkKind{{Kind: "agent.task.x"}}})
 	for i := range describedCap - 1 {
 		c.put("draft"+strconv.Itoa(i), validated{})
 	}
