@@ -438,11 +438,6 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_denied", "kind is not in the scope authorization's work_kinds; add it there or remove it here")
 			}
 		}
-		for k, kind := range b.WorkKinds {
-			if !v.routedKind(e, kind) {
-				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_unrouted", "no enabled route in this scope binds child Work of this kind, so it would never run; add a work route that lists it or remove it here")
-			}
-		}
 		if len(b.WorkKinds) > 0 && !resolved.Operation("create_work") {
 			v.fail(p+"/work_kinds", "work_kinds_unused", "the binding names work_kinds but isn't granted create_work; add create_work to its operations")
 		}
@@ -488,6 +483,20 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if r.ActivePolicy == "inject" && !c.Inject && !req.Inject || r.ActivePolicy == "interrupt" && !c.Interrupt && !req.Interrupt {
 			if r.UnsupportedFallback == "" {
 				v.fail(p+"/active_policy", "unsupported_policy", fmt.Sprintf("executor %s has no %s; set unsupported_fallback to queue or drop, or bind a capable executor", b.value.Executor, r.ActivePolicy))
+			}
+		}
+	}
+	// After the routes, whose validation tells the host what an installed
+	// handler's route binds (Registry.HandlerWorkKinds).
+	for _, name := range e.bindings.names {
+		s := e.bindings.byName[name]
+		if s.disabled {
+			continue
+		}
+		p, _ := at("bindings", name, s.scope, s.index)
+		for k, kind := range s.value.WorkKinds {
+			if !v.routedKind(e, kind) {
+				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_unrouted", "no enabled route in this scope binds child Work of this kind, so it would never run; add a work route that lists it or remove it here")
 			}
 		}
 	}

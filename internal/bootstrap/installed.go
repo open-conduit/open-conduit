@@ -56,15 +56,17 @@ var _ extension.ConfigCandidate = (*installed)(nil)
 // protocol.ValidateRoute; Validate checks a config object through the
 // package (nil accepts any), Binding a route's binding for a handler that
 // declares a binding check, and Settings and Describe an entry's safe
-// fields and what it sets up.
+// fields and what it sets up; WorkKinds, for a route type, the kinds of
+// child Work a route's config binds.
 type configType struct {
-	Kind     string
-	Type     string
-	Ingress  bool
-	Validate func(config json.RawMessage, secretNames []string) error
-	Binding  func(extension.RouteBinding) error
-	Settings func(config json.RawMessage) []extension.Setting
-	Describe func(config json.RawMessage) []config.Entry
+	Kind      string
+	Type      string
+	Ingress   bool
+	Validate  func(config json.RawMessage, secretNames []string) error
+	Binding   func(extension.RouteBinding) error
+	Settings  func(config json.RawMessage) []extension.Setting
+	Describe  func(config json.RawMessage) []config.Entry
+	WorkKinds func(config json.RawMessage) []string
 }
 
 // ingressSource is an ingress source a package's configure result
@@ -141,6 +143,7 @@ func (x *installed) Types() []configType {
 			if r.Config {
 				t.Validate = x.validator(protocol.ValidateRoute, r.Handler)
 				t.Describe = x.describe(protocol.ValidateRoute, r.Handler, nil)
+				t.WorkKinds = x.workKinds(r.Handler)
 			}
 			if r.Binding {
 				t.Binding = x.bindingCheck(r.Handler)
@@ -658,6 +661,24 @@ func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []
 			return nil
 		}
 		return declared(raw)
+	}
+}
+
+// workKinds are the kinds of child Work a route config of handler binds:
+// what the package said when it validated that config
+// (protocol.ValidateResult.WorkKinds), else none. It never calls the
+// package; validation does, before a binding's work_kinds are checked.
+func (x *installed) workKinds(handler string) func(json.RawMessage) []string {
+	return func(raw json.RawMessage) []string {
+		r := x.r
+		if r == nil && x.offline != nil && x.offline.started {
+			r = x.offline.r
+		}
+		if r == nil {
+			return nil
+		}
+		kinds, _ := r.WorkKinds(handler, raw)
+		return kinds
 	}
 }
 

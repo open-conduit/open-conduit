@@ -252,3 +252,27 @@ func TestStartGateOverTheWire(t *testing.T) {
 		t.Fatal("an undecided gate answered")
 	}
 }
+
+// A route handler that binds child Work answers validate with the kinds a
+// route config binds, which the host needs before it lets a binding ask
+// for them; other kinds of object carry none.
+func TestValidateReturnsARouteWorkKinds(t *testing.T) {
+	ext := &sdk.Extension{Manifest: manifest(), WorkKinds: func(p protocol.ValidateParams) []string {
+		var c struct{ Kinds []string }
+		_ = json.Unmarshal(p.Config, &c)
+		return c.Kinds
+	}}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var out protocol.ValidateResult
+	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateRoute, Type: "chat", Config: json.RawMessage(`{"kinds":["chat.task.answer"]}`)}, &out); err != nil || len(out.WorkKinds) != 1 || out.WorkKinds[0] != "chat.task.answer" {
+		t.Fatalf("route: %+v %v", out, err)
+	}
+	out = protocol.ValidateResult{}
+	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExtension, Type: "chat", Config: json.RawMessage(`{"kinds":["chat.task.answer"]}`)}, &out); err != nil || len(out.WorkKinds) != 0 {
+		t.Fatalf("an extension entry carried work kinds: %+v %v", out, err)
+	}
+}

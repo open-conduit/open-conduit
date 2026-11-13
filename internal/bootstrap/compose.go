@@ -75,6 +75,12 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 				if c.Binding != nil {
 					reg.HandlerBinding[c.Type] = c.Binding
 				}
+				if c.WorkKinds != nil {
+					if reg.HandlerWorkKinds == nil {
+						reg.HandlerWorkKinds = map[string]func(json.RawMessage) []string{}
+					}
+					reg.HandlerWorkKinds[c.Type] = c.WorkKinds
+				}
 				if describe := c.Describe; describe != nil {
 					if reg.HandlerDescribe == nil {
 						reg.HandlerDescribe = map[string]func(json.RawMessage) string{}

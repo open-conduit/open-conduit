@@ -100,6 +100,11 @@ type Extension struct {
 	// for the operator's view of the config (protocol.ValidateResult): it
 	// is asked after Validate accepts an object of kind extension or route.
 	Describe func(p protocol.ValidateParams) []protocol.DescribeLine
+	// WorkKinds, for a route handler that binds child Work, are the kinds
+	// a valid route config binds (protocol.ValidateResult.WorkKinds): a
+	// binding may be granted a kind only when an enabled route binds it.
+	// It is asked after Validate accepts an object of kind route.
+	WorkKinds func(p protocol.ValidateParams) []string
 	// Webhooks returns the handler of a webhook path the last configure
 	// registered. The handler verifies the request and pushes through
 	// Host.Deliver before writing a 2xx status.
