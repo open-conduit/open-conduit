@@ -570,7 +570,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	var belt *runtime.Toolbelt
-	grant := d.configs.Grant(func() []string { return belt.EventTypes() })
+	grant := d.configs.Grant(func() []string { return belt.EventTypes() }, describeWorkKind(d.configs.Registry()))
 	// The configured causal limits bound toolbelt emissions too (03-08 fix:
 	// they were applied only to routing, timers and control, so an execution's
 	// emissions pinned the default limits on a new root).

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -337,7 +338,10 @@ func (c *ConfigService) Enabled(scope domain.ID) bool {
 // Authorize is the runtime toolbelt ceiling: current config can only narrow.
 func (c *ConfigService) Authorize(_ context.Context, check runtime.AuthorityCheck) error {
 	s, _ := c.Current()
-	return s.AuthorizeOperation(check.ScopeID, check.Binding, check.Operation)
+	if err := s.AuthorizeOperation(check.ScopeID, check.Binding, check.Operation); err != nil || check.WorkKind == "" {
+		return err
+	}
+	return s.AuthorizeWorkKind(check.ScopeID, check.Binding, check.WorkKind)
 }
 
 // Refusal classifies a refused toolbelt call (runtime.ToolbeltOptions.Refusal)
@@ -382,7 +386,10 @@ func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 // binding grants the attempt's Work opted into, intersected with the current
 // ceiling, plus the registered emitted families and the pinned binding's
 // connection.
-func (c *ConfigService) Grant(events func() []string) func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+//
+// describe, when set, is what a kind of child Work in the scope is for (the
+// route that binds it says), shown with the kinds the binding may ask for.
+func (c *ConfigService) Grant(events func() []string, describe func(config.EffectiveScope, string) string) func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 	return func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 		grant := runtime.ToolbeltGrant{}
 		pinned := c.snapshotFor(state.Generation)
@@ -398,6 +405,15 @@ func (c *ConfigService) Grant(events func() []string) func(context.Context, runt
 			return grant, nil
 		}
 		grant.Connection = binding.Connection
+		for _, kind := range binding.WorkKinds {
+			if c.Authorize(ctx, runtime.AuthorityCheck{ScopeID: state.ScopeID, Binding: state.Binding.Name, Operation: extension.CreateWork, WorkKind: kind}) == nil {
+				k := extension.WorkKind{Kind: kind}
+				if describe != nil {
+					k.Description = describe(*scope, kind)
+				}
+				grant.WorkKinds = append(grant.WorkKinds, k)
+			}
+		}
 		ops := slices.Clone(binding.Operations)
 		for _, g := range binding.Grants {
 			if slices.Contains(state.Grants, g.Name) {

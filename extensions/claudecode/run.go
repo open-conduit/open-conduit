@@ -69,6 +69,9 @@ type turnRecord struct {
 	StatusSchema  string    `json:"status_schema"`
 	FollowUps     int       `json:"follow_ups"`
 	InputTypes    []string  `json:"input_types,omitempty"`
+	// Asked says the Work is child Work another Work asked for, so an
+	// unstructured turn's final text is its result.
+	Asked bool `json:"asked,omitempty"`
 }
 
 type processRecord struct {
@@ -275,7 +278,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		}
 		first = dryRunPrompt(first, cfg.structured())
 	}
-	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, HandoffReason: d.Reason, Resume: d.Resume, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
+	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, HandoffReason: d.Reason, Resume: d.Resume, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs), Asked: r.Work.ParentID != ""}
 	for _, ev := range inputs {
 		turn.InputTypes = append(turn.InputTypes, ev.Type)
 	}
@@ -1021,7 +1024,11 @@ type resultFields struct {
 	Status string `json:"status,omitempty"`
 	Reason string `json:"reason"`
 	// Report is the status's write-up for the operator, shown with the turn.
-	Report     string     `json:"report,omitempty"`
+	Report string `json:"report,omitempty"`
+	// Result is the turn's answer to the Work that asked for this one
+	// (domain.TurnDeclaration.Result): the status's result, or an
+	// unstructured turn's final text.
+	Result     string     `json:"result,omitempty"`
 	Kind       string     `json:"kind,omitempty"`
 	Models     []string   `json:"models,omitempty"`
 	ModelCalls int        `json:"model_calls,omitempty"`
@@ -1071,10 +1078,15 @@ func mapOutcome(p parsed, f *resultFields) (domain.Outcome, *extension.RetryHint
 	}
 	if p.Status == nil {
 		f.Reason = "result"
+		if p.Asked {
+			// An unstructured turn has no status to carry a result: its
+			// final text is the only answer it gives.
+			f.Result = strings.TrimSpace(p.Text)
+		}
 		return domain.Outcome{Kind: domain.OutcomeCompleted, Summary: truncate(strings.TrimSpace(p.Text), 300)}, nil
 	}
 	s := p.Status
-	f.Reason, f.Status, f.Report = "status", s.State, truncate(s.Report, maxReport)
+	f.Reason, f.Status, f.Report, f.Result = "status", s.State, truncate(s.Report, maxReport), strings.TrimSpace(s.Result)
 	kind := domain.OutcomeHandoff
 	if s.State == StateFinished {
 		kind = domain.OutcomeCompleted
@@ -1216,6 +1228,7 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 		// gone retries after the margin.
 		p.ResetsAt = &now
 	}
+	p.Asked = turn.Asked
 	outcome, hint := mapOutcome(p, &f)
 	result := extension.Result{Outcome: outcome, Usage: usageOf(p), RetryHint: hint}
 	// claude echoed these injected inputs back (--replay-user-messages): the

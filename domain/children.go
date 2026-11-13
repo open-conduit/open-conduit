@@ -1,0 +1,34 @@
+package domain
+
+import "encoding/json"
+
+// Child Work is Work another Work's execution asked for (Work.ParentID).
+// When it ends, the host tells the parent with a TypeChildEnded Event on
+// the parent's lineage key (LineageKey), so the parent can Wait for it like
+// any other Event and be resumed with the child's result.
+const (
+	TypeChildEnded   = "core.work.child.ended"
+	SchemaChildEnded = "core.work.child.ended.v1"
+	// LineageSource is the correlation source of a Work's lineage key.
+	LineageSource = "core.work"
+)
+
+// LineageKey is the correlation key the host gives a Work when it first asks
+// for child Work: its own ID under LineageSource. Its children's
+// TypeChildEnded Events carry it, so a Wait on the parent's keys sees them.
+func LineageKey(work ID) CorrelationKey {
+	return CorrelationKey{Source: LineageSource, ExternalID: string(work)}
+}
+
+// ChildEnded is a TypeChildEnded Event's payload: which child ended, in
+// which state, and what its last attempt returned. Result is the child's
+// declared turn result (TurnDeclaration.Result), absent when it returned
+// none (a failed or cancelled child).
+type ChildEnded struct {
+	Work    string          `json:"work"`
+	Kind    string          `json:"kind"`
+	State   WorkState       `json:"state"`
+	Outcome OutcomeKind     `json:"outcome,omitempty"`
+	Summary string          `json:"summary,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+}

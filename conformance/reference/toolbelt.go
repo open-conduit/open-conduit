@@ -178,7 +178,7 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 				return extension.ErrInvalid
 			}
 			child := *c.Child
-			if child.ScopeID != "" && child.ScopeID != a.ScopeID || child.ParentID != "" && child.ParentID != a.WorkID {
+			if child.ScopeID != "" && child.ScopeID != a.ScopeID || child.ParentID != "" && child.ParentID != a.WorkID || !a.GrantsWorkKind(child.Kind) {
 				return extension.ErrUnauthorized
 			}
 			child.ScopeID, child.ParentID, child.State = a.ScopeID, a.WorkID, domain.WorkReady

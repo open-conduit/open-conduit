@@ -100,6 +100,7 @@ A scope's `authorization`.
 | `file_scopes` | array of string |  |  | Other scopes whose trackers this scope's agents may file issues in and comment on. |
 | `operations` | array of string | yes |  | Toolbelt operations executions in this scope may call (see the operations reference): an operation, a toolset an extension publishes as `@<name>` (every operation it has in the running release), or either denied with a leading `!`. A binding's operations narrow it. |
 | `read_scopes` | array of string | yes |  | Other scopes whose Events this scope's executions may wait on. |
+| `work_kinds` | array of string |  |  | Kinds of child Work this scope's bindings may be granted to ask for with create_work (a binding's work_kinds). Empty grants none. |
 
 ## bindings
 
@@ -122,6 +123,7 @@ Each entry of a scope's `bindings`.
 | `sandbox` | object |  |  | Process sandbox provider and its config. |
 | `secret_names` | array of string |  |  | Scope secrets the executor may resolve. |
 | `timeout_seconds` | integer |  |  | Replaces settings.timeout_seconds, the time limit of one turn, for this binding's attempts. |
+| `work_kinds` | array of string |  |  | Kinds of child Work the binding's runs may ask for with create_work, within the scope's authorization.work_kinds, each bound by an enabled route of the scope (a work route that lists it). Needs create_work in operations. The host refuses any other kind. |
 
 ## requires
 

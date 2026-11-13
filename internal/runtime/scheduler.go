@@ -1818,7 +1818,29 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		return nil
 	}
 	if declared != nil && declared.Outcome != nil {
-		result.Outcome = *declared.Outcome
+		// An outcome the agent declared keeps the turn data the executor
+		// reported (its status, report and result) unless it gave its own,
+		// so it has the same shape whoever declared it.
+		outcome := *declared.Outcome
+		if outcome.Data.Schema == "" && len(outcome.Data.Data) == 0 {
+			outcome.Data = result.Outcome.Data
+		}
+		result.Outcome = outcome
+	}
+	if result.Outcome.Kind == domain.OutcomeCompleted {
+		var missing bool
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			var e error
+			missing, e = s.resultMissingInTx(tx, ref, result.Outcome)
+			return e
+		}); err != nil {
+			return err
+		}
+		if missing {
+			// The parent would hear an empty success: fail the attempt
+			// instead, so the retry policy runs it again or the Work fails.
+			result.Outcome = domain.Outcome{Kind: domain.OutcomeFailed, Summary: MissingResultSummary, Data: result.Outcome.Data}
+		}
 	}
 	if result.Outcome.Kind == domain.OutcomeWaiting {
 		return s.acknowledgeWaiting(ctx, ref, result)
@@ -1890,6 +1912,9 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 			w.State = domain.WorkCompleted
 		}
 		if err = tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		if err = childEndedInTx(tx, s.now(), w); err != nil {
 			return err
 		}
 		if err = resetRetryInTx(tx, w.ID); err != nil {

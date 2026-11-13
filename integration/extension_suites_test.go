@@ -132,7 +132,7 @@ func newExternalToolbeltHarness(t *testing.T, mode string, reg extension.Registr
 	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), mu: &sync.Mutex{}}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
-			return runtime.ToolbeltGrant{Operations: ops, EventTypes: []string{"fixture.changed.v1"}}, nil
+			return runtime.ToolbeltGrant{Operations: ops, EventTypes: []string{"fixture.changed.v1"}, WorkKinds: fixtureWorkKinds}, nil
 		},
 		Authorize: func(_ context.Context, c runtime.AuthorityCheck) error {
 			if c.Binding != "fixture" || c.Generation != "fixture-generation" {

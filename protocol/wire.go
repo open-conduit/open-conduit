@@ -617,13 +617,30 @@ type Authority struct {
 	// Connection is the connection ID the Execution's binding names, or
 	// empty.
 	Connection string `json:"connection,omitempty"`
+	// WorkKinds are the kinds of child Work the execution may ask for.
+	WorkKinds []WorkKind `json:"work_kinds,omitempty"`
+}
+
+// WorkKind is one kind of child Work an execution may ask for, and what to
+// ask it for.
+type WorkKind struct {
+	Kind        string `json:"kind"`
+	Description string `json:"description,omitempty"`
 }
 
 func FromAuthority(a extension.Authority) Authority {
-	return Authority{ScopeID: string(a.ScopeID), WorkID: string(a.WorkID), ExecutionID: string(a.ExecutionID), Lease: FromLeaseRef(a.Lease), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: string(a.TriggerID), Connection: a.Connection}
+	out := Authority{ScopeID: string(a.ScopeID), WorkID: string(a.WorkID), ExecutionID: string(a.ExecutionID), Lease: FromLeaseRef(a.Lease), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: string(a.TriggerID), Connection: a.Connection}
+	for _, k := range a.WorkKinds {
+		out.WorkKinds = append(out.WorkKinds, WorkKind{Kind: k.Kind, Description: k.Description})
+	}
+	return out
 }
 func (a Authority) Extension() extension.Authority {
-	return extension.Authority{ScopeID: domain.ID(a.ScopeID), WorkID: domain.ID(a.WorkID), ExecutionID: domain.ID(a.ExecutionID), Lease: a.Lease.Domain(), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: domain.ID(a.TriggerID), Connection: a.Connection}
+	out := extension.Authority{ScopeID: domain.ID(a.ScopeID), WorkID: domain.ID(a.WorkID), ExecutionID: domain.ID(a.ExecutionID), Lease: a.Lease.Domain(), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: domain.ID(a.TriggerID), Connection: a.Connection}
+	for _, k := range a.WorkKinds {
+		out.WorkKinds = append(out.WorkKinds, extension.WorkKind{Kind: k.Kind, Description: k.Description})
+	}
+	return out
 }
 
 type WaitRequest struct {

@@ -148,7 +148,11 @@ func TestObservationDiffAndPushOverlap(t *testing.T) {
 		t.Fatal("truncated scan deleted state")
 	}
 }
-func toolbeltFixture() conformance.ToolbeltFixture {
+func toolbeltFixture() conformance.ToolbeltFixture { return toolbeltFixtureGranting() }
+
+// toolbeltFixtureGranting issues the fixture's token with extraKinds of
+// child Work beyond what its Authority reports (a negative control).
+func toolbeltFixtureGranting(extraKinds ...extension.WorkKind) conformance.ToolbeltFixture {
 	ctx := context.Background()
 	clock := conformance.NewClock()
 	store := reference.New()
@@ -180,8 +184,10 @@ func toolbeltFixture() conformance.ToolbeltFixture {
 	}}}}); err != nil {
 		panic(err)
 	}
-	a := extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: "execution", TriggerID: "trigger", Lease: lease, ExpiresAt: clock.Now().Add(time.Minute), Operations: []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo"}, EventTypes: []string{"fixture.changed.v1"}}
-	token, err := belt.Issue(ctx, a)
+	a := extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: "execution", TriggerID: "trigger", Lease: lease, ExpiresAt: clock.Now().Add(time.Minute), Operations: []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo"}, EventTypes: []string{"fixture.changed.v1"}, WorkKinds: []extension.WorkKind{{Kind: "fixture.child"}}}
+	issued := a
+	issued.WorkKinds = append(append([]extension.WorkKind(nil), a.WorkKinds...), extraKinds...)
+	token, err := belt.Issue(ctx, issued)
 	if err != nil {
 		panic(err)
 	}
@@ -345,6 +351,13 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 			f.Registrar = squattableRegistrar{f.Registrar}
 			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "outside its namespace accepted") {
 				t.Fatalf("operation squatting undetected: %v", err)
+			}
+		}
+		if c.Name == "child_and_extension_operation" {
+			// A toolbelt that lets a caller ask for any kind of child Work.
+			f := toolbeltFixtureGranting(extension.WorkKind{Kind: "fixture.ungranted"})
+			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "doesn't grant accepted") {
+				t.Fatalf("ungranted child kind undetected: %v", err)
 			}
 		}
 		if c.Name == "cross_scope_work_execution" {

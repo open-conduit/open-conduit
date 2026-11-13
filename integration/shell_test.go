@@ -91,9 +91,10 @@ func shellConfig(t *testing.T, binding map[string]any) string {
   "version": 1, "settings": {}, "connections": [],
   "scopes": [{
     "id": "ops", "name": "Operations",
-    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes": []},
-    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
-    "routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}}],
+    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes": [], "work_kinds": ["fixture.child"]},
+    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "work_kinds": ["fixture.child"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
+    "routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}},
+      {"name": "children", "handler": "work", "binding": "run", "active_policy": "queue", "config": {"kinds": [{"kind": "fixture.child"}]}}],
     "secret_refs": {"api": "cmd:printf shell-secret"}
   }]
 }`
@@ -226,13 +227,23 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		executors[name] = e
 		routeBindings[name] = runtime.RouteBinding{Executor: e, Capabilities: e.Capabilities()}
 	}
-	handlers := map[string]extension.RouteHandler{"manual": routingHandlerFunc(shellRoute)}
-	handlerNames := map[string]bool{"manual": true}
+	// "work" stands for the bundled work route: it binds the child kinds
+	// its config lists (so a binding may be granted them), and here takes
+	// nothing, so the child Work stays put for the test to inspect.
+	handlers := map[string]extension.RouteHandler{"manual": routingHandlerFunc(shellRoute), "work": routingHandlerFunc(func(extension.RouteInput) (extension.RouteDecision, error) {
+		return extension.Skip("the test runs no child Work"), nil
+	})}
+	handlerNames := map[string]bool{"manual": true, "work": true}
 	for name, handler := range o.handlers {
 		handlers[name] = handler
 		handlerNames[name] = true
 	}
-	registry := config.Registry{Executors: executors, Handlers: handlerNames, Extensions: o.extensions, Operations: o.operations}
+	registry := config.Registry{Executors: executors, Handlers: handlerNames, Extensions: o.extensions, Operations: o.operations,
+		HandlerWorkKinds: map[string]func(json.RawMessage) []extension.WorkKind{"work": func(raw json.RawMessage) []extension.WorkKind {
+			var c struct{ Kinds []extension.WorkKind }
+			_ = json.Unmarshal(raw, &c)
+			return c.Kinds
+		}}}
 	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +252,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		t.Fatal(err)
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }), Observer: observer})
+	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }, nil), Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}

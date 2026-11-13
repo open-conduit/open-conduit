@@ -63,6 +63,10 @@ type ConfigType struct {
 	// config sets up (a schedule's jobs and when they run), for the
 	// operator's view of the config. It must not reveal secrets.
 	Describe func(config json.RawMessage) []Entry
+	// WorkKinds, for a route type that binds child Work only, are the kinds
+	// a route's config binds, each with what it is for
+	// (config.Registry.HandlerWorkKinds).
+	WorkKinds func(config json.RawMessage) []extension.WorkKind
 	// Fields describe the type's config fields (and, for a connection,
 	// its secret_refs keys) for the operator's catalogue: manifest fields
 	// (protocol.FieldDecl).

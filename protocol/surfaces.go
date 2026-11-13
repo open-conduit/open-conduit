@@ -117,12 +117,20 @@ type ValidateParams struct {
 // or which jobs a route takes. The host keeps the lines of the config it
 // validated, so its view needs no call; without them it reads the entry
 // type's declared describe. They must not reveal secrets.
+//
+// For kind route, WorkKinds are the kinds of child Work a valid route
+// config binds, each with what it is for, when the handler binds child
+// Work (as the bundled work handler does): a binding may be granted a kind
+// (its work_kinds) only when an enabled route of its scope binds it, and an
+// asking agent is shown the description. The host keeps them with the
+// describe lines.
 type ValidateResult struct {
-	Mode     string          `json:"mode,omitempty"`
-	Playbook string          `json:"playbook,omitempty"`
-	Config   json.RawMessage `json:"config,omitempty"`
-	Warnings []string        `json:"warnings,omitempty"`
-	Describe []DescribeLine  `json:"describe,omitempty"`
+	Mode      string          `json:"mode,omitempty"`
+	Playbook  string          `json:"playbook,omitempty"`
+	Config    json.RawMessage `json:"config,omitempty"`
+	Warnings  []string        `json:"warnings,omitempty"`
+	Describe  []DescribeLine  `json:"describe,omitempty"`
+	WorkKinds []WorkKind      `json:"work_kinds,omitempty"`
 }
 
 // DescribeLine is one thing a config object sets up: a named element of

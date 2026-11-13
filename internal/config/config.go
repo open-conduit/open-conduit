@@ -26,6 +26,9 @@ var (
 	// toolset ("@github.author") or either denied ("!github.pr.edit").
 	grantPattern = regexp.MustCompile(`^!?@?[a-z][a-z0-9_.-]*$`)
 	envPattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// kindPattern is a Work kind an operator names in config: two or more
+	// lower-case words joined by dots (agent.task.engineer).
+	kindPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$`)
 )
 
 // Diagnostic paths are JSON pointers without the leading slash. Messages are
@@ -170,7 +173,15 @@ type Authorization struct {
 	// FileScopes are the other scopes whose trackers this scope's agents
 	// may file issues in and comment on (optional; empty grants none).
 	FileScopes []string `json:"file_scopes,omitempty"`
+	// WorkKinds are the kinds of child Work this scope's bindings may be
+	// granted to ask for (Binding.WorkKinds; optional, empty grants none).
+	WorkKinds []string `json:"work_kinds,omitempty"`
 }
+
+// WorkKind reports whether s has the shape of a Work kind an operator names
+// in config: lower-case words joined by dots (agent.task.engineer).
+func WorkKind(s string) bool { return kindPattern.MatchString(s) }
+
 type Resource struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config"`
@@ -200,8 +211,12 @@ type Binding struct {
 	Operations, SecretNames    []string
 	// PassEnv names host variables the binding's runs see
 	// (domain.Binding.PassEnv).
-	PassEnv  []string
-	Resource *Resource
+	PassEnv []string
+	// WorkKinds are the kinds of child Work the binding's runs may ask for
+	// with create_work, within the scope's authorization.work_kinds; the
+	// host refuses any other kind.
+	WorkKinds []string
+	Resource  *Resource
 	// Sandbox runs the binding's executor in a process sandbox (B09).
 	Sandbox *Sandbox
 	// Container runs the binding's executor in a container. It can't be
@@ -640,13 +655,16 @@ func (c *checker) scope(n *node, path string) ScopeConfig {
 	}
 	if a := n.field("authorization"); a != nil {
 		p := path + "/authorization"
-		out.Authorization = &Authorization{[]string{}, []string{}, []string{}, []string{}}
-		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes") {
+		out.Authorization = &Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}
+		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes", "work_kinds") {
 			out.Authorization = &Authorization{
 				Connections: c.list(a.field("connections"), p+"/connections", idPattern),
 				Operations:  c.list(a.field("operations"), p+"/operations", grantPattern),
 				ReadScopes:  c.list(a.field("read_scopes"), p+"/read_scopes", idPattern),
 				FileScopes:  c.list(a.field("file_scopes"), p+"/file_scopes", idPattern),
+			}
+			if k := a.field("work_kinds"); k != nil {
+				out.Authorization.WorkKinds = c.list(k, p+"/work_kinds", kindPattern)
 			}
 		}
 	}
@@ -694,7 +712,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	optional := []string{"requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants"}
+	optional := []string{"requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants", "work_kinds"}
 	if !c.fragment {
 		// A folder's bindings pass no daemon variables: like its scopes'
 		// secret references, pass_env stays in the config file, so a
@@ -721,6 +739,9 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 	}
 	b.Operations = c.list(n.field("operations"), path+"/operations", grantPattern)
 	b.SecretNames = c.list(n.field("secret_names"), path+"/secret_names", idPattern)
+	if k := n.field("work_kinds"); k != nil {
+		b.WorkKinds = c.list(k, path+"/work_kinds", kindPattern)
+	}
 	if pe := n.field("pass_env"); pe != nil {
 		b.PassEnv = c.list(pe, path+"/pass_env", envPattern)
 	}
@@ -997,6 +1018,9 @@ func (b BindingEntry) normalized() any {
 			grants = append(grants, gm)
 		}
 		m["grants"] = grants
+	}
+	if len(b.WorkKinds) > 0 {
+		m["work_kinds"] = b.WorkKinds
 	}
 	return m
 }

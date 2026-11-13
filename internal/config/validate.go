@@ -66,6 +66,12 @@ type Registry struct {
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
+	// HandlerWorkKinds optionally names, for a route handler that binds
+	// child Work, the kinds a route's config binds, each with what it is
+	// for. A binding's work_kinds must each be bound by an enabled route of
+	// its scope, so a kind an agent may ask for always has a binding to run
+	// it; the description is what an asking agent is shown.
+	HandlerWorkKinds map[string]func(json.RawMessage) []extension.WorkKind
 	// HandlerBinding optionally checks the binding a route with this handler
 	// binds (extension.RouteBinding). Its error is a fixed, secret-free
 	// reason, shown in the diagnostic.
@@ -336,7 +342,7 @@ func (v *validator) resolve(id string) *effective {
 		}
 	}
 	e := &effective{enabled: true, concurrency: v.doc.Settings.Concurrency, admission: v.doc.Settings.AdmissionLimit,
-		auth: Authorization{[]string{}, []string{}, []string{}, []string{}}, refs: map[string]string{}}
+		auth: Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}, refs: map[string]string{}}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
 			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil}
@@ -351,6 +357,7 @@ func (v *validator) resolve(id string) *effective {
 			{"connections", a.Connections, e.auth.Connections, func(s string) bool { return v.connections[s] }},
 			{"read_scopes", a.ReadScopes, e.auth.ReadScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
 			{"file_scopes", a.FileScopes, e.auth.FileScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
+			{"work_kinds", a.WorkKinds, e.auth.WorkKinds, func(string) bool { return true }},
 		}
 		for _, c := range categories {
 			p := path + "/authorization/" + c.key
@@ -420,6 +427,34 @@ func (v *validator) resolve(id string) *effective {
 	return e
 }
 
+// routedKind reports whether an enabled route of e binds child Work of kind
+// (Registry.HandlerWorkKinds).
+func (v *validator) routedKind(e *effective, kind string) bool {
+	for _, name := range e.routes.names {
+		if s := e.routes.byName[name]; !s.disabled {
+			if _, ok := RoutedWorkKind(v.reg, s.value, kind); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RoutedWorkKind is kind as route binds it, with its description, when the
+// route's handler binds child Work of that kind (Registry.HandlerWorkKinds).
+func RoutedWorkKind(reg Registry, route Route, kind string) (extension.WorkKind, bool) {
+	kinds := reg.HandlerWorkKinds[route.Handler]
+	if kinds == nil {
+		return extension.WorkKind{}, false
+	}
+	for _, k := range kinds(route.Config) {
+		if k.Kind == kind {
+			return k, true
+		}
+	}
+	return extension.WorkKind{}, false
+}
+
 // check revalidates every effective entry. Context-free registration checks run
 // only where an entry is declared; inherited entries resolve against this
 // scope's ceiling, secrets and bindings.
@@ -461,6 +496,14 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		}
 		if b.Connection != "" && !slices.Contains(e.auth.Connections, b.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
+		}
+		for k, kind := range b.WorkKinds {
+			if !slices.Contains(e.auth.WorkKinds, kind) {
+				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_denied", "kind is not in the scope authorization's work_kinds; add it there or remove it here")
+			}
+		}
+		if len(b.WorkKinds) > 0 && !resolved.Operation("create_work") {
+			v.fail(p+"/work_kinds", "work_kinds_unused", "the binding names work_kinds but isn't granted create_work; add create_work to its operations")
 		}
 	}
 	for _, name := range e.routes.names {
@@ -504,6 +547,20 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if r.ActivePolicy == "inject" && !c.Inject && !req.Inject || r.ActivePolicy == "interrupt" && !c.Interrupt && !req.Interrupt {
 			if r.UnsupportedFallback == "" {
 				v.fail(p+"/active_policy", "unsupported_policy", fmt.Sprintf("executor %s has no %s; set unsupported_fallback to queue or drop, or bind a capable executor", b.value.Executor, r.ActivePolicy))
+			}
+		}
+	}
+	// After the routes, whose validation tells the host what an installed
+	// handler's route binds (Registry.HandlerWorkKinds).
+	for _, name := range e.bindings.names {
+		s := e.bindings.byName[name]
+		if s.disabled {
+			continue
+		}
+		p, _ := at("bindings", name, s.scope, s.index)
+		for k, kind := range s.value.WorkKinds {
+			if !v.routedKind(e, kind) {
+				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_unrouted", "no enabled route in this scope binds child Work of this kind, so it would never run; add a work route that lists it or remove it here")
 			}
 		}
 	}
@@ -990,6 +1047,21 @@ func (s *Snapshot) AuthorizeOperation(scope domain.ID, binding, operation string
 	}
 	b, ok := e.Binding(binding)
 	if !ok || !b.Operation(operation) || !slices.Contains(e.Authorization.Operations, operation) {
+		return ErrDenied
+	}
+	return nil
+}
+
+// AuthorizeWorkKind allows a binding to ask for child Work of kind: the
+// binding names it in work_kinds and the scope authorization's work_kinds
+// still has it.
+func (s *Snapshot) AuthorizeWorkKind(scope domain.ID, binding, kind string) error {
+	e, ok := s.Scopes[scope]
+	if !ok || !e.Enabled {
+		return ErrDenied
+	}
+	b, ok := e.Binding(binding)
+	if !ok || !slices.Contains(e.Authorization.WorkKinds, kind) || !slices.Contains(b.WorkKinds, kind) {
 		return ErrDenied
 	}
 	return nil

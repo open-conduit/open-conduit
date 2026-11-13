@@ -40,6 +40,7 @@ export default defineConfig({
 						{ label: 'Scheduled jobs', slug: 'workflows/scheduled-jobs' },
 						{ label: 'Introspection', slug: 'workflows/introspection' },
 						{ label: 'Human decisions', slug: 'workflows/human-decisions' },
+						{ label: 'Agents asking agents', slug: 'workflows/delegation' },
 						{ label: 'Observed sources', slug: 'workflows/observed-sources' },
 						{ label: 'Incidents and errors', slug: 'workflows/incidents' },
 						{ label: 'Fix red CI on main', slug: 'workflows/red-ci' },

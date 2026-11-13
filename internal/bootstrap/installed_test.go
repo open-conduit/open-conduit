@@ -56,3 +56,23 @@ func TestInstalledRunOnceWorkKind(t *testing.T) {
 		t.Fatalf("work kinds %+v", kinds)
 	}
 }
+
+// A package's configurable route handler says which kinds of child Work a
+// route binds through what it answered when it validated the route's
+// config; before any validation, it binds none.
+func TestInstalledRouteWorkKinds(t *testing.T) {
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1", Command: []string{"./acme"}, Provides: protocol.Provides{
+		Routes: []protocol.RouteDecl{{Handler: "acme", Config: true}, {Handler: "acme-plain"}}}}
+	reg := config.Registry{}
+	packageRegistry(&reg, []*installed{{m: m}})
+	kinds := reg.HandlerWorkKinds["acme"]
+	if kinds == nil {
+		t.Fatal("a configurable route handler can't say which kinds it binds")
+	}
+	if got := kinds(json.RawMessage(`{"kinds":["acme.task.x"]}`)); len(got) != 0 {
+		t.Fatalf("kinds before the package validated the config: %v", got)
+	}
+	if reg.HandlerWorkKinds["acme-plain"] != nil {
+		t.Fatal("a route handler without config binds kinds")
+	}
+}

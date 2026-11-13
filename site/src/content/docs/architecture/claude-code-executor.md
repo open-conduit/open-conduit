@@ -49,7 +49,7 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>`, or on the
 
 ## Outcomes
 
-The executor adds no core state. The structured status uses `--json-schema` (state, summary, handoff, report). Its descriptions say only what each state means to Open Conduit: `finished` completes the Work; `building`, `review`, `help` and `done` keep it open for the next input, with `review`, `help` and `done` putting something to the owner. They name no code host, issue, PR, check or preview: what a state means for a kind of Work (that `building` follows a push, say) is its playbook's to say, as `work-issue`'s "Ending a turn" does. A test (`TestNoDomainTerms`, with a negative control) keeps such terms out of the executor's sources. It maps as follows:
+The executor adds no core state. The structured status uses `--json-schema` (state, summary, handoff, report, result). Its descriptions say only what each state means to Open Conduit: `finished` completes the Work; `building`, `review`, `help` and `done` keep it open for the next input, with `review`, `help` and `done` putting something to the owner. They name no code host, issue, PR, check or preview: what a state means for a kind of Work (that `building` follows a push, say) is its playbook's to say, as `work-issue`'s "Ending a turn" does. A test (`TestNoDomainTerms`, with a negative control) keeps such terms out of the executor's sources. It maps as follows:
 
 | Turn ended | Outcome | Work afterwards |
 | --- | --- | --- |
@@ -63,6 +63,7 @@ The outcome data schema is the binding's optional `status_schema`. The default i
 
 - `reason` and `kind`
 - `report`, the status's optional write-up for the operator (at most 20,000 bytes), which the web view shows under the turn's summary
+- `result`, the status's answer to the Work that asked for this one ([child Work](../routing-lifecycle/#child-work)), kept whole: the parent receives it in `core.work.child.ended`. An unstructured turn of child Work gives its final text as its result, having no status to carry one. A child's first turn renders its creation as the task it was asked (the context's `task`, else its data), and a parent's turn renders a child's end with its state, summary and result in full
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
 - `limited` and `resets_at`
 - `exit_code` and `injected`

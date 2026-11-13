@@ -46,14 +46,14 @@ Emit a declared event for this Work.
 
 ### `create_work`
 
-Create follow-up child Work in this scope.
+Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result; wait for it.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `context` | object |  | A payload: {schema, data}. |
+| `context` | object |  | The task, as a payload: {schema, data}, for example {"schema": "<kind>.v1", "data": {"task": "…"}}. |
 | `correlation_keys` | array of object |  |  |
 | `id` | string |  |  |
-| `kind` | string | yes |  |
+| `kind` | string | yes | A kind of child Work your toolbelt guidance lists; the host refuses any other. |
 | `request_id` | string |  | Optional idempotency key: retrying with the same ID never repeats the effect. |
 
 ### `wait`

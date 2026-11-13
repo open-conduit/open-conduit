@@ -19,6 +19,9 @@ type Status struct {
 	Summary string `json:"summary"`
 	Handoff string `json:"handoff,omitempty"`
 	Report  string `json:"report,omitempty"`
+	// Result is the answer the turn hands back to the agent that asked for
+	// the Work (core.turn.v1 result); empty for Work nobody asked for.
+	Result string `json:"result,omitempty"`
 }
 
 // The turn states a structured status may report. They are this executor's
@@ -55,6 +58,8 @@ var StatusSchema = map[string]any{
 			"what is pending, the judgement calls you made and why, and what to look at next. Intent only; leave out what the work's own record already shows."},
 		"report": map[string]any{"type": "string", "description": "Optional: a write-up for the operator, in Markdown, shown with this turn in the run's history. " +
 			"Use it for findings too long for the one-line summary that aren't written down anywhere else; leave it out otherwise."},
+		"result": map[string]any{"type": "string", "description": "Only when another agent asked for this work: your answer to it, in full, in Markdown. " +
+			"It is all that agent receives (not your summary or your final text), so give it with the state finished once you have answered. Leave it out otherwise."},
 	},
 	"required":             []string{"state", "summary"},
 	"additionalProperties": false,
@@ -95,6 +100,8 @@ type Totals struct {
 
 // parsed is how a turn ended, as read from claude's output.
 type parsed struct {
+	// Asked is the turn's (turnRecord.Asked), not parsed from output.
+	Asked      bool
 	OK         bool
 	Status     *Status
 	Text       string

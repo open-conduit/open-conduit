@@ -88,14 +88,15 @@ var parity = map[string][]string{
 	"Host.Config":            {"manifest:permissions", "method:config.base"},
 
 	// A config type's fields, inproc.ConfigType.
-	"ConfigType.Kind":     {"method:validate"},
-	"ConfigType.Type":     {"manifest:provides.connections.type", "manifest:provides.extensions.type", "manifest:provides.routes.handler"},
-	"ConfigType.Ingress":  {"manifest:provides.extensions.ingress"},
-	"ConfigType.Validate": {"method:validate"},
-	"ConfigType.Binding":  {"manifest:provides.routes.binding", "method:validate"},
-	"ConfigType.Settings": {"manifest:provides.extensions.settings"},
-	"ConfigType.Describe": {"manifest:provides.extensions.describe"},
-	"ConfigType.Fields":   {"manifest:provides.connections.fields", "manifest:provides.extensions.fields", "manifest:provides.routes.fields"},
+	"ConfigType.Kind":      {"method:validate"},
+	"ConfigType.Type":      {"manifest:provides.connections.type", "manifest:provides.extensions.type", "manifest:provides.routes.handler"},
+	"ConfigType.Ingress":   {"manifest:provides.extensions.ingress"},
+	"ConfigType.Validate":  {"method:validate"},
+	"ConfigType.Binding":   {"manifest:provides.routes.binding", "method:validate"},
+	"ConfigType.Settings":  {"manifest:provides.extensions.settings"},
+	"ConfigType.Describe":  {"manifest:provides.extensions.describe"},
+	"ConfigType.Fields":    {"manifest:provides.connections.fields", "manifest:provides.extensions.fields", "manifest:provides.routes.fields"},
+	"ConfigType.WorkKinds": {"manifest:provides.routes.config", "method:validate"},
 }
 
 // parityGaps are the surfaces no wire method or manifest field carries yet,
