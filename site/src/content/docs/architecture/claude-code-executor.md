@@ -192,7 +192,7 @@ The environment follows B05:
 
 ## Binding config
 
-The config is strict and validated at load. Every field is optional:
+The config is strict and validated at load. A refusal names each field that is wrong as a [config diagnostic](../extension-protocol/#config-diagnostics), such as `extra_args/1` with `reserved_argument`, `secret_env/<secret>` with `secret_not_selected` for a secret the binding doesn't select, or `unknown_field`, and never echoes the value. Every field is optional:
 
 | Field | Meaning |
 | --- | --- |

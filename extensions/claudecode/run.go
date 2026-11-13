@@ -537,7 +537,7 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	for secret, value := range r.Context.Secrets {
 		name := cfg.secretVariable(secret)
 		if reserved(name) || strings.ContainsRune(value, 0) {
-			return nil, configError("secret maps to a reserved variable")
+			return nil, invalidConfig{extension.Invalid("/secret_env", "reserved_env", "a selected secret maps to a reserved OS_* variable; map it to another name in secret_env")}
 		}
 		vars[name] = value
 	}

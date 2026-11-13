@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -142,29 +140,67 @@ const (
 	ColdResume  = "resume"
 )
 
-func configError(msg string) error { return fmt.Errorf("%w: %s", ErrConfig, msg) }
+// invalidConfig is the executor's refusal of a binding config: ErrConfig,
+// with the diagnostics (extension.ConfigError) that say which field is
+// wrong and why. Messages never echo configured values.
+type invalidConfig struct{ *extension.ConfigError }
+
+func (e invalidConfig) Error() string {
+	msgs := make([]string, len(e.Diagnostics))
+	for i, d := range e.Diagnostics {
+		msgs[i] = d.Message
+	}
+	return ErrConfig.Error() + ": " + strings.Join(msgs, "; ")
+}
+
+func (e invalidConfig) Unwrap() []error { return []error{ErrConfig, e.ConfigError} }
+
+// refuse is ce as the executor's refusal, nil when it holds nothing.
+func refuse(ce *extension.ConfigError) error {
+	if ce.Err() == nil {
+		return nil
+	}
+	return invalidConfig{ce}
+}
 
 // reserved reports toolbelt protocol variables no configured layer may set.
 func reserved(name string) bool { return strings.HasPrefix(strings.ToUpper(name), "OS_") }
 
+// ownFlags are the claude flags the executor sets itself, which extra_args
+// must not override.
+var ownFlags = []string{"--mcp-config", "--session-id", "--resume", "-p", "--print"}
+
 // ParseConfig strictly decodes, validates and defaults a binding config.
+// Its refusal is ErrConfig and an *extension.ConfigError naming every
+// field that is wrong.
 func ParseConfig(data []byte) (Config, error) {
-	var c Config
-	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
-		d := json.NewDecoder(bytes.NewReader(data))
-		d.DisallowUnknownFields()
-		if err := d.Decode(&c); err != nil {
-			return Config{}, configError("malformed config or unknown field")
+	c, ce, decoded := parseConfig(data)
+	if err := refuse(ce); err != nil || !decoded {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// parseConfig is ParseConfig's work: the defaulted config, what is wrong
+// with it, and whether it decoded at all (when it didn't, c is empty).
+func parseConfig(data []byte) (c Config, ce *extension.ConfigError, decoded bool) {
+	if err := extension.DecodeConfig(data, &c); err != nil {
+		if !errors.As(err, &ce) {
+			ce = extension.Invalid("", "malformed_config", "config must be one JSON object")
 		}
-		if _, err := d.Token(); err != io.EOF {
-			return Config{}, configError("trailing data after config object")
+		return Config{}, ce, false
+	}
+	ce = &extension.ConfigError{}
+	nul := func(path, s string) {
+		if strings.ContainsRune(s, 0) {
+			ce.Add(path, "invalid_string", "strings must not contain NUL")
 		}
 	}
-	strs := append(append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir, c.HomeSeed}, c.ExtraArgs...), c.Models...)
-	for _, s := range strs {
-		if strings.ContainsRune(s, 0) {
-			return Config{}, configError("strings must not contain NUL")
-		}
+	for path, s := range map[string]string{"/binary": c.Binary, "/model": c.Model, "/permission_mode": c.PermissionMode, "/playbook": c.Playbook, "/plugin_dir": c.PluginDir, "/args": c.Args, "/status_schema": c.StatusSchema, "/branch": c.Branch, "/workspace_mode": c.WorkspaceMode, "/dir": c.Dir, "/home_seed": c.HomeSeed} {
+		nul(path, s)
+	}
+	for i, a := range c.ExtraArgs {
+		nul(extension.ConfigPointer("extra_args", i), a)
 	}
 	if c.Binary == "" {
 		c.Binary = "claude"
@@ -176,23 +212,19 @@ func ParseConfig(data []byte) (Config, error) {
 		c.PermissionMode = "bypassPermissions"
 	}
 	if !slices.Contains(permissionModes, c.PermissionMode) {
-		return Config{}, configError("permission_mode is not a Claude Code permission mode")
+		ce.Add("/permission_mode", "unknown_permission_mode", "permission_mode must be one of "+strings.Join(permissionModes, ", "))
 	}
 	switch c.Playbook {
 	case "", "-":
 	default:
 		if !skillName.MatchString(c.Playbook) {
-			return Config{}, configError("playbook must be a skill name")
+			ce.Add("/playbook", "invalid_playbook", "playbook must be a skill name (letters, digits, dots, dashes and underscores), or - for none")
 		}
 	}
-	if c.PluginDir != "" && (!filepath.IsAbs(c.PluginDir) || filepath.Clean(c.PluginDir) != c.PluginDir) {
-		return Config{}, configError("plugin_dir must be a clean absolute path")
-	}
-	if c.Dir != "" && (!filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir) {
-		return Config{}, configError("dir must be a clean absolute path")
-	}
-	if c.HomeSeed != "" && (!filepath.IsAbs(c.HomeSeed) || filepath.Clean(c.HomeSeed) != c.HomeSeed) {
-		return Config{}, configError("home_seed must be a clean absolute path")
+	for _, f := range []struct{ path, value string }{{"/plugin_dir", c.PluginDir}, {"/dir", c.Dir}, {"/home_seed", c.HomeSeed}} {
+		if f.value != "" && (!filepath.IsAbs(f.value) || filepath.Clean(f.value) != f.value) {
+			ce.Add(f.path, "invalid_path", strings.TrimPrefix(f.path, "/")+" must be a clean absolute path")
+		}
 	}
 	if c.Args == "" {
 		c.Args = "{number}"
@@ -212,7 +244,7 @@ func ParseConfig(data []byte) (Config, error) {
 		c.HandoffMinutes = &n
 	}
 	if *c.HandoffMinutes < 0 || *c.HandoffMinutes > 7*24*60 {
-		return Config{}, configError("handoff_minutes must be between 0 and 10080")
+		ce.Add("/handoff_minutes", "out_of_range", "handoff_minutes must be between 0 and 10080")
 	}
 	if c.HandoffTokens == nil {
 		n := DefaultHandoffTokens
@@ -222,52 +254,79 @@ func ParseConfig(data []byte) (Config, error) {
 		n := DefaultAutoCompactTokens
 		c.AutoCompactTokens = &n
 	}
-	if *c.HandoffTokens < 0 || *c.AutoCompactTokens < 0 {
-		return Config{}, configError("handoff_tokens and auto_compact_tokens must not be negative")
+	if *c.HandoffTokens < 0 {
+		ce.Add("/handoff_tokens", "out_of_range", "handoff_tokens must not be negative; 0 turns it off")
+	}
+	if *c.AutoCompactTokens < 0 {
+		ce.Add("/auto_compact_tokens", "out_of_range", "auto_compact_tokens must not be negative; 0 leaves Claude Code's own threshold")
 	}
 	switch c.ColdTurns {
 	case "":
 		c.ColdTurns = ColdHandoff
 	case ColdHandoff, ColdResume:
 	default:
-		return Config{}, configError("cold_turns must be handoff or resume")
+		ce.Add("/cold_turns", "unknown_cold_turns", "cold_turns must be handoff or resume")
 	}
-	for name, value := range c.Env {
-		if !envName.MatchString(name) || reserved(name) || strings.ContainsRune(value, 0) {
-			return Config{}, configError("env names must be valid, non-reserved (OS_*) variables")
+	for _, name := range sortedKeys(c.Env) {
+		switch {
+		case !envName.MatchString(name):
+			ce.Add(extension.ConfigPointer("env", name), "invalid_env_name", "env names must be variable names ([A-Za-z_][A-Za-z0-9_]*)")
+		case reserved(name):
+			ce.Add(extension.ConfigPointer("env", name), "reserved_env", "OS_* variables are the toolbelt's own; use another name")
+		case strings.ContainsRune(c.Env[name], 0):
+			ce.Add(extension.ConfigPointer("env", name), "invalid_string", "strings must not contain NUL")
 		}
 	}
-	for _, name := range c.PassEnv {
-		if !envName.MatchString(name) || reserved(name) {
-			return Config{}, configError("pass_env names must be valid, non-reserved (OS_*) variables")
+	for i, name := range c.PassEnv {
+		switch {
+		case !envName.MatchString(name):
+			ce.Add(extension.ConfigPointer("pass_env", i), "invalid_env_name", "pass_env names must be variable names ([A-Za-z_][A-Za-z0-9_]*)")
+		case reserved(name):
+			ce.Add(extension.ConfigPointer("pass_env", i), "reserved_env", "OS_* variables are the toolbelt's own; they can't be passed")
 		}
 	}
-	for secret, name := range c.SecretEnv {
-		if secret == "" || !envName.MatchString(name) || reserved(name) {
-			return Config{}, configError("secret_env must map secret names to valid, non-reserved (OS_*) variables")
+	for _, secret := range sortedKeys(c.SecretEnv) {
+		name := c.SecretEnv[secret]
+		switch {
+		case secret == "":
+			ce.Add(extension.ConfigPointer("secret_env", secret), "invalid_secret_name", "secret_env keys must be secret names")
+		case !envName.MatchString(name):
+			ce.Add(extension.ConfigPointer("secret_env", secret), "invalid_env_name", "secret_env must map a secret to a variable name ([A-Za-z_][A-Za-z0-9_]*)")
+		case reserved(name):
+			ce.Add(extension.ConfigPointer("secret_env", secret), "reserved_env", "OS_* variables are the toolbelt's own; map the secret to another name")
 		}
 	}
-	for _, a := range c.ExtraArgs {
-		if a == "--mcp-config" || strings.HasPrefix(a, "--mcp-config=") || a == "--session-id" || a == "--resume" || a == "-p" || a == "--print" {
-			return Config{}, configError("extra_args must not override the executor's own session, print or toolbelt flags")
-		}
-		if c.BuiltinTools != nil && (a == "--tools" || strings.HasPrefix(a, "--tools=")) {
-			return Config{}, configError("extra_args must not override builtin_tools")
+	for i, a := range c.ExtraArgs {
+		flag, _, _ := strings.Cut(a, "=")
+		if slices.Contains(ownFlags, a) || flag == "--mcp-config" {
+			ce.Add(extension.ConfigPointer("extra_args", i), "reserved_argument", "extra_args must not set the flags the executor sets itself: "+strings.Join(ownFlags, ", "))
+		} else if c.BuiltinTools != nil && flag == "--tools" {
+			ce.Add(extension.ConfigPointer("extra_args", i), "reserved_argument", "extra_args must not set --tools when builtin_tools is set; list the tools in builtin_tools")
 		}
 	}
 	if c.BuiltinTools != nil {
-		for _, t := range *c.BuiltinTools {
+		for i, t := range *c.BuiltinTools {
 			if !toolName.MatchString(t) {
-				return Config{}, configError("builtin_tools must name Claude Code tools, such as Read")
+				ce.Add(extension.ConfigPointer("builtin_tools", i), "invalid_tool", "builtin_tools must name Claude Code tools, such as Read")
 			}
 		}
 	}
-	for _, m := range c.Models {
+	for i, m := range c.Models {
 		if !modelName.MatchString(m) {
-			return Config{}, configError("models must be model aliases or IDs")
+			ce.Add(extension.ConfigPointer("models", i), "invalid_model", "models must be model aliases or IDs, such as opus or claude-opus-5-5")
 		}
 	}
-	return c, nil
+	return c, ce, true
+}
+
+// sortedKeys are m's keys in order, so diagnostics come in a stable order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // playbook is the skill c's turns start on: its own, else "-" (none).
@@ -329,23 +388,22 @@ func (c Config) secretVariable(secret string) string {
 // ValidateConfig lets configuration loading reject an invalid binding before
 // any execution is scheduled. secretNames are the binding's selected secrets.
 func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) error {
-	c, err := ParseConfig(raw)
-	if err != nil {
-		return err
-	}
-	// A dir that has gone fails its own turns as workspace_unavailable; it
-	// must not make the rest of the configuration invalid.
-	for secret := range c.SecretEnv {
+	// Every problem is reported at once: the config's own, then how it
+	// uses the binding's secrets. A dir that has gone fails its own turns
+	// as workspace_unavailable; it must not make the rest of the
+	// configuration invalid.
+	c, ce, _ := parseConfig(raw)
+	for _, secret := range sortedKeys(c.SecretEnv) {
 		if !slices.Contains(secretNames, secret) {
-			return configError("secret_env names a secret the binding does not select")
+			ce.Add(extension.ConfigPointer("secret_env", secret), "secret_not_selected", "secret_env names a secret the binding does not select; add it to the binding's secret_names or remove it here")
 		}
 	}
 	for _, secret := range secretNames {
-		if reserved(c.secretVariable(secret)) {
-			return configError("a selected secret maps to a reserved OS_* variable; set secret_env")
+		if reserved(c.secretVariable(secret)) && c.SecretEnv[secret] == "" {
+			ce.Add("/secret_env", "reserved_env", "a selected secret's default variable is an OS_* name, which is the toolbelt's own; map it to another name in secret_env")
 		}
 	}
-	return nil
+	return refuse(ce)
 }
 
 // The reasons a sandboxed binding's claude config is refused. They name no
@@ -458,7 +516,7 @@ func (e *Executor) FolderConfig(raw json.RawMessage, folder string, resource boo
 	fields := map[string]json.RawMessage{}
 	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
 		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, configError("malformed config")
+			return nil, invalidConfig{extension.Invalid("", "malformed_config", "config must be one JSON object")}
 		}
 	}
 	for _, key := range []string{"dir", "plugin_dir"} {
