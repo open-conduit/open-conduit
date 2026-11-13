@@ -79,12 +79,13 @@ Only the entry's **answer** action counts, and only while the question is open a
 | --- | --- | --- |
 | `operations` | none | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `cancel_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
 | `kinds` | none | Work kinds, such as `github.issue`, or a prefix ending in `.*`, such as `github.*`. Work of a named kind waits for a person's approval before it first starts. See [Approving a start](#approving-a-start). |
+| `for_bindings` | none | Binding names. With it, the gate holds its `operations` only when a run on one of these bindings calls them; calls from the scope's other bindings go through without approval. See [Gating one agent](#gating-one-agent). |
 | `bindings` | none | Binding names. Work whose first attempt would run on a named binding waits for approval before it starts. |
 | `responders` | the entry's | Who may approve or refuse. |
 | `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused, unless the gate escalates. An approval also holds only this long. |
 | `escalate` | none | Who an unanswered request goes to next, rather than being refused at `timeout`: `{"responders": [...], "timeout": "24h"}`. See [Escalation](#escalation). |
 
-The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants.
+The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants, unless `for_bindings` narrows it.
 
 When a gated call comes in:
 
@@ -94,6 +95,23 @@ When a gated call comes in:
 4. A refusal returns `approval_refused` to the caller, naming who refused; no answer by the timeout returns `approval_timed_out`. Either way the operation never runs, and the caller keeps its toolbelt for anything else.
 
 Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Work that has no conversation to resume (no correlation key) can't wait for an answer, so a gated call there is refused with `approval_unavailable`.
+
+### Gating one agent
+
+Agents that hand work to one another share a scope, because `create_work` makes child Work in the caller's scope. To gate one of them and not the others, add `for_bindings` naming its bindings:
+
+```json
+{"name": "decisions", "type": "human", "secret_names": [],
+ "config": {
+   "gates": [
+     {"operations": ["github.pr.create", "slack.post"], "for_bindings": ["newbie", "newbie--job"], "responders": ["operator:alice"], "timeout": "24h"}
+   ]
+ }}
+```
+
+Here a run on `newbie` or `newbie--job` waits for `operator:alice` before it opens a PR or posts to Slack, and every other binding in the scope does both without asking. Open Conduit reads the binding from the calling run as it stored it, never from anything in the call. Each name must be a binding of every scope the entry applies to: `open-conduit config check` refuses one that isn't, with `missing_binding`, so a typo can't leave the agent ungated. `bindings` is checked the same way.
+
+When more than one gate holds a call (an agent's own gate, and one for every binding), the call is asked about once. Anyone either gate names may answer it, and the first of those gates in the list sets the `timeout` and the `escalate`. A responder of a gate that doesn't hold the call, such as another agent's gate, can't answer it.
 
 ## Answering from GitHub
 

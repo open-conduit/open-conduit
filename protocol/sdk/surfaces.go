@@ -57,7 +57,10 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if s.ext.WorkKinds != nil && p.Kind == protocol.ValidateRoute {
 			out.WorkKinds = s.ext.WorkKinds(p)
 		}
-		if len(out.Describe) > 0 || len(out.WorkKinds) > 0 {
+		if s.ext.Bindings != nil && p.Kind == protocol.ValidateExtension {
+			out.Bindings = s.ext.Bindings(p)
+		}
+		if len(out.Describe) > 0 || len(out.WorkKinds) > 0 || len(out.Bindings) > 0 {
 			return out, nil
 		}
 		return struct{}{}, nil

@@ -67,6 +67,11 @@ type ConfigType struct {
 	// a route's config binds, each with what it is for
 	// (config.Registry.HandlerWorkKinds).
 	WorkKinds func(config json.RawMessage) []extension.WorkKind
+	// Bindings, for an entry type only, optionally lists the binding names
+	// a valid entry's config refers to (a human gate's bindings): config
+	// check refuses an entry that names a binding its scope has no enabled
+	// binding of (config.ExtensionType.Bindings).
+	Bindings func(config json.RawMessage) []string
 	// Fields describe the type's config fields (and, for a connection,
 	// its secret_refs keys) for the operator's catalogue: manifest fields
 	// (protocol.FieldDecl).

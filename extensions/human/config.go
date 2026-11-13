@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,6 +58,12 @@ type GateConfig struct {
 	// Operations are toolbelt operation names ("github.pr.create"), or a
 	// prefix ending in ".*" for every operation under it ("deploy.*").
 	Operations []string `json:"operations,omitempty"`
+	// ForBindings, when set, narrows Operations to calls made by a run on
+	// one of these bindings, read from the calling Execution as stored, so
+	// other bindings in the scope call the operations without approval.
+	// Each must name a binding of the scope. It needs Operations, and does
+	// not narrow Kinds or Bindings.
+	ForBindings []string `json:"for_bindings,omitempty"`
 	// Kinds are Work kinds ("github.issue"), or a prefix ending in ".*",
 	// whose Work needs approval before its first attempt starts.
 	Kinds []string `json:"kinds,omitempty"`
@@ -135,6 +142,14 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 				return c, fmt.Errorf("%s: bindings: %q is not a binding name", where, b)
 			}
 		}
+		if len(g.ForBindings) > 0 && len(g.Operations) == 0 {
+			return c, fmt.Errorf("%s: for_bindings: name the operations it narrows; a binding's Work that needs approval to start goes in bindings", where)
+		}
+		for _, b := range g.ForBindings {
+			if !validPart(b) {
+				return c, fmt.Errorf("%s: for_bindings: %q is not a binding name", where, b)
+			}
+		}
 		for _, op := range g.Operations {
 			name := strings.TrimSuffix(op, ".*")
 			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
@@ -205,16 +220,56 @@ func checkResponders(field string, responders []string) error {
 	return nil
 }
 
-// gate is the first gate that names op, if any.
-func (c Config) gate(op string) (GateConfig, bool) {
+// gates are the gates that name op, in order; with binding known, only
+// those whose for_bindings, if any, name it (with it unknown, every gate
+// that names op, so a filter never lets a call through unasked).
+func (c Config) gates(op, binding string, known bool) []GateConfig {
+	var out []GateConfig
 	for _, g := range c.Gates {
-		for _, pattern := range g.Operations {
-			if matches(pattern, op) {
-				return g, true
+		if !slices.ContainsFunc(g.Operations, func(pattern string) bool { return matches(pattern, op) }) {
+			continue
+		}
+		if known && len(g.ForBindings) > 0 && !slices.Contains(g.ForBindings, binding) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+// gate is the rule one call's approval request follows when the gates
+// that match it are matched: the call is asked about once, whoever any of
+// them names may answer, and the first of them (in config order) sets the
+// timeout and the escalation.
+func gate(matched []GateConfig) GateConfig {
+	rule := matched[0]
+	rule.Responders = slices.Clone(rule.Responders)
+	for _, g := range matched[1:] {
+		for _, r := range g.Responders {
+			if !slices.Contains(rule.Responders, r) {
+				rule.Responders = append(rule.Responders, r)
 			}
 		}
 	}
-	return GateConfig{}, false
+	return rule
+}
+
+// gateBindings are the binding names an entry's gates name (bindings and
+// for_bindings), each once, for config check to find in the scope.
+func gateBindings(raw json.RawMessage) []string {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, g := range c.Gates {
+		for _, b := range append(slices.Clone(g.Bindings), g.ForBindings...) {
+			if !slices.Contains(out, b) {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
 }
 
 // startGate is the first gate that names the Work's kind or the binding

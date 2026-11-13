@@ -97,6 +97,10 @@ type ExtensionType struct {
 	// show the operator, with typed values. Fields it leaves out are shown
 	// by name alone.
 	Settings func(config json.RawMessage) []extension.Setting
+	// Bindings optionally lists the binding names a valid entry's config
+	// refers to (a human gate's bindings). Each must name an enabled
+	// binding of every scope the entry applies to.
+	Bindings func(config json.RawMessage) []string
 }
 
 // Entry is one thing an extension entry sets up, named and described.
@@ -579,6 +583,17 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		}
 		if x.Connection != "" && !slices.Contains(e.auth.Connections, x.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
+		}
+		if registered && t.Bindings != nil {
+			var missing []string
+			for _, name := range t.Bindings(x.Config) {
+				if b, ok := e.bindings.byName[name]; (!ok || b.disabled) && !slices.Contains(missing, name) {
+					missing = append(missing, name)
+				}
+			}
+			if len(missing) > 0 {
+				v.fail(p+"/config", "missing_binding", "config names a binding this scope has no enabled binding of: "+strings.Join(missing, ", ")+"; name a binding of the scope, or enable it")
+			}
 		}
 		if !secrets(x.SecretNames) {
 			v.fail(p+"/secret_names", "unknown_secret", "selected secret name has no effective reference in this scope")
