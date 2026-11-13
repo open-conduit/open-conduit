@@ -109,8 +109,12 @@ type Options struct {
 	// DefaultViewDeadline). Tests inject them; nil uses the defaults.
 	ProviderTimeout func(provider string) <-chan time.Time
 	ViewDeadline    func() <-chan time.Time
-	// Observer receives the host-observed provider.* records: an action
-	// provider's call starting or stopping to time out (optional).
+	// Secrets is the daemon's secret store, which /secrets writes to
+	// (optional: without it those routes answer secrets_unavailable).
+	Secrets *config.SecretStore
+	// Observer receives the host-observed provider.* records, an action
+	// provider's call starting or stopping to time out, and the operator.*
+	// records of administrative calls (optional).
 	Observer observability.Observer
 }
 
@@ -402,6 +406,9 @@ var routes = []route{
 	{"POST", []string{"events", "*", "reroute"}, true, true, (*Server).rerouteEvent},
 	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},
+	{"GET", []string{"secrets"}, false, false, (*Server).listSecrets},
+	{"PUT", []string{"secrets", "*"}, true, false, (*Server).putSecret},
+	{"DELETE", []string{"secrets", "*"}, true, false, (*Server).deleteSecret},
 	{"POST", []string{"auth", "rotate"}, true, false, (*Server).rotate},
 	{"GET", []string{"auth", "operators"}, false, false, (*Server).listOperators},
 	{"POST", []string{"auth", "operators"}, true, false, (*Server).addOperator},
@@ -459,6 +466,9 @@ func APIRoutes() []APIRoute {
 		switch {
 		case rt.idem:
 			e.IdempotencyKey = "required"
+		case rt.pattern[0] == "secrets":
+			// Storing or removing a secret is idempotent by itself, and
+			// nothing about the request is kept for replay.
 		case rt.mutation:
 			e.IdempotencyKey = "optional"
 		}
@@ -472,13 +482,13 @@ func APIRoutes() []APIRoute {
 
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
-// applying config, exporting it (it carries secret reference text) and
-// issuing operators' credentials need admin; every other control needs
-// operate. Revoking another operator's credential needs admin too, which
-// revoke checks itself.
+// applying config, exporting it (it carries secret reference text),
+// issuing operators' credentials and every secrets route, listing included,
+// need admin; every other control needs operate. Revoking another
+// operator's credential needs admin too, which revoke checks itself.
 func requiredRole(rt *route, parts []string) string {
 	path := strings.Join(rt.pattern, "/")
-	if path == "config/export" {
+	if path == "config/export" || rt.pattern[0] == "secrets" {
 		return RoleAdmin
 	}
 	if !rt.mutation {
@@ -579,15 +589,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		if r.URL.RawQuery != "" {
 			return fail(400, "query_not_allowed", "mutation routes accept no query")
 		}
-		if mt := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); mt != "application/json" {
-			return fail(415, "unsupported_media_type", "Content-Type must be application/json")
-		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 		if err != nil {
 			return fail(400, "malformed", "request body unreadable")
 		}
 		if len(body) > maxBody {
 			return fail(413, "body_too_large", "request body exceeds 1 MiB")
+		}
+		// A DELETE may come without a body; any other body is JSON.
+		if mt := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); mt != "application/json" && (len(body) > 0 || r.Method != "DELETE") {
+			return fail(415, "unsupported_media_type", "Content-Type must be application/json")
 		}
 		c.body = body
 		c.key = r.Header.Get("Idempotency-Key")

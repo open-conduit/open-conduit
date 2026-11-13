@@ -44,12 +44,16 @@ type Exporter interface {
 // anchored instead by its source namespace attribute (ingress.source) and a
 // trace derived from the scan, and must not carry a fabricated Event ID. A
 // provider health record ("provider." prefix) is host-observed in the same
-// way, anchored by the action provider's name (provider.name).
+// way, anchored by the action provider's name (provider.name). An operator
+// record ("operator." prefix) is a daemon-wide administrative call (a secret
+// stored, say): no Event or scope precedes it, so it is anchored by the
+// operator who made it (operator.actor) and needs no scope.
 func Validate(r Record) error {
 	c := r.Correlation
+	operator := strings.HasPrefix(r.Name, "operator.") && r.Attributes["operator.actor"] != ""
 	anchored := c.EventID != "" || strings.HasPrefix(r.Name, "ingress.") && r.Attributes["ingress.source"] != "" ||
-		strings.HasPrefix(r.Name, "provider.") && r.Attributes["provider.name"] != ""
-	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" || !anchored || c.TraceID == "" {
+		strings.HasPrefix(r.Name, "provider.") && r.Attributes["provider.name"] != "" || operator
+	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" && !operator || !anchored || c.TraceID == "" {
 		return fmt.Errorf("missing lifecycle correlation")
 	}
 	if strings.HasPrefix(r.Name, "execution.") && (c.WorkID == "" || c.ExecutionID == "" || c.ExecutorBinding == "") {

@@ -308,6 +308,21 @@ func (o *looseProviderObserver) Observe(ctx context.Context, r observability.Rec
 	return o.unsafeObserver.Observe(ctx, r)
 }
 
+// looseOperatorObserver validates as the contract does, except that it
+// takes any operator.* record as anchored.
+type looseOperatorObserver struct{ unsafeObserver }
+
+func (o *looseOperatorObserver) Observe(ctx context.Context, r observability.Record) error {
+	check := r
+	if strings.HasPrefix(r.Name, "operator.") {
+		check.Attributes = map[string]string{"operator.actor": "any"}
+	}
+	if err := observability.Validate(check); err != nil {
+		return err
+	}
+	return o.unsafeObserver.Observe(ctx, r)
+}
+
 func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 	f := ingressFixture()
 	i := f.Ingress.(*reference.Ingress)
@@ -347,6 +362,10 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 	loose := &looseProviderObserver{}
 	if err := conformance.CheckObserver(loose, func() []observability.Record { return loose.records }); err == nil || !strings.Contains(err.Error(), "unanchored provider record accepted") {
 		t.Fatalf("unanchored provider record undetected: %v", err)
+	}
+	looseOperator := &looseOperatorObserver{}
+	if err := conformance.CheckObserver(looseOperator, func() []observability.Record { return looseOperator.records }); err == nil || !strings.Contains(err.Error(), "unanchored operator record accepted") {
+		t.Fatalf("unanchored operator record undetected: %v", err)
 	}
 }
 

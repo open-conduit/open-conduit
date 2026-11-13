@@ -80,6 +80,10 @@ type managementHarness struct {
 	container       func(context.Context, runtime.AttemptState, extension.ResourceBroker, func(extension.ContainerPin) error) (runtime.ContainerBinding, error)
 	containerAttach func(context.Context, string, domain.Work, domain.ID) (management.ContainerAttachment, error)
 	containerDetach func(context.Context, domain.Work, string) error
+	// keyring is the secret store's keyring, observed the records the
+	// management server observes.
+	keyring  *memoryKeyring
+	observed *recordedObserver
 }
 
 func newManagementHarness(t testing.TB) *managementHarness {
@@ -104,7 +108,8 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(state) })
-	h := &managementHarness{t: t, state: state, clock: conformance.NewClock(), tokens: make(chan string, 8), sockets: map[string]string{}, secrets: make(chan map[string]string, 8)}
+	h := &managementHarness{t: t, state: state, clock: conformance.NewClock(), tokens: make(chan string, 8), sockets: map[string]string{}, secrets: make(chan map[string]string, 8),
+		keyring: &memoryKeyring{values: map[string]string{}}, observed: &recordedObserver{}}
 	h.lock, err = management.AcquireLock(state)
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +193,11 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 	if wrap != nil {
 		served = wrap(db)
 	}
+	secretsFile := filepath.Join(state, "config", "secrets.json")
 	server, err := management.NewServer(management.Options{Store: served, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
+		Secrets:  &config.SecretStore{File: secretsFile, Keyring: h.keyring},
+		Resolver: &config.Resolver{SecretsFile: secretsFile, Keyring: h.keyring, LookupEnv: func(string) (string, bool) { return "", false }},
+		Observer: h.observed,
 		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
 		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
 			if h.attach == nil {
