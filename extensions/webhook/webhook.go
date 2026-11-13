@@ -424,7 +424,8 @@ func (st *state) configure(_ context.Context, h *sdk.Host, p protocol.ConfigureP
 
 // check lists each hook's path (doctor's webhook check); with urls
 // (webhook-urls, doctor --check-secrets) it prints each hook's signed URL,
-// which is a capability derived from the entry's secret.
+// which is a capability derived from the entry's secret, and fails when the
+// entry's secret or a hook's signature secret is unavailable.
 func (st *state) check(ctx context.Context, deep bool) (string, error) {
 	entries, public := st.list()
 	var items []string
@@ -440,6 +441,15 @@ func (st *state) check(ctx context.Context, deep bool) (string, error) {
 					continue
 				}
 				token = Token(secret, e.namespace, h.Name, h.Version)
+				// A hook whose signature secret is unset would answer every
+				// delivery 503, leaving no Event to notice it by.
+				if h.Signature != nil {
+					if _, err := st.secret(e)(ctx, h.Signature.Secret); err != nil {
+						items = append(items, fmt.Sprintf("%s: hook %s: signature secret unavailable", e.namespace, h.Name))
+						failed = errors.New("a webhook signature secret is unavailable")
+						continue
+					}
+				}
 			}
 			line := fmt.Sprintf("%s: hook %s: POST %s/%s/%s/%s", e.namespace, h.Name, public, e.namespace, h.Name, token)
 			if !deep {

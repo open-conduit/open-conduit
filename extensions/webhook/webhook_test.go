@@ -585,6 +585,19 @@ func TestSignatureSecretUnavailable(t *testing.T) {
 	if got := post(t, h, url("github"), http.Header{"X-Hub-Signature-256": {"sha256=" + hexMAC("", "{}")}}, `{}`); got != http.StatusServiceUnavailable || len(h.Events()) != 0 {
 		t.Fatalf("%d, %d events", got, len(h.Events()))
 	}
+	// doctor --check-secrets names it, since the 503s leave no Event.
+	deep, err := h.Check(context.Background(), webhook.Name+"-urls")
+	if err != nil || deep.OK || !strings.Contains(deep.Detail, "hook github: signature secret unavailable") {
+		t.Fatalf("deep check: %+v %v", deep, err)
+	}
+}
+
+// doctor --check-secrets passes a hook whose signature secret is set.
+func TestSignatureSecretPassesDoctor(t *testing.T) {
+	deep, err := signed(t).Check(context.Background(), webhook.Name+"-urls")
+	if err != nil || !deep.OK || !strings.Contains(deep.Detail, url("github")) {
+		t.Fatalf("deep check: %+v %v", deep, err)
+	}
 }
 
 func TestSignatureSettings(t *testing.T) {
