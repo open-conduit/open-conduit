@@ -281,7 +281,7 @@ func (ch *chat) orchestrate(run client.Run) {
 		case run.TurnTimeLimit():
 			text = "Turn ended at its time limit; the next turn carries on"
 		case run.InterruptEventID != "":
-			text = "Interrupted; the next turn starts with the input queued for it"
+			text = "Interrupted"
 		}
 		rules = append(rules, chatBlock{Kind: "orch", Tone: "cancel", At: at, Text: text})
 	}
