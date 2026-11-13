@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,11 +32,27 @@ func harness(t *testing.T) *sdktest.Host {
 
 func post(t *testing.T, h *sdktest.Host, path string, header http.Header, body string) int {
 	t.Helper()
+	return handle(t, h, path, header, body).Status
+}
+
+func handle(t *testing.T, h *sdktest.Host, path string, header http.Header, body string) protocol.WebhookHandleResult {
+	t.Helper()
 	var out protocol.WebhookHandleResult
 	if err := h.Call(context.Background(), "webhook.handle", protocol.WebhookHandleParams{Path: path, Method: http.MethodPost, Header: header, Body: []byte(body), ReceivedAt: sdktest.Start}, &out); err != nil {
 		t.Fatal(err)
 	}
-	return out.Status
+	return out
+}
+
+// receipt posts a delivery that must be accepted and returns its 202's body.
+func receipt(t *testing.T, h *sdktest.Host, path string, header http.Header, body string) webhook.Receipt {
+	t.Helper()
+	out := handle(t, h, path, header, body)
+	var r webhook.Receipt
+	if out.Status != http.StatusAccepted || http.Header(out.Header).Get("Content-Type") != "application/json" || json.Unmarshal(out.Body, &r) != nil {
+		t.Fatalf("%s: %d %v %q", path, out.Status, out.Header, out.Body)
+	}
+	return r
 }
 
 func url(hook string) string {
@@ -145,6 +162,80 @@ func TestVersionRevokesOneHooksURL(t *testing.T) {
 	deep, err := h.Check(context.Background(), webhook.Name+"-urls")
 	if err != nil || !strings.Contains(deep.Detail, bumped) || strings.Contains(deep.Detail, old) || !strings.Contains(deep.Detail, url("forms")) {
 		t.Fatalf("doctor: %+v %v", deep, err)
+	}
+}
+
+// event is the ID of a receipt's only Event.
+func event(t *testing.T, r webhook.Receipt) domain.ID {
+	t.Helper()
+	if len(r.Events) != 1 || r.Events[0].Target != "" || r.Events[0].Duplicate != r.Duplicate {
+		t.Fatalf("receipt %+v", r)
+	}
+	return r.Events[0].ID
+}
+
+// The 202 names the delivery's Event, and a retry of the same delivery key
+// names the first delivery's Event as a duplicate.
+func TestReceiptNamesTheEvent(t *testing.T) {
+	h := harness(t)
+	with := func(id string) http.Header {
+		return http.Header{"Content-Type": {"application/json"}, "X-Delivery-Id": {id}}
+	}
+	first := receipt(t, h, url("deploys"), with("d-1"), `{"service":"checkout"}`)
+	retry := receipt(t, h, url("deploys"), with("d-1"), `{"service":"checkout"}`)
+	other := receipt(t, h, url("deploys"), with("d-2"), `{"service":"checkout"}`)
+	events := h.Events()
+	if len(events) != 2 || event(t, first) != events[0].Event.ID || event(t, other) != events[1].Event.ID {
+		t.Fatalf("receipts %+v %+v, events %d", first, other, len(events))
+	}
+	if first.Duplicate || !retry.Duplicate || event(t, retry) != events[0].Event.ID || other.Duplicate {
+		t.Fatalf("receipts: %+v %+v %+v", first, retry, other)
+	}
+}
+
+// A hook that fans out answers with each target's Event, in target order,
+// and a retry is a duplicate for every target.
+func TestReceiptNamesEachTargetsEvent(t *testing.T) {
+	h := fanOut(t)
+	with := http.Header{"X-Delivery-Id": {"d-1"}}
+	first := receipt(t, h, url("tickets"), with, `{"ticket":"T-1"}`)
+	retry := receipt(t, h, url("tickets"), with, `{"ticket":"T-1"}`)
+	events := h.Events()
+	want := webhook.Receipt{Events: []webhook.ReceiptEvent{{ID: events[0].Event.ID, Target: "triage"}, {ID: events[1].Event.ID, Target: "audit"}}}
+	if len(events) != 2 || !reflect.DeepEqual(first, want) {
+		t.Fatalf("receipt %+v, want %+v", first, want)
+	}
+	want.Duplicate, want.Events[0].Duplicate, want.Events[1].Duplicate = true, true, true
+	if !reflect.DeepEqual(retry, want) {
+		t.Fatalf("retry %+v, want %+v", retry, want)
+	}
+}
+
+func TestReceiptOf(t *testing.T) {
+	delivery := func(id domain.ID, target string) domain.AcceptedEvent {
+		data, _ := json.Marshal(webhook.Payload{Hook: "h", Target: target})
+		return domain.AcceptedEvent{Event: domain.Event{ID: id, Type: webhook.TypeDelivery, Data: domain.Payload{Schema: webhook.SchemaDelivery, Data: data}}}
+	}
+	two := []domain.AcceptedEvent{delivery("a", "x"), delivery("b", "y")}
+	// Only a delivery every one of whose Events was accepted before is a
+	// duplicate.
+	r, err := webhook.ReceiptOf(two, []bool{false, true}, nil)
+	if err != nil || r.Duplicate || !r.Events[0].Duplicate || r.Events[1].Duplicate || r.Events[1].Target != "y" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	// An answer that names nothing, or whose flags don't match its Events,
+	// isn't a 202.
+	for name, c := range map[string]struct {
+		accepted []domain.AcceptedEvent
+		added    []bool
+	}{
+		"no events":     {nil, nil},
+		"missing flags": {two, []bool{true}},
+		"another type":  {[]domain.AcceptedEvent{{Event: domain.Event{ID: "c", Type: "other"}}}, []bool{true}},
+	} {
+		if _, err := webhook.ReceiptOf(c.accepted, c.added, nil); err == nil {
+			t.Fatalf("%s gave a receipt", name)
+		}
 	}
 }
 

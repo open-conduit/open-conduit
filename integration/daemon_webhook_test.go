@@ -73,6 +73,8 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 	})
 	ns := webhook.Namespace("ops", "inbox")
 	path := "/" + ns + "/deploys/" + webhook.Token("hook-secret", ns, "deploys", 0)
+	// last is the body of the latest 202: the delivery's receipt.
+	var last webhook.Receipt
 	post := func(path, id, body string) int {
 		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+path, bytes.NewReader([]byte(body)))
 		req.Header.Set("Content-Type", "application/json")
@@ -81,12 +83,20 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res.Body.Close()
+		defer res.Body.Close()
+		if res.StatusCode == http.StatusAccepted {
+			last = webhook.Receipt{}
+			if err := json.NewDecoder(res.Body).Decode(&last); err != nil || len(last.Events) != 1 || last.Events[0].ID == "" {
+				t.Fatalf("202 body: %+v %v", last, err)
+			}
+		}
 		return res.StatusCode
 	}
 	if code := post("/"+ns+"/deploys/wrong", "d-0", `{}`); code != http.StatusNotFound {
 		t.Fatalf("wrong token: %d", code)
 	}
+	// Each 202 names the delivery's Event; the retry names the first's.
+	var receipts []webhook.Receipt
 	for _, c := range []struct{ id, body string }{
 		{"d-1", `{"service":"checkout","status":"failed"}`},
 		{"d-1", `{"service":"checkout","status":"failed"}`},
@@ -95,6 +105,10 @@ func TestDaemonWebhookDeliveries(t *testing.T) {
 		if code := post(path, c.id, c.body); code != http.StatusAccepted {
 			t.Fatalf("%s: %d", c.id, code)
 		}
+		receipts = append(receipts, last)
+	}
+	if receipts[0].Duplicate || !receipts[1].Duplicate || receipts[1].Events[0].ID != receipts[0].Events[0].ID || receipts[2].Duplicate || receipts[2].Events[0].ID == receipts[0].Events[0].ID {
+		t.Fatalf("receipts: %+v", receipts)
 	}
 	works := func() []string {
 		page, err := d.c.Works(ctx, url.Values{"kind": {webhook.WorkKind}})

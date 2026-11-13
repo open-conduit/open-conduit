@@ -39,7 +39,7 @@ The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The 
 1. Answers 404 for an unknown hook or a wrong token, compared in constant time before the body is read.
 2. Answers 413 for a body over 1 MiB, or for one the hook's fan-out Events couldn't carry (see [Fan-out](#fan-out)).
 3. Reads the hook's keys. A hook with a delivery key refuses a POST without it, or with a value over 256 bytes, with 400. A missing correlation value is not an error: that delivery is a thread of its own.
-4. Hands the delivery to the host and answers 202 only after durable acceptance, or 503 when it wasn't accepted (or the secret is unavailable).
+4. Hands the delivery to the host and answers 202 only after durable acceptance, or 503 when it wasn't accepted (or the secret is unavailable). The 202's body is the delivery's receipt (`application/json`), which names its Events.
 
 Hooks and entries follow the configuration: one added by `config apply` serves its URL as soon as the apply is done, and one removed answers 404, with no restart.
 
@@ -48,6 +48,8 @@ Ingress turns it into one `webhook.delivery` Event, or one for each target of a 
 **Deduplication.** The Event's delivery ID is the hook and a digest of the delivery key's value, so the core's `(source, delivery_id)` deduplication ([event ingress](../event-ingress/)) makes a sender's retry the first delivery again, and the first envelope is kept even when a retry's body differs. A hook without a delivery key gives each POST a fresh ID, so each POST is a new delivery. A sender that retries needs a delivery key.
 
 **Correlation.** The Event's correlation key is `webhook/<scope>/<entry>` with the external ID `<hook>/c/<digest of the correlation value>`, or `<hook>/d/<delivery ID>` when there is none. A delivery with a correlation value already seen therefore names the Work the first one opened.
+
+**The receipt.** The 202's body lists the delivery's Events, one for each [fan-out](#fan-out) target or else one, in target order: `{"events": [{"id": "<id>", "target": "triage", "duplicate": false}], "duplicate": false}`. `target` is left out for a hook that doesn't fan out. The host's `ingress.deliver` reports whether the delivery added each Event. An Event's `duplicate` is true when it was already accepted, and its `id` is then the first delivery's. The top-level `duplicate` is true only when every Event was, as with a sender's retry of the same delivery key, so a retrying sender can stop. A host that doesn't report it is taken to have added each Event, so a delivery is never claimed as a duplicate wrongly. The receipt doesn't name the Work: routing happens after the 202, and the route decides which Work an Event reaches, even when a correlation value has Work already. An operator follows each Event to its Work with `GET /v1/events/{id}/route` (or `open-conduit events get`). A sender without an operator token has no read of its own delivery's route yet.
 
 ### Fan-out
 

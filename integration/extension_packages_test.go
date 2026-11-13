@@ -81,8 +81,8 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 		}
 		return out, nil
 	}
-	deps.Deliver = func(ctx context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, error) {
-		return ingress.Push(ctx, name, d)
+	deps.Deliver = func(ctx context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
+		return ingress.Deliver(ctx, name, d)
 	}
 	o := e.options(slackext.Name)
 	o.Configure = func() protocol.ConfigureParams {
@@ -309,14 +309,14 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 	var delivered []extension.Delivery
 	var mu sync.Mutex
 	deps := e.deps()
-	deps.Deliver = func(_ context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, error) {
+	deps.Deliver = func(_ context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 		if name != notes.Name+"/"+string(extensionScope) {
-			return nil, errors.New("wrong source")
+			return nil, nil, errors.New("wrong source")
 		}
 		mu.Lock()
 		delivered = append(delivered, d)
 		mu.Unlock()
-		return []domain.AcceptedEvent{{Event: domain.Event{ID: "accepted"}}}, nil
+		return []domain.AcceptedEvent{{Event: domain.Event{ID: "accepted"}}}, []bool{true}, nil
 	}
 	o := e.options(notes.Name)
 	r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), deps, o)
