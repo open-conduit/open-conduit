@@ -2,6 +2,9 @@ package webhook_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -36,7 +39,7 @@ func post(t *testing.T, h *sdktest.Host, path string, header http.Header, body s
 }
 
 func url(hook string) string {
-	return "/" + webhook.FixtureSource + "/" + hook + "/" + webhook.Token(webhook.FixtureValue, webhook.FixtureSource, hook)
+	return "/" + webhook.FixtureSource + "/" + hook + "/" + webhook.Token(webhook.FixtureValue, webhook.FixtureSource, hook, 0)
 }
 
 func payloads(t *testing.T, h *sdktest.Host) []webhook.Payload {
@@ -72,7 +75,7 @@ func TestDeliveriesAreDeduplicatedAndThreaded(t *testing.T) {
 		{"no delivery key", url("deploys"), plain, `{"service":"checkout"}`, http.StatusBadRequest},
 		{"a key too long", url("deploys"), with(strings.Repeat("x", webhook.MaxKey+1)), `{}`, http.StatusBadRequest},
 		{"wrong token", "/" + webhook.FixtureSource + "/deploys/" + strings.Repeat("0", 32), with("d-5"), `{}`, http.StatusNotFound},
-		{"unknown hook", "/" + webhook.FixtureSource + "/nope/" + webhook.Token(webhook.FixtureValue, webhook.FixtureSource, "nope"), with("d-6"), `{}`, http.StatusNotFound},
+		{"unknown hook", "/" + webhook.FixtureSource + "/nope/" + webhook.Token(webhook.FixtureValue, webhook.FixtureSource, "nope", 0), with("d-6"), `{}`, http.StatusNotFound},
 		{"the mount itself", "/" + webhook.FixtureSource, with("d-7"), `{}`, http.StatusNotFound},
 		{"too large", url("forms"), plain, strings.Repeat("x", webhook.MaxBody+1), http.StatusRequestEntityTooLarge},
 		{"a form", url("forms"), http.Header{"Content-Type": {"text/plain"}}, "hello", http.StatusAccepted},
@@ -98,6 +101,50 @@ func TestDeliveriesAreDeduplicatedAndThreaded(t *testing.T) {
 	ps := payloads(t, h)
 	if ps[0].Delivery != "d-1" || ps[0].Correlation != "checkout" || string(ps[0].Body) != `{"service":"checkout","status":"failed"}` || ps[5].Text != "hello" || ps[5].Body != nil {
 		t.Fatalf("payloads: %+v", ps)
+	}
+}
+
+// Bumping one hook's version revokes that hook's URL alone: the old URL
+// is refused, the new one (which doctor --check-secrets prints) is served,
+// and the entry's other hook keeps its URL.
+func TestVersionRevokesOneHooksURL(t *testing.T) {
+	// Version 0 signs only the namespace and hook, so URLs issued before
+	// versions existed still work.
+	mac := hmac.New(sha256.New, []byte(webhook.FixtureValue))
+	mac.Write([]byte(webhook.FixtureSource + "\x00deploys"))
+	if webhook.Token(webhook.FixtureValue, webhook.FixtureSource, "deploys", 0) != hex.EncodeToString(mac.Sum(nil))[:32] {
+		t.Fatal("version 0 changed the token")
+	}
+	h := harness(t)
+	with := func(id string) http.Header { return http.Header{"X-Delivery-Id": {id}} }
+	old := url("deploys")
+	if got := post(t, h, old, with("d-1"), `{}`); got != http.StatusAccepted {
+		t.Fatalf("before the bump: %d", got)
+	}
+	cfg := strings.Replace(string(webhook.FixtureConfig()), `"name":"deploys",`, `"name":"deploys","version":1,`, 1)
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{PublicURL: "https://hooks.example.test", Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: webhook.Name,
+		Name: webhook.FixtureEntry, Config: json.RawMessage(cfg), Secrets: []string{webhook.FixtureSecret}}}}); err != nil {
+		t.Fatal(err)
+	}
+	bumped := "/" + webhook.FixtureSource + "/deploys/" + webhook.Token(webhook.FixtureValue, webhook.FixtureSource, "deploys", 1)
+	if bumped == old {
+		t.Fatal("the bump kept the token")
+	}
+	for _, c := range []struct {
+		name, path string
+		want       int
+	}{
+		{"the old URL", old, http.StatusNotFound},
+		{"the new URL", bumped, http.StatusAccepted},
+		{"the other hook", url("forms"), http.StatusAccepted},
+	} {
+		if got := post(t, h, c.path, with("d-2"), `{}`); got != c.want {
+			t.Fatalf("%s: status %d, want %d", c.name, got, c.want)
+		}
+	}
+	deep, err := h.Check(context.Background(), webhook.Name+"-urls")
+	if err != nil || !strings.Contains(deep.Detail, bumped) || strings.Contains(deep.Detail, old) || !strings.Contains(deep.Detail, url("forms")) {
+		t.Fatalf("doctor: %+v %v", deep, err)
 	}
 }
 
@@ -132,6 +179,7 @@ func TestSettings(t *testing.T) {
 		"bad key":        `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","delivery_key":"query:id"}]}`,
 		"unknown field":  `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","per_delivery":true}]}`,
 		"secret unnamed": `{"scope":"ops","webhook_secret":"other","hooks":[{"name":"a"}]}`,
+		"negative":       `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","version":-1}]}`,
 	} {
 		if _, err := webhook.ParseSettings(json.RawMessage(cfg), []string{"hook"}); err == nil {
 			t.Fatalf("%s: accepted", name)

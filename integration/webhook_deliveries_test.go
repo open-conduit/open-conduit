@@ -27,7 +27,7 @@ func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 	hook := http.StripPrefix("/"+webhook.FixtureSource, webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context) (string, error) { return "s", nil }, e.push, e.clock.Now))
 	post := func(name string, header http.Header, body string) {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/"+name+"/"+webhook.Token("s", webhook.FixtureSource, name), strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/"+webhook.FixtureSource+"/"+name+"/"+webhook.Token("s", webhook.FixtureSource, name, 0), strings.NewReader(body))
 		req.Header = header
 		w := httptest.NewRecorder()
 		hook.ServeHTTP(w, req)
