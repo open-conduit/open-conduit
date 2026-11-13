@@ -143,7 +143,7 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 
 | Code | Go error |
 | --- | --- |
-| `invalid` | `extension.ErrInvalid` |
+| `invalid` | `extension.ErrInvalid`. A refusal of a config object may carry `data.diagnostics` (`extension.ConfigError`, see [config diagnostics](#config-diagnostics)) |
 | `unsupported` | `extension.ErrUnsupported` |
 | `unauthorized` | `extension.ErrUnauthorized` |
 | `undeclared` | `extension.ErrUndeclared` |
@@ -164,6 +164,12 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `retry_after` | `extension.RetryHint` (`data.reset_at` optional). It is the only code that crosses as a retry hint (`protocol.RetryAfter`); every other code is a plain refusal, so an executor's `not_adoptable` never delays its retry. |
 
 The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.
+
+### Config diagnostics
+
+An extension that refuses a config object it owns in `validate` (an entry's, a connection's, a route's, a binding's executor config or a resource's) may say why. It refuses with `invalid` and `data.diagnostics`, a list of `{path, code, message}`. `path` is the JSON pointer of the field within the object (`/jobs/1/cron`, empty for the object), `code` a stable `[a-z][a-z0-9_]{0,63}` code (`invalid_cron`, `unknown_field`) and `message` what is wrong and what is allowed. The host reports each one in `config validate`, `config check` and the management API's `details` at the field's full path in the document (`scopes/0/extensions/0/config/jobs/1/cron`), with the extension's code and message. It does the same for an in-process owner's `*extension.ConfigError`. A message is shown to the operator, so it is fixed text that never quotes a configured value. The host passes at most `extension.MaxConfigDiagnostics` (32) diagnostics and drops any with a malformed path or code, or a message that is empty, over 500 bytes or not printable. A refusal without valid diagnostics is reported, as before, only as `invalid_config` at the object, because its message could quote a value.
+
+In Go, return an `*extension.ConfigError` (`extension.Invalid`, `Add`, `Merge`, `ConfigPointer`), and decode with `extension.DecodeConfig`, which refuses unknown fields (`unknown_field`, listing the allowed ones), values of the wrong JSON type (`invalid_type`) and malformed JSON (`malformed_config`) at their paths. The Go SDK passes a `ConfigError` through. The TypeScript SDK reports an entry config its schema refuses as diagnostics (`invalid_type`, `invalid_value`, `missing_field`, `unknown_field`), and a `ConfigError` thrown from an entry type's `validate` hook crosses with its own.
 
 ## Lifecycle
 

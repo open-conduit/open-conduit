@@ -56,6 +56,8 @@ type wireError struct {
 type errData struct {
 	Code    string     `json:"code"`
 	ResetAt *time.Time `json:"reset_at,omitempty"`
+	// Diagnostics are a config refusal's (protocol.Error.Diagnostics).
+	Diagnostics []protocol.ConfigDiagnostic `json:"diagnostics,omitempty"`
 }
 
 type message struct {
@@ -284,7 +286,7 @@ func encodeError(err error, cancelled bool) *wireError {
 	case protocol.CodeInternal:
 		code = codeInternal
 	}
-	return &wireError{Code: code, Message: e.Message, Data: &errData{Code: e.Code, ResetAt: e.ResetAt}}
+	return &wireError{Code: code, Message: e.Message, Data: &errData{Code: e.Code, ResetAt: e.ResetAt, Diagnostics: e.Diagnostics}}
 }
 
 // Call sends a request and decodes its result into out (which may be nil).
@@ -349,7 +351,7 @@ func decodeError(e *wireError) error {
 	case e.Code == codeCancelled:
 		return context.Canceled
 	case e.Data != nil && e.Data.Code != "":
-		return protocol.Decode(e.Data.Code, e.Message, e.Data.ResetAt)
+		return protocol.DecodeWith(e.Data.Code, e.Message, e.Data.ResetAt, e.Data.Diagnostics)
 	case e.Code == codeMethodNotFound:
 		return protocol.Errorf(protocol.CodeMethodNotFound, e.Message)
 	case e.Code == codeInvalidParams || e.Code == codeInvalidRequest || e.Code == codeParse:

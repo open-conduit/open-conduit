@@ -120,7 +120,9 @@ func compose(data []byte, reg Registry, inc Includes) (*Document, []string, erro
 					if fc, ok := reg.Executors[b.Executor].(FolderConfigurer); ok {
 						config, err := fc.FolderConfig(b.Config, folder, b.Resource != nil)
 						if err != nil {
-							c.fail(ptr(origin+"/bindings", k)+"/config", "invalid_config", fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor))
+							for _, d := range Owned(ptr(origin+"/bindings", k)+"/config", err, fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor)) {
+								c.fail(d.Path, d.Code, d.Message)
+							}
 							continue
 						}
 						sc.Bindings[k].Config = canonical(json.RawMessage(config))

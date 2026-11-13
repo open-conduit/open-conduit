@@ -207,6 +207,44 @@ func (v *validator) fail(path, code, msg string) {
 	v.diags = append(v.diags, Diagnostic{path, code, msg})
 }
 
+// owned records an owner's refusal (err, nil for none) of the config
+// object at path (owned).
+func (v *validator) owned(path string, err error, fallback string) {
+	if err != nil {
+		v.diags = append(v.diags, Owned(path, err, fallback)...)
+	}
+}
+
+// Owned are the diagnostics of an owner's refusal of the config object at
+// path: each diagnostic the owner authored (extension.ConfigError), at its
+// field's full path and with its own code and message, or invalid_config
+// at the object with fallback when it authored none. The owner's error
+// text is never echoed: it could quote configured values.
+func Owned(path string, err error, fallback string) []Diagnostic {
+	ds := extension.ConfigDiagnostics(err)
+	if len(ds) == 0 {
+		return []Diagnostic{{path, "invalid_config", fallback}}
+	}
+	out := make([]Diagnostic, len(ds))
+	for i, d := range ds {
+		out[i] = Diagnostic{path + d.Path, d.Code, d.Message}
+	}
+	return out
+}
+
+// withGrant are Owned's diagnostics for a binding config refused with a
+// grant applied, at the grant's config: the field may be the grant's or
+// the binding's own, so each message says so.
+func withGrant(path string, err error, fallback string) []Diagnostic {
+	out := Owned(path, err, fallback)
+	if len(extension.ConfigDiagnostics(err)) > 0 {
+		for i := range out {
+			out[i].Message = "with this grant applied: " + out[i].Message
+		}
+	}
+	return out
+}
+
 // Validate runs parse → defaults → scope graph → inheritance → registration
 // and owner checks → references/authorization → capabilities, returning every
 // independent diagnostic as *ValidationError.
@@ -229,8 +267,8 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 		check, ok := reg.Connections[c.Type]
 		if !ok {
 			v.fail(p+"/type", "unknown_registration", "connection type is not registered; use a registered type"+registeredNames(reg.Connections, c.Type))
-		} else if check != nil && check(c.Config) != nil {
-			v.fail(p+"/config", "invalid_config", "connection config rejected by its registered owner; fix it against the owner schema")
+		} else if check != nil {
+			v.owned(p+"/config", check(c.Config), "connection config rejected by its registered owner; fix it against the owner schema")
 		}
 	}
 	for i, s := range doc.Scopes {
@@ -421,8 +459,8 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		p, own := at("routes", name, s.scope, s.index)
 		if own && !v.reg.Handlers[r.Handler] {
 			v.fail(p+"/handler", "unknown_registration", "route handler is not registered; use a registered handler"+registeredNames(v.reg.Handlers, r.Handler))
-		} else if check := v.reg.HandlerConfig[r.Handler]; own && check != nil && check(r.Config) != nil {
-			v.fail(p+"/config", "invalid_config", "route config rejected by its registered handler; fix it against the handler's documented config")
+		} else if check := v.reg.HandlerConfig[r.Handler]; own && check != nil {
+			v.owned(p+"/config", check(r.Config), "route config rejected by its registered handler; fix it against the handler's documented config")
 		}
 		b, ok := e.bindings.byName[r.Binding]
 		if !ok || b.disabled {
@@ -466,8 +504,8 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		t, registered := v.reg.Extensions[x.Type]
 		if own && !registered {
 			v.fail(p+"/type", "unknown_registration", "extension type is not registered; use a registered type"+registeredNames(v.reg.Extensions, x.Type))
-		} else if own && t.Validate != nil && t.Validate(x.Config, x.SecretNames) != nil {
-			v.fail(p+"/config", "invalid_config", "extension config rejected by its registered owner; fix it against the owner schema")
+		} else if own && t.Validate != nil {
+			v.owned(p+"/config", t.Validate(x.Config, x.SecretNames), "extension config rejected by its registered owner; fix it against the owner schema")
 		}
 		if x.Connection != "" && !slices.Contains(e.auth.Connections, x.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
@@ -495,8 +533,8 @@ func (v *validator) registration(p string, b Binding) {
 	if b.Resource != nil && !v.reg.Resources[b.Resource.Provider] {
 		v.fail(p+"/resource/provider", "unknown_registration", "resource provider is not registered; use a registered provider"+registeredNames(v.reg.Resources, b.Resource.Provider))
 	} else if b.Resource != nil {
-		if check := v.reg.ResourceConfig[b.Resource.Provider]; check != nil && check(b.Resource.Config) != nil {
-			v.fail(p+"/resource/config", "invalid_config", fmt.Sprintf("resource provider %s rejected this config; correct it against the provider's documented config", b.Resource.Provider))
+		if check := v.reg.ResourceConfig[b.Resource.Provider]; check != nil {
+			v.owned(p+"/resource/config", check(b.Resource.Config), fmt.Sprintf("resource provider %s rejected this config; correct it against the provider's documented config", b.Resource.Provider))
 		}
 	}
 	exec, ok := v.reg.Executors[b.Executor]
@@ -540,18 +578,20 @@ func (v *validator) registration(p string, b Binding) {
 	if err := extension.ValidateBinding(domain.Binding{Name: b.Name, Executor: b.Executor, Requires: r}, exec); errors.Is(err, extension.ErrInvalid) {
 		v.fail(p+"/executor", "invalid_registration", "executor registration does not implement its advertised capabilities")
 	}
-	// Executor config is opaque to core and strictly checked by its owner. The
-	// owner's error text is never echoed: it could quote configured values.
-	if owner, ok := exec.(ConfigValidator); ok && owner.ValidateConfig(b.Config, b.SecretNames) != nil {
-		v.fail(p+"/config", "invalid_config", fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor))
-	} else if ok {
+	// Executor config is opaque to core and strictly checked by its owner.
+	// Only the owner's diagnostics are echoed (owned), never its error text.
+	if owner, ok := exec.(ConfigValidator); ok {
+		if err := owner.ValidateConfig(b.Config, b.SecretNames); err != nil {
+			v.owned(p+"/config", err, fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor))
+			return // a grant's config would fail the same way
+		}
 		// Each grant's config is checked as the binding a Work that takes
 		// it alone runs.
 		base := domain.Binding{Config: domain.Payload{Data: b.Config}, Grants: b.domainGrants()}
 		for k, g := range b.Grants {
 			granted, _ := base.Granted([]string{g.Name})
-			if owner.ValidateConfig(granted.Config.Data, b.SecretNames) != nil {
-				v.fail(fmt.Sprintf("%s/grants/%d/config", p, k), "invalid_config", fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))
+			if err := owner.ValidateConfig(granted.Config.Data, b.SecretNames); err != nil {
+				v.diags = append(v.diags, withGrant(fmt.Sprintf("%s/grants/%d/config", p, k), err, fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))...)
 			}
 		}
 	}

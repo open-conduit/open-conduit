@@ -47,6 +47,8 @@ func TestNestedCallbacksAndErrors(t *testing.T) {
 			return nil, extension.ErrNotAdoptable
 		case "leak":
 			return nil, errors.New("password=hunter2")
+		case "config":
+			return nil, extension.Invalid("/jobs/1/cron", "invalid_cron", "cron must be a five-field schedule")
 		}
 		return nil, protocol.Errorf(protocol.CodeMethodNotFound, method)
 	}
@@ -68,6 +70,12 @@ func TestNestedCallbacksAndErrors(t *testing.T) {
 	}
 	if err := host.Call(context.Background(), "missing", nil, nil); protocol.ErrorCode(err) != protocol.CodeMethodNotFound {
 		t.Fatalf("unknown method: %v", err)
+	}
+	// A config refusal's diagnostics cross (issue #576).
+	err := host.Call(context.Background(), "config", nil, nil)
+	ds := extension.ConfigDiagnostics(err)
+	if !errors.Is(err, extension.ErrInvalid) || len(ds) != 1 || ds[0] != (extension.ConfigDiagnostic{Path: "/jobs/1/cron", Code: "invalid_cron", Message: "cron must be a five-field schedule"}) {
+		t.Fatalf("config diagnostics: %v %+v", err, ds)
 	}
 }
 

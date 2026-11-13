@@ -18,6 +18,10 @@ type Error struct {
 	Message string
 	// ResetAt is carried by CodeRetryAfter (extension.RetryHint).
 	ResetAt *time.Time
+	// Diagnostics are carried by a CodeInvalid answer to validate: the
+	// owner's own reasons for refusing a config object
+	// (extension.ConfigError), which the host passes through.
+	Diagnostics []ConfigDiagnostic
 }
 
 func (e *Error) Error() string {
@@ -63,12 +67,24 @@ var confinement = []struct {
 
 // Unwrap returns the public sentinel the code carries, if any.
 func (e *Error) Unwrap() error {
+	if e.Code == CodeInvalid && len(e.Diagnostics) > 0 {
+		return e.configError()
+	}
 	for _, s := range append(sentinels[:len(sentinels):len(sentinels)], confinement...) {
 		if s.code == e.Code {
 			return s.err
 		}
 	}
 	return nil
+}
+
+// configError is the extension.ConfigError the diagnostics carry.
+func (e *Error) configError() *extension.ConfigError {
+	ce := &extension.ConfigError{}
+	for _, d := range e.Diagnostics {
+		ce.Add(d.Path, d.Code, d.Message)
+	}
+	return ce
 }
 
 // RetryAfter is a received CodeRetryAfter error: the only authored error
@@ -99,6 +115,15 @@ func Encode(err error) *Error {
 	var pe *Error
 	if errors.As(err, &pe) {
 		return pe
+	}
+	// A config refusal's diagnostics are fixed text the owner authored
+	// (extension.ConfigDiagnostic), so they cross.
+	if ds := extension.ConfigDiagnostics(err); len(ds) > 0 {
+		out := &Error{Code: CodeInvalid, Message: "invalid config"}
+		for _, d := range ds {
+			out.Diagnostics = append(out.Diagnostics, ConfigDiagnostic{Path: d.Path, Code: d.Code, Message: d.Message})
+		}
+		return out
 	}
 	var oe *extension.OperationError
 	if errors.As(err, &oe) {
@@ -141,6 +166,15 @@ func Encode(err error) *Error {
 // a sentinel-carrying *Error for protocol codes, and an
 // extension.OperationError for an extension's own operation codes.
 func Decode(code, message string, resetAt *time.Time) error {
+	return DecodeWith(code, message, resetAt, nil)
+}
+
+// DecodeWith is Decode for an error that may carry config diagnostics
+// (Error.Diagnostics), which only CodeInvalid keeps.
+func DecodeWith(code, message string, resetAt *time.Time, diagnostics []ConfigDiagnostic) error {
+	if code == CodeInvalid && len(diagnostics) > 0 {
+		return &Error{Code: code, Message: message, Diagnostics: diagnostics}
+	}
 	if code == CodeRetryAfter {
 		return RetryAfter{&Error{Code: code, Message: message, ResetAt: resetAt}}
 	}

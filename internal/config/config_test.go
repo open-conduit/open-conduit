@@ -306,6 +306,23 @@ func TestOwnerValidationAndRegistrations(t *testing.T) {
 	if got := diagnostics(t, err); len(got) != 2 || got[0].Path != "scopes/0/authorization/operations" || got[1].Path != "scopes/0/extensions/0/config" {
 		t.Fatalf("diagnostics %v", got)
 	}
+	// An owner's own diagnostics (extension.ConfigError) pass through at
+	// their fields' full paths (issue #576); the plain error above didn't.
+	reg.Extensions["schedule"] = ExtensionType{Validate: func(json.RawMessage, []string) error {
+		ce := extension.Invalid("/jobs/1/cron", "invalid_cron", "cron must be a five-field schedule")
+		ce.Add("/x", "Not A Code", "dropped")
+		return ce
+	}}
+	_, err = Validate(encode(t, m), reg)
+	if got := diagnostics(t, err); len(got) != 2 || got[1] != (Diagnostic{"scopes/0/extensions/0/config/jobs/1/cron", "invalid_cron", "cron must be a five-field schedule"}) {
+		t.Fatalf("owner diagnostics %v", got)
+	}
+	reg.Extensions["schedule"] = ExtensionType{Validate: func(c json.RawMessage, names []string) error {
+		if !strings.Contains(string(c), "every_seconds") {
+			return errors.New("bad")
+		}
+		return nil
+	}}
 	reg.Operations = []string{"custom.op"}
 	entry(m, 0, "extensions", 0)["config"].(map[string]any)["every_seconds"] = 60
 	if _, err := Validate(encode(t, m), reg); err != nil {
