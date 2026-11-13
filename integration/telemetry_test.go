@@ -539,17 +539,19 @@ func TestUnmatchedEventRecordsEachRefusal(t *testing.T) {
 	c := h.operator()
 	ignored := h.submit("tracker.label", "ignored", "thread-9")
 	h.routeAll()
-	const why = "incoming: only keyed operator.* events start Work"
+	// Each route that declined it, in route order: the shell config's
+	// work route takes no Event in these tests.
+	const why = "incoming: only keyed operator.* events start Work\nchildren: the test runs no child Work"
 	decided := recordSet(h.records()).one(t, "route.decided", func(r observability.Record) bool { return r.Correlation.EventID == domain.ID(ignored.ID) })
 	if decided.To != "unmatched" || decided.Attributes["route.refusals"] != why {
 		t.Fatalf("route.decided: %+v", decided)
 	}
 	e, err := c.EventWithRoute(ctx, ignored.ID)
-	if err != nil || e.Route == nil || e.Route.Disposition != "unmatched" || !reflect.DeepEqual(e.Route.Refusals, []client.RouteRefusal{{Route: "incoming", Reason: "only keyed operator.* events start Work"}}) {
+	if err != nil || e.Route == nil || e.Route.Disposition != "unmatched" || !reflect.DeepEqual(e.Route.Refusals, []client.RouteRefusal{{Route: "incoming", Reason: "only keyed operator.* events start Work"}, {Route: "children", Reason: "the test runs no child Work"}}) {
 		t.Fatalf("event with route: %+v %v", e.Route, err)
 	}
 	chain, err := c.EventChain(ctx, ignored.ID)
-	if err != nil || len(chain) != 1 || chain[0].Route == nil || len(chain[0].Route.Refusals) != 1 {
+	if err != nil || len(chain) != 1 || chain[0].Route == nil || len(chain[0].Route.Refusals) != 2 {
 		t.Fatalf("chain: %+v %v", chain, err)
 	}
 	// The single-Event form takes with=route and nothing else.
