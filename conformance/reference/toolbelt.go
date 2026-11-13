@@ -25,10 +25,11 @@ type Toolbelt struct {
 	registrations map[string]bool
 	operations    map[string]extension.Operation
 	events        map[string]bool
+	sealed        map[string]bool
 }
 
 func NewToolbelt(s storage.Store, now func() time.Time) *Toolbelt {
-	return &Toolbelt{Store: s, Now: now, tokens: map[string]extension.Authority{}, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}}
+	return &Toolbelt{Store: s, Now: now, tokens: map[string]extension.Authority{}, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}, sealed: map[string]bool{}}
 }
 func builtin(n string) bool {
 	return n == extension.Emit || n == extension.CreateWork || n == extension.CancelWork || n == extension.Wait || n == extension.DeclareOutcome || n == extension.ReadContext
@@ -67,12 +68,20 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		}
 		events[n] = true
 	}
+	for _, n := range r.SealedEventTypes {
+		if !events[n] {
+			return extension.ErrInvalid
+		}
+	}
 	t.registrations[r.Name] = true
 	for _, op := range r.Operations {
 		t.operations[op.Name] = op
 	}
 	for _, n := range r.EventTypes {
 		t.events[n] = true
+	}
+	for _, n := range r.SealedEventTypes {
+		t.sealed[n] = true
 	}
 	return nil
 }
@@ -152,6 +161,9 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 			e := *c.Event
 			if !t.events[e.Type] || !contains(a.EventTypes, e.Type) {
 				return extension.ErrUndeclared
+			}
+			if t.sealed[e.Type] {
+				return extension.ErrUnauthorized
 			}
 			if e.CausationID != "" && e.CausationID != a.TriggerID || e.WorkID != "" && e.WorkID != a.WorkID || e.ExecutionID != "" && e.ExecutionID != a.ExecutionID {
 				return extension.ErrUnauthorized

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -304,6 +305,22 @@ func (r squattableRegistrar) Register(reg extension.Registration) error {
 	return nil
 }
 
+// unsealingRegistrar drops what a registration seals, as a toolbelt whose
+// builtin emit took any declared family would.
+type unsealingRegistrar struct{ extension.Registrar }
+
+func (r unsealingRegistrar) Register(reg extension.Registration) error {
+	if len(reg.SealedEventTypes) > 0 && len(reg.EventTypes) > 0 {
+		for _, s := range reg.SealedEventTypes {
+			if !slices.Contains(reg.EventTypes, s) {
+				return extension.ErrInvalid
+			}
+		}
+	}
+	reg.SealedEventTypes = nil
+	return r.Registrar.Register(reg)
+}
+
 type unsafeObserver struct{ records []observability.Record }
 
 func (o *unsafeObserver) Observe(_ context.Context, r observability.Record) error {
@@ -378,6 +395,13 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 			f.Belt = anyCancelBelt{f.Belt}
 			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "isn't the caller's child accepted") {
 				t.Fatalf("cancel of foreign Work undetected: %v", err)
+			}
+		}
+		if c.Name == "sealed_family" {
+			f := toolbeltFixture()
+			f.Registrar = unsealingRegistrar{f.Registrar}
+			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "sealed family emitted") {
+				t.Fatalf("an unsealed family undetected: %v", err)
 			}
 		}
 		if c.Name == "cross_scope_work_execution" {

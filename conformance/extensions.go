@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -504,6 +505,34 @@ func ToolbeltCases() []ToolbeltCase {
 			e.Type = "undeclared"
 			if _, err := f.Belt.Call(context.Background(), f.Token, extension.ToolCall{Operation: extension.Emit, Event: &e}); !errors.Is(err, extension.ErrUndeclared) {
 				return fmt.Errorf("undeclared event accepted: %v", err)
+			}
+			return nil
+		}},
+		// A family its registration seals is emitted only through that
+		// registration's own operations: the builtin emit refuses it even
+		// to an execution whose authority lists it, so a route can trust
+		// it passed the operation's checks.
+		{"sealed_family", func(f ToolbeltFixture) error {
+			ctx := context.Background()
+			if err := f.Registrar.Register(extension.Registration{Version: extension.ContractVersion, Name: "unsealed", EventTypes: []string{"unsealed.opened"}, SealedEventTypes: []string{"unsealed.other"}}); !errors.Is(err, extension.ErrInvalid) {
+				return fmt.Errorf("a sealed type outside the registration's event types accepted: %v", err)
+			}
+			if err := f.Registrar.Register(extension.Registration{Version: extension.ContractVersion, Name: "sealer", EventTypes: []string{"sealer.opened", "sealer.noted"}, SealedEventTypes: []string{"sealer.opened"}}); err != nil {
+				return err
+			}
+			a := f.Authority
+			a.EventTypes = append(slices.Clone(a.EventTypes), "sealer.opened", "sealer.noted")
+			token, err := f.Issuer.Issue(ctx, a)
+			if err != nil {
+				return err
+			}
+			e := domain.Event{ID: "noted", Type: "sealer.noted", DeliveryID: "noted", OccurredAt: NewClock().Now()}
+			if _, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: extension.Emit, Event: &e}); err != nil {
+				return fmt.Errorf("an unsealed family of the same registration refused: %v", err)
+			}
+			e = domain.Event{ID: "opened", Type: "sealer.opened", DeliveryID: "opened", OccurredAt: NewClock().Now()}
+			if _, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: extension.Emit, Event: &e}); !errors.Is(err, extension.ErrUnauthorized) {
+				return fmt.Errorf("sealed family emitted through the builtin emit: %v", err)
 			}
 			return nil
 		}},

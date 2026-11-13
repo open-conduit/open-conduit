@@ -255,6 +255,9 @@ func (r *Remote) Registration() extension.Registration {
 	reg := extension.Registration{Version: extension.ContractVersion, Name: r.m.Name}
 	for _, f := range r.m.Provides.Families {
 		reg.EventTypes = append(reg.EventTypes, f.Type)
+		if f.Sealed {
+			reg.SealedEventTypes = append(reg.SealedEventTypes, f.Type)
+		}
 	}
 	for _, decl := range r.m.Provides.Operations {
 		name := decl.Name
