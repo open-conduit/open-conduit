@@ -28,7 +28,7 @@ func init() {
 }
 
 // Call is one toolbelt call a turn makes. Operation is a core operation
-// (read_context, emit, create_work, wait, declare_outcome) or one an
+// (read_context, emit, create_work, cancel_work, wait, declare_outcome) or one an
 // extension registered; Input is its input object.
 type Call struct {
 	Operation string `json:"operation"`
@@ -284,7 +284,7 @@ func readMCPConfig(path string) (mcpServer, error) {
 
 // coreTools are the toolbelt operations `os mcp` offers as tools of their
 // own; any other operation goes through its `call` tool.
-var coreTools = map[string]bool{"read_context": true, "emit": true, "create_work": true, "wait": true, "declare_outcome": true}
+var coreTools = map[string]bool{"read_context": true, "emit": true, "create_work": true, "cancel_work": true, "wait": true, "declare_outcome": true}
 
 // calls starts the server, initializes it and makes each call in turn.
 func (s mcpServer) calls(calls []Call) ([]Result, error) {

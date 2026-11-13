@@ -30,6 +30,7 @@ var (
 const (
 	Emit           = "emit"
 	CreateWork     = "create_work"
+	CancelWork     = "cancel_work"
 	Wait           = "wait"
 	DeclareOutcome = "declare_outcome"
 	ReadContext    = "read_context"
@@ -39,7 +40,7 @@ const (
 // operations, which no extension may declare and no gate decides on.
 func BuiltinOperation(name string) bool {
 	switch name {
-	case Emit, CreateWork, Wait, DeclareOutcome, ReadContext:
+	case Emit, CreateWork, CancelWork, Wait, DeclareOutcome, ReadContext:
 		return true
 	}
 	return false
@@ -87,10 +88,30 @@ type ToolCall struct {
 	ScopeID, WorkID, ExecutionID domain.ID
 	Event                        *domain.Event
 	Child                        *domain.Work
+	Cancel                       *CancelRequest
 	Wait                         *WaitRequest
 	Outcome                      *domain.Outcome
 	Input                        domain.Payload
 }
+
+// CancelRequest is cancel_work's input: the child Work to cancel and,
+// optionally, why (at most MaxCancelReason bytes). The host allows it only
+// for Work that is not yet terminal and whose parent is the caller's own
+// Work, and refuses any other as unauthorized (a Work that has already
+// ended with OperationError code CodeWorkEnded). The child ends cancelled,
+// so its parent hears of it with domain.TypeChildEnded like any other end.
+type CancelRequest struct {
+	Work   domain.ID
+	Reason string
+}
+
+// MaxCancelReason bounds CancelRequest.Reason.
+const MaxCancelReason = 1024
+
+// CodeWorkEnded is the OperationError code of a cancel_work refused because
+// the child Work has already ended.
+const CodeWorkEnded = "work_ended"
+
 type WaitRequest struct {
 	Match         domain.EventMatch
 	Timeout       *time.Time

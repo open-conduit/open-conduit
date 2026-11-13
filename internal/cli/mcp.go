@@ -64,6 +64,10 @@ var mcpTools = []mcpTool{
 		"correlation_keys": map[string]any{"type": "array", "items": keySchema},
 		"context":          map[string]any{"type": "object", "description": "The task, as a payload: {schema, data}, for example {\"schema\": \"<kind>.v1\", \"data\": {\"task\": \"…\"}}.", "properties": payloadSchema["properties"]},
 	}, "kind")},
+	{Name: "cancel_work", Description: "Cancel child Work you asked for with create_work that hasn't ended yet, when you no longer need its answer. You still receive its core.work.child.ended event, in state cancelled.", InputSchema: object(map[string]any{
+		"work_id": map[string]any{"type": "string", "description": "The child Work's ID, as create_work returned it."},
+		"reason":  map[string]any{"type": "string", "description": "Why you no longer need it, in a few words; recorded on the child's history."},
+	}, "work_id")},
 	{Name: "wait", Description: "Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. Finish your turn after calling it.", InputSchema: object(map[string]any{
 		"match": map[string]any{"type": "object", "properties": map[string]any{
 			"types": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -324,7 +328,7 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 		}
 	case "emit":
 		shown = result.Event
-	case "create_work":
+	case "create_work", "cancel_work":
 		shown = result.Work
 	case "wait":
 		shown = result.Wait

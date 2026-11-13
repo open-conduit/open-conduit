@@ -77,7 +77,7 @@ Only the entry's **answer** action counts, and only while the question is open a
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `operations` | none | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
+| `operations` | none | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `cancel_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
 | `kinds` | none | Work kinds, such as `github.issue`, or a prefix ending in `.*`, such as `github.*`. Work of a named kind waits for a person's approval before it first starts. See [Approving a start](#approving-a-start). |
 | `bindings` | none | Binding names. Work whose first attempt would run on a named binding waits for approval before it starts. |
 | `responders` | the entry's | Who may approve or refuse. |

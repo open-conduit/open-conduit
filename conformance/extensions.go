@@ -540,6 +540,35 @@ func ToolbeltCases() []ToolbeltCase {
 			}
 			return nil
 		}},
+		// cancel_work ends only the caller's own child Work that hasn't
+		// ended, and records who cancelled it, caused by the trigger.
+		{"cancel_child", func(f ToolbeltFixture) error {
+			ctx := context.Background()
+			child := domain.Work{ID: "cancellable", Kind: "fixture.child"}
+			if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CreateWork, Child: &child}); err != nil {
+				return err
+			}
+			for _, target := range []domain.ID{f.Authority.WorkID, "unknown"} {
+				if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: target}}); !errors.Is(err, extension.ErrUnauthorized) {
+					return fmt.Errorf("cancel of Work that isn't the caller's child accepted (%s): %v", target, err)
+				}
+			}
+			out, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: child.ID, Reason: "no longer needed"}})
+			if err != nil {
+				return err
+			}
+			if out.Work == nil || out.Work.ID != child.ID || out.Work.State != domain.WorkCancelled {
+				return fmt.Errorf("cancelled child not returned cancelled: %+v", out.Work)
+			}
+			if out.Event == nil || out.Event.Event.Type != domain.TypeChildCancel || out.Event.Event.WorkID != child.ID || out.Event.Event.CausationID != f.Authority.TriggerID {
+				return fmt.Errorf("cancel not recorded on the child with the trigger's causation")
+			}
+			var oe *extension.OperationError
+			if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: child.ID}}); !errors.As(err, &oe) || oe.Code != extension.CodeWorkEnded {
+				return fmt.Errorf("cancel of ended child Work accepted: %v", err)
+			}
+			return nil
+		}},
 		{"wait_releases_authority", func(f ToolbeltFixture) error {
 			timeout := NewClock().Now().Add(time.Hour)
 			out, err := f.Belt.Call(context.Background(), f.Token, extension.ToolCall{Operation: extension.Wait, Wait: &extension.WaitRequest{Match: domain.EventMatch{Keys: []domain.CorrelationKey{{Source: "fixture", ExternalID: "item"}}, Types: []string{"fixture.changed.v1"}}, Timeout: &timeout}})

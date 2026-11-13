@@ -54,6 +54,7 @@ The environment follows the B05 order:
 | `os context` | `read_context` |
 | `os emit` | `emit` |
 | `os work create` | `create_work` |
+| `os work cancel` | `cancel_work` |
 | `os wait` | `wait` |
 | `os outcome completed\|failed\|handoff` | `declare_outcome` |
 | `os call OP` | registered extension operations |

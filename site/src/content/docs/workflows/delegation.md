@@ -17,13 +17,13 @@ A front agent in a Slack thread answers simple questions itself. For the rest it
   "name": "Support",
   "authorization": {
     "connections": [],
-    "operations": ["create_work", "wait", "read_context", "declare_outcome", "emit"],
+    "operations": ["create_work", "cancel_work", "wait", "read_context", "declare_outcome", "emit"],
     "read_scopes": [],
     "work_kinds": ["agent.task.engineer"]
   },
   "bindings": [
     {"name": "front", "executor": "claude-code", "requires": {"toolbelt": "mcp"},
-     "operations": ["create_work", "wait", "read_context"], "work_kinds": ["agent.task.engineer"],
+     "operations": ["create_work", "cancel_work", "wait", "read_context"], "work_kinds": ["agent.task.engineer"],
      "secret_names": [], "config": {"playbook": "slack-thread"}},
     {"name": "engineer", "executor": "claude-code", "requires": {"toolbelt": "mcp"},
      "operations": ["read_context", "declare_outcome"], "secret_names": [], "config": {"playbook": "-"}}
@@ -46,6 +46,7 @@ The asking agent calls `create_work` with a kind it was given and the task as it
 The asking agent is resumed with a `core.work.child.ended` Event: which Work ended, its kind, its state (`completed`, `failed` or `cancelled`), its summary and its `result`. A failed or cancelled agent has no result.
 
 - **Waiting on more than the answer.** One `wait` can name several types. `{"match": {"types": ["core.work.child.ended", "slack.message.human"]}}` wakes the front agent on whichever comes first, the answer or a new message in its thread, and its turn shows what woke it. If the message wins, the child carries on, and its answer arrives with a later wake.
+- **Changing its mind.** If the message makes the task moot ("never mind"), the front agent calls `cancel_work` with the child's `work_id` and a short `reason`. The child stops, its history records who cancelled it and why, and the front agent still hears its end, in state `cancelled`. An agent can cancel only Work it asked for, and only before it ends; a binding needs `cancel_work` in its operations to do it.
 - **Several at once.** Each child's end is its own Event, carrying the child's ID. Ask several, wait, and wait again after each answer until all have come back.
 - **Loops.** Every hand-off stays on one causal chain, so agents that keep asking each other (A asks B asks A) stop at `causal_max_depth`.
 

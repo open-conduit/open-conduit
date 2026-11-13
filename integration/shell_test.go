@@ -91,8 +91,8 @@ func shellConfig(t *testing.T, binding map[string]any) string {
   "version": 1, "settings": {}, "connections": [],
   "scopes": [{
     "id": "ops", "name": "Operations",
-    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes": [], "work_kinds": ["fixture.child"]},
-    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "work_kinds": ["fixture.child"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
+    "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome", "create_work", "cancel_work", "wait"], "read_scopes": [], "work_kinds": ["fixture.child"]},
+    "bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["emit", "read_context", "declare_outcome", "create_work", "cancel_work", "wait"], "work_kinds": ["fixture.child"], "secret_names": ["api"], "config": ` + string(cfg) + `}],
     "routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}},
       {"name": "children", "handler": "work", "binding": "run", "active_policy": "queue", "config": {"kinds": [{"kind": "fixture.child"}]}}],
     "secret_refs": {"api": "cmd:printf shell-secret"}
@@ -431,6 +431,8 @@ fi
 os context > "$OS_OUTPUT_DIR/context.json"
 os emit --type fixture.reported.v1 --delivery-id report-1 --schema fixture.v1 --data '{"ok":true}' --request-id emit-1 > "$OS_OUTPUT_DIR/emitted.json"
 os work create --kind fixture.child --key-source ops --key-external-id child-1 --request-id child-1 > "$OS_OUTPUT_DIR/child.json"
+os work create --kind fixture.child --id child/moot --request-id child-2 > /dev/null
+os work cancel --id child/moot --reason moot --request-id cancel-1 > "$OS_OUTPUT_DIR/cancelled.json"
 os wait --type operator.reply --key-source ops --key-external-id thread-1 --timeout 3600 --request-id wait-1 > "$OS_OUTPUT_DIR/wait.json"
 if os context > /dev/null 2>&1; then echo "authority survived wait" >&2; exit 9; fi
 echo "waiting for reply"
@@ -467,7 +469,7 @@ func TestShellToolbeltWorkflow(t *testing.T) {
 				t.Fatalf("declared wait: %+v %v", waits.Items, err)
 			}
 			// Logs and OS_OUTPUT_DIR files are execution artifacts.
-			if len(x.Artifacts) != 5 {
+			if len(x.Artifacts) != 6 {
 				t.Fatalf("artifacts %+v", x.Artifacts)
 			}
 			if x.Outcome == nil || x.Outcome.Kind != "waiting" {
@@ -485,7 +487,14 @@ func TestShellToolbeltWorkflow(t *testing.T) {
 			if emitted.Type != "fixture.reported.v1" || emitted.ExecutionID != x.ID || emitted.WorkID != work || emitted.CausationID != root.ID {
 				t.Fatalf("emission authority/causation: %+v", emitted)
 			}
-			children, err := c.Works(ctx, url.Values{"parent_id": {work}})
+			var cancelled client.Work
+			if err = json.Unmarshal([]byte(h.artifact(outputs["cancelled.json"].(string))), &cancelled); err != nil {
+				t.Fatal(err)
+			}
+			if cancelled.ID != "child/moot" || cancelled.State != "cancelled" {
+				t.Fatalf("cancelled child: %+v", cancelled)
+			}
+			children, err := c.Works(ctx, url.Values{"parent_id": {work}, "state": {"ready"}})
 			if err != nil || len(children.Items) != 1 || children.Items[0].Kind != "fixture.child" || children.Items[0].ScopeID != "ops" {
 				t.Fatalf("child work: %+v %v", children.Items, err)
 			}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -90,6 +91,65 @@ func childEndedInTx(tx storage.Tx, now time.Time, child domain.Work) error {
 		CorrelationKey: &key, WorkID: parent.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildEnded, Data: data}}
 	_, _, err = AcceptInTx(tx, parent.ScopeID, e)
 	return err
+}
+
+// cancelledChild is what cancel_work returns: the child as it ended and
+// the Event recording why.
+type cancelledChild struct {
+	Work  domain.Work
+	Event domain.AcceptedEvent
+}
+
+// cancelChildInTx is cancel_work: the execution x of parent cancels its
+// child Work. Only Work whose parent is parent, in parent's scope, may be
+// cancelled; anything else (another Work's child, Work with no parent, an
+// unknown ID) is refused as unauthorized, fail closed and without saying
+// whether it exists. A child that has already ended is refused with
+// extension.CodeWorkEnded.
+//
+// The cancel is recorded on the child as a domain.TypeChildCancel Event
+// whose source is the cancelling execution and whose causation is its
+// trigger, so the child's history says who ended it and why. It carries no
+// ExecutionID, which would have to be an attempt of the child's own Work.
+// It is a control fact, never routed. The child then
+// ends the way an operator's cancel ends it (cancelWorkInTx), so the
+// parent hears of it with domain.TypeChildEnded in state cancelled.
+func cancelChildInTx(tx storage.Tx, now time.Time, limits CausalLimits, parent domain.Work, x domain.Execution, trigger domain.ID, r extension.CancelRequest) (cancelledChild, error) {
+	child, err := tx.Work(r.Work)
+	if errors.Is(err, storage.ErrNotFound) {
+		return cancelledChild{}, unauthorized(RefusalNotGranted)
+	}
+	if err != nil {
+		return cancelledChild{}, err
+	}
+	if child.ParentID != parent.ID || child.ScopeID != parent.ScopeID {
+		return cancelledChild{}, unauthorized(RefusalNotGranted)
+	}
+	if child.State.Terminal() {
+		return cancelledChild{}, &extension.OperationError{Code: extension.CodeWorkEnded, Message: "that Work has already ended (" + string(child.State) + ")"}
+	}
+	data, err := json.Marshal(domain.ChildCancel{Parent: string(parent.ID), Reason: r.Reason})
+	if err != nil {
+		return cancelledChild{}, err
+	}
+	source := "execution/" + string(x.ID)
+	delivery := "cancel/" + string(child.ID)
+	e := domain.Event{ID: domain.ID("child-cancel/" + identity(string(x.ID), string(child.ID))), Type: domain.TypeChildCancel, Source: source, DeliveryID: delivery,
+		WorkID: child.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildCancel, Data: data}}
+	accepted, _, err := AcceptInTx(tx, parent.ScopeID, e)
+	if err != nil {
+		return cancelledChild{}, err
+	}
+	if err = tx.MarkRouted(accepted.Event.ID, "", "control"); err != nil {
+		return cancelledChild{}, err
+	}
+	if err = cancelWorkInTx(tx, now, limits, child.ID); err != nil {
+		return cancelledChild{}, err
+	}
+	if child, err = tx.Work(child.ID); err != nil {
+		return cancelledChild{}, err
+	}
+	return cancelledChild{Work: child, Event: accepted}, nil
 }
 
 // MissingResultSummary is the outcome summary of an attempt of child Work

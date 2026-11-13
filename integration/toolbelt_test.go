@@ -54,7 +54,7 @@ func (o harnessObserver) Observe(_ context.Context, r observability.Record) erro
 }
 
 func allToolbeltOperations() []string {
-	return []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo", "fixture.wait"}
+	return []string{extension.Emit, extension.CreateWork, extension.CancelWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo", "fixture.wait"}
 }
 
 // newToolbeltHarness runs a real scheduled attempt whose token is issued by the
@@ -306,7 +306,7 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	got, err := h.belt.Guidance(ctx, h.token, "")
 	// The host's own guidance follows: the kinds of child Work the grant
 	// lets the execution ask for.
-	if err != nil || len(got) != 2 || got[0] != "Echo with fixture.echo." || !strings.Contains(got[1], "- `fixture.child`") {
+	if err != nil || len(got) != 2 || got[0] != "Echo with fixture.echo." || !strings.Contains(got[1], "- `fixture.child`") || !strings.Contains(got[1], "`cancel_work`") {
 		t.Fatalf("guidance = %q, %v", got, err)
 	}
 	if _, err = h.belt.Guidance(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
@@ -475,6 +475,67 @@ func TestProductionToolbeltRequestIdempotency(t *testing.T) {
 	unowned.DeliveryID, unowned.CorrelationKey = "unowned", &foreign
 	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.Emit, Event: &unowned}); !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("unowned correlation accepted: %v", err)
+	}
+}
+
+// TestProductionToolbeltCancelsChild: an execution cancels child Work it
+// asked for. The cancel is recorded on the child, caused by the
+// execution's trigger, the child ends cancelled, and the parent hears of it
+// like any other end. Work that isn't its child, and a child that has
+// already ended, are refused.
+func TestProductionToolbeltCancelsChild(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	child := domain.Work{Kind: "fixture.child"}
+	asked, err := h.belt.CallRequest(ctx, h.token, "child", extension.ToolCall{Operation: extension.CreateWork, Child: &child})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := asked.Work.ID
+	for _, target := range []domain.ID{"work/item", "work/unknown"} {
+		if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: target}}); !errors.Is(err, extension.ErrUnauthorized) {
+			t.Fatalf("cancel of %s, not the caller's child, accepted: %v", target, err)
+		}
+	}
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: id, Reason: strings.Repeat("x", extension.MaxCancelReason+1)}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("oversized reason accepted: %v", err)
+	}
+	out, err := h.belt.CallRequest(ctx, h.token, "cancel", extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: id, Reason: "never mind"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Work == nil || out.Work.ID != id || out.Work.State != domain.WorkCancelled {
+		t.Fatalf("cancelled child = %+v", out.Work)
+	}
+	cancel := out.Event.Event
+	var why domain.ChildCancel
+	if err = json.Unmarshal(cancel.Data.Data, &why); err != nil || cancel.Type != domain.TypeChildCancel || cancel.WorkID != id || cancel.CausationID != "trigger" || cancel.Source != "execution/"+string(h.attempt.Lease.ExecutionID) || why.Parent != "work/item" || why.Reason != "never mind" {
+		t.Fatalf("cancel recorded as %+v (%+v), %v", cancel, why, err)
+	}
+	// A retry with the same request ID replays the cancel.
+	if again, err := h.belt.CallRequest(ctx, h.token, "cancel", extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: id, Reason: "never mind"}}); err != nil || again.Event.Event.ID != cancel.ID {
+		t.Fatalf("retried cancel not replayed: %v", err)
+	}
+	var oe *extension.OperationError
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: id}}); !errors.As(err, &oe) || oe.Code != extension.CodeWorkEnded {
+		t.Fatalf("cancel of ended child accepted: %v", err)
+	}
+	err = storage.View(ctx, h.f.Store, h.f.Clock.Now(), func(tx storage.Tx) error {
+		ended, e := tx.EventByDelivery(domain.LineageSource, "child-ended/"+string(id))
+		if e != nil {
+			return e
+		}
+		var c domain.ChildEnded
+		if e = json.Unmarshal(ended.Event.Data.Data, &c); e != nil {
+			return e
+		}
+		if ended.Event.WorkID != "work/item" || c.Work != string(id) || c.State != domain.WorkCancelled {
+			t.Fatalf("the parent heard %+v: %+v", ended.Event, c)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
