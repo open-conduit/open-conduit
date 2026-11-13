@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -12,18 +13,13 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-type executionTimeoutPayload struct {
-	ExecutionID domain.ID
-	Deadline    time.Time
-}
-
 func ExecutionDeadlineTimerID(id domain.ID) domain.ID {
 	return domain.ID("execution-deadline/" + identity(string(id)))
 }
 func executionTimeoutEvent(state AttemptState, parent domain.ID) domain.Event {
 	key := identity(string(state.ExecutionID), state.Deadline.UTC().Format(time.RFC3339Nano), string(parent))
-	data, _ := json.Marshal(executionTimeoutPayload{state.ExecutionID, state.Deadline})
-	return domain.Event{ID: domain.ID("execution-timeout/" + key), Type: "core.execution.timeout", Source: "core.execution", DeliveryID: "timeout/" + key, OccurredAt: state.Deadline, ReceivedAt: state.Deadline, WorkID: state.WorkID, ExecutionID: state.ExecutionID, CausationID: parent, Data: domain.Payload{Schema: "core.execution.timeout.v1", Data: data}}
+	data, _ := json.Marshal(domain.ExecutionTimeout{ExecutionID: state.ExecutionID, Deadline: state.Deadline, TimeoutSeconds: int64(state.TurnTimeout / time.Second)})
+	return domain.Event{ID: domain.ID("execution-timeout/" + key), Type: domain.TypeExecutionTimeout, Source: "core.execution", DeliveryID: "timeout/" + key, OccurredAt: state.Deadline, ReceivedAt: state.Deadline, WorkID: state.WorkID, ExecutionID: state.ExecutionID, CausationID: parent, Data: domain.Payload{Schema: domain.SchemaExecutionTimeout, Data: data}}
 }
 
 // ArmExecutionDeadlineInTx pins the active segment deadline to a durable Event
@@ -78,7 +74,7 @@ func CancelExecutionDeadlineInTx(tx storage.Tx, id domain.ID) error {
 	return tx.Delete(timerNamespace, timerKey(timerID))
 }
 func executionTimeoutMatchesInTx(tx storage.Tx, event domain.Event, state AttemptState) (bool, error) {
-	if event.Type != "core.execution.timeout" || event.Source != "core.execution" || event.ExecutionID != state.ExecutionID || state.Deadline.IsZero() {
+	if event.Type != domain.TypeExecutionTimeout || event.Source != "core.execution" || event.ExecutionID != state.ExecutionID || state.Deadline.IsZero() {
 		return false, nil
 	}
 	x, err := tx.Execution(state.ExecutionID)
@@ -97,7 +93,7 @@ func executionTimeoutMatchesInTx(tx storage.Tx, event domain.Event, state Attemp
 // causal event budget refuses the branch. It emits no runnable Event or retry
 // Timer; a fresh authorized manual retry is required to clear this hold.
 func rejectExecutionTimeoutInTx(tx storage.Tx, now time.Time, event domain.Event) error {
-	if event.Type != "core.execution.timeout" || event.ExecutionID == "" {
+	if event.Type != domain.TypeExecutionTimeout || event.ExecutionID == "" {
 		return nil
 	}
 	state, err := attemptState(tx, event.ExecutionID)
@@ -180,7 +176,7 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 		if event.Routed {
 			return nil
 		}
-		if event.Event.Type != "core.execution.timeout" || event.Event.ExecutionID == "" {
+		if event.Event.Type != domain.TypeExecutionTimeout || event.Event.ExecutionID == "" {
 			return storage.ErrInvalid
 		}
 		x, e = tx.Execution(event.Event.ExecutionID)
@@ -257,7 +253,8 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 		return storage.ErrClaimed
 	}
 	ref := domain.LeaseRef{ExecutionID: x.ID, Owner: x.Lease.Owner, Epoch: x.Lease.Epoch}
-	return s.transact(ctx, &ref, func(tx storage.Tx) error {
+	var intent string
+	err = s.transact(ctx, &ref, func(tx storage.Tx) error {
 		a, e := tx.Event(eventID)
 		if e != nil {
 			return e
@@ -283,22 +280,90 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 		if e != nil {
 			return e
 		}
-		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}
-		current.Excluded = false
-		current.LaunchState = "timed_out"
-		current.carryUsage()
-		current.Result = &result
-		if e = putAttemptState(tx, current); e != nil {
-			return e
-		}
-		if e = CancelExecutionDeadlineInTx(tx, x.ID); e != nil {
-			return e
-		}
-		if e = s.failureInTx(tx, execution, result, s.now()); e != nil {
-			return e
-		}
-		return tx.MarkRouted(eventID, "", "execution_timeout")
+		intent, e = s.expireInTx(tx, execution, current, a)
+		return e
 	})
+	if err == nil && intent != "" {
+		// Dispatch now rather than on the host's next pass; the attempt is
+		// already fenced, so its holder stops the process either way.
+		_ = s.DispatchControl(ctx, intent)
+	}
+	return err
+}
+
+// Turn-limit dispositions of a core.execution.timeout Event: the turn was
+// ended and the Work continues, or the attempt failed.
+const (
+	RoutedTurnLimit        = "turn_time_limit"
+	RoutedExecutionTimeout = "execution_timeout"
+)
+
+// endsTurnAtLimit says whether a deadline ends the attempt's turn rather
+// than failing it (#564): the attempt was pinned with interrupt and resume
+// and its executor can be interrupted. The core asks only the pinned
+// capabilities, never what kind of executor it is.
+func (s *Scheduler) endsTurnAtLimit(state AttemptState) bool {
+	if !state.Capabilities.Interrupt || !state.Capabilities.Resume {
+		return false
+	}
+	executor, err := s.executorFor(state)
+	if err != nil {
+		return false
+	}
+	_, ok := executor.(extension.InterruptExecutor)
+	return ok
+}
+
+// expireInTx applies an accepted deadline Event to the running attempt it
+// times. An attempt that can be interrupted and resumed has its turn ended
+// through the interrupt path: it is fenced (cancelled, with the Event as
+// its InterruptEventID), the Event is queued as the Work's next input so
+// the next attempt carries on with it, and no failure is counted or backoff
+// waited. It returns the interrupt intent for the caller to dispatch once
+// the transaction commits. Any other attempt fails under retry policy.
+func (s *Scheduler) expireInTx(tx storage.Tx, x domain.Execution, state AttemptState, event domain.AcceptedEvent) (string, error) {
+	if err := CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
+		return "", err
+	}
+	if !s.endsTurnAtLimit(state) {
+		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}
+		state.Excluded = false
+		state.LaunchState = "timed_out"
+		state.carryUsage()
+		state.Result = &result
+		if err := putAttemptState(tx, state); err != nil {
+			return "", err
+		}
+		if err := s.failureInTx(tx, x, result, s.now()); err != nil {
+			return "", err
+		}
+		return "", tx.MarkRouted(event.Event.ID, "", RoutedExecutionTimeout)
+	}
+	state.LaunchState = "turn_time_limit"
+	w, err := fenceInterruptInTx(tx, &x, &state, event.Event.ID)
+	if err != nil {
+		return "", err
+	}
+	if err = putJSON(tx, queueNamespace, queueKey(w.ID, event.Sequence), QueuedInput{EventID: event.Event.ID, Sequence: event.Sequence, Binding: x.ExecutorBinding}); err != nil {
+		return "", err
+	}
+	if err = tx.MarkRouted(event.Event.ID, w.ID, RoutedTurnLimit); err != nil {
+		return "", err
+	}
+	// The deadline is the runtime's own control, with no input of its own
+	// to fall back on: like an operator's interrupt, a failed dispatch
+	// never takes the binding's control_error_fallback (whose drop would
+	// discard the queued deadline Event).
+	intent := ControlIntent{ID: identity(string(event.Event.ID), string(x.ID), fmt.Sprint(x.Lease.Epoch), "interrupt"), EventID: event.Event.ID, WorkID: w.ID, ExecutionID: x.ID, Epoch: x.Lease.Epoch, Policy: "interrupt", Binding: x.ExecutorBinding, Operator: true}
+	if err = putJSON(tx, intentNamespace, intent.ID, intent); err != nil {
+		return "", err
+	}
+	// Fenced here, atomically with the deadline, so the dispatch only
+	// delivers the interrupt to the process.
+	if err = putJSON(tx, controlNamespace, intent.ID, ControlState{IntentID: intent.ID, Fenced: true}); err != nil {
+		return "", err
+	}
+	return intent.ID, nil
 }
 
 type PollDiagnostic struct {
@@ -399,7 +464,7 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 					return e
 				}
 				for _, a := range events {
-					if !a.Routed && (a.Event.Type == "core.retry.due" || a.Event.Type == "core.execution.timeout") {
+					if !a.Routed && (a.Event.Type == "core.retry.due" || a.Event.Type == domain.TypeExecutionTimeout) {
 						ids = append(ids, a.Event.ID)
 					}
 				}

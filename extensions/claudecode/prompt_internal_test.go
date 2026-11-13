@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // A project's additions to a playbook are read without frontmatter and only
@@ -35,5 +38,24 @@ func TestProjectAdditions(t *testing.T) {
 	}
 	if withAdditions("", "- a") == "" || withAdditions("b", "") != "b" {
 		t.Fatal("empty parts")
+	}
+}
+
+// A turn cut off at its time limit is told so in the next turn's prompt, with
+// the limit, rather than shown as a raw core Event (#564). The control: any
+// other Event renders as before.
+func TestRenderTurnLimit(t *testing.T) {
+	e := domain.Event{Type: "core.execution.timeout", Data: domain.Payload{Schema: "core.execution.timeout.v1", Data: []byte(`{"ExecutionID":"x","TimeoutSeconds":3600}`)}}
+	got := RenderEvents([]domain.Event{e})
+	if !strings.HasPrefix(got, "### Your last turn ended at its time limit") || !strings.Contains(got, "time limit of 1 hour") || !strings.Contains(got, OpTaskStart) {
+		t.Fatalf("turn limit rendered as %q", got)
+	}
+	if other := RenderEvents([]domain.Event{{Type: "core.retry.due"}}); strings.Contains(other, "time limit") {
+		t.Fatalf("another Event rendered as a turn limit: %q", other)
+	}
+	for d, want := range map[time.Duration]string{time.Hour: "1 hour", 2 * time.Hour: "2 hours", 90 * time.Minute: "90 minutes", 45 * time.Second: "45s"} {
+		if got := spell(d); got != want {
+			t.Errorf("spell(%s) = %q, want %q", d, got, want)
+		}
 	}
 }

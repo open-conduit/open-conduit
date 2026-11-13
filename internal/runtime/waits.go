@@ -243,11 +243,11 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		if err = tx.PutWork(work, work.Revision); err != nil {
 			return err
 		}
-		if !state.Deadline.IsZero() {
-			if !s.now().Before(state.Deadline) {
-				return storage.ErrInvalid
-			}
-			state.RemainingTimeout = state.Deadline.Sub(s.now())
+		// A turn past its deadline cannot park: the deadline ends it. A
+		// park ends the turn, and the resume after a wake gets a fresh
+		// limit (#564).
+		if !state.Deadline.IsZero() && !s.now().Before(state.Deadline) {
+			return storage.ErrInvalid
 		}
 		state.Deadline = time.Time{}
 		if resume {

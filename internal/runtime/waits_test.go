@@ -867,7 +867,12 @@ func TestProductionResumeCarriesOrderedContextAndRecoveryTrigger(t *testing.T) {
 	}
 }
 
-func TestProductionResumePreservesRemainingExecutionTimeout(t *testing.T) {
+// TestProductionEachTurnGetsTheFullTimeout: the deadline limits one turn,
+// not the attempt (#564). An attempt that parks and wakes many times, each
+// turn well under its limit, is never timed out, however much active time
+// it adds up to, across a restart too. The control: one turn that runs to
+// its limit is cut off.
+func TestProductionEachTurnGetsTheFullTimeout(t *testing.T) {
 	ctx := context.Background()
 	f := waitFixture(t, "reopen", waitOptions(true))
 	d := f.Driver.(*waitDriver)
@@ -878,60 +883,68 @@ func TestProductionResumePreservesRemainingExecutionTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Scheduler = scheduler
-	work := seedSchedulerWork(t, f, "paused-deadline")
-	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "paused-deadline"}
+	work := seedSchedulerWork(t, f, "turn-deadline")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "turn-deadline"}
 	attempt, err := scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Clock.Advance(10 * time.Second)
-	registerWait(t, f, attempt.Lease, "deadline-wait-1", key, true, 1)
-	f.Clock.Advance(72 * time.Hour)
-	requireAccept(t, f, "deadline-wake-1", &key)
-	if err = d.Wake("deadline-wait-1"); err != nil {
-		t.Fatal(err)
+	observed := uint64(1)
+	for turn := 1; turn <= 6; turn++ {
+		state, err := d.Scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !state.Deadline.Equal(f.Clock.Now().Add(30 * time.Second)) {
+			t.Fatalf("turn %d did not get the full limit: now %s deadline %s", turn, f.Clock.Now(), state.Deadline)
+		}
+		// Each turn works for 20 of its 30 seconds: by the sixth, the
+		// attempt has been active for two minutes.
+		f.Clock.Advance(20 * time.Second)
+		if err = d.Scheduler.Timeout(ctx, attempt.Lease); !errors.Is(err, storage.ErrInvalid) {
+			t.Fatalf("turn %d timed out before its own limit: %v", turn, err)
+		}
+		wait, wake := domain.ID(fmt.Sprintf("turn-wait-%d", turn)), domain.ID(fmt.Sprintf("turn-wake-%d", turn))
+		registerWait(t, f, attempt.Lease, wait, key, true, observed)
+		f.Clock.Advance(72 * time.Hour)
+		if turn == 3 {
+			f.Driver = f.Restart()
+			d = f.Driver.(*waitDriver)
+			options := d.Options
+			options.Timeout = 30 * time.Second
+			if d.Scheduler, err = runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options); err != nil {
+				t.Fatal(err)
+			}
+		}
+		requireAccept(t, f, string(wake), &key)
+		routingRead(t, f, func(tx storage.Tx) error { a, err := tx.Event(wake); observed = a.Sequence; return err })
+		if err = d.Wake(wait); err != nil {
+			t.Fatal(err)
+		}
+		next, err := d.Scheduler.Start(ctx, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.Lease.ExecutionID != attempt.Lease.ExecutionID {
+			t.Fatalf("turn %d resumed as another attempt: %s", turn, next.Lease.ExecutionID)
+		}
+		attempt = next
 	}
-	resumed, err := scheduler.Start(ctx, work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !state.Deadline.Equal(f.Clock.Now().Add(20 * time.Second)) {
-		t.Fatalf("parked days consumed/reset timeout: now%s deadline%s", f.Clock.Now(), state.Deadline)
-	}
-	f.Clock.Advance(5 * time.Second)
-	var observed uint64
-	routingRead(t, f, func(tx storage.Tx) error { a, err := tx.Event("deadline-wake-1"); observed = a.Sequence; return err })
-	registerWait(t, f, resumed.Lease, "deadline-wait-2", key, true, observed)
-	f.Clock.Advance(72 * time.Hour)
-	f.Driver = f.Restart()
-	d = f.Driver.(*waitDriver)
-	requireAccept(t, f, "deadline-wake-2", &key)
-	if err = d.Wake("deadline-wait-2"); err != nil {
-		t.Fatal(err)
-	}
-	resumed, err = d.Scheduler.Start(ctx, work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err = d.Scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !state.Deadline.Equal(f.Clock.Now().Add(15 * time.Second)) {
-		t.Fatalf("restart/repeatedpark restored full timeout: now%s deadline%s", f.Clock.Now(), state.Deadline)
-	}
-	f.Clock.Advance(14 * time.Second)
-	if err = d.Scheduler.Timeout(ctx, resumed.Lease); !errors.Is(err, storage.ErrInvalid) {
-		t.Fatalf("timeout before remaining budget: %v", err)
+	f.Clock.Advance(29 * time.Second)
+	if err = d.Scheduler.Timeout(ctx, attempt.Lease); !errors.Is(err, storage.ErrInvalid) {
+		t.Fatalf("timeout before the turn's limit: %v", err)
 	}
 	f.Clock.Advance(time.Second)
-	if err = d.Scheduler.Timeout(ctx, resumed.Lease); err != nil {
-		t.Fatal(err)
+	if err = d.Scheduler.Timeout(ctx, attempt.Lease); err != nil {
+		t.Fatalf("control: a turn that ran to its limit was not cut off: %v", err)
 	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		x, err := tx.Execution(attempt.Lease.ExecutionID)
+		if err == nil && x.State != domain.ExecutionFailed {
+			t.Fatalf("a turn past its limit on an executor that cannot be interrupted: %s, want failed", x.State)
+		}
+		return err
+	})
 }
 
 func TestProductionRegisteredWaitOutcomeAcknowledgementRetainsHistory(t *testing.T) {
@@ -1104,8 +1117,8 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 		})
 		return r
 	}
-	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second || r.ActiveTime+r.RemainingTimeout != budget {
-		t.Fatalf("parked run: %+v active %s remaining %s of %s", r.Segments, r.ActiveTime, r.RemainingTimeout, budget)
+	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second || !r.Deadline.IsZero() {
+		t.Fatalf("parked run: %+v active %s deadline %s (limit %s)", r.Segments, r.ActiveTime, r.Deadline, budget)
 	}
 	f.Clock.Advance(72 * time.Hour)
 	requireAccept(t, f, "segments-wake", &key)

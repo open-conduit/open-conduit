@@ -596,3 +596,15 @@ func (s *memoryArtifacts) Open(_ context.Context, ref storage.ArtifactRef) (io.R
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 func (s *memoryArtifacts) Delete(context.Context, storage.ArtifactRef) error { return nil }
+
+// A turn cut off at its time limit is told so in the next turn's prompt
+// (#564); another core Event is not.
+func TestRenderTurnLimit(t *testing.T) {
+	e := domain.Event{Type: "core.execution.timeout", Data: domain.Payload{Schema: "core.execution.timeout.v1", Data: []byte(`{"TimeoutSeconds":1800}`)}}
+	if got := codex.RenderEvents([]domain.Event{e}); !strings.HasPrefix(got, "### Your last turn ended at its time limit") || !strings.Contains(got, "30 minutes") {
+		t.Fatalf("turn limit rendered as %q", got)
+	}
+	if got := codex.RenderEvents([]domain.Event{{Type: "core.retry.due"}}); strings.Contains(got, "time limit") {
+		t.Fatalf("another Event rendered as a turn limit: %q", got)
+	}
+}

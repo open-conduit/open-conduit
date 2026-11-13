@@ -155,7 +155,7 @@ Jobs run as the same Executions as every other Work, with no job record, job sch
 
 ### Timeouts: one deadline model
 
-Every attempt has one runtime deadline, `settings.timeout_seconds` (default 3600), overridable per binding with `bindings[].timeout_seconds` for any executor. The attempt pins it with its binding, the host times the attempt out when it passes (stop, then confirmed exclusion), and history shows the deadline and remaining budget the same way for jobs and turns. The shell's own `config.timeout_seconds` remains the process-tree deadline the executor enforces across restarts (SIGTERM, then SIGKILL), and its result reads `shell command timed out`. A long detached job gets a binding `timeout_seconds` above its longest run.
+Every turn has one runtime deadline, `settings.timeout_seconds` (default 3600), overridable per binding with `bindings[].timeout_seconds` for any executor. The attempt pins it with its binding, the host times the turn out when it passes (stop, then confirmed exclusion), and history shows the deadline the same way for jobs and turns. A shell job can't be interrupted and resumed, so its timeout fails the run under retry policy ([deadlines](../execution-scheduling/#deadlines)). The shell's own `config.timeout_seconds` remains the process-tree deadline the executor enforces across restarts (SIGTERM, then SIGKILL), and its result reads `shell command timed out`. A long detached job gets a binding `timeout_seconds` above its longest run.
 
 ### Kept runs: one retention policy
 

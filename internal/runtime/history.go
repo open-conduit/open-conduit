@@ -23,18 +23,21 @@ type Run struct {
 	Executor, Generation    string
 	LaunchState             string
 	ResourceExcluded        bool
-	Deadline                time.Time
-	RemainingTimeout        time.Duration
-	Usage                   *extension.Usage
+	// Deadline is the running segment's deadline: each turn gets its
+	// binding's full timeout (#564).
+	Deadline time.Time
+	Usage    *extension.Usage
 	// Workspace is the resource the attempt ran in, as its executor reported
 	// it (B07): the same record for every executor.
 	Workspace           *extension.WorkspaceRecord
 	Inputs              int
 	WaitID, WakeEventID domain.ID
 	// InterruptEventID is the Event whose interrupt ended the attempt: an
-	// operator's core.manual.interrupt or input a route with policy
-	// interrupt delivered (AttemptState.InterruptEventID).
+	// operator's core.manual.interrupt, input a route with policy interrupt
+	// delivered, or the core.execution.timeout of a turn that reached its
+	// time limit (AttemptState.InterruptEventID). Interrupt is its envelope.
 	InterruptEventID domain.ID
+	Interrupt        *domain.Event
 	// Segments are the attempt's kept active stretches
 	// (AttemptState.Segments), the last ended at the execution's finish once
 	// it is terminal. ActiveTime sums the ended ones and the dropped ones
@@ -82,10 +85,10 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 	if err == nil {
 		run.Executor, run.Generation, run.LaunchState = state.Executor, state.Generation, state.LaunchState
 		run.ResourceExcluded = state.Excluded
-		run.Deadline, run.RemainingTimeout = state.Deadline, state.RemainingTimeout
+		run.Deadline = state.Deadline
 		run.Inputs = len(state.InputEventIDs)
 		run.WaitID, run.WakeEventID = state.WaitID, state.WakeEventID
-		run.InterruptEventID = state.InterruptEventID
+		run.InterruptEventID, run.Interrupt = state.InterruptEventID, envelope(tx, state.InterruptEventID)
 		run.Segments, run.ActiveTime = segments(state.Segments, x)
 		run.DroppedSegments, run.ActiveTime = state.DroppedSegments, run.ActiveTime+state.DroppedActive
 		run.Attaches = state.Attaches

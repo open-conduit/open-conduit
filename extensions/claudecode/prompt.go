@@ -105,6 +105,9 @@ func RenderEvents(events []domain.Event) string {
 }
 
 func renderEvent(e domain.Event) string {
+	if e.Type == domain.TypeExecutionTimeout {
+		return renderTurnLimit(e)
+	}
 	var m map[string]any
 	_ = json.Unmarshal(e.Data.Data, &m)
 	str := func(k string) string {
@@ -199,4 +202,33 @@ func withAdditions(body, extra string) string {
 		return add
 	}
 	return body + "\n\n" + add
+}
+
+// renderTurnLimit tells the agent its last turn was cut off at its time
+// limit, so it can pick up where it left off.
+func renderTurnLimit(e domain.Event) string {
+	var p domain.ExecutionTimeout
+	_ = json.Unmarshal(e.Data.Data, &p)
+	limit := "its time limit"
+	if p.TimeoutSeconds > 0 {
+		limit += " of " + spell(time.Duration(p.TimeoutSeconds)*time.Second)
+	}
+	return "### Your last turn ended at its time limit\nYour last turn ran for " + limit + " and was stopped partway through, perhaps in the middle of a command. Nothing failed. See where it got to (the workspace, anything it had started) and carry on from there. A single step that runs long belongs in a task (`" + OpTaskStart + "`), which outlives the turn."
+}
+
+// spell is a time limit in words: "1 hour", "90 minutes", "45s".
+func spell(d time.Duration) string {
+	unit := func(n int64, word string) string {
+		if n == 1 {
+			return "1 " + word
+		}
+		return fmt.Sprintf("%d %ss", n, word)
+	}
+	switch {
+	case d%time.Hour == 0:
+		return unit(int64(d/time.Hour), "hour")
+	case d%time.Minute == 0:
+		return unit(int64(d/time.Minute), "minute")
+	}
+	return d.String()
 }
