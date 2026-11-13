@@ -26,10 +26,11 @@ A [job webhook](../schedule-extension/) is a different kind of POST. It triggers
 | `hooks[].delivery_key` | Optional. Where a delivery's identity is read: `header:<name>` or `body:<JSON pointer>`. |
 | `hooks[].correlation_key` | Optional. Where a delivery's thread is read, in the same form. Best a value that names something that ends and may start again, such as a ticket or an incident (see [Routing and Work](#routing-and-work)). |
 | `hooks[].version` | Optional, an integer, 0 by default. It is signed into the hook's URL token, so bumping it revokes that hook's URL alone, keeping its name, its Work IDs and its threads. After applying the bump, `doctor --check-secrets` prints the new URL to hand to the sender. |
+| `hooks[].fan_out` | Optional. Up to 4 targets, named like hooks, that each delivery goes to (see [Fan-out](#fan-out)). |
 
 A key is `header:<name>` (the header's value) or `body:<pointer>` (an RFC 6901 pointer into a JSON body, naming a string, number or boolean). A value is at most 256 bytes.
 
-The route is `{"handler": "webhook", "config": {"hooks": ["deploys"]}}`. `hooks` limits the route to those hooks; empty takes every hook of the scope's webhook entries. One route per binding gives each hook its own command or agent.
+The route is `{"handler": "webhook", "config": {"hooks": ["deploys"], "targets": ["triage"]}}`. `hooks` limits the route to those hooks; empty takes every hook of the scope's webhook entries. `targets` limits it to those fan-out targets; empty takes every delivery of its hooks, whatever the target. One route per binding gives each hook, or each target, its own command or agent.
 
 ## Ingress
 
@@ -42,11 +43,30 @@ The webhook listener serves `POST /webhook/<scope>/<entry>/<hook>/<token>`. The 
 
 Hooks and entries follow the configuration: one added by `config apply` serves its URL as soon as the apply is done, and one removed answers 404, with no restart.
 
-Ingress turns it into one `webhook.delivery` Event with payload `webhook.delivery.v1`: `{hook, delivery?, correlation?, content_type?, body | text}`. A JSON body is kept as JSON, and any other body as text.
+Ingress turns it into one `webhook.delivery` Event, or one for each target of a hook that fans out, with payload `webhook.delivery.v1`: `{hook, target?, delivery?, correlation?, content_type?, body | text}`. A JSON body is kept as JSON, and any other body as text.
 
 **Deduplication.** The Event's delivery ID is the hook and a digest of the delivery key's value, so the core's `(source, delivery_id)` deduplication ([event ingress](../event-ingress/)) makes a sender's retry the first delivery again, and the first envelope is kept even when a retry's body differs. A hook without a delivery key gives each POST a fresh ID, so each POST is a new delivery. A sender that retries needs a delivery key.
 
 **Correlation.** The Event's correlation key is `webhook/<scope>/<entry>` with the external ID `<hook>/c/<digest of the correlation value>`, or `<hook>/d/<delivery ID>` when there is none. A delivery with a correlation value already seen therefore names the Work the first one opened.
+
+### Fan-out
+
+A delivery goes to the first route that takes it, never to every route that would ([runtime semantics](../runtime-semantics/), rule 3), so a second route for the same hook never sees it. A hook that should start Work for several bindings lists them as targets instead:
+
+```json
+{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "fan_out": ["triage", "audit"]}
+```
+
+with a route for each target:
+
+```json
+{"name": "triage", "handler": "webhook", "binding": "triage", "config": {"hooks": ["tickets"], "targets": ["triage"]}},
+{"name": "audit", "handler": "webhook", "binding": "audit", "config": {"hooks": ["tickets"], "targets": ["audit"]}}
+```
+
+Ingress accepts one Event for each target, all in one transaction, so the 202 covers every target. Each Event carries the whole body and its `target`, and has its own identity: the delivery ID `<hook>/<target>/<delivery ID>` and the thread `<hook>/<target>/c/<digest>` (or `<hook>/<target>/d/<delivery ID>`). Deduplication, threading and successors therefore work per target: a retry is every target's first delivery again, and a later delivery of the ticket is each target's own Work's input. Each target's Event is routed on its own, first match as ever. A route without `targets` takes every target, each as Work of its own, and an Event no route takes is `unmatched` like any other.
+
+The targets are config, so every delivery goes to all of them. When which agents should take a delivery depends on what it says, bind the hook to one agent that hands the rest on as child Work (issue #568). A hook has at most 4 targets, because each target's Event carries the whole body and a delivery's Events are accepted in one ingress page.
 
 The family is one-shot, declared with its loss: a POST leaves no history to read back, so reconcile returns an empty complete snapshot, and a POST sent while the listener or tunnel is down is lost (the sender sees the failure and may retry).
 
@@ -54,7 +74,7 @@ The family is one-shot, declared with its loss: a POST leaves no history to read
 
 For a delivery to one of the scope's webhook entries, of a hook the route takes:
 
-- with no owner of its correlation key, it creates `webhook.delivery` Work with the ID `<namespace>/<external ID>`, titled `A delivery to <hook>: <correlation or delivery value>`;
+- with no owner of its correlation key, it creates `webhook.delivery` Work with the ID `<namespace>/<external ID>`, titled `A delivery to <hook>: <correlation or delivery value>` (`A delivery to <hook> for <target>: …` for a fan-out target);
 - with a live `webhook.delivery` owner, it is that Work's input, as a Slack reply is its thread's;
 - with a finished `webhook.delivery` owner, it opens the thread's next generation: a successor Work, `<owner ID>/g2` (then `/g3` and on), with the generation key `<external ID>/g2`. The delivery is its first input, and a `core.work.created` Event links it to the finished Work. Later deliveries of the thread route to it, and a type-only wait on it wakes on them. A ticket that is reopened, or an alert that fires again, therefore starts new Work rather than being dropped;
 - with any other owner, it is skipped.
@@ -63,7 +83,7 @@ The core does this (`RouteDecision.Successor`, [runtime semantics](../runtime-se
 
 ## The run
 
-An agent's turn reads the delivery rendered by the package: a heading naming the hook, the delivery's Event ID, the delivery and correlation values, the content type, then the body. A body over 8 KiB is cut, with a note naming the operation that returns it whole.
+An agent's turn reads the delivery rendered by the package: a heading naming the hook, the delivery's Event ID, its target, the delivery and correlation values, the content type, then the body. A body over 8 KiB is cut, with a note naming the operation that returns it whole.
 
 `webhook.delivery.read {event}` returns the delivery the turn names in full: its Event ID, receive time and `webhook.delivery.v1` payload, body included. It reads that one Event and returns it only when it is a delivery routed to the calling Work (bound from durable state), so a Work can't read another's. A binding needs the operation granted (in its `operations` and the scope's `authorization.operations`). A shell binding has the whole Event, payload and body included, in `OS_INPUT_FILE` as well.
 
@@ -74,8 +94,9 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 
 ## Evidence
 
-- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, a missing or long delivery key, a wrong token, a version bump revoking one hook's URL while the entry's other hook keeps its own, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
+- [`extensions/webhook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/webhook/webhook_test.go) over the SDK host: retries, threads, fan-out Events, routes selecting by target, a 413 for an escape-heavy body a 4-target hook's Events couldn't carry, a missing or long delivery key, a wrong token, a version bump revoking one hook's URL while the entry's other hook keeps its own, an unknown hook, an oversized body, POSTs without a delivery key, JSON pointer edge cases, config refusals, the route's decisions, rendering, the doctor lines, and `webhook.delivery.read` returning a 9 KB body to its own Work while refusing another Work and Work the scope doesn't hold.
 - [`TestWebhookDeliveriesThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): the real runtime ingress and router over SQLite. A retry with another body is the first delivery, a delivery with the same correlation value is routed to the first one's Work, and every other delivery has Work of its own.
+- [`TestWebhookFanOutThroughRuntime`](https://github.com/open-conduit/open-conduit/blob/main/integration/webhook_deliveries_test.go): a hook that fans out to two targets, with a route and binding for each. One POST, its retry and a later delivery of the same ticket give two Works, one on each binding, each with that target's two deliveries.
 - [`TestDaemonWebhookThreadGenerations`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): a ticket's Work finishes, its next delivery opens a linked successor that parks on a type-only wait, and the delivery after that wakes the successor rather than starting more Work.
 - [`TestDaemonWebhookDeliveries`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_webhook_test.go): the composed daemon. A hook and an entry added by `config apply` take deliveries with no restart. Two deliveries and a retry run as two Works, each with its body in `OS_INPUT_FILE` and read back whole through `os call webhook.delivery.read`; a wrong token is refused, and `doctor --check-secrets` prints the URL.
 - `TestCertificationFirstPartyPackages/webhook`: ingress conformance, the route's decisions and the operation's refusal of unbound Work.
@@ -83,3 +104,4 @@ An agent's turn reads the delivery rendered by the package: a heading naming the
 ## History
 
 - Issue #566 added the extension, so that a POST can be Work of its own rather than a trigger merged into a job's one run.
+- Issue #572 added fan-out, so that one delivery can start Work for more than one binding without the core broadcasting it.

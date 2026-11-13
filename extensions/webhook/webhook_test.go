@@ -95,7 +95,7 @@ func TestDeliveriesAreDeduplicatedAndThreaded(t *testing.T) {
 	for _, a := range events {
 		threads[a.Event.CorrelationKey.ExternalID]++
 	}
-	if len(threads) != 5 || threads[webhook.Thread("deploys", "checkout", "")] != 2 {
+	if len(threads) != 5 || threads[webhook.Thread("deploys", "", "checkout", "")] != 2 {
 		t.Fatalf("threads: %v", threads)
 	}
 	ps := payloads(t, h)
@@ -180,10 +180,95 @@ func TestSettings(t *testing.T) {
 		"unknown field":  `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","per_delivery":true}]}`,
 		"secret unnamed": `{"scope":"ops","webhook_secret":"other","hooks":[{"name":"a"}]}`,
 		"negative":       `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","version":-1}]}`,
+		"bad target":     `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","fan_out":["Triage"]}]}`,
+		"target twice":   `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","fan_out":["x","x"]}]}`,
+		"many targets":   `{"scope":"ops","webhook_secret":"hook","hooks":[{"name":"a","fan_out":["a","b","c","d","e"]}]}`,
 	} {
 		if _, err := webhook.ParseSettings(json.RawMessage(cfg), []string{"hook"}); err == nil {
 			t.Fatalf("%s: accepted", name)
 		}
+	}
+	if _, err := webhook.ParseRoute(json.RawMessage(`{"targets":["Audit"]}`)); err == nil {
+		t.Fatal("a bad route target parsed")
+	}
+}
+
+// fanOut is a harness whose tickets hook fans each delivery out to triage
+// and audit.
+func fanOut(t *testing.T) *sdktest.Host {
+	t.Helper()
+	h := sdktest.New(t, webhook.Build(webhook.Options{}), sdktest.WithSecrets(scope, map[string]string{webhook.FixtureSecret: webhook.FixtureValue}))
+	cfg := json.RawMessage(`{"scope":"` + scope + `","webhook_secret":"` + webhook.FixtureSecret + `","hooks":[` +
+		`{"name":"tickets","delivery_key":"header:X-Delivery-Id","correlation_key":"body:/ticket","fan_out":["triage","audit"]}]}`)
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: webhook.Name,
+		Name: webhook.FixtureEntry, Config: cfg, Secrets: []string{webhook.FixtureSecret}}}}); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestFanOutAcceptsAnEventForEachTarget(t *testing.T) {
+	h := fanOut(t)
+	with := func(id string) http.Header { return http.Header{"X-Delivery-Id": {id}} }
+	for _, c := range []struct{ id, body string }{
+		{"d-1", `{"ticket":"T-1"}`},
+		{"d-1", `{"ticket":"T-1"}`}, // a retry: every target's Event again
+		{"d-2", `{"ticket":"T-1"}`},
+	} {
+		if got := post(t, h, url("tickets"), with(c.id), c.body); got != http.StatusAccepted {
+			t.Fatalf("%s: %d", c.id, got)
+		}
+	}
+	events := h.Events()
+	if len(events) != 4 {
+		t.Fatalf("%d events", len(events))
+	}
+	ids, deliveries := map[domain.ID]bool{}, map[string]bool{}
+	threads := map[string]int{}
+	for _, a := range events {
+		ids[a.Event.ID], deliveries[a.Event.DeliveryID] = true, true
+		threads[a.Event.CorrelationKey.ExternalID]++
+	}
+	if len(ids) != 4 || len(deliveries) != 4 || !strings.HasPrefix(events[0].Event.DeliveryID, "tickets/triage/k-") || !strings.HasPrefix(events[1].Event.DeliveryID, "tickets/audit/k-") {
+		t.Fatalf("ids %v deliveries %v", ids, deliveries)
+	}
+	// Each target threads on its own: the same ticket is one thread per
+	// target.
+	if len(threads) != 2 || threads[webhook.Thread("tickets", "triage", "T-1", "")] != 2 || threads[webhook.Thread("tickets", "audit", "T-1", "")] != 2 {
+		t.Fatalf("threads %v", threads)
+	}
+	ps := payloads(t, h)
+	if ps[0].Target != "triage" || ps[1].Target != "audit" || string(ps[1].Body) != `{"ticket":"T-1"}` {
+		t.Fatalf("payloads %+v", ps)
+	}
+	text, ok := webhook.RenderEvent(events[1].Event)
+	if !ok || !strings.Contains(text, "\nTarget: audit\nDelivery: d-1\n") {
+		t.Fatalf("render %q", text)
+	}
+}
+
+func TestRoutesSelectByTarget(t *testing.T) {
+	h := fanOut(t)
+	if got := post(t, h, url("tickets"), http.Header{"X-Delivery-Id": {"d-1"}}, `{"ticket":"T-1"}`); got != http.StatusAccepted {
+		t.Fatal(got)
+	}
+	triage, audit := h.Events()[0], h.Events()[1]
+	s := domain.Scope{ID: scope, Name: scope}
+	only := func(targets string) domain.Route {
+		return domain.Route{Name: "r", Handler: webhook.Name, Binding: "b", Config: domain.Payload{Data: json.RawMessage(`{"targets":` + targets + `}`)}}
+	}
+	d, err := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: audit, Scope: s, Route: only(`["audit"]`)})
+	want := domain.ID(webhook.FixtureSource + "/" + webhook.Thread("tickets", "audit", "T-1", ""))
+	if err != nil || !d.Match || d.CreateID != want || d.Display.Title != "A delivery to tickets for audit: T-1" {
+		t.Fatalf("audit decision %+v %v", d, err)
+	}
+	if d, _ := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: triage, Scope: s, Route: only(`["audit"]`)}); d.Match || d.Reason != "a target this route doesn't take" {
+		t.Fatalf("audit route took triage: %+v", d)
+	}
+	// A route without targets takes every target, each as Work of its own.
+	all := domain.Route{Name: "r", Handler: webhook.Name, Binding: "b"}
+	if d, _ := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: triage, Scope: s, Route: all}); !d.Match || d.CreateID == want {
+		t.Fatalf("untargeted route: %+v", d)
 	}
 }
 
@@ -196,7 +281,7 @@ func TestRouteOpensWorkPerThread(t *testing.T) {
 	s := domain.Scope{ID: scope, Name: scope}
 	r := domain.Route{Name: "deliveries", Handler: webhook.Name, Binding: "triage"}
 	d, err := h.Route(context.Background(), webhook.Name, extension.RouteInput{Event: ev, Scope: s, Route: r})
-	want := domain.ID(webhook.FixtureSource + "/" + webhook.Thread("deploys", "checkout", ""))
+	want := domain.ID(webhook.FixtureSource + "/" + webhook.Thread("deploys", "", "checkout", ""))
 	if err != nil || !d.Match || d.Kind != webhook.WorkKind || d.CreateID != want || d.Display.Title != "A delivery to deploys: checkout" {
 		t.Fatalf("decision %+v %v", d, err)
 	}

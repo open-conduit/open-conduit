@@ -617,10 +617,11 @@ Extension entry `config`:
 | --- | --- | --- |
 | `scope` |  | Required. the scope the entry is in |
 | `webhook_secret` |  | Required. names a selected scope secret the hooks' URL tokens are derived from; rotating it revokes every hook's URL |
-| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "version": 0}]: each hook, the header or JSON pointer naming a delivery (a retry is the same delivery), the one threading it into one Work (a ticket's ID; once that Work finishes, the next delivery opens a successor), and a version signed into its URL (bump it to revoke that URL alone) |
+| `hooks` |  | Required. [{"name": "tickets", "delivery_key": "header:Idempotency-Key", "correlation_key": "body:/ticket/id", "fan_out": ["triage", "audit"], "version": 0}]: each hook, where a delivery's identity (a retry is the same delivery) and thread (one Work, a successor once it finishes) are read, the targets each delivery goes to, and a version signed into its URL (bump it to revoke that URL alone) |
 
 Route `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `hooks` |  | the hooks the route takes (every hook of the scope's webhook entries when empty) |
+| `targets` |  | the fan-out targets the route takes (every target when empty) |
