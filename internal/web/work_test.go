@@ -37,6 +37,9 @@ func TestDisposition(t *testing.T) {
 	retrying.Retry = &client.RetryStatus{FailureCount: 1, EligibleAt: at0(3 * time.Hour)}
 	handoff := turnRun(1, "handoff", time.Hour, 2*time.Hour)
 	handoff.Outcome = &client.Outcome{Kind: "handoff", Summary: "Opened PR #12; waiting on checks"}
+	limited := turnRun(1, "cancelled", time.Hour, 2*time.Hour)
+	limited.InterruptEventID = "execution-timeout/1"
+	limited.Interrupt = &client.Trigger{ID: "execution-timeout/1", Type: "core.execution.timeout"}
 	zero, one := 0, 1
 	wait := &client.Wait{ID: "wait/1", State: "active", Match: client.Match{Types: []string{"github.check_suite.completed", "github.pull_request.merged"}}, Description: "checks on PR #137", CreatedAt: at0(4 * time.Hour)}
 	ask := []client.Action{{Provider: "acme", ID: "answer", Label: "Answer the question", Awaited: true}}
@@ -68,6 +71,7 @@ func TestDisposition(t *testing.T) {
 		{name: "retries exhausted is a repair", work: client.Work{State: "ready"}, runs: []client.Run{exhausted}, group: "attention", kind: "repair", detail: "workspace setup failed"},
 		{name: "retries left is queued", work: client.Work{State: "ready"}, runs: []client.Run{retrying}, group: "queued", kind: "queued", detail: "Retrying after turn 1 failed"},
 		{name: "an operator-cancelled turn is a repair", work: client.Work{State: "ready"}, runs: []client.Run{turnRun(1, "cancelled", time.Hour, 2*time.Hour)}, group: "attention", kind: "repair", label: "Turn cancelled"},
+		{name: "a turn ended at its time limit carries on", work: client.Work{State: "ready", Inputs: &one}, runs: []client.Run{limited}, group: "queued", kind: "queued", detail: "Ready for the next turn"},
 		{name: "waiting says what for", work: client.Work{State: "waiting"}, runs: []client.Run{turnRun(1, "parked", time.Hour, 2*time.Hour)}, wait: wait, group: "waiting", kind: "waiting", detail: "checks on PR #137", waiting: "github"},
 		{name: "a wait with progress", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", Description: "checks on PR #137", Progress: "3 of 7 checks finished"}, group: "waiting", kind: "waiting", detail: "checks on PR #137 · 3 of 7 checks finished", waiting: "events"},
 		{name: "a wait on a timer alone", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", TimeoutTimerID: "timer/1", Description: "until Mon 09:00"}, group: "waiting", kind: "waiting", detail: "until Mon 09:00", waiting: "time"},
@@ -362,5 +366,30 @@ func TestTitleWithoutDisplay(t *testing.T) {
 	w.Display = &client.Display{Title: "Can you look at the build?"}
 	if v := newWork(w, nil, nil, t0); v.Title != "Can you look at the build?" {
 		t.Fatalf("display title %q", v.Title)
+	}
+}
+
+// A turn that ended at its time limit reads as that, not as a cancelled or
+// failed one (#564): in run history, the turn's head and its transcript. The
+// control: an operator's cancel still reads as cancelled.
+func TestTurnTimeLimitShown(t *testing.T) {
+	now := t0.Add(5 * time.Hour)
+	limited := turnRun(1, "cancelled", time.Hour, 2*time.Hour)
+	limited.InterruptEventID = "execution-timeout/1"
+	limited.Interrupt = &client.Trigger{ID: "execution-timeout/1", Type: "core.execution.timeout"}
+	if got := summary(limited); got != "turn ended at its time limit" {
+		t.Fatalf("history outcome %q", got)
+	}
+	v := newWork(client.Work{ID: "w", State: "ready", CreatedAt: at0(0), UpdatedAt: at0(2 * time.Hour)}, []client.Run{limited}, nil, now)
+	p := turnPanelOf(v, v.Turns[0], chat{}, now)
+	if p.Outcome == nil || p.Outcome.Summary != "Turn ended at its time limit" || strings.Contains(p.OutcomeNote, "Failed") {
+		t.Fatalf("turn panel %+v %q", p.Outcome, p.OutcomeNote)
+	}
+	cancelled := turnRun(1, "cancelled", time.Hour, 2*time.Hour)
+	if got := summary(cancelled); got != "" {
+		t.Fatalf("control: a cancelled run's outcome %q", got)
+	}
+	if p := turnPanelOf(v, newTurn(cancelled), chat{}, now); p.Outcome != nil {
+		t.Fatalf("control: a cancelled turn's panel %+v", p.Outcome)
 	}
 }

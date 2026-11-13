@@ -276,7 +276,14 @@ func (ch *chat) orchestrate(run client.Run) {
 	}
 	if run.State == "cancelled" {
 		at := parseTime(run.FinishedAt)
-		rules = append(rules, chatBlock{Kind: "orch", Tone: "cancel", At: at, Text: "Cancelled"})
+		text := "Cancelled"
+		switch {
+		case run.TurnTimeLimit():
+			text = "Turn ended at its time limit; the next turn carries on"
+		case run.InterruptEventID != "":
+			text = "Interrupted; the next turn starts with the input queued for it"
+		}
+		rules = append(rules, chatBlock{Kind: "orch", Tone: "cancel", At: at, Text: text})
 	}
 	timed := false
 	for _, b := range ch.Blocks {

@@ -32,7 +32,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 | `kept_finished_days` | integer |  | `14` | Days a finished Work keeps its attempts' content (logs, transcripts, outputs) after it last changed; the retention sweep then releases all of it. Coordination history is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `reconcile_seconds` | integer |  | `900` | How often each source (a repository, a tracker, a Slack workspace, a schedule) is reconciled against its service, so missed webhooks cost only this much latency. Sources added by a later generation (open-conduit config apply) use the new value; bundled sources already running keep theirs until serve restarts on that generation. |
 | `retry_delays_seconds` | array of integer |  | `[300,600]` | The wait before each retry of a failed attempt, in order; once they are used up automatic retries stop and the Work stays open for an operator to retry. Usage-limit retries wait for the reported reset instead. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
-| `timeout_seconds` | integer |  | `3600` | The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. An attempt already running keeps the deadline it started with. |
+| `timeout_seconds` | integer |  | `3600` | The time limit of one turn: how long an attempt (an Execution) may run from its start, or from each resume after a wake, before the host stops it. Each turn gets the full limit, however many turns the attempt has had. An attempt whose executor can be interrupted and resumed has its turn ended at the limit and carries on in its next attempt, using no retry; any other attempt fails under retry policy. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. A turn already running keeps the deadline it started with. |
 | `webhooks` | object |  |  | The webhook listener and tunnel serve starts with; serve flags override it for one run. Without it the daemon is reconcile-only. Takes effect at the next serve start after the generation holding it is applied with open-conduit config apply. |
 
 ### settings.webhooks
@@ -121,7 +121,7 @@ Each entry of a scope's `bindings`.
 | `resource` | object |  |  | Resource provider and its config (such as a git workspace). |
 | `sandbox` | object |  |  | Process sandbox provider and its config. |
 | `secret_names` | array of string |  |  | Scope secrets the executor may resolve. |
-| `timeout_seconds` | integer |  |  | Replaces settings.timeout_seconds for this binding's attempts. |
+| `timeout_seconds` | integer |  |  | Replaces settings.timeout_seconds, the time limit of one turn, for this binding's attempts. |
 
 ## requires
 

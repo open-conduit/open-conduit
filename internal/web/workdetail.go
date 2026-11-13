@@ -589,6 +589,12 @@ func turnPanelOf(v workView, t turnInfo, c chat, now time.Time) turnPanel {
 	default:
 		p.Verb = "Woken by"
 	}
+	if t.TurnTimeLimit() && !t.Live() {
+		// Not a failure: the executor could resume, so the deadline ended
+		// the turn and the next one carries on (#564).
+		p.Outcome = &client.Outcome{Kind: "handoff", Summary: "Turn ended at its time limit"}
+		p.OutcomeNote = "Stopped partway through; the next turn carries on in this session"
+	}
 	if t.Outcome != nil && !t.Live() {
 		p.Outcome, p.Report = t.Outcome, outcomeReport(t.Outcome)
 		switch t.Outcome.Kind {

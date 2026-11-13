@@ -128,6 +128,9 @@ func RenderEvents(events []domain.Event) string {
 }
 
 func renderEvent(e domain.Event) string {
+	if e.Type == typeExecutionTimeout {
+		return renderTurnLimit(e)
+	}
 	var m map[string]any
 	_ = json.Unmarshal(e.Data.Data, &m)
 	str := func(k string) string {
@@ -200,3 +203,37 @@ func truncate(s string, n int) string {
 }
 
 func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
+
+// typeExecutionTimeout is the runtime's deadline Event. An executor that can
+// be interrupted and resumed gets it as input when its last turn reached its
+// time limit and was stopped (#564).
+const typeExecutionTimeout = "core.execution.timeout"
+
+// renderTurnLimit tells the agent its last turn was cut off at its time
+// limit, so it can pick up where it left off.
+func renderTurnLimit(e domain.Event) string {
+	var p struct{ TimeoutSeconds int64 }
+	_ = json.Unmarshal(e.Data.Data, &p)
+	limit := "its time limit"
+	if p.TimeoutSeconds > 0 {
+		limit += " of " + spell(time.Duration(p.TimeoutSeconds)*time.Second)
+	}
+	return "### Your last turn ended at its time limit\nYour last turn ran for " + limit + " and was stopped partway through, perhaps in the middle of a command. Nothing failed. See where it got to (the workspace, anything it had started) and carry on from there."
+}
+
+// spell is a time limit in words: "1 hour", "90 minutes", "45s".
+func spell(d time.Duration) string {
+	unit := func(n int64, word string) string {
+		if n == 1 {
+			return "1 " + word
+		}
+		return fmt.Sprintf("%d %ss", n, word)
+	}
+	switch {
+	case d%time.Hour == 0:
+		return unit(int64(d/time.Hour), "hour")
+	case d%time.Minute == 0:
+		return unit(int64(d/time.Minute), "minute")
+	}
+	return d.String()
+}

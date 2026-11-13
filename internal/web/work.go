@@ -240,7 +240,9 @@ func dispositionOf(v workView, now time.Time) disposition {
 			}
 			return disposition{Group: "attention", Kind: "repair", Label: "Failed turn", Detail: detail, Since: parseTime(last.FinishedAt)}
 		}
-		if last.State == "cancelled" {
+		// An interrupted turn (by an operator, an input or its time limit)
+		// was cancelled, but the Work carries on: no repair is needed.
+		if last.State == "cancelled" && last.InterruptEventID == "" {
 			return disposition{Group: "attention", Kind: "repair", Label: "Turn cancelled", Detail: "An operator cancelled turn " + itoa(last.Number) + "; run it again or cancel the Work", Since: parseTime(last.FinishedAt)}
 		}
 	}

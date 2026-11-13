@@ -1323,17 +1323,22 @@ type Retention struct {
 // Run is one attempt in the unified history, identical for every executor.
 type Run struct {
 	Execution
-	WorkKind                string   `json:"work_kind"`
-	WorkState               string   `json:"work_state"`
-	Trigger                 *Trigger `json:"trigger,omitempty"`
-	CurrentTrigger          *Trigger `json:"current_trigger,omitempty"`
-	Executor                string   `json:"executor,omitempty"`
-	ConfigGeneration        string   `json:"config_generation,omitempty"`
-	LaunchState             string   `json:"launch_state,omitempty"`
-	ResourceExcluded        bool     `json:"resource_excluded"`
-	Deadline                string   `json:"deadline,omitempty"`
-	RemainingTimeoutSeconds int64    `json:"remaining_timeout_seconds,omitempty"`
-	DurationMS              int64    `json:"duration_ms,omitempty"`
+	WorkKind         string   `json:"work_kind"`
+	WorkState        string   `json:"work_state"`
+	Trigger          *Trigger `json:"trigger,omitempty"`
+	CurrentTrigger   *Trigger `json:"current_trigger,omitempty"`
+	Executor         string   `json:"executor,omitempty"`
+	ConfigGeneration string   `json:"config_generation,omitempty"`
+	LaunchState      string   `json:"launch_state,omitempty"`
+	ResourceExcluded bool     `json:"resource_excluded"`
+	Deadline         string   `json:"deadline,omitempty"`
+	// RemainingTimeoutSeconds is no longer reported and is always zero:
+	// each turn gets its binding's full timeout rather than what an
+	// earlier turn left (#564).
+	//
+	// Deprecated: a parked run has no remaining timeout to report.
+	RemainingTimeoutSeconds int64 `json:"remaining_timeout_seconds,omitempty"`
+	DurationMS              int64 `json:"duration_ms,omitempty"`
 	// Segments are the run's active stretches, oldest first; the run keeps
 	// the last 50 and SegmentsDropped counts the older ones.
 	Segments        []RunSegment `json:"segments,omitempty"`
@@ -1341,8 +1346,7 @@ type Run struct {
 	// Attaches are the containers operators attached to the run's session
 	// in (open-conduit container attach), each pinned as a segment's is.
 	Attaches []RunAttach `json:"attaches,omitempty"`
-	// ActiveMS is the time the run held its lease, as its timeout budget
-	// counts it: its ended segments, dropped ones included. It leaves out
+	// ActiveMS is the time the run held its lease: its ended segments, dropped ones included. It leaves out
 	// the segment running now; Active adds it. Runs started before segments
 	// existed report neither.
 	ActiveMS    int64         `json:"active_ms,omitempty"`
@@ -1352,11 +1356,23 @@ type Run struct {
 	WaitID      string        `json:"wait_id,omitempty"`
 	WakeEventID string        `json:"wake_event_id,omitempty"`
 	// InterruptEventID is the Event whose interrupt ended the run: an
-	// operator's core.manual.interrupt, or input a route with policy
-	// interrupt delivered.
-	InterruptEventID string       `json:"interrupt_event_id,omitempty"`
-	Retry            *RetryStatus `json:"retry,omitempty"`
-	Retention        Retention    `json:"retention"`
+	// operator's core.manual.interrupt, input a route with policy
+	// interrupt delivered, or the deadline of a turn that reached its time
+	// limit.
+	InterruptEventID string `json:"interrupt_event_id,omitempty"`
+	// Interrupt is that Event's envelope. A core.execution.timeout one
+	// means the turn ended at its time limit and the Work carried on
+	// (TurnTimeLimit).
+	Interrupt *Trigger     `json:"interrupt,omitempty"`
+	Retry     *RetryStatus `json:"retry,omitempty"`
+	Retention Retention    `json:"retention"`
+}
+
+// TurnTimeLimit says the run's turn ended at its time limit: its executor
+// could be interrupted and resumed, so the deadline ended the turn rather
+// than failing the run, and the Work carried on with a new attempt.
+func (r Run) TurnTimeLimit() bool {
+	return r.Interrupt != nil && r.Interrupt.Type == "core.execution.timeout"
 }
 
 // Active is the run's active time as of now: ActiveMS plus the segment
@@ -1371,8 +1387,8 @@ func (r Run) Active(now time.Time) time.Duration {
 	return active
 }
 
-// RunSegment is one stretch of a run holding its lease, as its timeout
-// budget counts it: the first start, a resume after a wake (WakeEventID
+// RunSegment is one stretch of a run holding its lease, each with its own
+// time limit: the first start, a resume after a wake (WakeEventID
 // names the wake on either) or a new owner's recovery (Recovered, with no
 // gap before it), ended by a park (Parked), a recovery or the run's finish.
 // The segment running now has no EndedAt.

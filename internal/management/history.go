@@ -106,29 +106,29 @@ type wireRetention struct {
 // shape serves every executor.
 type wireRun struct {
 	wireExecution
-	WorkKind                string         `json:"work_kind"`
-	WorkState               string         `json:"work_state"`
-	Trigger                 *wireTrigger   `json:"trigger,omitempty"`
-	CurrentTrigger          *wireTrigger   `json:"current_trigger,omitempty"`
-	Executor                string         `json:"executor,omitempty"`
-	ConfigGeneration        string         `json:"config_generation,omitempty"`
-	LaunchState             string         `json:"launch_state,omitempty"`
-	ResourceExcluded        bool           `json:"resource_excluded"`
-	Deadline                string         `json:"deadline,omitempty"`
-	RemainingTimeoutSeconds int64          `json:"remaining_timeout_seconds,omitempty"`
-	DurationMS              int64          `json:"duration_ms,omitempty"`
-	Segments                []wireSegment  `json:"segments,omitempty"`
-	Attaches                []wireAttach   `json:"attaches,omitempty"`
-	SegmentsDropped         int            `json:"segments_dropped,omitempty"`
-	ActiveMS                int64          `json:"active_ms,omitempty"`
-	Usage                   *wireUsage     `json:"usage,omitempty"`
-	Workspace               *wireWorkspace `json:"workspace,omitempty"`
-	Inputs                  int            `json:"inputs"`
-	WaitID                  string         `json:"wait_id,omitempty"`
-	WakeEventID             string         `json:"wake_event_id,omitempty"`
-	InterruptEventID        string         `json:"interrupt_event_id,omitempty"`
-	Retry                   *wireRetry     `json:"retry,omitempty"`
-	Retention               wireRetention  `json:"retention"`
+	WorkKind         string         `json:"work_kind"`
+	WorkState        string         `json:"work_state"`
+	Trigger          *wireTrigger   `json:"trigger,omitempty"`
+	CurrentTrigger   *wireTrigger   `json:"current_trigger,omitempty"`
+	Executor         string         `json:"executor,omitempty"`
+	ConfigGeneration string         `json:"config_generation,omitempty"`
+	LaunchState      string         `json:"launch_state,omitempty"`
+	ResourceExcluded bool           `json:"resource_excluded"`
+	Deadline         string         `json:"deadline,omitempty"`
+	DurationMS       int64          `json:"duration_ms,omitempty"`
+	Segments         []wireSegment  `json:"segments,omitempty"`
+	Attaches         []wireAttach   `json:"attaches,omitempty"`
+	SegmentsDropped  int            `json:"segments_dropped,omitempty"`
+	ActiveMS         int64          `json:"active_ms,omitempty"`
+	Usage            *wireUsage     `json:"usage,omitempty"`
+	Workspace        *wireWorkspace `json:"workspace,omitempty"`
+	Inputs           int            `json:"inputs"`
+	WaitID           string         `json:"wait_id,omitempty"`
+	WakeEventID      string         `json:"wake_event_id,omitempty"`
+	InterruptEventID string         `json:"interrupt_event_id,omitempty"`
+	Interrupt        *wireTrigger   `json:"interrupt,omitempty"`
+	Retry            *wireRetry     `json:"retry,omitempty"`
+	Retention        wireRetention  `json:"retention"`
 }
 
 func trigger(e *domain.Event) *wireTrigger {
@@ -144,9 +144,7 @@ func toRun(r runtime.Run) wireRun {
 	if !x.State.Terminal() && x.State != domain.ExecutionParked {
 		out.Deadline = ts(r.Deadline)
 	}
-	if r.RemainingTimeout > 0 {
-		out.RemainingTimeoutSeconds = int64(r.RemainingTimeout.Seconds())
-	}
+	out.Interrupt = trigger(r.Interrupt)
 	if x.StartedAt != nil && x.FinishedAt != nil {
 		out.DurationMS = x.FinishedAt.Sub(*x.StartedAt).Milliseconds()
 	}

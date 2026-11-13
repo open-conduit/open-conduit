@@ -71,8 +71,10 @@ type SchedulerOptions struct {
 	CausalLimits         CausalLimits
 	AutoContinueHandoff  bool
 	ControlErrorFallback map[string]string
-	Timeout              time.Duration
-	AuthorizeAlias       func(context.Context, AliasAuthorization) error
+	// Timeout is one turn's time limit when the binding sets none
+	// (default an hour). It limits each segment, not the attempt (#564).
+	Timeout        time.Duration
+	AuthorizeAlias func(context.Context, AliasAuthorization) error
 	// AliasFilter evaluates a subscription's opaque Filter with the filter its
 	// namespace's extension declared (Toolbelt.DependencyFilter). It is pure
 	// and runs inside coordination transactions. A subscription with a filter
@@ -233,13 +235,15 @@ type AttemptState struct {
 	InterruptEventID domain.ID `json:",omitempty"`
 	ObservedSequence uint64
 	InputEventIDs    []domain.ID
-	RemainingTimeout time.Duration
-	Declaration      *ToolbeltDeclaration
-	// Segments are the attempt's active stretches, the time it held a lease
-	// as the deadline budget counts it: the first start (with the waking
-	// event's ID when a wake started it), each resume after a wake, each
-	// recovery by a new owner (no gap: recovery keeps the deadline), each
-	// ended by a park. The last stays open while the attempt runs and ends
+	// TurnTimeout is the open segment's time limit, pinned when it began:
+	// the binding's timeout_seconds, else the runtime default. Deadline is
+	// the segment's start plus it; recovery keeps both.
+	TurnTimeout time.Duration `json:",omitempty"`
+	Declaration *ToolbeltDeclaration
+	// Segments are the attempt's active stretches, the time it held a lease:
+	// the first start (with the waking event's ID when a wake started it),
+	// each resume after a wake, each recovery by a new owner (no gap:
+	// recovery keeps the segment's deadline), each ended by a park. The last stays open while the attempt runs and ends
 	// when the execution finishes. Only the last MaxSegments are kept; DroppedActive
 	// is the active time of the ones dropped, DroppedSegments their count.
 	Segments        []Segment     `json:",omitempty"`
@@ -633,6 +637,16 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 }
 func (s *Scheduler) transact(ctx context.Context, ref *domain.LeaseRef, fn func(storage.Tx) error) error {
 	return s.store.Transact(ctx, storage.Guard{Now: s.now(), Lease: ref}, fn)
+}
+
+// turnTimeout is one turn's time limit under a binding (05-02, #564): the
+// binding's own timeout when it sets one, else the runtime default. Every
+// executor has the same deadline model.
+func (s *Scheduler) turnTimeout(b domain.Binding) time.Duration {
+	if seconds := b.TimeoutSeconds; seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return s.options.Timeout
 }
 func (s *Scheduler) executorFor(state AttemptState) (extension.Executor, error) {
 	registry := s.options.Executors
@@ -1259,20 +1273,10 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 			return e
 		}
 		attempt.Lease = ref
-		if parked == "" {
-			// One deadline model for every executor (05-02): the binding's
-			// own timeout when it sets one, else the runtime default.
-			timeout := s.options.Timeout
-			if seconds := state.Binding.TimeoutSeconds; seconds > 0 {
-				timeout = time.Duration(seconds) * time.Second
-			}
-			state.Deadline = s.now().Add(timeout)
-		} else {
-			if state.RemainingTimeout <= 0 {
-				return storage.ErrInvalid
-			}
-			state.Deadline = s.now().Add(state.RemainingTimeout)
-		}
+		// The deadline limits one turn, not the attempt (#564): a fresh
+		// start and every resume after a wake get the turn's full limit.
+		state.TurnTimeout = s.turnTimeout(state.Binding)
+		state.Deadline = s.now().Add(state.TurnTimeout)
 		state.InputEventIDs = make([]domain.ID, 0, len(inputs))
 		for _, pending := range inputs {
 			state.InputEventIDs = append(state.InputEventIDs, pending.EventID)
@@ -1906,8 +1910,14 @@ func (s *Scheduler) Handoff(ctx context.Context, ref domain.LeaseRef, outcome do
 	}
 	return s.Complete(ctx, ref, extension.Result{Outcome: outcome})
 }
+
+// Timeout applies the open segment's deadline under the attempt's lease, as
+// the deadline's Timer would: it accepts the same core.execution.timeout
+// Event and settles it (ProcessExecutionTimeout). An attempt that can be
+// interrupted and resumed has its turn ended; any other fails.
 func (s *Scheduler) Timeout(ctx context.Context, ref domain.LeaseRef) error {
-	return s.transact(ctx, &ref, func(tx storage.Tx) error {
+	var intent string
+	err := s.transact(ctx, &ref, func(tx storage.Tx) error {
 		state, err := attemptState(tx, ref.ExecutionID)
 		if err != nil {
 			return err
@@ -1919,19 +1929,32 @@ func (s *Scheduler) Timeout(ctx context.Context, ref domain.LeaseRef) error {
 		if err != nil {
 			return err
 		}
-		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
+		parent, err := executionTriggerInTx(tx, x)
+		if err != nil {
 			return err
 		}
-		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}
-		state.Excluded = false
-		state.LaunchState = "timed_out"
-		state.carryUsage()
-		state.Result = &result
-		if err = putAttemptState(tx, state); err != nil {
+		event := executionTimeoutEvent(state, parent)
+		event.ReceivedAt = s.now()
+		accepted, _, err := AcceptDerivedInTx(tx, s.now(), s.options.CausalLimits, state.ScopeID, parent, event)
+		if errors.Is(err, ErrCausalRejected) {
+			if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
+				return err
+			}
+			return rejectExecutionTimeoutInTx(tx, s.now(), event)
+		}
+		if err != nil {
 			return err
 		}
-		return s.failureInTx(tx, x, result, s.now())
+		if accepted.Routed {
+			return storage.ErrConflict
+		}
+		intent, err = s.expireInTx(tx, x, state, accepted)
+		return err
 	})
+	if err == nil && intent != "" {
+		_ = s.DispatchControl(ctx, intent)
+	}
+	return err
 }
 func (s *Scheduler) Cancel(ctx context.Context, id domain.ID) error { return s.router.Cancel(ctx, id) }
 

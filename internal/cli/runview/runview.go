@@ -63,6 +63,9 @@ func Outcome(r client.Run) string {
 		if r.WaitID != "" && r.State == "parked" {
 			return "waiting on " + r.WaitID
 		}
+		if r.TurnTimeLimit() {
+			return TurnTimeLimit
+		}
 		return ""
 	}
 	if r.Outcome.Summary == "" {
@@ -70,6 +73,10 @@ func Outcome(r client.Run) string {
 	}
 	return r.Outcome.Kind + ": " + r.Outcome.Summary
 }
+
+// TurnTimeLimit is the outcome of a run whose turn ended at its time limit
+// and whose Work carried on (client.Run.TurnTimeLimit).
+const TurnTimeLimit = "turn ended at its time limit"
 
 // TriggerText renders the trigger type, preferring the resumed segment's.
 func TriggerText(r client.Run) string {
@@ -138,9 +145,6 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 	line("finished", ShortTime(r.FinishedAt))
 	line("duration", Duration(r, now))
 	line("deadline", ShortTime(r.Deadline))
-	if r.RemainingTimeoutSeconds > 0 {
-		line("timeout left", (time.Duration(r.RemainingTimeoutSeconds) * time.Second).String())
-	}
 	line("usage", usageText(r.Usage))
 	if ws := r.Workspace; ws != nil {
 		v := strings.TrimSpace(ws.Kind + " " + ws.Dir)

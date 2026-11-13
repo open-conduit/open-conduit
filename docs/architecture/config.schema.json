@@ -96,7 +96,7 @@
           "minimum": 1,
           "maximum": 2147483647,
           "default": 3600,
-          "description": "The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. An attempt already running keeps the deadline it started with."
+          "description": "The time limit of one turn: how long an attempt (an Execution) may run from its start, or from each resume after a wake, before the host stops it. Each turn gets the full limit, however many turns the attempt has had. An attempt whose executor can be interrupted and resumed has its turn ended at the limit and carries on in its next attempt, using no retry; any other attempt fails under retry policy. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. A turn already running keeps the deadline it started with."
         },
         "kept_executions": {
           "type": "integer",
@@ -522,7 +522,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 2147483647,
-              "description": "Replaces settings.timeout_seconds for this binding's attempts."
+              "description": "Replaces settings.timeout_seconds, the time limit of one turn, for this binding's attempts."
             },
             "pass_env": {
               "type": "array",
