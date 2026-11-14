@@ -150,6 +150,20 @@ func (c *Client) WriterPermissions(ctx context.Context, repo string) (perms map[
 	return perms, true, nil
 }
 
+// ReaderPermissions are the permissions of the App the client signs in and
+// reads as on repo, read afresh; known is false for a token sign-in.
+func (c *Client) ReaderPermissions(ctx context.Context, repo string) (perms map[string]string, known bool, err error) {
+	app, ok := c.who.Load().read.(*appToken)
+	if !ok {
+		return nil, false, nil
+	}
+	perms, err = app.permissions(ctx, repo)
+	if err != nil {
+		return nil, false, err
+	}
+	return perms, true, nil
+}
+
 // forbidden reports a 403 from GitHub on op as the refusal the agent sees:
 // what GitHub says is missing (its X-Accepted-GitHub-Permissions header),
 // else what op needs that the connection's App installation lacks, else

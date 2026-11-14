@@ -372,7 +372,7 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 		case !a.App:
 			notes = append(notes, "authenticated (the token's permissions are not reported)")
 		}
-		for _, n := range installationNotes(s, a, client, live) {
+		for _, n := range installationNotes(ctx, s, a, client, live) {
 			if n.code != "" {
 				warn(n.code)
 			}
@@ -423,97 +423,116 @@ var reportedPermissions = []string{"contents", "issues", "pull_requests", "check
 type installNote struct{ code, note string }
 
 // installationNotes reports, for an entry whose sign-in or writer is a
-// GitHub App, what each App's installation holds on the repository
-// (reportedPermissions) and each permission a configured feature needs
-// that it lacks: reads by the sign-in App for reconcile, Webhooks write
-// by it for manage_webhook (hook_admin_missing), and by the App writes go
-// out as, Issues, Pull requests and Contents write for live projection
-// (labels, comments, PRs) and Contents write for git as the bot (permission_missing). An
-// installation GitHub doesn't answer for warns installation_unreadable.
-// A token sign-in with no bot App adds nothing: GitHub reports a token's
-// role on the repository instead (Access.Known).
-func installationNotes(s Settings, a Access, c *Client, live bool) []installNote {
+// GitHub App, what each App's installation holds (reportedPermissions) on
+// each repository a configured feature acts on, read afresh, and each
+// permission a feature needs there that it lacks. The sign-in App reads:
+// Issues on the tracker repository and Contents, Pull requests, Checks and
+// Commit statuses on the code repository, for reconcile; and it needs
+// Webhooks write on the code repository for manage_webhook
+// (hook_admin_missing). The App writes go out as needs, for live
+// projection (labels, comments, PRs), Issues write on the tracker and
+// Contents and Pull requests write on the code repository, and Contents
+// write there for git as the bot (permission_missing). An installation
+// GitHub doesn't answer for warns installation_unreadable. A token sign-in
+// with no bot App adds nothing: GitHub reports a token's role on the
+// repository instead (Access.Known).
+func installationNotes(ctx context.Context, s Settings, a Access, c *Client, live bool) []installNote {
 	type app struct {
 		who   string
-		perms map[string]string
-		needs map[string]map[string][]string // permission → level → features
+		read  func(context.Context, string) (map[string]string, bool, error)
+		needs map[string]map[string]map[string][]string // repo → permission → level → features
 	}
-	need := func(x *app, name, level, feature string) {
-		if x.needs[name] == nil {
-			x.needs[name] = map[string][]string{}
+	need := func(x *app, repo, name, level, feature string) {
+		if x.needs[repo] == nil {
+			x.needs[repo] = map[string]map[string][]string{}
 		}
-		x.needs[name][level] = append(x.needs[name][level], feature)
+		if x.needs[repo][name] == nil {
+			x.needs[repo][name] = map[string][]string{}
+		}
+		x.needs[repo][name][level] = append(x.needs[repo][name][level], feature)
 	}
 	var apps []*app
-	var reader, writer *app
+	var writer *app
 	if a.App {
-		reader = &app{who: c.Reader(), perms: a.Installation, needs: map[string]map[string][]string{}}
+		reader := &app{who: c.Reader(), read: c.ReaderPermissions, needs: map[string]map[string]map[string][]string{}}
 		apps = append(apps, reader)
-		for _, p := range []string{"contents", "issues", "pull_requests", "checks", "statuses"} {
-			need(reader, p, "read", "reconcile")
+		need(reader, s.TrackerRepo, "issues", "read", "reconcile")
+		for _, p := range []string{"contents", "pull_requests", "checks", "statuses"} {
+			need(reader, s.Repo, p, "read", "reconcile")
 		}
 		if s.ManageWebhook {
-			need(reader, "repository_hooks", "write", "manage_webhook")
+			need(reader, s.Repo, "repository_hooks", "write", "manage_webhook")
 		}
+		writer = reader
 	}
-	writer = reader
 	if a.Writer {
-		writer = &app{who: c.Writer(), perms: a.BotInstallation, needs: map[string]map[string][]string{}}
+		writer = &app{who: c.Writer(), read: c.WriterPermissions, needs: map[string]map[string]map[string][]string{}}
 		apps = append(apps, writer)
 	}
 	if writer != nil {
 		if live {
-			for _, p := range []string{"contents", "issues", "pull_requests"} {
-				need(writer, p, "write", "projection")
-			}
+			need(writer, s.TrackerRepo, "issues", "write", "projection")
+			need(writer, s.Repo, "contents", "write", "projection")
+			need(writer, s.Repo, "pull_requests", "write", "projection")
 		}
 		if c.GitBot() {
-			need(writer, "contents", "write", "git as the bot")
+			need(writer, s.Repo, "contents", "write", "git as the bot")
 		}
 	}
 	var out []installNote
 	for _, x := range apps {
-		if x.perms == nil {
-			out = append(out, installNote{"installation_unreadable", fmt.Sprintf("%s's installation permissions on %s could not be read", x.who, s.Repo)})
-			continue
+		repos := make([]string, 0, len(x.needs))
+		for repo := range x.needs {
+			repos = append(repos, repo)
 		}
-		held := make([]string, len(reportedPermissions))
-		for i, p := range reportedPermissions {
-			level := x.perms[p]
-			if level == "" {
-				level = "none"
-			}
-			held[i] = permissionLabel(p) + " " + level
-		}
-		out = append(out, installNote{"", fmt.Sprintf("%s holds %s", x.who, strings.Join(held, ", "))})
-		for _, p := range reportedPermissions {
-			var top string
-			var features []string
-			for _, level := range []string{"read", "write"} {
-				if fs := x.needs[p][level]; len(fs) > 0 && !covers(x.perms[p], level) {
-					top, features = level, append(features, fs...)
-				}
-			}
-			if top == "" {
+		// The code repository first, then the tracker.
+		sort.Slice(repos, func(i, j int) bool { return repos[i] == s.Repo && repos[j] != s.Repo })
+		for _, repo := range repos {
+			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			perms, known, err := x.read(cx, repo)
+			cancel()
+			if err != nil || !known {
+				out = append(out, installNote{"installation_unreadable", fmt.Sprintf("%s's installation permissions on %s could not be read", x.who, repo)})
 				continue
 			}
-			code := "permission_missing"
-			if p == "repository_hooks" {
-				code = "hook_admin_missing"
+			held := make([]string, len(reportedPermissions))
+			for i, p := range reportedPermissions {
+				held[i] = permissionLabel(p) + " " + heldLevel(perms[p])
 			}
-			has := x.perms[p]
-			if has == "" {
-				has = "none"
+			out = append(out, installNote{"", fmt.Sprintf("%s holds %s on %s", x.who, strings.Join(held, ", "), repo)})
+			for _, p := range reportedPermissions {
+				var top string
+				var features []string
+				for _, level := range []string{"read", "write"} {
+					if fs := x.needs[repo][p][level]; len(fs) > 0 && !covers(perms[p], level) {
+						top, features = level, append(features, fs...)
+					}
+				}
+				if top == "" {
+					continue
+				}
+				code := "permission_missing"
+				if p == "repository_hooks" {
+					code = "hook_admin_missing"
+				}
+				verb := "needs"
+				if len(features) > 1 {
+					verb = "need"
+				}
+				want := Permission{p, top}
+				out = append(out, installNote{code, fmt.Sprintf("%s %s %s on %s, but %s has %s %s there; grant %s in the App's settings", joinWords(features), verb, want, repo, x.who, permissionLabel(p), heldLevel(perms[p]), want)})
 			}
-			verb := "needs"
-			if len(features) > 1 {
-				verb = "need"
-			}
-			want := Permission{p, top}
-			out = append(out, installNote{code, fmt.Sprintf("%s %s %s, but %s has %s %s on %s; grant %s in the App's settings", joinWords(features), verb, want, x.who, permissionLabel(p), has, s.Repo, want)})
 		}
 	}
 	return out
+}
+
+// heldLevel is a permission level held, "none" for none.
+func heldLevel(level string) string {
+	if level == "" {
+		return "none"
+	}
+	return level
 }
 
 // joinWords joins words as a list: "a", "a and b", "a, b and c".

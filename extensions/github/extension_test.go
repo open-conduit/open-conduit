@@ -378,7 +378,7 @@ func TestExtensionDoctorAppInstallation(t *testing.T) {
 	c := deep(context.Background())
 	items := strings.Join(c.Items, "\n")
 	if c.Status != inproc.CheckOK || c.Code != "verified" ||
-		!strings.Contains(items, "github/w: App 12 holds Contents write, Issues write, Pull requests write, Checks write, Commit statuses write, Webhooks write") ||
+		!strings.Contains(items, "github/w: App 12 holds Contents write, Issues write, Pull requests write, Checks write, Commit statuses write, Webhooks write on octo/widgets") ||
 		strings.Contains(items, "pull=") || strings.Contains(items, "needs") {
 		t.Fatalf("installation with every permission: %+v", c)
 	}
@@ -392,7 +392,7 @@ func TestExtensionDoctorAppInstallation(t *testing.T) {
 	fake.SetInstallationPermissions(noHooks)
 	c = deep(context.Background())
 	items = strings.Join(c.Items, "\n")
-	want := "manage_webhook needs Webhooks write, but App 12 has Webhooks none on octo/widgets; grant Webhooks write in the App's settings"
+	want := "manage_webhook needs Webhooks write on octo/widgets, but App 12 has Webhooks none there; grant Webhooks write in the App's settings"
 	if c.Status != inproc.CheckWarn || c.Code != "hook_admin_missing" || !strings.Contains(items, want) || strings.Count(items, " needs ") != 1 {
 		t.Fatalf("installation without Webhooks: %+v", c)
 	}
@@ -412,7 +412,25 @@ func TestExtensionDoctorAppInstallation(t *testing.T) {
 	fake.SetInstallationPermissions(limited)
 	c = deep(context.Background())
 	items = strings.Join(c.Items, "\n")
-	if c.Code != "permission_missing" || !strings.Contains(items, "projection needs Issues write, but App 12 has Issues read on octo/widgets") || strings.Count(items, " needs ") != 1 {
+	if c.Code != "permission_missing" || !strings.Contains(items, "projection needs Issues write on octo/widgets, but App 12 has Issues read there") || strings.Count(items, " needs ") != 1 {
 		t.Fatalf("installation with Issues read: %+v", c)
+	}
+
+	// Each need is judged on the repository it acts on: with the code in
+	// another repository than the tracker, issues are read on the tracker
+	// and PRs, contents and hooks on the code repository, whose
+	// installation this App doesn't have.
+	fake.SetInstallationPermissions(all)
+	split, err := gh.ParseExtension([]byte(`{"namespace":"github/c","scope":"eng","repo":"octo/code","tracker":{"repo":"octo/widgets","namespace":"github/w"},"manage_webhook":true,"webhook_secret":"hook"}`), []string{"hook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.Entries[0].Settings = split
+	c = deep(context.Background())
+	items = strings.Join(c.Items, "\n")
+	if c.Status != inproc.CheckWarn || c.Code != "installation_unreadable" ||
+		!strings.Contains(items, "App 12 holds Contents write, Issues write, Pull requests write, Checks write, Commit statuses write, Webhooks write on octo/widgets") ||
+		!strings.Contains(items, "App 12's installation permissions on octo/code could not be read") {
+		t.Fatalf("code repository apart from the tracker: %+v", c)
 	}
 }
