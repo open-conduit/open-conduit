@@ -103,6 +103,9 @@ func (t *Tools) prMerge(ctx context.Context, b *bound, data json.RawMessage) (an
 	if err := t.nobodyWorking(ctx, b, src, p); err != nil {
 		return nil, err
 	}
+	if err := mergeableNow(p, method); err != nil {
+		return nil, err
+	}
 	sha, err := c.MergePull(ctx, repo, p.Number, p.Head.SHA, method)
 	switch {
 	case IsStatus(err, http.StatusConflict):
@@ -171,11 +174,32 @@ func statusMessage(err error) string {
 	return "it gave no reason"
 }
 
-// mergeRefused relays GitHub's refusal to merge PR p as one the caller can
+// mergeableNow refuses a PR whose mergeable_state, GitHub's own reading of
+// the repository's rules, isn't one GitHub merges under them. The merge
+// call alone doesn't settle it: an identity that may bypass the rules (an
+// admin where protection doesn't enforce admins, a ruleset's bypass actor)
+// merges straight through, so this connection's reach mustn't decide what
+// lands. GitHub reports blocked even to such an identity. Unknown is
+// GitHub still working it out, which a merge mustn't be blind to.
+func mergeableNow(p rawPull, method string) error {
+	switch p.MergeableState {
+	case "clean", "unstable", "has_hooks":
+		return nil
+	case "unknown", "":
+		return refuse("mergeability_unknown", "GitHub hasn't yet worked out whether PR #%d can merge at %s; wait a minute (github.wait with until) and try again", p.Number, short(p.Head.SHA))
+	}
+	return mergeRefused(p, method, "")
+}
+
+// mergeRefused relays GitHub's refusal to merge PR p, before or after the
+// merge call, as one the caller can
 // act on, telling the reason apart by the PR's mergeable_state: behind is
 // the repository requiring branches to be up to date, the one rule the
 // caller can satisfy itself, with github.pr.update-branch.
 func mergeRefused(p rawPull, method, reason string) error {
+	if reason == "" {
+		reason = "it reports the PR as " + p.MergeableState
+	}
 	if r := strings.ToLower(reason); strings.Contains(r, "not allowed") && strings.Contains(r, "merge") {
 		return refuse("method_not_allowed", "GitHub won't merge PR #%d by %s: %s; merge it with a method the repository allows", p.Number, method, reason)
 	}
@@ -188,7 +212,7 @@ func mergeRefused(p rawPull, method, reason string) error {
 	case "draft":
 		return refuse("draft", "GitHub won't merge PR #%d: %s; it is a draft, so wait until it is marked ready for review", p.Number, reason)
 	case "blocked":
-		return refuse("blocked", "GitHub won't merge PR #%d yet: %s; the repository's rules for %s still want something (a required review or check), so wait for the PR to change", p.Number, reason, p.Base.Ref)
+		return refuse("blocked", "GitHub won't merge PR #%d yet: %s; the repository's rules for %s still want something (a required review or check: %s and %s show which), so wait for the PR to change", p.Number, reason, p.Base.Ref, OpPRView, OpChecks)
 	}
 	return refuse("not_mergeable", "GitHub won't merge PR #%d: %s; wait for the PR to change", p.Number, reason)
 }

@@ -685,6 +685,11 @@ type MergeRules struct {
 	UpToDate bool
 	// Methods are the merge methods allowed; empty allows all.
 	Methods []string
+	// Bypass makes the caller an identity the rules don't bind (an admin
+	// where protection doesn't enforce admins, a ruleset's bypass actor):
+	// its merge call succeeds whatever they say, while mergeable_state
+	// still reports them, as GitHub's does.
+	Bypass bool
 }
 
 // SetMergeRules sets what branch demands of a merge into it.
@@ -1879,7 +1884,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		if methods := s.mergeRules[p.BaseRef].Methods; req.MergeMethod != "" && len(methods) > 0 && !slices.Contains(methods, req.MergeMethod) {
 			return http.StatusMethodNotAllowed, map[string]any{"message": map[string]string{"merge": "Merge commits", "squash": "Squash merges", "rebase": "Rebase merges"}[req.MergeMethod] + " are not allowed on this repository."}
 		}
-		if state, msg := s.mergeState(p); state != "clean" {
+		if state, msg := s.mergeState(p); state != "clean" && !s.mergeRules[p.BaseRef].Bypass {
 			return http.StatusMethodNotAllowed, map[string]any{"message": msg}
 		}
 		t := s.tick()
