@@ -1837,6 +1837,7 @@ type resultHint struct{ hint RetryHint }
 
 func (h resultHint) Error() string        { return "executor retry hint" }
 func (h resultHint) RetryHint() RetryHint { return h.hint }
+
 // Complete applies the attempt's result. One the attempt can no longer
 // take, because it ended while its turn ran (a fence took the lease), still
 // keeps what that turn wrote up to the stop (RecordStopped, #647), and the
