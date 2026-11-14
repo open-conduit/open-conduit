@@ -472,7 +472,7 @@ func validIdentity(id BindingIdentity) error {
 		return errors.New("set icon_emoji or icon_url, not both")
 	}
 	if id.IconEmoji != "" && !emojiPattern.MatchString(id.IconEmoji) {
-		return errors.New("icon_emoji must be an emoji code such as :wrench:")
+		return errors.New("icon_emoji must be an emoji code between colons (:wrench:)")
 	}
 	if id.IconURL != "" {
 		u, err := url.Parse(id.IconURL)

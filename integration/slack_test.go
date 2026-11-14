@@ -1537,8 +1537,8 @@ func TestSlackBindingsPostUnderTheirOwnIdentity(t *testing.T) {
 // TestSlackIdentityWithoutScopeIsRefused: a token without
 // chat:write.customize posts nothing for a binding with its own identity,
 // where Slack would post under the app's name: the tool gives a clear
-// refusal, a declared reply fails rather than retrying, and a binding with
-// no identity still posts as the app.
+// refusal and ends its intent, a declared reply is held until the scope is
+// granted, and a binding with no identity still posts as the app.
 func TestSlackIdentityWithoutScopeIsRefused(t *testing.T) {
 	e := slIdentityEnv(t)
 	var scopes []string
@@ -1562,13 +1562,26 @@ func TestSlackIdentityWithoutScopeIsRefused(t *testing.T) {
 	if got := e.fake.AgentReplies(slChannel, eng); len(got) != 0 {
 		t.Fatalf("posted without the scope: %+v", got)
 	}
+	if res := e.converge(); res.Failed != 0 || res.Posted != 0 {
+		t.Fatalf("a refused tool reply was retried: %+v", res)
+	}
+	// A declared reply nobody waits on is held, not lost: it is reported
+	// under its own code and posted under the binding's name once the
+	// scope is granted.
 	e.finishAttempt(attempt, domain.WorkReady, "declared answer")
-	if res := e.converge(); res.Failed != 1 || res.Posted != 0 || len(e.fake.AgentReplies(slChannel, eng)) != 0 {
+	if res := e.converge(); res.Failed != 0 || res.Posted != 0 || !slices.Contains(res.Codes, "reply:identity_scope_missing") || len(e.fake.AgentReplies(slChannel, eng)) != 0 {
 		t.Fatalf("declared reply without the scope: %+v", res)
 	}
-	if res := e.converge(); res.Failed != 0 || res.Posted != 0 {
-		t.Fatalf("a refused reply was retried: %+v", res)
+	e.fake.SetScopes(nil)
+	e.clock.Add(11 * time.Minute)
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("declared reply once the scope is granted: %+v", res)
 	}
+	if got := e.fake.AgentReplies(slChannel, eng); len(got) != 1 || got[0].Text != "declared answer" || got[0].Username != "Steve" {
+		t.Fatalf("held reply: %+v", got)
+	}
+	e.fake.SetScopes(scopes)
+	e.clock.Add(11 * time.Minute)
 	p, _ := e.workFor(plain)
 	pa := e.startAttempt(p.ID)
 	if out, err := e.slReplier(p.ID, pa)("r1", "hello"); err != nil || out["state"] != sl.IntentPosted {

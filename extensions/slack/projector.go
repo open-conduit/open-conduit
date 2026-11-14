@@ -173,6 +173,10 @@ func (p *Projector) transact(ctx context.Context, fn func(storage.Tx) error) err
 // own identity and the token lacks CustomizeScope: nothing was posted.
 const CodeIdentityScope = "identity_scope_missing"
 
+// ErrIdentityScope is returned for an outcome reply or prompt held pending
+// because its binding's identity needs CustomizeScope, which the token lacks.
+var ErrIdentityScope = errors.New("slack token lacks " + CustomizeScope)
+
 // MarkerID is the marker form of an intent ID carried in reply metadata.
 func MarkerID(intent string) string { return "i" + digest(intent)[:32] }
 
@@ -242,7 +246,14 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 			return rec.State, err
 		}
 		if !self.Grants(CustomizeScope) {
-			return p.finish(ctx, key, IntentFailed, "", CodeIdentityScope, false)
+			if in.Durable {
+				// A tool call: the agent is told now and decides what to
+				// do, so the intent ends here.
+				return p.finish(ctx, key, IntentFailed, "", CodeIdentityScope, false)
+			}
+			// An outcome reply or a prompt nobody waits on: it stays
+			// pending and is posted once the scope is granted.
+			return rec.State, ErrIdentityScope
 		}
 		post.Username, post.IconEmoji, post.IconURL = id.Username, id.IconEmoji, id.IconURL
 	}
@@ -517,7 +528,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			res.Posted++
 		case state == IntentFailed:
 			res.Failed++
-			res.Codes = append(res.Codes, "reply:refused")
+			code := "reply:refused"
+			if st, err := p.Lookup(ctx, in.ID); err == nil && st.Code == CodeIdentityScope {
+				code = "reply:" + CodeIdentityScope
+			}
+			res.Codes = append(res.Codes, code)
 		}
 	}
 	return res, nil
@@ -541,6 +556,8 @@ func ErrorCode(err error) string {
 		return fmt.Sprintf("http_%d", s.Status)
 	case errors.Is(err, ErrIntentConflict):
 		return "intent_conflict"
+	case errors.Is(err, ErrIdentityScope):
+		return CodeIdentityScope
 	case errors.Is(err, ErrThreadTooLong):
 		return "thread_too_long"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
