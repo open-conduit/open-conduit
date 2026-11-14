@@ -27,6 +27,7 @@ var typescriptWire = map[string]any{
 	"DisplayLink":          protocol.DisplayLink{},
 	"Display":              protocol.Display{},
 	"Work":                 protocol.Work{},
+	"PendingInput":         protocol.PendingInput{},
 	"LeaseRef":             protocol.LeaseRef{},
 	"Authority":            protocol.Authority{},
 	"HostInfo":             protocol.HostInfo{},
@@ -78,7 +79,7 @@ var typescriptWire = map[string]any{
 
 // Messages the SDK decodes (the host sends them); the rest it only sends.
 var typescriptInbound = map[string]bool{
-	"Payload": true, "Key": true, "Event": true, "AcceptedEvent": true, "DisplayLink": true, "Display": true, "Work": true,
+	"Payload": true, "Key": true, "Event": true, "AcceptedEvent": true, "DisplayLink": true, "Display": true, "Work": true, "PendingInput": true,
 	"LeaseRef": true, "Authority": true, "HostInfo": true, "InitializeParams": true, "ConnectionEntry": true, "ConfigEntry": true,
 	"KVState": true, "ConfigureParams": true, "ValidateParams": true, "OperationParams": true, "TaskRunParams": true,
 	"CheckRunParams": true, "KVEntry": true, "KVGetResult": true, "KVListResult": true, "EventAcceptResult": true,
