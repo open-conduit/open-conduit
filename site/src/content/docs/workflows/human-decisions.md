@@ -84,6 +84,7 @@ Only the entry's **answer** action counts, and only while the question is open a
 | `bindings` | none | Binding names. Work whose first attempt would run on a named binding waits for approval before it starts. |
 | `responders` | the entry's | Who may approve or refuse. |
 | `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused, unless the gate escalates. An approval also holds only this long. |
+| `valid_for` | none | A duration from `1m` to `24h`. With it, an approval is a grant: once the approved call goes through, the same call (the same operation and input) from the same Work passes without asking until `valid_for` has passed. See [Approving for a while](#approving-for-a-while). |
 | `escalate` | none | Who an unanswered request goes to next, rather than being refused at `timeout`: `{"responders": [...], "timeout": "24h"}`. See [Escalation](#escalation). |
 
 The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants, unless `for_bindings` narrows it.
@@ -92,7 +93,7 @@ When a gated call comes in:
 
 1. The operation does not run. Open Conduit records an approval request and parks the Work, the same way `human.ask` does. The request shows on the Work as **Approval needed**, with the operation, its input and the options **approve** and **refuse**. Answer it from the TUI, the web view or the CLI, as for a question.
 2. The answer resumes the caller. It is told whether it was approved, and makes the same call again. When the call was one the agent's tools made for it rather than its own (git's sign-in, `github.git.credential`, which the host calls when git opens a session), it is told in those terms: "A person approved git's sign-in to github.com/acme/app. Run the same git command again: it goes through once." The toolbelt refuses any call of such an operation from the run (through `call`, `os call` or a request naming the capability), so the agent isn't sent there and never gets its result.
-3. An approval lets that exact call (the same operation with the same input, in the same Work) through once, if it is made within the gate's `timeout` of the answer. A different input asks again, and so does the same call made a second time or after that window.
+3. An approval lets that exact call (the same operation with the same input, in the same Work) through once, if it is made within the gate's `timeout` of the answer. A different input asks again, and so does the same call made a second time or after that window, unless the gate has `valid_for` ([approving for a while](#approving-for-a-while)).
 4. A refusal returns `approval_refused` to the caller, naming who refused; no answer by the timeout returns `approval_timed_out`. Either way the operation never runs, and the caller keeps its toolbelt for anything else.
 
 Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Any Work can wait for an answer: Work that has no correlation key of its own (made with `POST /v1/work` or `create_work` and no keys) is given its own key, `core.work`/`<its ID>`, when it first waits, and the answer arrives on that.
@@ -123,6 +124,16 @@ One operation can do both a harmless and a risky thing, depending on its input. 
 ```
 
 Here a run asks for approval before it gets credentials for the `write` role, and gets the `read` role's without asking. The gate compares each field's JSON value exactly (`"write"` doesn't match `["write"]`), and a call whose input lacks the field isn't held. It fails closed on how an operation might read its input: a key that names the field in another case (`Role`), or a repeated key, is held when any of them has the value, and an input that isn't a JSON object is held. Operations written on `protocol/sdk` refuse such keys anyway. To hold several values, add a gate for each. `input` can be combined with `for_bindings`, and both must hold for the gate to hold a call.
+
+### Approving for a while
+
+Some calls are made again and again for one piece of work: a tool that fetches credentials once per process, such as the AWS CLI with a gated `aws` role, calls once for every command. What a person decides there is "this run may do this now", not "this one process may". Give the gate `valid_for`:
+
+```json
+{"operations": ["aws.credentials"], "input": {"role": "write"}, "valid_for": "15m", "responders": ["operator:local"]}
+```
+
+Once the approved call goes through, the same call from the same Work passes without asking for the next 15 minutes. The grant starts when the approved call is made, not when the person answered. It covers only that operation with that input, in that Work: another input, such as `{"role": "admin"}`, or another Work asks as usual. Once it ends, the next call asks again. When several gates hold a call, the shortest `valid_for` applies, and none at all if one of them has none. Open Conduit keeps the grant, never the call's result. Each call a grant lets through records the `human_gate_grant_used` telemetry event, naming the approval that covered it and who gave it.
 
 ## Answering from GitHub
 

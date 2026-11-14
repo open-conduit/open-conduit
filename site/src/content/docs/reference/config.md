@@ -390,7 +390,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `responders` | `["operator:local"]` | who may answer, each kind:id or a bare kind |
 | `surfaces` | `["tui"]` | where the question is shown |
-| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them; input: only when the call's input has these top-level field values, such as {"role": "write"}) |
+| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it |
 
 ### Introspection (`introspection`)
 

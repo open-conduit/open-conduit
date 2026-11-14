@@ -58,9 +58,10 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 	pointer := "gate/" + string(a.WorkID) + "/" + request
 	var rec Ask
 	var decided error
+	var granted *Grant
 	allowed := false
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		allowed, decided, rec = false, nil, Ask{}
+		allowed, decided, rec, granted = false, nil, Ask{}, nil
 		w, err := tx.Work(a.WorkID)
 		if err != nil || w.ScopeID != a.ScopeID {
 			return extension.ErrUnauthorized
@@ -81,6 +82,24 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			return nil
 		}
 		rule := gate(matched)
+		// An approval's grant (valid_for) lets the same call from the
+		// same Work through until it ends; the grant names the approval
+		// that made it. An expired one is dropped and the call asked
+		// about anew.
+		grantKey := "grant/" + string(a.WorkID) + "/" + request
+		if raw, err := tx.Get(Namespace, grantKey); err == nil {
+			var g Grant
+			// A config that shortened valid_for since shortens the grant.
+			if json.Unmarshal(raw, &g) == nil && rule.validFor > 0 && now.Before(g.Until) && now.Before(g.From.Add(rule.validFor)) {
+				allowed, granted = true, &g
+				return nil
+			}
+			if err = tx.Delete(Namespace, grantKey); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
 		if id, err := tx.Get(Namespace, pointer); err == nil {
 			// The call asked before: settle that request and act on it.
 			if err = settle(tx, string(id), now, &SyncResult{}); err != nil && !errors.Is(err, storage.ErrNotFound) {
@@ -98,6 +117,18 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			case err == nil && prior.State == StateAnswered && prior.Answer != nil:
 				if prior.Answer.Answer == OptionApprove {
 					allowed = true
+					if rule.validFor > 0 {
+						// The grant starts when the approved call goes
+						// through, not when the person answered.
+						g := Grant{Ask: prior.ID, Operation: c.Operation, Responder: prior.Answer.Responder, From: now, Until: now.Add(rule.validFor)}
+						raw, err := json.Marshal(g)
+						if err != nil {
+							return err
+						}
+						if err = tx.Put(Namespace, grantKey, raw); err != nil {
+							return err
+						}
+					}
 				} else {
 					decided = refuse(CodeApprovalRefused, "%s refused %s; %s", prior.Answer.Responder, words.subject, words.dont)
 				}
@@ -141,6 +172,9 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 	case err != nil:
 		return nil, err
 	case allowed:
+		if granted != nil && t.o.Granted != nil {
+			t.o.Granted(ctx, a, *granted)
+		}
 		return nil, nil
 	case decided != nil:
 		return nil, decided
@@ -154,6 +188,16 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			AliasType: TypeAnswered, Filter: filterPayload(rec), Label: "a person's approval"}},
 		Output: domain.Payload{Schema: SchemaTool, Data: out},
 	}, nil
+}
+
+// Grant is an approval's life (a gate's valid_for): the approval it came
+// from, who gave it, and when it ends.
+type Grant struct {
+	Ask       string    `json:"ask"`
+	Operation string    `json:"operation"`
+	Responder string    `json:"responder"`
+	From      time.Time `json:"from"`
+	Until     time.Time `json:"until"`
 }
 
 // requestHash is a call's identity: its operation and its input, with the

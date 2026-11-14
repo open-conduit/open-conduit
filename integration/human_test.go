@@ -1082,3 +1082,85 @@ func TestHumanStartGateSkipsOtherKinds(t *testing.T) {
 		t.Fatal("ungated Work was held")
 	}
 }
+
+// With valid_for, an approval is a grant: once the approved call goes
+// through, the same call from the same Work passes without asking until
+// the grant ends, counted from that call. Another input, another Work and
+// an expired grant are each held again (the negative controls); without
+// valid_for the same harness asks again on the second call (see
+// TestHumanGateApprovesTheSameCallOnce).
+func TestHumanGateGrant(t *testing.T) {
+	cfg := `{"gates":[{"operations":["fixture.deploy"],"timeout":"2h","valid_for":"15m"}]}`
+	h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":`+cfg+`}`)
+	ctx := context.Background()
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil || out.Wait == nil {
+		t.Fatalf("the first call was not held: %+v %v", out, err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.f.Clock.Advance(10 * time.Minute)
+	h.resume(t)
+	// Time passes in a live run: the attempt renews its lease as it goes.
+	pass := func(d time.Duration) {
+		t.Helper()
+		for step := conformance.RuntimeLease / 2; d > 0; d -= step {
+			h.f.Clock.Advance(min(step, d))
+			if err := h.scheduler.Renew(ctx, h.attempt.Lease); err != nil {
+				t.Fatalf("renew: %v", err)
+			}
+		}
+	}
+	for i, at := range []time.Duration{0, 14 * time.Minute} {
+		pass(at)
+		if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != i+1 {
+			t.Fatalf("call %d within the grant: %+v %v (runs %d)", i+1, out, err, *h.deploys)
+		}
+	}
+	// Another input asks for itself (and parks this attempt).
+	if out, err = h.deploy(t, `{"env":"staging"}`); err != nil || out.Wait == nil || *h.deploys != 2 {
+		t.Fatalf("another input rode the grant: %+v %v", out, err)
+	}
+
+	// The gate itself, for calls the parked attempt can't make: another
+	// Work of the scope, and the same Work once the grant has ended.
+	scope := h.work(t).ScopeID
+	if err = h.f.Store.Transact(ctx, storage.Guard{Now: h.f.Clock.Now()}, func(tx storage.Tx) error {
+		return tx.PutWork(domain.Work{ID: "work/other", Kind: "fixture.task", ScopeID: scope, State: domain.WorkReady, Context: domain.Payload{Schema: "fixture.v1", Data: json.RawMessage(`{}`)}}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := hu.ParseConfig(json.RawMessage(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var used []hu.Grant
+	tools, err := hu.NewTools(hu.Options{Store: h.f.Store, Now: h.f.Clock.Now, Entry: func(domain.ID) (hu.Entry, bool) { return hu.Entry{Name: "decisions", Config: c}, true },
+		Granted: func(_ context.Context, _ extension.Authority, g hu.Grant) { used = append(used, g) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := func(work domain.ID) bool {
+		t.Helper()
+		plan, err := tools.Gate(ctx, extension.Authority{ScopeID: scope, WorkID: work, ExecutionID: "x"},
+			extension.GateCall{Operation: "fixture.deploy", Owner: "fixture", Input: domain.Payload{Schema: "fixture.deploy.v1", Data: json.RawMessage(`{"env":"prod"}`)}})
+		if err != nil {
+			t.Fatalf("gate: %v", err)
+		}
+		return plan != nil
+	}
+	if held("work/item") || len(used) != 1 || used[0].Ask == "" || used[0].Responder != "operator:local" {
+		t.Fatalf("control: the grant no longer holds (%+v)", used)
+	}
+	if !held("work/other") {
+		t.Fatal("another Work rode the grant")
+	}
+	h.f.Clock.Advance(2 * time.Minute)
+	if !held("work/item") {
+		t.Fatal("an expired grant let the call through")
+	}
+}

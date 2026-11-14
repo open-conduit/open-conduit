@@ -88,7 +88,11 @@ A person approves a role with a `human` gate on the operation's input ([gating s
 {"operations": ["aws.credentials"], "input": {"role": "write"}, "responders": ["operator:local"]}
 ```
 
-When the gate holds a call, the operation doesn't run and the run's Work is parked on the approval request, as for any gated call. `os call --output data` prints the gate's answer on stderr and exits 3. The AWS CLI shows that answer to the agent as its credential error. The agent ends its turn and runs the command again once it is resumed. An approval lets one identical call through. Each AWS CLI command is a new process that asks for credentials once, so each command with a gated profile asks a person again. A long-running SDK process asks once at the start and again each time its credentials expire.
+When the gate holds a call, the operation doesn't run and the run's Work is parked on the approval request, as for any gated call. `os call --output data` prints the gate's answer on stderr and exits 3. The AWS CLI shows that answer to the agent as its credential error. The agent ends its turn and runs the command again once it is resumed. Each AWS CLI command is a new process that asks for credentials once. On its own, an approval lets one identical call through, so each command with a gated profile would ask a person again. Give the gate `valid_for` (the role's `duration` is a natural choice) so an approval covers that role for that Work for a while ([approving for a while](../../workflows/human-decisions/#approving-for-a-while)):
+
+```json
+{"operations": ["aws.credentials"], "input": {"role": "write"}, "valid_for": "15m", "responders": ["operator:local"]}
+```
 
 ## What the extension does not do
 
