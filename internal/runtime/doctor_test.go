@@ -123,7 +123,7 @@ func TestDoctorReadsOnlyOutstandingAttempts(t *testing.T) {
 				holds = c
 			}
 		}
-		if holds.Code != "unconfirmed_stop" || strings.Join(holds.Items, ",") != "execution/t300,execution/t301" {
+		if holds.Code != "unconfirmed_stop" || strings.Join(holds.Items, ",") != "execution/t300 blocks work work/t300,execution/t301 blocks work work/t301" {
 			t.Fatalf("indexed=%v resource_holds %+v", indexed, holds)
 		}
 		pinned := s.PinnedExecutorCheck(ctx)

@@ -169,7 +169,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | --- | --- |
 | `storage` | A read/write coordination transaction commits. |
 | `lease_recovery` | Running attempts holding expired leases that await recovery. |
-| `resource_holds` | Finished attempts still holding capacity without a confirmed stop. |
+| `resource_holds` | Finished attempts still holding capacity without a confirmed stop, each with the Work it blocks (`<execution> blocks work <work>`). |
 | `retention` | Expired attempts with release pending. |
 | `routing` | Events unrouted for over ten minutes, each holding the Work it targets, with its route failures (`unrouted_events`); `events skip` lets the Work move on ([route failures](../routing-lifecycle/#route-failures)). |
 | `reconcile_lag` | Sources that are failing (safe code, and for `provider_failed` the provider's failure class, code and bounded message), have no complete scan, or are older than two intervals; when none is, each source's last complete scan (or that its first is pending). |

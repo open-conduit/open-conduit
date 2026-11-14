@@ -60,6 +60,9 @@ func (d *daemon) loop(ctx context.Context) error {
 				d.confirmStopped(ctx, c, diag.ID, 0)
 			}
 		}
+		for _, due := range poll.Stops {
+			d.followUpStop(ctx, c, due)
+		}
 		if len(poll.Timers) > 0 {
 			d.routePending(ctx, c)
 		}
@@ -210,7 +213,7 @@ func (d *daemon) startReady(ctx context.Context) {
 		c := d.current.Load()
 		a, err := c.scheduler.Claim(ctx, id)
 		if err != nil {
-			d.report("start", id, errorCode(err))
+			d.report("start", id, errorCode(err), heldBy(err))
 			continue
 		}
 		d.clear("start", id)
@@ -311,7 +314,7 @@ func (d *daemon) launchFailed(c *components, a runtime.Attempt, work domain.ID, 
 	}
 	if work != "" {
 		code := errorCode(err)
-		d.report("start", work, code)
+		d.report("start", work, code, heldBy(err))
 		if code == "executor_failed" || code == "invalid_state" {
 			d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
 		}
@@ -362,9 +365,58 @@ func (d *daemon) observe(ctx context.Context, c *components, a runtime.Attempt, 
 	d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
 }
 
+// followUpStop stops and confirms a finished attempt whose stop the
+// runtime's follow-up found unconfirmed (SchedulerPoll.Stops), off the
+// loop: a follow-up comes back exactly when stopping is failing (a wedged
+// container runtime, say), which must not hold routing, timers and starts.
+// It is skipped while a holder of this daemon still has the attempt at that
+// epoch, whose own end stops it, or while an earlier follow-up for it is
+// still stopping. The stop is bounded by stopFollowupTimeout. A failure is
+// reported as a stop diagnostic, and the runtime hands the attempt over
+// again after its backoff.
+func (d *daemon) followUpStop(ctx context.Context, c *components, due runtime.StopDue) {
+	key := attemptKey{due.ExecutionID, due.Epoch}
+	d.mu.Lock()
+	_, held := d.inflight[key]
+	if held || d.stopping[key] {
+		d.mu.Unlock()
+		return
+	}
+	if d.stopping == nil {
+		d.stopping = map[attemptKey]bool{}
+	}
+	d.stopping[key] = true
+	d.mu.Unlock()
+	d.goSafe("stop", func() {
+		defer func() {
+			d.mu.Lock()
+			delete(d.stopping, key)
+			d.mu.Unlock()
+		}()
+		stopCtx, cancel := context.WithTimeout(ctx, stopFollowupTimeout)
+		defer cancel()
+		d.confirmStopped(stopCtx, c, due.ExecutionID, due.Epoch)
+	})
+}
+
+// stopFollowupTimeout bounds one follow-up's stop; one that takes longer
+// is reported and tried again at the runtime's next follow-up.
+const stopFollowupTimeout = 2 * time.Minute
+
+// heldBy is the cause a refused start reports when an unconfirmed stop
+// holds its Work: the attempt holding it.
+func heldBy(err error) string {
+	var held *runtime.ResourceHeldError
+	if errors.As(err, &held) {
+		return "held by " + string(held.ExecutionID)
+	}
+	return ""
+}
+
 // confirmStopped proves an attempt is not running before releasing its
 // resource hold. An epoch of zero uses the attempt's current epoch. A
-// superseded epoch is refused by the executor and confirms nothing.
+// superseded epoch is refused by the executor and confirms nothing; the
+// runtime's follow-up (followUpStop) asks again at the current one.
 func (d *daemon) confirmStopped(ctx context.Context, c *components, id domain.ID, epoch uint64) {
 	state, err := c.scheduler.InspectAttempt(ctx, id)
 	if err != nil || state.Excluded {
@@ -431,6 +483,8 @@ func errorCode(err error) string {
 		return "capacity"
 	case errors.Is(err, runtime.ErrBudgetHeld):
 		return "over_budget"
+	case errors.Is(err, runtime.ErrResourceHeld):
+		return "resource_held"
 	case errors.Is(err, runtime.ErrNotEligible):
 		return "not_eligible"
 	case errors.Is(err, runtime.ErrSecretUnavailable):

@@ -99,7 +99,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 			case x.State.Terminal():
 				state, err := attemptState(tx, x.ID)
 				if err == nil && !state.Excluded {
-					holds = append(holds, string(x.ID))
+					holds = append(holds, fmt.Sprintf("%s blocks work %s", x.ID, x.WorkID))
 				} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
 					return err
 				}
@@ -141,7 +141,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 		checks = append(checks, Check{Name: "lease_recovery", Status: CheckOK, Code: "current", Detail: fmt.Sprintf("no expired leases; %d parked attempt(s)", parked)})
 	}
 	if len(holds) > 0 {
-		checks = append(checks, Check{Name: "resource_holds", Status: CheckWarn, Code: "unconfirmed_stop", Detail: fmt.Sprintf("%d finished attempt(s) still hold capacity until a verified stop is confirmed", len(holds)), Items: limit(holds)})
+		checks = append(checks, Check{Name: "resource_holds", Status: CheckWarn, Code: "unconfirmed_stop", Detail: fmt.Sprintf("%d finished attempt(s) still hold capacity, and their Work's next attempt, until a verified stop is confirmed", len(holds)), Items: limit(holds)})
 	} else {
 		checks = append(checks, Check{Name: "resource_holds", Status: CheckOK, Code: "released", Detail: "every finished attempt has confirmed resource exclusion"})
 	}
