@@ -119,7 +119,7 @@ type Options struct {
 	Log func(msg string)
 	Now func() time.Time
 	// QueryTimeout bounds each read of the daemon's state (info, ps,
-	// inspect), so a wedged Docker can't hold the caller (default 5s).
+	// inspect, a network or volume listing), so a wedged Docker can't hold the caller (default 5s).
 	// Creating, stopping and removing containers keep the caller's
 	// context.
 	QueryTimeout time.Duration
@@ -598,6 +598,9 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	if err := p.network(ctx, d.Context, network+"-egress", labels, false); err != nil {
 		return extension.ContainerCreated{}, err
 	}
+	if err := p.removeOrphanGateways(ctx, d.Context, labels); err != nil {
+		return extension.ContainerCreated{}, err
+	}
 	volume, err := p.gateway(ctx, d, name, network, labels)
 	if err != nil {
 		p.removeGateway(context.WithoutCancel(ctx), d.Context, name)
@@ -700,8 +703,41 @@ func (p *Provider) network(ctx context.Context, dctx, name string, labels map[st
 	if !notFound(err) {
 		return err
 	}
-	_, err = p.docker(ctx, dctx, append([]string{"network", "create"}, networkArgs(name, labels, internal)...)...)
-	return err
+	return p.createNetwork(ctx, dctx, networkArgs(name, labels, internal))
+}
+
+// createNetwork runs docker network create. When Docker has no address
+// space left for another network, the error says how many networks Open
+// Conduit made are on the context, since leftovers of ended runs are the
+// likely cause, and how to see them.
+func (p *Provider) createNetwork(ctx context.Context, dctx string, args []string) error {
+	_, err := p.docker(ctx, dctx, append([]string{"network", "create"}, args...)...)
+	if err == nil || !addressSpaceExhausted(err) {
+		return err
+	}
+	ours, all := "some", "?"
+	if made, lerr := p.objects(ctx, dctx, objectNetwork, "label="+labelNetwork); lerr == nil {
+		n := 0
+		for _, o := range made {
+			if o.labels[extension.ContainerLabelHost] == p.o.Host {
+				n++
+			}
+		}
+		ours = fmt.Sprintf("%d (%d of them this daemon's)", len(made), n)
+	}
+	if out, lerr := p.docker(ctx, dctx, "network", "ls", "--quiet"); lerr == nil {
+		all = strconv.Itoa(len(strings.Fields(string(out))))
+	}
+	return fmt.Errorf("%w: Docker on context %s has no address space left for another network; %s of its %s networks are Open Conduit's, "+
+		"and leftovers of ended runs are the likely cause. The daemon removes its own leftovers of ended runs as it reconciles; "+
+		"see them with docker --context %s network ls --filter label=%s", err, dctx, ours, all, dctx, labelNetwork)
+}
+
+// addressSpaceExhausted is whether a network create failed because the
+// daemon's address pools are used up.
+func addressSpaceExhausted(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "fully subnetted") || strings.Contains(s, "could not find an available, non-overlapping")
 }
 
 func networkArgs(name string, labels map[string]string, internal bool) []string {
@@ -771,6 +807,50 @@ func (p *Provider) gateway(ctx context.Context, d Plan, name, network string, la
 		return "", fmt.Errorf("the gateway did not start: %s", strings.TrimSpace(string(logs)))
 	}
 	return volume, nil
+}
+
+// removeOrphanGateways removes the execution's gateways that have lost
+// their launch's container: what a launch cut short (the daemon stopped
+// between the gateway and the container) or a removal cut short left. A
+// segment's launch removes every other segment's; an attach's, only those
+// that have stopped, since a segment's launch may be between its gateway
+// and its container. Each holds a place on the execution's networks, and
+// a stopped one is never used again.
+func (p *Provider) removeOrphanGateways(ctx context.Context, dctx string, labels map[string]string) error {
+	filters := []string{"--filter", "label=" + extension.ContainerLabelHost + "=" + labels[extension.ContainerLabelHost],
+		"--filter", "label=" + extension.ContainerLabelExecution + "=" + labels[extension.ContainerLabelExecution]}
+	out, err := p.docker(ctx, dctx, append([]string{"ps", "--all", "--format", "{{.Names}}|{{.State}}|{{.Label \"" + labelRole + "\"}}"}, filters...)...)
+	if err != nil {
+		return err
+	}
+	type gw struct {
+		name    string
+		running bool
+	}
+	containers := map[string]bool{}
+	var gateways []gw
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[2] == "gateway" {
+			gateways = append(gateways, gw{parts[0], parts[1] == "running"})
+		} else {
+			containers[parts[0]] = true
+		}
+	}
+	own, _ := p.names(labels)
+	attach := labels[extension.ContainerLabelSegment] == extension.ContainerSegmentAttach
+	var errs []error
+	for _, g := range gateways {
+		launch := strings.TrimSuffix(g.name, "-gw")
+		if launch == own || containers[launch] || attach && g.running {
+			continue
+		}
+		errs = append(errs, p.removeGateway(ctx, dctx, launch))
+	}
+	return errors.Join(errs...)
 }
 
 // removeGateway removes a launch's gateway and its volume; either being
@@ -896,14 +976,134 @@ func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]e
 			st.Daemon = daemon
 			out = append(out, st)
 		}
+		if owner.ExecutionID == "" {
+			// What the provider made for an execution beside its containers
+			// (its toolbelt volumes, then its networks, which hold Docker's
+			// address space) is listed after them, so reconcile removes what
+			// a launch or removal cut short left once the execution is over.
+			made, err := p.made(ctx, dctx, daemon)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, made...)
+		}
 	}
 	return out, nil
+}
+
+// Kinds of object, besides containers, a host-wide listing reports: a
+// ContainerRef ID of <context>/<kind>:<name>, with its labels and the role
+// label set to the kind.
+const (
+	objectNetwork = "network"
+	objectVolume  = "volume"
+)
+
+// made lists this host's execution volumes and networks on a context as
+// stopped entries, volumes first: one Remove takes each.
+func (p *Provider) made(ctx context.Context, dctx, daemon string) ([]extension.ContainerState, error) {
+	var out []extension.ContainerState
+	for _, kind := range []string{objectVolume, objectNetwork} {
+		objects, err := p.objects(ctx, dctx, kind, "label="+extension.ContainerLabelHost+"="+p.o.Host)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range objects {
+			if o.labels[extension.ContainerLabelExecution] == "" {
+				continue
+			}
+			labels := map[string]string{labelRole: kind}
+			for _, k := range []string{extension.ContainerLabelHost, extension.ContainerLabelExecution, extension.ContainerLabelSegment} {
+				if v := o.labels[k]; v != "" {
+					labels[k] = v
+				}
+			}
+			out = append(out, extension.ContainerState{Ref: extension.ContainerRef{ID: dctx + "/" + kind + ":" + o.name, Labels: labels}, Daemon: daemon})
+		}
+	}
+	return out, nil
+}
+
+// object is a network or volume: its name and labels.
+type object struct {
+	name   string
+	labels map[string]string
+}
+
+// objects lists the networks or volumes on a context that match a filter,
+// with their labels. A listing that fails is an error.
+func (p *Provider) objects(ctx context.Context, dctx, kind, filter string) ([]object, error) {
+	out, err := p.docker(ctx, dctx, kind, "ls", "--quiet", "--filter", filter)
+	if err != nil {
+		return nil, err
+	}
+	names := strings.Fields(string(out))
+	if len(names) == 0 {
+		return nil, nil
+	}
+	raw, err := p.docker(ctx, dctx, append([]string{kind, "inspect", "--format", "{{json .Name}} {{json .Labels}}"}, names...)...)
+	if err != nil && !notFound(err) {
+		return nil, err
+	}
+	var objects []object
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		name, labels, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		var o object
+		if json.Unmarshal([]byte(name), &o.name) != nil || json.Unmarshal([]byte(labels), &o.labels) != nil || o.name == "" {
+			return nil, fmt.Errorf("docker %s inspect: unreadable output", kind)
+		}
+		objects = append(objects, o)
+	}
+	return objects, nil
+}
+
+// removeObject removes a network or volume a host-wide listing reported,
+// once it is proved this host's and an execution's. One that is gone is
+// not an error, and nor is one still in use (an operator's attach running
+// beside a finished execution is still on its networks and volume): the
+// next reconcile pass removes it once nothing uses it.
+func (p *Provider) removeObject(ctx context.Context, dctx, kind, name string) error {
+	objects, err := p.objects(ctx, dctx, kind, "name="+name)
+	if err != nil {
+		return err
+	}
+	for _, o := range objects {
+		if o.name != name {
+			continue
+		}
+		if o.labels[extension.ContainerLabelHost] != p.o.Host || o.labels[extension.ContainerLabelExecution] == "" {
+			return fmt.Errorf("%s %s is not one this host made for an execution", kind, name)
+		}
+		args := []string{kind, "rm", name}
+		if kind == objectVolume {
+			args = []string{kind, "rm", "--force", name}
+		}
+		if _, err := p.docker(ctx, dctx, args...); err != nil && !notFound(err) && !inUse(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// inUse is whether a network or volume rm failed because a container still
+// uses it.
+func inUse(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "active endpoints") || strings.Contains(s, "volume is in use")
 }
 
 func (p *Provider) Remove(ctx context.Context, ref extension.ContainerRef) error {
 	dctx, id, err := splitRef(ref.ID)
 	if err != nil {
 		return err
+	}
+	for _, kind := range []string{objectNetwork, objectVolume} {
+		if name, ok := strings.CutPrefix(id, kind+":"); ok {
+			return p.removeObject(ctx, dctx, kind, name)
+		}
 	}
 	labels := ref.Labels
 	if labels[extension.ContainerLabelExecution] == "" {
@@ -980,7 +1180,9 @@ func notFound(err error) bool {
 
 // docker runs the CLI on a context and returns its stdout.
 func (p *Provider) docker(ctx context.Context, dctx string, args ...string) ([]byte, error) {
-	if len(args) > 0 && (args[0] == "info" || args[0] == "ps" || args[0] == "inspect") {
+	read := len(args) > 0 && (args[0] == "info" || args[0] == "ps" || args[0] == "inspect") ||
+		len(args) > 1 && (args[0] == "network" || args[0] == "volume") && (args[1] == "ls" || args[1] == "inspect")
+	if read {
 		timeout := p.o.QueryTimeout
 		if timeout <= 0 {
 			timeout = DefaultQueryTimeout

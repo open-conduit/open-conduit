@@ -117,8 +117,11 @@ type ContainerCreated struct {
 //     grace, then kills it.
 //   - Inspect reports one container (Gone when its daemon holds none).
 //   - List reports every container carrying the owner's labels; an owner
-//     with no ExecutionID lists every container of the host. A listing that
-//     fails is an error, never an empty list.
+//     with no ExecutionID lists every container of the host and then, as
+//     stopped entries carrying the execution's labels, anything else the
+//     provider made for an execution that would outlive it (a network, a
+//     volume), so reconcile removes what a launch or removal cut short
+//     left. A listing that fails is an error, never an empty list.
 //   - Remove removes the container and what the provider made for it (a
 //     gateway, a network). Removing one that is gone is not an error.
 type ContainerProvider interface {

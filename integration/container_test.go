@@ -128,9 +128,11 @@ type dockerLab struct {
 	root, home, state, config, ws, outside string
 	run, other, records, runRoot           string
 	port, gateway, network                 string
-	provider                               *docker.Provider
-	mu                                     sync.Mutex
-	pins                                   []extension.ContainerPin
+	// segment is the segment the lab's bindings open (1 when zero).
+	segment  int
+	provider *docker.Provider
+	mu       sync.Mutex
+	pins     []extension.ContainerPin
 }
 
 func newDockerLab(t *testing.T) *dockerLab {
@@ -195,7 +197,7 @@ func newDockerLab(t *testing.T) *dockerLab {
 		if out, _ := exec.Command("docker", "--context", dctx, "ps", "-aq", "--filter", "label="+extension.ContainerLabelHost+"="+l.host).Output(); len(out) > 0 {
 			_ = exec.Command("docker", append([]string{"--context", dctx, "rm", "-f"}, strings.Fields(string(out))...)...).Run()
 		}
-		_ = extension.ReconcileContainers(ctx, l.provider, l.host, func([]domain.ID) (map[domain.ID]bool, error) { return nil, nil })
+		_, _ = extension.ReconcileContainers(ctx, l.provider, l.host, func([]domain.ID) (map[domain.ID]bool, error) { return nil, nil })
 		if out, _ := exec.Command("docker", "--context", dctx, "network", "ls", "-q", "--filter", "label="+extension.ContainerLabelHost+"="+l.host).Output(); len(out) > 0 {
 			_ = exec.Command("docker", append([]string{"--context", dctx, "network", "rm"}, strings.Fields(string(out))...)...).Run()
 		}
@@ -228,7 +230,7 @@ func (l *dockerLab) binding(config string, exec domain.ID, pinned *extension.Con
 		Owner:     extension.ResourceOwner{ScopeID: "scope", WorkID: "work", ExecutionID: exec},
 		Config:    domain.Payload{Schema: extension.ContainerConfigSchema, Data: json.RawMessage(config)},
 		Host:      l.host,
-		Segment:   1,
+		Segment:   max(l.segment, 1),
 		Protected: []string{l.state, l.config},
 		Shared:    []string{l.run},
 		RunRoot:   l.runRoot,
@@ -807,7 +809,7 @@ func TestDockerRemoveAndReconcile(t *testing.T) {
 	if err != nil || !containsPath(mounts, l.ws) {
 		t.Errorf("mounts %v %v, want the workspace", mounts, err)
 	}
-	err = extension.ReconcileContainers(ctx, l.provider, l.host, func(ids []domain.ID) (map[domain.ID]bool, error) {
+	_, err = extension.ReconcileContainers(ctx, l.provider, l.host, func(ids []domain.ID) (map[domain.ID]bool, error) {
 		return map[domain.ID]bool{"rm-live": true}, nil
 	})
 	if err != nil {
@@ -848,6 +850,105 @@ func TestDockerRemoveAndReconcile(t *testing.T) {
 	}
 	if out, _ := l.docker("ps", "-aq", "--filter", "label="+extension.ContainerLabelExecution+"=rm-live"); out != "" {
 		t.Error("removal left the execution's gateway")
+	}
+}
+
+// TestDockerReconcileLeftovers: what a launch cut short leaves (its
+// volume and networks, with no container or gateway, as a daemon stopped
+// before the gateway started leaves them) is gone once
+// reconcile runs and the execution is over; a live execution keeps its
+// networks, and its next segment's launch removes the orphaned gateway of
+// the last. A network or volume with another host's label, or no label,
+// is never touched, even one named as the provider names its own (#637).
+func TestDockerReconcileLeftovers(t *testing.T) {
+	ctx := context.Background()
+	l := newDockerLab(t)
+	for _, exec := range []domain.ID{"lo-cut", "lo-live"} {
+		if _, _, err := l.launch(l.binding(l.grant(""), exec, nil, nil), string(exec), "true", extension.SandboxNeeds{}); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := l.docker("rm", "-f", dockerID(l.pinned().ID)); err != nil {
+			t.Fatalf("removing the container: %v %s", err, out)
+		}
+	}
+	gateway := func(exec domain.ID, segment string) string {
+		return docker.ExecutionNetwork(l.host, string(exec)) + "-" + segment + "-gw"
+	}
+	// One cut short before its gateway started has only its networks and
+	// volume: nothing a container listing finds.
+	if out, err := l.docker("rm", "-f", gateway("lo-cut", "1")); err != nil {
+		t.Fatalf("removing the gateway: %v %s", err, out)
+	}
+	if out, _ := l.docker("network", "ls", "-q", "--filter", "label="+extension.ContainerLabelExecution+"=lo-cut"); out == "" {
+		t.Fatal("the cut-short launch left no network to test with")
+	}
+	foreign := docker.ExecutionNetwork("other-host", "lo-cut")
+	unlabelled := docker.ExecutionNetwork(l.host, "lo-unlabelled")
+	for _, args := range [][]string{
+		{"network", "create", "--label", extension.ContainerLabelHost + "=other-host", "--label", extension.ContainerLabelExecution + "=lo-cut", foreign},
+		{"network", "create", unlabelled},
+		{"volume", "create", "--label", extension.ContainerLabelHost + "=other-host", "--label", extension.ContainerLabelExecution + "=lo-cut", foreign + "-tb"},
+	} {
+		if out, err := l.docker(args...); err != nil {
+			t.Fatalf("%v: %v %s", args, err, out)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = l.docker("network", "rm", foreign, unlabelled)
+		_, _ = l.docker("volume", "rm", "-f", foreign+"-tb")
+	})
+	live := func(ids []domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{"lo-live": true}, nil }
+	// While something still uses the finished execution's network and
+	// volume (an operator's attach beside it), reconcile leaves them and
+	// doesn't fail; the next pass, once it has gone, removes them.
+	cutNetwork, cutVolume := docker.ExecutionNetwork(l.host, "lo-cut"), docker.ExecutionNetwork(l.host, "lo-cut")+"-1-tb"
+	if out, err := l.docker("run", "-d", "--name", cutNetwork+"-user", "--network", cutNetwork, "--mount", "type=volume,source="+cutVolume+",target=/v", dockerTestImage, "sleep", "60"); err != nil {
+		t.Fatalf("a container on the network: %v %s", err, out)
+	}
+	t.Cleanup(func() { _, _ = l.docker("rm", "-f", cutNetwork+"-user") })
+	if _, err := extension.ReconcileContainers(ctx, l.provider, l.host, live); err != nil {
+		t.Fatalf("reconcile with the network in use: %v", err)
+	}
+	if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+cutNetwork+"$"); out == "" {
+		t.Error("reconcile removed a network in use")
+	}
+	if out, err := l.docker("rm", "-f", cutNetwork+"-user"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	removed, err := extension.ReconcileContainers(ctx, l.provider, l.host, live)
+	if err != nil || removed == 0 {
+		t.Fatalf("reconcile removed %d: %v", removed, err)
+	}
+	mine := []string{"--filter", "label=" + extension.ContainerLabelExecution + "=lo-cut", "--filter", "label=" + extension.ContainerLabelHost + "=" + l.host}
+	for _, list := range [][]string{{"ps", "-aq"}, {"network", "ls", "-q"}, {"volume", "ls", "-q"}} {
+		if out, _ := l.docker(append(list, mine...)...); out != "" {
+			t.Errorf("reconcile left the cut-short execution's %s: %s", list[0], out)
+		}
+	}
+	for _, n := range []string{foreign, unlabelled, docker.ExecutionNetwork(l.host, "lo-live")} {
+		if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+n+"$"); out == "" {
+			t.Errorf("reconcile removed the network %s", n)
+		}
+	}
+	if out, _ := l.docker("volume", "ls", "-q", "--filter", "name=^"+foreign+"-tb$"); out == "" {
+		t.Error("reconcile removed another host's volume")
+	}
+	if err := l.provider.Remove(ctx, extension.ContainerRef{ID: l.dctx + "/network:" + foreign}); err == nil {
+		t.Error("Remove took another host's network")
+	}
+	// The live execution's next segment removes the last one's gateway.
+	if out, _ := l.docker("ps", "-aq", "--filter", "name="+gateway("lo-live", "1")); out == "" {
+		t.Fatal("the live execution has no orphaned gateway to test with")
+	}
+	l.segment = 2
+	if _, _, err := l.launch(l.binding(l.grant(""), "lo-live", nil, nil), "lo-live-2", "true", extension.SandboxNeeds{}); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := l.docker("ps", "-aq", "--filter", "name="+gateway("lo-live", "1")); out != "" {
+		t.Error("the next segment's launch left the orphaned gateway")
+	}
+	if out, _ := l.docker("ps", "-aq", "--filter", "name="+gateway("lo-live", "2")); out == "" {
+		t.Error("the next segment's launch has no gateway")
 	}
 }
 

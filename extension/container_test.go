@@ -420,17 +420,17 @@ func TestReconcileContainers(t *testing.T) {
 	add("terminal", "host-a", "x2")
 	add("gone", "host-a", "x3")
 	add("other-host", "host-b", "x2")
-	err := extension.ReconcileContainers(context.Background(), f, "host-a", func(ids []domain.ID) (map[domain.ID]bool, error) {
+	n, err := extension.ReconcileContainers(context.Background(), f, "host-a", func(ids []domain.ID) (map[domain.ID]bool, error) {
 		return map[domain.ID]bool{"x1": true, "x2": false}, nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || n != 2 {
+		t.Fatalf("reconcile removed %d: %v, want 2", n, err)
 	}
 	if len(f.removed) != 2 || !contains(f.removed, "terminal") || !contains(f.removed, "gone") {
 		t.Errorf("removed %v, want the terminal and gone executions' containers only", f.removed)
 	}
 	f.listErr = errors.New("unreachable")
-	if err := extension.ReconcileContainers(context.Background(), f, "host-a", nil); err == nil {
+	if _, err := extension.ReconcileContainers(context.Background(), f, "host-a", nil); err == nil {
 		t.Error("a failed listing reconciled")
 	}
 }
@@ -552,7 +552,7 @@ func TestContainerAttachLabels(t *testing.T) {
 		t.Fatalf("created %v, pins %v", f.created, h.pins)
 	}
 	f.start("c1", h.now.Add(time.Second))
-	err := extension.ReconcileContainers(context.Background(), f, "host-a", func([]domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{}, nil })
+	_, err := extension.ReconcileContainers(context.Background(), f, "host-a", func([]domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{}, nil })
 	if err != nil || len(f.removed) != 0 {
 		t.Fatalf("reconcile removed a running attach: %v, %v", f.removed, err)
 	}
