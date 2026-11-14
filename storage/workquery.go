@@ -84,11 +84,13 @@ type WorkFacets struct {
 	Executors []string
 }
 
-// WorkSource is where Work came from: the Source of its first correlation
-// key, else its Kind.
+// WorkSource is where Work came from: the Source of its subject key
+// (domain.SubjectKey: its first key other than its lineage key), else its
+// Kind, so where Work came from doesn't change when it first waits or asks
+// for child Work.
 func WorkSource(w domain.Work) string {
-	if len(w.CorrelationKeys) > 0 {
-		return w.CorrelationKeys[0].Source
+	if k, ok := domain.SubjectKey(w.CorrelationKeys); ok {
+		return k.Source
 	}
 	return w.Kind
 }

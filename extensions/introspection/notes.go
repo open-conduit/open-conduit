@@ -107,9 +107,10 @@ func (t *Tools) note(ctx context.Context, a extension.Authority, kind, area, bod
 		}
 		n := Note{Kind: kind, Area: area, Scope: string(a.ScopeID), Work: string(a.WorkID), Execution: string(a.ExecutionID), Body: body, At: at}
 		n.Origin = noteOrigin(tx, a)
-		if w, err := tx.Work(a.WorkID); err == nil && len(w.CorrelationKeys) > 0 {
-			k := w.CorrelationKeys[0]
-			n.Key = &k
+		if w, err := tx.Work(a.WorkID); err == nil {
+			if k, ok := domain.SubjectKey(w.CorrelationKeys); ok {
+				n.Key = &k
+			}
 		}
 		value, err := json.Marshal(n)
 		if err != nil {

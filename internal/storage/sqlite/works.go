@@ -31,9 +31,14 @@ var (
 const (
 	workState = "json_extract(CAST(record AS TEXT),'$.State')"
 	workKind  = "json_extract(CAST(record AS TEXT),'$.Kind')"
-	// workSource is storage.WorkSource: the first correlation key's
-	// source, else the kind.
-	workSource = "coalesce(json_extract(CAST(record AS TEXT),'$.CorrelationKeys[0].Source')," + workKind + ")"
+	// workSource is storage.WorkSource: the source of the first
+	// correlation key other than the lineage key, else the kind. A Work
+	// owns one lineage key, and any key it gains after it is appended, so
+	// only the first two keys need looking at (an index expression can't
+	// search the list).
+	workSource = "coalesce(CASE WHEN json_extract(CAST(record AS TEXT),'$.CorrelationKeys[0].Source')='" + domain.LineageSource + "' " +
+		"THEN json_extract(CAST(record AS TEXT),'$.CorrelationKeys[1].Source') " +
+		"ELSE json_extract(CAST(record AS TEXT),'$.CorrelationKeys[0].Source') END," + workKind + ")"
 	// workExecutor is the Work's LatestExecutor, "" before one is recorded.
 	workExecutor = "coalesce(json_extract(CAST(record AS TEXT),'$.LatestExecutor'),'')"
 )
@@ -55,7 +60,10 @@ var workIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS works_executor_created ON works(` + workExecutor + `, ` + workState + `, ` + workCreated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_executor_updated ON works(` + workExecutor + `, ` + workState + `, ` + workUpdated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_scope ON works(scope_id, ` + workState + `)`,
-	`CREATE INDEX IF NOT EXISTS works_source ON works(` + workSource + `, ` + workState + `)`,
+	// works_source_subject replaces works_source, which indexed the first
+	// key's source whatever it was.
+	`DROP INDEX IF EXISTS works_source`,
+	`CREATE INDEX IF NOT EXISTS works_source_subject ON works(` + workSource + `, ` + workState + `)`,
 	`CREATE INDEX IF NOT EXISTS works_parent ON works(parent_id)`,
 }
 

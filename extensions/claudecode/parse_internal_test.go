@@ -143,6 +143,15 @@ func TestBodyAndPrompt(t *testing.T) {
 	if got := expand("agent/issue-{number} {key} {work}", w); got != "agent/issue-12 issue/12/generation/reopen-99 w1" {
 		t.Fatalf("template %q", got)
 	}
+	// The lineage key the host adds when the Work waits or asks for child
+	// Work is not its subject: the arguments don't change.
+	w.CorrelationKeys = append([]domain.CorrelationKey{domain.LineageKey("work/d5bc")}, w.CorrelationKeys...)
+	if got := expand("{number} {key}", w); got != "12 issue/12/generation/reopen-99" {
+		t.Fatalf("with a lineage key %q", got)
+	}
+	if got := expand("[{number}]", domain.Work{ID: "work/d5bc", CorrelationKeys: []domain.CorrelationKey{domain.LineageKey("work/d5bc")}}); got != "[]" {
+		t.Fatalf("keyless Work's arguments changed once it waited: %q", got)
+	}
 	args, text := body(kindEvents, "12", "", "### an event")
 	if p := prompt("work-issue", args, text); p != "/open-conduit:work-issue 12 events\n\n## Since your last turn\n\n### an event" {
 		t.Fatalf("prompt %q", p)

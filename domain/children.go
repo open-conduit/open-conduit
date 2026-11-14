@@ -26,6 +26,22 @@ func LineageKey(work ID) CorrelationKey {
 	return CorrelationKey{Source: LineageSource, ExternalID: string(work)}
 }
 
+// SubjectKey is the first of a Work's keys that says what the Work is about
+// (what an outside source keyed it by): any key but its lineage key, which the host adds
+// to the Work's keys partway through its life and which names only the
+// Work itself. Without one, ok is false. Whatever reads a Work's first key
+// as its subject (a playbook's {number}, where the Work came from) reads
+// this, so a Work's subject doesn't change when it first waits or asks
+// for child Work.
+func SubjectKey(keys []CorrelationKey) (key CorrelationKey, ok bool) {
+	for _, k := range keys {
+		if k.Source != LineageSource {
+			return k, true
+		}
+	}
+	return CorrelationKey{}, false
+}
+
 // ChildEnded is a TypeChildEnded Event's payload: which child ended, in
 // which state, and what its last attempt returned. Result is the child's
 // declared turn result (TurnDeclaration.Result), absent when it returned

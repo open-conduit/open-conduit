@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
 
@@ -135,10 +136,18 @@ func (t turnInfo) Live() bool { return runview.Running(t.Run) }
 func newWork(w client.Work, runs []client.Run, wait *client.Wait, now time.Time) workView {
 	v := workView{Work: w, Wait: wait, Actions: w.Actions, Panels: w.Panels, Created: parseTime(w.CreatedAt), Updated: parseTime(w.UpdatedAt)}
 	v.Title, v.Ref = runview.WorkLabel(w), ""
-	// Without a display or an annotation the label is the first key; the
-	// row names its source beside the title, so the title is the key's ID.
-	if k := w.CorrelationKeys; len(k) > 0 && v.Title == k[0].Source+" "+k[0].ExternalID {
-		v.Title = k[0].ExternalID
+	// Without a display or an annotation the label is the subject key
+	// (any key but the lineage key); the row names its source beside the
+	// title, so the title is the key's ID.
+	subject, hasSubject := client.Key{}, false
+	for _, k := range w.CorrelationKeys {
+		if k.Source != domain.LineageSource {
+			subject, hasSubject = k, true
+			break
+		}
+	}
+	if hasSubject && v.Title == subject.Source+" "+subject.ExternalID {
+		v.Title = subject.ExternalID
 	}
 	if d := w.Display; d != nil {
 		if d.Title != "" {
@@ -146,8 +155,8 @@ func newWork(w client.Work, runs []client.Run, wait *client.Wait, now time.Time)
 		}
 		v.Ref = d.Ref
 	}
-	if len(w.CorrelationKeys) > 0 {
-		v.Source = sourceFamily(w.CorrelationKeys[0].Source)
+	if hasSubject {
+		v.Source = sourceFamily(subject.Source)
 	} else {
 		v.Source = sourceFamily(w.Kind)
 	}

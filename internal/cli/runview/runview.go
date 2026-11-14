@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // LogArtifact selects the run's log: the first text artifact, else the first.
@@ -229,8 +230,11 @@ func WorkLabel(w client.Work) string {
 		}
 		return a.Value
 	}
+	// The lineage key names only the Work itself, so it is no label.
 	for _, k := range w.CorrelationKeys {
-		return k.Source + " " + k.ExternalID
+		if k.Source != domain.LineageSource {
+			return k.Source + " " + k.ExternalID
+		}
 	}
 	return w.ID
 }
