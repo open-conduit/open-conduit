@@ -520,13 +520,14 @@ func ContainerMounts(ctx context.Context, p ContainerProvider, owner ResourceOwn
 }
 
 // ReconcileContainers removes this host's containers (and what the
-// provider made for them) whose execution is terminal or gone. live
-// reports, for the executions found, which are still live; one it leaves
-// out is gone.
-func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, live func([]domain.ID) (map[domain.ID]bool, error)) error {
+// provider made for them, which its host-wide listing reports after them)
+// whose execution is terminal or gone, and returns how many entries it
+// removed. live reports, for the executions found, which are still live;
+// one it leaves out is gone.
+func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, live func([]domain.ID) (map[domain.ID]bool, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var ids []domain.ID
 	seen := map[domain.ID]bool{}
@@ -538,12 +539,13 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 		}
 	}
 	if len(ids) == 0 {
-		return nil
+		return 0, nil
 	}
 	alive, err := live(ids)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	removed := 0
 	var errs []error
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
@@ -555,7 +557,11 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 		if st.Running && st.Ref.Labels[ContainerLabelSegment] == ContainerSegmentAttach {
 			continue
 		}
-		errs = append(errs, p.Remove(ctx, st.Ref))
+		if err := p.Remove(ctx, st.Ref); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed++
 	}
-	return errors.Join(errs...)
+	return removed, errors.Join(errs...)
 }

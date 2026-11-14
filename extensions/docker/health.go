@@ -36,7 +36,42 @@ type Health struct {
 // the Docker. With cached, a pass in the last ten minutes stands. Health
 // only looks: it never pulls the gateway image (EnsureGateway does).
 func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached bool) Health {
-	return p.assess(ctx, dctx, image, dir, cached, false)
+	h := p.assess(ctx, dctx, image, dir, cached, false)
+	if h.Code != "docker_unreachable" {
+		h.Items = append(h.Items, p.held(ctx, dctx))
+	}
+	return h
+}
+
+// held is doctor's count of what this daemon has made on a context: its
+// containers (gateways among them) and how many have stopped, and its
+// networks. The daemon removes those of ended runs as it reconciles, so a
+// count that grows run after run means that removal is failing.
+func (p *Provider) held(ctx context.Context, dctx string) string {
+	filter := "label=" + extension.ContainerLabelHost + "=" + p.o.Host
+	out, err := p.docker(ctx, dctx, "ps", "--all", "--filter", filter, "--format", "{{.State}}")
+	if err != nil {
+		return fmt.Sprintf("could not count Open Conduit's containers on context %s: %v", dctx, err)
+	}
+	containers, stopped := 0, 0
+	for _, state := range strings.Fields(string(out)) {
+		containers++
+		if state != "running" {
+			stopped++
+		}
+	}
+	networks, err := p.objects(ctx, dctx, objectNetwork, filter)
+	if err != nil {
+		return fmt.Sprintf("could not count Open Conduit's networks on context %s: %v", dctx, err)
+	}
+	n := 0
+	for _, o := range networks {
+		if o.labels[extension.ContainerLabelExecution] != "" {
+			n++
+		}
+	}
+	return fmt.Sprintf("this daemon's on context %s: %d containers (%d stopped) and %d networks; it removes those of ended runs as it reconciles "+
+		"(docker --context %s ps --all --filter %s lists them)", dctx, containers, stopped, n, dctx, filter)
 }
 
 // assess is Health, pulling a missing gateway image first with pull (a
@@ -220,7 +255,7 @@ func (p *Provider) Preflight(ctx context.Context, dctx string) (string, error) {
 	_, _ = rand.Read(b)
 	name := "oc-preflight-" + hex.EncodeToString(b)
 	labels := map[string]string{extension.ContainerLabelHost: p.o.Host}
-	if _, err := p.docker(ctx, dctx, append([]string{"network", "create"}, networkArgs(name, labels, true)...)...); err != nil {
+	if err := p.createNetwork(ctx, dctx, networkArgs(name, labels, true)); err != nil {
 		return "preflight_failed", fmt.Errorf("could not make an internal network: %v", err)
 	}
 	cleanup := context.WithoutCancel(ctx)

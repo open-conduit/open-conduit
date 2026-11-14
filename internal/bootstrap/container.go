@@ -294,7 +294,7 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	sort.Strings(names)
 	var errs []error
 	for _, name := range names {
-		errs = append(errs, extension.ReconcileContainers(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]bool, error) {
+		removed, err := extension.ReconcileContainers(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]bool, error) {
 			live := map[domain.ID]bool{}
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				for _, id := range ids {
@@ -310,11 +310,17 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 				return nil
 			})
 			return live, err
-		}))
+		})
+		if removed > 0 {
+			d.log.Info("removed what ended runs left in containers", "provider", name, "removed", removed)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
 	}
 	errs = append(errs, d.sweepHomes(ctx))
 	if err := errors.Join(errs...); err != nil && ctx.Err() == nil {
-		d.report("containers", "", "reconcile_failed")
+		d.report("containers", "", "reconcile_failed", err.Error())
 		return
 	}
 	d.clear("containers", "")
