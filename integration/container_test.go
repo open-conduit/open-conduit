@@ -897,9 +897,25 @@ func TestDockerReconcileLeftovers(t *testing.T) {
 		_, _ = l.docker("network", "rm", foreign, unlabelled)
 		_, _ = l.docker("volume", "rm", "-f", foreign+"-tb")
 	})
-	removed, err := extension.ReconcileContainers(ctx, l.provider, l.host, func(ids []domain.ID) (map[domain.ID]bool, error) {
-		return map[domain.ID]bool{"lo-live": true}, nil
-	})
+	live := func(ids []domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{"lo-live": true}, nil }
+	// While something still uses the finished execution's network and
+	// volume (an operator's attach beside it), reconcile leaves them and
+	// doesn't fail; the next pass, once it has gone, removes them.
+	cutNetwork, cutVolume := docker.ExecutionNetwork(l.host, "lo-cut"), docker.ExecutionNetwork(l.host, "lo-cut")+"-1-tb"
+	if out, err := l.docker("run", "-d", "--name", cutNetwork+"-user", "--network", cutNetwork, "--mount", "type=volume,source="+cutVolume+",target=/v", dockerTestImage, "sleep", "60"); err != nil {
+		t.Fatalf("a container on the network: %v %s", err, out)
+	}
+	t.Cleanup(func() { _, _ = l.docker("rm", "-f", cutNetwork+"-user") })
+	if _, err := extension.ReconcileContainers(ctx, l.provider, l.host, live); err != nil {
+		t.Fatalf("reconcile with the network in use: %v", err)
+	}
+	if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+cutNetwork+"$"); out == "" {
+		t.Error("reconcile removed a network in use")
+	}
+	if out, err := l.docker("rm", "-f", cutNetwork+"-user"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	removed, err := extension.ReconcileContainers(ctx, l.provider, l.host, live)
 	if err != nil || removed == 0 {
 		t.Fatalf("reconcile removed %d: %v", removed, err)
 	}

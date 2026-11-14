@@ -1061,8 +1061,10 @@ func (p *Provider) objects(ctx context.Context, dctx, kind, filter string) ([]ob
 }
 
 // removeObject removes a network or volume a host-wide listing reported,
-// once it is proved this host's and an execution's; one that is gone is
-// not an error.
+// once it is proved this host's and an execution's. One that is gone is
+// not an error, and nor is one still in use (an operator's attach running
+// beside a finished execution is still on its networks and volume): the
+// next reconcile pass removes it once nothing uses it.
 func (p *Provider) removeObject(ctx context.Context, dctx, kind, name string) error {
 	objects, err := p.objects(ctx, dctx, kind, "name="+name)
 	if err != nil {
@@ -1079,11 +1081,18 @@ func (p *Provider) removeObject(ctx context.Context, dctx, kind, name string) er
 		if kind == objectVolume {
 			args = []string{kind, "rm", "--force", name}
 		}
-		if _, err := p.docker(ctx, dctx, args...); err != nil && !notFound(err) {
+		if _, err := p.docker(ctx, dctx, args...); err != nil && !notFound(err) && !inUse(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// inUse is whether a network or volume rm failed because a container still
+// uses it.
+func inUse(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "active endpoints") || strings.Contains(s, "volume is in use")
 }
 
 func (p *Provider) Remove(ctx context.Context, ref extension.ContainerRef) error {
