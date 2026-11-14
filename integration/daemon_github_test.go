@@ -120,7 +120,9 @@ func githubToolsDaemonConfig(apiURL string) []byte {
 	runOps := []string{"read_context", "declare_outcome", "github.issue.comment", "github.context"}
 	holdOps := []string{"emit", "github.hold.status", "github.hold"}
 	cfg := map[string]any{
-		"version": 1, "settings": map[string]any{},
+		// Reconciled each second: the test opens its issue once the daemon
+		// serves, and the hold's margin covers only reconcile and claim.
+		"version": 1, "settings": map[string]any{"reconcile_seconds": 1},
 		"connections": []any{map[string]any{"id": "github", "type": "github", "config": map[string]any{"api_url": apiURL},
 			"secret_refs": map[string]any{"token": "env:OC_TEST_GITHUB_TOKEN"}}},
 		"scopes": []any{map[string]any{
@@ -153,8 +155,9 @@ func githubToolsDaemonConfig(apiURL string) []byte {
 //
 // The hold is checked from the run history once the Work completes, not by
 // catching it parked: on a loaded runner the parked window can pass between
-// two polls. The runAt is set after the daemon binary is built and leaves
-// holdMargin for the daemon to start and claim the issue before it comes.
+// two polls. The issue is opened, and its runAt set, once the daemon serves
+// (a loaded runner can take seconds to start its packages), leaving
+// holdMargin for the daemon to reconcile and claim it before its time.
 func TestDaemonGitHubHeldIssueAndTools(t *testing.T) {
 	const holdMargin = 10 * time.Second
 	fake := githubtest.New("octo/widgets", "tok")
@@ -164,9 +167,9 @@ func TestDaemonGitHubHeldIssueAndTools(t *testing.T) {
 	if err := os.WriteFile(d.config, githubToolsDaemonConfig(fake.URL), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	d.start("")
 	at := time.Now().Add(holdMargin).UTC().Truncate(time.Second)
 	n := fake.OpenIssue("Match day", "Report on it.\n\n<!-- runAt: "+at.Format(time.RFC3339)+" -->", githubtest.User{Login: "alice", Type: "User"}, "scheduled")
-	d.start("")
 	work := func() (string, string) {
 		page, err := d.c.Works(context.Background(), url.Values{"scope_id": {"eng"}})
 		if err != nil || len(page.Items) != 1 {

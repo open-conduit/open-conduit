@@ -82,7 +82,7 @@ The wrapper's `$0` carries an unguessable per-segment nonce. Process identity is
 
 A lower-epoch recoverer is refused. A superseded instance can neither interrupt nor stop a process that a newer epoch adopted (`ErrSuperseded`); this is how lease ownership is respected at the process boundary.
 
-The production scheduler requires `PersistRecovery` to succeed before it accepts an adopted handle, so re-acknowledging the identical metadata during recovery is allowed. The shared executor case permits that re-acknowledgement and still rejects new metadata as a replacement launch, with a negative control (`TestExecutorRecoveryReplacement`).
+The production scheduler requires `PersistRecovery` to succeed before it accepts an adopted handle, so recovery re-acknowledges the identical metadata. The shared executor case requires that re-acknowledgement and still rejects new metadata as a replacement launch, with negative controls for both (`TestExecutorRecoveryReplacement`).
 
 ## Results, interruption and stop evidence
 
