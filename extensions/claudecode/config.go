@@ -38,6 +38,11 @@ type Config struct {
 	// to the outcome (default true). Otherwise a turn that ends cleanly is
 	// completed with its final text as the summary.
 	Structured *bool `json:"structured,omitempty"`
+	// Reply says what a turn's reply is. "text": the turn's final text, as
+	// for Work a person talks to through a client. A turn that ends without
+	// any is asked for its reply once, in the same process, before it ends.
+	// Empty leaves a turn's text as it is.
+	Reply string `json:"reply,omitempty"`
 	// StatusSchema names the outcome data schema the parsed status is
 	// reported under. Optional: the default, domain.TurnSchema, is what
 	// every projector reads and what the host publishes a turn's end from.
@@ -139,6 +144,9 @@ const (
 	ColdHandoff = "handoff"
 	ColdResume  = "resume"
 )
+
+// ReplyText is the Config.Reply that makes a turn's final text its reply.
+const ReplyText = "text"
 
 // invalidConfig is the executor's refusal of a binding config: ErrConfig,
 // with the diagnostics (extension.ConfigError) that say which field is
@@ -266,6 +274,9 @@ func parseConfig(data []byte) (c Config, ce *extension.ConfigError, decoded bool
 	case ColdHandoff, ColdResume:
 	default:
 		ce.Add("/cold_turns", "unknown_cold_turns", "cold_turns must be handoff or resume")
+	}
+	if c.Reply != "" && c.Reply != ReplyText {
+		ce.Add("/reply", "unknown_reply", "reply must be text, or left out")
 	}
 	for _, name := range sortedKeys(c.Env) {
 		switch {

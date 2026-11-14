@@ -37,7 +37,8 @@ var StatusSchema = map[string]any{
 				"Each of these keeps the work open, and you are resumed with whatever arrives next. " +
 				"finished: the work is over and you have cleaned up; it completes, and nothing resumes it.",
 		},
-		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line."},
+		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line: a note for the run's history. " +
+			"Nobody in the conversation sees it, so it never carries a reply; write that as text before you end the turn."},
 		"handoff": map[string]any{"type": "string", "description": "A note to whoever picks this work up next: " +
 			"what is pending, the judgement calls you made and why, and what to look at next. Empty when there is nothing to add."},
 		"report": map[string]any{"type": "string", "description": "A write-up for the operator, in Markdown, shown with this turn in the run's history, " +

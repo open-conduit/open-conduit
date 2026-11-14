@@ -232,6 +232,7 @@ Binding `config`:
 | `plugin_dir` |  |  |
 | `args` | `{number}` | a template of {key}, {number} and {work} |
 | `status_schema` | `core.turn.v1` |  |
+| `reply` |  | text: a turn's final text is its reply, and a turn that ends without one is asked for it once One of text. |
 | `branch` |  | the workspace branch template, of {key}, {number} and {work} |
 | `workspace_mode` |  |  |
 | `dir` |  | a folder a workspace-free binding runs in, as-is |

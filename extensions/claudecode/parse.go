@@ -41,6 +41,8 @@ const (
 // about any one kind of Work: the playbook says what they mean for its own.
 var StatusSchema = map[string]any{
 	"type": "object",
+	"description": "How this turn ends, for Open Conduit and the run's history. Nobody in the conversation sees it: " +
+		"anything a person or another agent should get must be in your text, in the result, or in the tool call that delivers it.",
 	"properties": map[string]any{
 		"state": map[string]any{
 			"type": "string",
@@ -53,7 +55,8 @@ var StatusSchema = map[string]any{
 				"Each of these keeps the work open, and you are resumed with whatever arrives next. " +
 				"finished: the work is over and you have cleaned up; it completes, and nothing resumes it.",
 		},
-		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line."},
+		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line: a note for the run's history. " +
+			"Nobody in the conversation sees it, so it never carries a reply; write that as text before you end the turn."},
 		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this work up next if this one has gone cold or grown too large: " +
 			"what is pending, the judgement calls you made and why, and what to look at next. Intent only; leave out what the work's own record already shows."},
 		"report": map[string]any{"type": "string", "description": "Optional: a write-up for the operator, in Markdown, shown with this turn in the run's history. " +
@@ -101,10 +104,14 @@ type Totals struct {
 // parsed is how a turn ended, as read from claude's output.
 type parsed struct {
 	// Asked is the turn's (turnRecord.Asked), not parsed from output.
-	Asked      bool
-	OK         bool
-	Status     *Status
-	Text       string
+	Asked  bool
+	OK     bool
+	Status *Status
+	// Text is claude's own result text: an unstructured turn's final
+	// message, or what an error said.
+	Text string
+	// Final is the turn's final text (finalText), whatever the mode.
+	Final      string
 	Cost       *float64
 	Tokens     *Tokens
 	Models     []string
@@ -180,6 +187,62 @@ func toolCalls(stdout string) int {
 		}
 	}
 	return n
+}
+
+// statusTool is the tool claude offers a --json-schema turn to end with.
+const statusTool = "StructuredOutput"
+
+// finalTracker follows a turn's stream-json output for its final text: what
+// the main thread wrote after its last tool call, the status call aside. It
+// is what the person in the conversation reads as the turn's reply; text a
+// subagent wrote, or text before a tool call ("let me look"), is not.
+type finalTracker struct{ parts []string }
+
+func (t *finalTracker) feed(line string) {
+	if !strings.Contains(line, `"assistant"`) {
+		return
+	}
+	var m struct {
+		Type    string  `json:"type"`
+		Parent  *string `json:"parent_tool_use_id"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal([]byte(line), &m) != nil || m.Type != "assistant" || m.Parent != nil {
+		return
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(m.Message.Content, &parts) != nil {
+		var text string
+		if json.Unmarshal(m.Message.Content, &text) == nil && strings.TrimSpace(text) != "" {
+			t.parts = append(t.parts, strings.TrimSpace(text))
+		}
+		return
+	}
+	for _, p := range parts {
+		switch {
+		case p.Type == "text" && strings.TrimSpace(p.Text) != "":
+			t.parts = append(t.parts, strings.TrimSpace(p.Text))
+		case p.Type == "tool_use" && p.Name != statusTool:
+			t.parts = nil
+		}
+	}
+}
+
+func (t *finalTracker) text() string { return strings.Join(t.parts, "\n\n") }
+
+// finalText is the turn's final text (finalTracker) in its output.
+func finalText(stdout string) string {
+	var t finalTracker
+	for _, line := range strings.Split(stdout, "\n") {
+		t.feed(line)
+	}
+	return t.text()
 }
 
 // lastContext is the size of the session's context after the last model
@@ -308,6 +371,7 @@ func parse(stdout, stderr string, code *int, structured bool, now time.Time) par
 		p.Totals = &Totals{Session: r.SessionID, Cost: r.TotalCostUSD, Models: models}
 	}
 	p.ModelCalls, p.ToolCalls, p.Context = r.NumTurns, toolCalls(stdout), lastContext(stdout)
+	p.Final = finalText(stdout)
 	p.Tokens, p.Models = usage(models, nil)
 	if r.IsError || (code != nil && *code != 0) {
 		p.Limited, p.ResetsAt = limitHit(r, stdout, now)
