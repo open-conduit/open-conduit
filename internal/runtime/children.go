@@ -254,7 +254,7 @@ const CodeNoChildInProgress = "no_child_in_progress"
 // it waits only for news of a child (every type it names is
 // domain.TypeChildEnded or domain.TypeChildReported) and no such Event can
 // come: the Work has no child that hasn't ended, and no child's end or
-// report has arrived after the wait's
+// report of a type it names has arrived after the wait's
 // watermark for it to wake on; or the wait's keys leave out the Work's
 // lineage key, the only key a child's end arrives on. Declaring such a wait
 // would release the execution's authority and park the Work for good (a
@@ -287,7 +287,7 @@ func childEndReachableInTx(tx storage.Tx, w domain.Work, match domain.EventMatch
 		return err
 	}
 	for _, a := range arrived {
-		if domain.IsChildNews(a.Event.Type) && a.Event.Source == domain.LineageSource {
+		if domain.IsChildNews(a.Event.Type) && a.Event.Source == domain.LineageSource && slices.Contains(match.Types, a.Event.Type) {
 			return nil
 		}
 	}
