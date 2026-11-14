@@ -1164,3 +1164,45 @@ func TestHumanGateGrant(t *testing.T) {
 		t.Fatal("an expired grant let the call through")
 	}
 }
+
+// conflicting is a store whose next n transactions are refused as a
+// concurrent writer's (the extension's own sync settling the same ask)
+// would be over the protocol: nothing is applied.
+type conflicting struct {
+	storage.Store
+	n int
+}
+
+func (c *conflicting) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	if c.n > 0 {
+		c.n--
+		return storage.ErrConflict
+	}
+	return c.Store.Transact(ctx, g, fn)
+}
+
+// A gate whose transaction loses a race with a concurrent write tries again
+// rather than refusing the call as gate_failed; one that keeps losing still
+// fails closed.
+func TestHumanGateRetriesAConflict(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	ctx := context.Background()
+	c, err := hu.ParseConfig(json.RawMessage(`{"gates":[{"operations":["fixture.deploy"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &conflicting{Store: h.f.Store, n: 2}
+	tools, err := hu.NewTools(hu.Options{Store: store, Now: h.f.Clock.Now, Entry: func(domain.ID) (hu.Entry, bool) { return hu.Entry{Name: "decisions", Config: c}, true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := extension.GateCall{Operation: "fixture.deploy", Owner: "fixture", Input: domain.Payload{Schema: "fixture.deploy.v1", Data: json.RawMessage(`{"env":"prod"}`)}}
+	a := extension.Authority{ScopeID: h.work(t).ScopeID, WorkID: "work/item", ExecutionID: "x"}
+	if plan, err := tools.Gate(ctx, a, call); err != nil || plan == nil {
+		t.Fatalf("a gate that lost two races: %+v %v", plan, err)
+	}
+	store.n = 100
+	if _, err := tools.Gate(ctx, a, call); !errors.Is(err, storage.ErrConflict) {
+		t.Fatalf("control: a gate that never wins: %v", err)
+	}
+}

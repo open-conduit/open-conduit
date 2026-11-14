@@ -37,7 +37,7 @@ func (t *Tools) StartGate(ctx context.Context, c extension.StartCall) (*extensio
 	gate := startGateName(c.Work.Kind)
 	var rec Ask
 	pass := false
-	err := t.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+	err := transact(ctx, t.o.Store, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		rec, pass = Ask{}, false
 		if id, err := tx.Get(Namespace, pointer); err == nil {
 			// Asked before: hold the Work on that request until it is
