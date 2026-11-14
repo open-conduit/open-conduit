@@ -119,6 +119,11 @@ type ToolbeltOptions struct {
 	// Authorize enforces current scope/ancestor ceiling and enabled state. It is
 	// called outside storage transactions; a nil Authorize permits the pinned grant.
 	Authorize func(context.Context, AuthorityCheck) error
+	// Served records the secret values each execution was served by an
+	// operation with a secret output (extension.Operation.SecretOutput),
+	// for the scheduler to scrub from what it publishes. When nil, such an
+	// operation is refused: its values could not be scrubbed.
+	Served *ServedSecrets
 	// Lifetime bounds a token after issue; zero uses the attempt deadline or one hour.
 	Lifetime time.Duration
 	// AuthorizeAlias answers whether a translated wait may depend on another
@@ -230,6 +235,12 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		}
 		if op.Serves != "" && (op.Handler == nil || !operationName.MatchString(op.Serves)) {
 			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
+		}
+		if len(op.SecretOutput) > 0 && op.Handler == nil {
+			return fmt.Errorf("%w: operation %q: only a handler has a secret output", extension.ErrInvalid, op.Name)
+		}
+		if err := extension.CheckSecretOutput(op.SecretOutput); err != nil {
+			return fmt.Errorf("operation %q: %w", op.Name, err)
 		}
 		if builtinOperation(op.Name) {
 			return fmt.Errorf("%w: operation %q is a builtin", extension.ErrConflict, op.Name)
@@ -963,6 +974,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	// without a gate, the agent is told what to do instead.
 	t.mu.RLock()
 	serves := t.operations[c.Operation].Serves
+	secret := t.operations[c.Operation].SecretOutput
 	t.mu.RUnlock()
 	if c.Capability != serves {
 		capability := serves
@@ -991,9 +1003,9 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	digest := TokenDigest(token)
 	hash := requestHash(c)
 	replayKey := ""
-	// A capability's answer is never kept for replay (it is often a
-	// credential): a retry asks afresh.
-	if requestID != "" && serves == "" {
+	// A capability's answer, or a secret output, is never kept for replay
+	// (it is often a credential): a retry asks afresh.
+	if requestID != "" && serves == "" && len(secret) == 0 {
 		replayKey = identity(string(a.ExecutionID), c.Operation, requestID)
 	}
 	ref := a.Lease
@@ -1044,6 +1056,17 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		output, e := op.Handler(hctx, handlerAuthority, c.Input)
 		if e != nil {
 			return out, e
+		}
+		if len(secret) > 0 {
+			// The values are remembered before the caller has them, so
+			// whatever it prints of them is scrubbed. Without a record,
+			// or with output whose secrets can't be read, nothing is
+			// handed over.
+			values, e := extension.SecretValues(secret, output)
+			if e != nil || t.options.Served == nil {
+				return out, &extension.OperationError{Code: "secret_output_unscrubbable", Message: c.Operation + " answered with a secret the host cannot scrub from the run, so it was not handed over"}
+			}
+			t.options.Served.Add(a.ExecutionID, values)
 		}
 		out.Output = output
 		if replayKey == "" {

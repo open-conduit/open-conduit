@@ -119,8 +119,10 @@ type shellHost struct {
 	closed    bool
 	// coord is the coordination store every component uses: SQLite itself,
 	// or SQLite behind lifecycle instrumentation when telemetry is enabled.
-	coord     storage.Store
-	toolbelt  *runtime.Toolbelt
+	coord    storage.Store
+	toolbelt *runtime.Toolbelt
+	// served is the daemon's record of the secrets the toolbelt served.
+	served    runtime.ServedSecrets
 	timers    *runtime.Timers
 	ingress   *runtime.Ingress
 	pipeline  *telemetry.Pipeline
@@ -252,7 +254,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		t.Fatal(err)
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }, nil), Observer: observer})
+	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Served: &h.served, Grant: configs.Grant(func() []string { return belt.EventTypes() }, nil), Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +272,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	if h.endpoints, err = management.NewEndpoints(h.lock, state, "", func(id domain.ID) http.Handler { return server.ExecutionHandler(id) }); err != nil {
 		t.Fatal(err)
 	}
-	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoints: h.endpoints.Serve, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, KeptFinished: o.keptFinished, Artifacts: h.artifacts}); err != nil {
+	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoints: h.endpoints.Serve, Secrets: configs.Secrets(&config.Resolver{}), Served: &h.served, KeptExecutions: o.kept, KeptFinished: o.keptFinished, Artifacts: h.artifacts}); err != nil {
 		t.Fatal(err)
 	}
 	h.toolbelt = belt
@@ -292,7 +294,8 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 			if !ok {
 				return nil, management.ErrLiveUnsupported
 			}
-			return l.Live(ctx, id, tail)
+			out, err := l.Live(ctx, id, tail)
+			return runtime.ScrubLive(out, h.served.Values(id)), err
 		}})
 	if err != nil {
 		t.Fatal(err)

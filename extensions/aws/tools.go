@@ -73,6 +73,9 @@ type Record struct {
 
 func (t tools) register(ext *sdk.Extension) {
 	ext.Operation(OpCredentials, sdk.Handler(t.credentials),
+		// The host scrubs these from whatever the run publishes, should an
+		// agent run the profile's command by hand.
+		sdk.SecretOutput("SecretAccessKey", "SessionToken"),
 		sdk.Describe("Short-lived AWS credentials for one of the roles this run may use, in credential_process format."),
 		sdk.Guidance("Your AWS CLI and SDKs already have a profile for each AWS role you may use, so run them with the profile: `aws --profile read s3 ls`, or set `AWS_PROFILE=read` for an SDK. `aws configure list-profiles` lists them. Each profile asks Open Conduit for short-lived credentials when it needs them and again when they expire, and CloudTrail records every call under this run, so you never handle a key and never call this operation yourself. If a command fails saying the call is held, a person is deciding whether this run may use that role: end your turn as your instructions say, and run the command again once you are resumed. Never print, copy or store credentials."))
 	ext.Task("aws-prune", 24*time.Hour, t.prune)

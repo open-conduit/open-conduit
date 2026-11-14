@@ -89,6 +89,15 @@ func Serves(capability string) OperationOption {
 	return func(d *operationDecl) { d.Serves = capability }
 }
 
+// SecretOutput declares that the named top-level fields of a Handler's
+// output hold secrets, such as a credential's key and token. The host then
+// never keeps the result for replay, and scrubs the values it served from
+// the calling execution's transcript, activity, outcome and live output
+// (extension.Operation.SecretOutput).
+func SecretOutput(fields ...string) OperationOption {
+	return func(d *operationDecl) { d.SecretOutput = append([]string(nil), fields...) }
+}
+
 // Commit marks an Emit whose plan writes records through EmitPlan.Commit.
 func Commit() OperationOption { return func(d *operationDecl) { d.Commit = true } }
 
@@ -298,7 +307,11 @@ func (e *Extension) Operation(name string, op Op, opts ...OperationOption) *Exte
 	x.Summary = d.Summary
 	x.Input = d.Input
 	x.Guidance = d.Guidance
+	if len(d.SecretOutput) > 0 && op.kind != protocol.OperationHandler {
+		panic("sdk: operation " + name + ": only sdk.Handler operations have a secret output")
+	}
 	x.Serves = d.Serves
+	x.SecretOutput = d.SecretOutput
 	e.Operations = append(e.Operations, x)
 	e.Manifest.Provides.Operations = append(e.Manifest.Provides.Operations, d.OperationDecl)
 	return e

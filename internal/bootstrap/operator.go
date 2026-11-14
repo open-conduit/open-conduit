@@ -415,7 +415,7 @@ func (d *daemon) live(ctx context.Context, executor string, execution domain.ID,
 	if errors.Is(err, extension.ErrUnsupported) {
 		return nil, management.ErrLiveUnsupported
 	}
-	return out, err
+	return runtime.ScrubLive(out, d.served.Values(execution)), err
 }
 
 func rank(status string) int {

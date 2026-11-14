@@ -157,7 +157,10 @@ type daemon struct {
 	endpoints     *management.Endpoints
 	// git is the toolbelt's git transport, one across config generations
 	// so a reload doesn't end a git command's session mid-push.
-	git       *management.GitTransport
+	git *management.GitTransport
+	// served are the secret values the toolbelt served each execution,
+	// in memory only, scrubbed from what the execution publishes.
+	served    runtime.ServedSecrets
 	cursorKey []byte
 	current   atomic.Pointer[components]
 
@@ -395,7 +398,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if usage != nil {
 		exporters = append(exporters, usage)
 	}
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: exporters, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: exporters, FlushInterval: 200 * time.Millisecond, Secrets: d.served.All, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -580,7 +583,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	// The configured causal limits bound toolbelt emissions too (03-08 fix:
 	// they were applied only to routing, timers and control, so an execution's
 	// emissions pinned the default limits on a new root).
-	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{CausalLimits: limits, Authorize: d.configs.Authorize, Grant: func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{CausalLimits: limits, Authorize: d.configs.Authorize, Served: &d.served, Grant: func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 		g, err := grant(ctx, state)
 		g.Operations = registeredOnly(g.Operations, belt.Operations())
 		return g, err
@@ -610,7 +613,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		GlobalLimit: set.Concurrency, ExecutorPools: d.pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
-		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
+		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Served: &d.served, Environment: d.runEnvironment,
 		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds, Budgets: budgets(set.Budgets),

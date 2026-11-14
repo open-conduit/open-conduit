@@ -327,7 +327,7 @@ Validation rules:
 - a non-re-derivable family states its loss, and a re-derivable one cannot;
 - an ingress type declares families, and webhooks need an ingress type;
 - work kinds need a route handler;
-- operation kinds are `handler`, `wait` or `emit`, only emit may `commit`, and only a handler `serves` a capability (`extension.Operation.Serves`), named like an operation;
+- operation kinds are `handler`, `wait` or `emit`, only emit may `commit`, only a handler `serves` a capability (`extension.Operation.Serves`), named like an operation, and only a handler has a `secret_output`: at most 16 distinct field names (`extension.Operation.SecretOutput`, [secret outputs](../extensions/#secret-outputs));
 - an operation's `summary` (`extension.Operation.Summary`) is one line of at most 200 bytes, its `guidance` (its agent guidance, `extension.Operation.Guidance`) is at most 4096 bytes, and its `input` (the JSON Schema of its input's data) is an object;
 - `targets` are wait target kinds (lower-case letters, digits, `-` or `_`), each declared once;
 - `dependency_filter` needs a wait operation;

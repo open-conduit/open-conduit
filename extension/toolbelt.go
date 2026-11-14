@@ -203,6 +203,55 @@ type Operation struct {
 	// and the host uses it on the execution's behalf without handing it
 	// over.
 	Serves string
+	// SecretOutput, on a Handler, names the top-level fields of its output's
+	// data whose string values are secrets, such as a credential's key and
+	// token. The toolbelt never keeps such an operation's result for replay,
+	// and the host remembers the values it served each execution, in memory
+	// only, and scrubs them from what that execution publishes: its
+	// artifacts (the transcript and activity), its outcome and its live
+	// output. A result whose data is not an object is refused.
+	SecretOutput []string
+}
+
+// MaxSecretOutput bounds the fields an operation's SecretOutput names.
+const MaxSecretOutput = 16
+
+// CheckSecretOutput validates an operation's SecretOutput: at most
+// MaxSecretOutput distinct, non-empty field names of at most 128 bytes.
+func CheckSecretOutput(fields []string) error {
+	if len(fields) > MaxSecretOutput {
+		return fmt.Errorf("%w: secret output names more than %d fields", ErrInvalid, MaxSecretOutput)
+	}
+	seen := map[string]bool{}
+	for _, f := range fields {
+		if f == "" || len(f) > 128 || seen[f] {
+			return fmt.Errorf("%w: secret output field %q must be a distinct name of 1 to 128 bytes", ErrInvalid, f)
+		}
+		seen[f] = true
+	}
+	return nil
+}
+
+// SecretValues are the non-empty string values of the named top-level
+// fields of a SecretOutput operation's output. Output data that is not a
+// JSON object is ErrInvalid; a field that is absent or not a string has no
+// value.
+func SecretValues(fields []string, output domain.Payload) ([]string, error) {
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(output.Data, &data); err != nil || data == nil {
+		return nil, fmt.Errorf("%w: a secret output must be a JSON object", ErrInvalid)
+	}
+	var out []string
+	for _, f := range fields {
+		var v string
+		if json.Unmarshal(data[f], &v) == nil && v != "" {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 
 // OperationNames are ops' names, in order.

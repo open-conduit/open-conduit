@@ -661,7 +661,7 @@ func (d *daemon) collectArtifacts(ctx context.Context) {
 func (d *daemon) reconcileEndpoints(ctx context.Context) {
 	scheduler := d.current.Load().scheduler
 	holding := func(ids []domain.ID) (map[domain.ID]bool, error) { return scheduler.Holding(ctx, ids) }
-	err := errors.Join(d.endpoints.Reconcile(holding), d.git.Reconcile(holding))
+	err := errors.Join(d.endpoints.Reconcile(holding), d.git.Reconcile(holding), d.served.Reconcile(holding))
 	if err != nil && ctx.Err() == nil {
 		d.report("endpoints", "", errorCode(err))
 		return
