@@ -102,6 +102,7 @@ func TestUnconfirmedStopIsFollowedUp(t *testing.T) {
 				for _, due := range poll.Stops {
 					d.followUpStop(ctx, c, due)
 				}
+				d.wg.Wait()
 				return poll
 			}
 
@@ -229,4 +230,78 @@ func heldItems(t *testing.T, store storage.Store, now time.Time) []string {
 	}
 	t.Fatal("no resource_holds check")
 	return nil
+}
+
+// blockingStopper is an executor whose Stop hangs until released.
+type blockingStopper struct {
+	*runtimetest.Executor
+	calls   atomic.Int32
+	release chan struct{}
+}
+
+func (e *blockingStopper) Stop(ctx context.Context, _ domain.ID, _ uint64) error {
+	e.calls.Add(1)
+	select {
+	case <-e.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestStopFollowupRunsOffTheLoop: a follow-up whose stop hangs (a wedged
+// container runtime) returns to the loop at once, and the next follow-up
+// for the same attempt and epoch doesn't start a second stop while the
+// first is still running. The control: the first stop really is running.
+func TestStopFollowupRunsOffTheLoop(t *testing.T) {
+	ctx := context.Background()
+	f, base := runtimetest.SchedulerFixture(t, runtimetest.Store(t, "direct"), runtimetest.Options(runtimetest.HandlerFunc(runtimetest.Decision), "queue"))
+	executor := &blockingStopper{Executor: base, release: make(chan struct{})}
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "wedged"}
+	runtimetest.RequireAccept(t, f, "trigger/wedged", &key)
+	runtimetest.RequireRoute(t, f.Driver, "trigger/wedged")
+	o := runtime.SchedulerOptions{Owner: "daemon", LeaseDuration: time.Minute, Generation: "fixture-generation", Executors: map[string]extension.Executor{"fixture": executor}}
+	s := runtimetest.NewScheduler(t, f, o)
+	a, err := s.Claim(ctx, "work/wedged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Launch(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	// Cancelling fences the attempt and leaves its stop unconfirmed.
+	if err = s.Cancel(ctx, "work/wedged"); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := s.InspectAttempt(ctx, a.Lease.ExecutionID); err != nil || state.Excluded {
+		t.Fatalf("attempt %+v (%v), want it cancelled and unexcluded", state, err)
+	}
+	d := &daemon{o: Options{LeaseDuration: o.LeaseDuration}, coord: f.Store, now: f.Clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		reported: map[string]string{}, reportedAt: map[string]time.Time{}, inflight: map[attemptKey]domain.LeaseRef{}, ctx: ctx, nudge: make(chan struct{}, 1),
+		executors: map[string]extension.Executor{"fixture": executor}}
+	c := &components{scheduler: s}
+	due := runtime.StopDue{ExecutionID: a.Lease.ExecutionID, Epoch: a.Lease.Epoch, Attempt: 1}
+	returned := make(chan struct{})
+	go func() {
+		d.followUpStop(ctx, c, due)
+		d.followUpStop(ctx, c, due)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a hung stop held the loop")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for executor.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if n := executor.calls.Load(); n != 1 {
+		t.Fatalf("%d stops running, want the first one only", n)
+	}
+	close(executor.release)
+	d.wg.Wait()
+	if state, err := s.InspectAttempt(ctx, a.Lease.ExecutionID); err != nil || !state.Excluded {
+		t.Fatalf("attempt %+v (%v), want it confirmed stopped once the stop returned", state, err)
+	}
 }

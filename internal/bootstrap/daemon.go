@@ -161,6 +161,8 @@ type daemon struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	inflight map[attemptKey]domain.LeaseRef
+	// stopping are the attempts a stop follow-up is stopping, off the loop.
+	stopping map[attemptKey]bool
 	// from are the executable and toolbelt the daemon started from.
 	from     []string
 	reported map[string]string
