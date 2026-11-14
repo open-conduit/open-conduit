@@ -13,6 +13,7 @@ func bindingFields() []protocol.FieldDecl {
 		{Name: "plugin_dir"},
 		{Name: "args", Help: "a template of {key}, {number} and {work}", Default: "{number}"},
 		{Name: "status_schema", Default: "core.turn.v1"},
+		{Name: "reply", Help: "text: a turn's final text is its reply, and a turn that ends without one is asked for it once", Options: []string{"text"}},
 		{Name: "branch", Help: "the workspace branch template, of {key}, {number} and {work}"},
 		{Name: "workspace_mode"},
 		{Name: "dir", Help: "a folder a workspace-free binding runs in, as-is"},

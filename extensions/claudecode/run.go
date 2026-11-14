@@ -44,6 +44,13 @@ type run struct {
 	partial string
 	waiting []pendingInput
 
+	// reply is the binding's reply: text (Config.Reply), so a turn that
+	// ends without final text is asked for it once (askReply); final
+	// follows that text and replyAsked says the ask was made.
+	reply      bool
+	final      finalTracker
+	replyAsked bool
+
 	// space is where the segment's tasks run (tasks.go): known only to
 	// the instance that launched it, so an adopted segment starts none.
 	space *taskSpace
@@ -374,6 +381,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not start claude process", nil)
 	}
 	rn.pid, rn.done, rn.stdin, rn.open = cmd.Process.Pid, make(chan struct{}), stdin, true
+	rn.reply = cfg.Reply == ReplyText && !e.o.DryRun
 	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid, Signals: plan.Signals})
 	rn.mu.Lock()
 	rn.write(first)
@@ -735,6 +743,8 @@ func (rn *run) readNew() {
 	for _, line := range lines[:len(lines)-1] {
 		var m struct {
 			Type     string `json:"type"`
+			Subtype  string `json:"subtype"`
+			IsError  bool   `json:"is_error"`
 			IsReplay bool   `json:"isReplay"`
 			Message  struct {
 				Content any `json:"content"`
@@ -743,6 +753,7 @@ func (rn *run) readNew() {
 		if json.Unmarshal([]byte(line), &m) != nil {
 			continue
 		}
+		rn.final.feed(line)
 		switch {
 		case m.Type == "user" && m.IsReplay:
 			text, _ := m.Message.Content.(string)
@@ -754,12 +765,43 @@ func (rn *run) readNew() {
 				}
 			}
 		case m.Type == "result":
+			if m.Subtype == "success" && !m.IsError && rn.askReply() {
+				continue
+			}
 			if rn.open {
 				rn.open = false
 				_ = rn.stdin.Close()
 			}
 		}
 	}
+}
+
+// replyAskedFile marks a segment whose turn was asked for its missing reply.
+const replyAskedFile = "reply_asked"
+
+// replyMissing is the message a turn that ended without its reply is given,
+// once, so it writes one before it ends again.
+const replyMissing = "## Your reply is missing\n\n" +
+	"Your turn ended without a reply: you wrote no text after your last tool call, and your text is all the person in this conversation reads. " +
+	"Your status and its summary reach nobody in the conversation. " +
+	"Write your reply now as a text message, then end the turn as before."
+
+// askReply asks a turn that ended without final text for its reply, once
+// per segment, when the binding's reply is its text and nobody asked the
+// turn to stop. It reports whether it asked, leaving stdin open for the
+// answer. The caller holds rn.mu.
+func (rn *run) askReply() bool {
+	if !rn.reply || rn.replyAsked || !rn.open || rn.final.text() != "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(rn.dir, "stop.json")); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	rn.replyAsked = true
+	if writeFile(filepath.Join(rn.dir, replyAskedFile), nil) != nil || !rn.write(replyMissing) {
+		return false
+	}
+	return true
 }
 
 // load restores a segment from its files: the daemon's process record, or the
@@ -1027,7 +1069,14 @@ type resultFields struct {
 	// Result is the turn's answer to the Work that asked for this one
 	// (domain.TurnDeclaration.Result): the status's result, or an
 	// unstructured turn's final text.
-	Result     string     `json:"result,omitempty"`
+	Result string `json:"result,omitempty"`
+	// Text is the turn's final text (finalText), kept whole: what the
+	// person in the conversation reads as its reply, so a client can show
+	// it from the outcome (and the summary when there is none).
+	Text string `json:"text,omitempty"`
+	// ReplyAsked says the turn ended without final text and was asked for
+	// its reply once (Config.Reply).
+	ReplyAsked bool       `json:"reply_asked,omitempty"`
 	Kind       string     `json:"kind,omitempty"`
 	Models     []string   `json:"models,omitempty"`
 	ModelCalls int        `json:"model_calls,omitempty"`
@@ -1075,6 +1124,7 @@ func mapOutcome(p parsed, f *resultFields) (domain.Outcome, *extension.RetryHint
 		}
 		return domain.Outcome{Kind: domain.OutcomeFailed, Summary: truncate(p.Error, 300)}, hint
 	}
+	f.Text = p.Final
 	if p.Status == nil {
 		f.Reason = "result"
 		if p.Asked {
@@ -1265,16 +1315,19 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 		f.Workspace = &ws
 	}
 	f.TasksUnwatched = e.unwatchedTasks(ctx, domain.ID(turn.WorkID), rn.id, rn.epoch)
+	if _, err := os.Stat(filepath.Join(rn.dir, replyAskedFile)); err == nil {
+		f.ReplyAsked = true
+	}
 	result.Outcome.Data = resultData(turn.StatusSchema, f)
 	result.Workspace = historyWorkspace(rn.dir)
 	if fresh {
-		e.reportTurn(turn, end, outcome, now, f.TasksUnwatched)
+		e.reportTurn(turn, end, outcome, now, f)
 	}
 	return result, nil
 }
 
 // reportTurn sends one telemetry record per turn, outside core.
-func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outcome, now time.Time, unwatched int) {
+func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outcome, now time.Time, f resultFields) {
 	p := end.parsed
 	a := map[string]any{
 		"scope": turn.ScopeID, "work": turn.WorkID, "execution": turn.ExecutionID,
@@ -1287,8 +1340,11 @@ func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outco
 	if turn.HandoffReason != "" {
 		a["handoff_reason"] = turn.HandoffReason
 	}
-	if unwatched > 0 {
-		a["tasks_unwatched"] = unwatched
+	if f.TasksUnwatched > 0 {
+		a["tasks_unwatched"] = f.TasksUnwatched
+	}
+	if f.ReplyAsked {
+		a["reply_asked"] = true
 	}
 	if p.Context > 0 {
 		a["context_tokens"] = p.Context

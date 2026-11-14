@@ -22,7 +22,7 @@ The segment runs detached, like the shell executor's:
 - **Recovery intent first.** It persists `open-conduit.claudecode.recovery.v1` (naming the segment directory) through `PersistRecovery` before it touches anything else.
 - **Process group.** A `/bin/sh` wrapper runs as a new session and process-group leader. Its `$0` carries an unguessable nonce, so identity is checked beyond the PID. The wrapper records its PID and exit status, and it signals the remaining group members (including the MCP server) when claude exits.
 - **Files.** stdout goes to `out.jsonl` and stderr to `err.log`.
-- **Prompt on stdin.** The first user message is the prompt. stdin stays open while this daemon instance holds the process. The follower closes it when the `result` line arrives, so claude exits.
+- **Prompt on stdin.** The first user message is the prompt. stdin stays open while this daemon instance holds the process. The follower closes it when the `result` line arrives, so claude exits; a binding whose `reply` is `text` first asks a turn that ended without its reply for it, once.
 
 `Recover` follows the shell executor:
 
@@ -49,7 +49,7 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>`, or on the
 
 ## Outcomes
 
-The executor adds no core state. The structured status uses `--json-schema` (state, summary, handoff, report, result). Its descriptions say only what each state means to Open Conduit: `finished` completes the Work; `building`, `review`, `help` and `done` keep it open for the next input, with `review`, `help` and `done` putting something to the owner. They name no code host, issue, PR, check or preview: what a state means for a kind of Work (that `building` follows a push, say) is its playbook's to say, as `work-issue`'s "Ending a turn" does. A test (`TestNoDomainTerms`, with a negative control) keeps such terms out of the executor's sources. It maps as follows:
+The executor adds no core state. The structured status uses `--json-schema` (state, summary, handoff, report, result). Its descriptions say only what each state means to Open Conduit: `finished` completes the Work; `building`, `review`, `help` and `done` keep it open for the next input, with `review`, `help` and `done` putting something to the owner. They name no code host, issue, PR, check or preview: what a state means for a kind of Work (that `building` follows a push, say) is its playbook's to say, as `work-issue`'s "Ending a turn" does. The schema's own description, and the summary's, say who reads the status: Open Conduit and the run's history, never anyone in the conversation, so a reply belongs in the turn's text, its `result` or the tool call that delivers it. A test (`TestNoDomainTerms`, with a negative control) keeps such terms out of the executor's sources. It maps as follows:
 
 | Turn ended | Outcome | Work afterwards |
 | --- | --- | --- |
@@ -64,6 +64,8 @@ The outcome data schema is the binding's optional `status_schema`. The default i
 - `reason` and `kind`
 - `report`, the status's optional write-up for the operator (at most 20,000 bytes), which the web view shows under the turn's summary
 - `result`, the status's answer to the Work that asked for this one ([child Work](../routing-lifecycle/#child-work)), kept whole: the parent receives it in `core.work.child.ended` when the turn ends the Work, and in `core.work.child.reported` when it leaves the Work open (any status but `finished`). An unstructured turn of child Work gives its final text as its result, having no status to carry one. A child's first turn renders its creation as the task it was asked (the context's `task`, else its data), and a parent's turn renders a child's end with its state, summary and result in full, and a child's report with its status, summary and result and that it is still open
+- `text`, the turn's final text, kept whole: what the main thread wrote after its last tool call (the status call aside; a subagent's text and text before a tool call don't count). It is what a person talking to the Work through a client reads as the reply, so the client can show it from the outcome, and the summary when there is none
+- `reply_asked`, when the binding's `reply` is `text` and the turn ended without final text: it was asked for its reply once, in the same process, before it ended (also on the turn's `agent_turn` telemetry)
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
 - `limited` and `resets_at`
 - `exit_code` and `injected`
@@ -206,6 +208,7 @@ The config is strict and validated at load. A refusal names each field that is w
 | `args` | Default `{number}`. |
 | `structured` | Default true. |
 | `status_schema` | The outcome data schema (default `core.turn.v1`). |
+| `reply` | `text` says a turn's final text is its reply, as for Work a person talks to through a client. A turn that ends cleanly without any is sent `## Your reply is missing` on stdin once, before stdin closes, so it writes the reply and ends again; its outcome data says `reply_asked`. Not in a dry run, nor once a stop was asked. Left out, a turn's text is left as it is. |
 | `branch`, `workspace_mode` | The workspace request. |
 | `dir` | An absolute folder a workspace-free binding's sessions run in, used as-is. A folder that has gone fails only that binding's turns, as `workspace_unavailable`, never the config. In an [included folder](../config-management/#included-folders), `dir` defaults to the folder (unless the binding has a resource), and a relative `dir` or `plugin_dir` resolves against it. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
@@ -242,6 +245,7 @@ The config is strict and validated at load. A refusal names each field that is w
   - config validation, and the playbook a binding that names none starts on
   - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
+  - a missing reply (`reply_test.go`): a turn that runs a skill and ends with only its status is asked once for its reply under `reply: text`, and its outcome carries the text and `reply_asked`, with the binding without the option as the negative control; a turn that wrote its reply after its last tool call is not asked
   - background tasks (`tasks_test.go`): a task outliving the turn whose wrapper signals its group, with a background child of claude's own as the negative control; one announcement per end, derived from the attempt's trigger; a retried start; stop, timeout and lost; a task stopped and released with its Work; the wait plan; refusals (input, stale epoch, an unknown execution, an ended turn, a sandbox); a task that exits between the sweep's liveness check and its read of the exit record, announced with its exit rather than as lost; a task released while a sweep is looking at it, whose directory that sweep doesn't bring back; and `tasks_unwatched`, with a parked turn as the negative control
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
@@ -278,3 +282,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#164** added the sandbox wrap ([B09](../sandboxes/)).
 - **#428** moved it out of process. It runs as a package bundled with the release (`extensions/claudecode/pkg`, `open-conduit extension-run claude-code`), the executor itself served through `inprocsdk`, with its live output and container attach crossing the wire (`executor.live`, `executor.container_attach`). A run takes the toolbelt and playbook directories the host names for it (`ExecutionContext.ToolbeltDir`, `PlaybookDir`). Its continuity moved from `executor.claudecode` to the package's own `claude-code` namespace; the daemon moved existing records once at start until #497 dropped that step, so continuity an older release left in `executor.claudecode` is no longer carried over. Its doctor check is its own (`claude-code`, formerly `claude_code` in bootstrap), and usage reading moved from `serve --claude-usage` to the binding's `usage`. Certification runs it against a fake `claude` the fixture command writes.
 - **#556** added background tasks: the `claude-code.task.*` operations, the `claude-code.task.ended` Event, the task sweep and the `tasks_unwatched` flag.
+- **#638** said in the status schema who reads the status, put the turn's final text on its outcome data (`text`), and added the binding's `reply` option, which asks a turn that ended without its reply for it once (`reply_asked`).
