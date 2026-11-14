@@ -20,16 +20,19 @@ const subscriptionNamespace = "core.waits.subscriptions"
 
 // ErrDependencyFilterUnavailable is what every DependencyFilterError is
 // (errors.Is): an extension's dependency filter could not answer about an
-// Event (it timed out, or its process was restarting).
+// Event (it timed out, its process was restarting, or it failed on it).
 var ErrDependencyFilterUnavailable = errors.New("dependency filter unavailable")
 
 // A subscription whose filter can't answer about an Event stops before it
-// and is asked again on later passes. After both of these bounds it passes
-// the Event by as a non-match and records that on the subscription, so an
+// and is asked again on later passes. While the filter can't be reached it
+// holds for as long as that lasts: an outage never passes a one-time
+// occurrence by. Only when the live extension itself fails on the Event
+// (extension.ErrFilterFailed), on at least failedPasses passes over at least
+// failedFor, does it pass the Event by as a non-match and record that, so an
 // Event the filter always fails on can't hold the wait for good.
 const (
-	unansweredPasses = 20
-	unansweredFor    = time.Hour
+	failedPasses = 20
+	failedFor    = time.Hour
 )
 
 // DependencyFilterError names a subscription whose dependency filter could
@@ -45,11 +48,17 @@ type DependencyFilterError struct {
 	Namespace, Label string
 	EventID          domain.ID
 	Sequence         uint64
-	// Passes is how many passes have asked about the Event, since Since.
-	Passes int
-	Since  time.Time
-	Held   bool
-	Err    error
+	// Passes is how many passes have asked about the Event, since Since;
+	// Failures how many of them the extension answered with a failure of
+	// its own (extension.ErrFilterFailed), which alone count towards
+	// passing it by.
+	Passes, Failures int
+	Since            time.Time
+	// Unreachable: this time the filter couldn't be reached at all, so the
+	// pass asks the namespace's filter no more.
+	Unreachable bool
+	Held        bool
+	Err         error
 }
 
 func (e *DependencyFilterError) Error() string {
@@ -57,7 +66,7 @@ func (e *DependencyFilterError) Error() string {
 	if !e.Held {
 		what = "gave up and passed by"
 	}
-	return fmt.Sprintf("%s: %s's filter for %s could not answer about %s (sequence %d, %d passes since %s); %s it: %v", ErrDependencyFilterUnavailable, e.Namespace, e.Label, e.EventID, e.Sequence, e.Passes, e.Since.UTC().Format(time.RFC3339), what, e.Err)
+	return fmt.Sprintf("%s: %s's filter for %s could not answer about %s (sequence %d, %d passes since %s, %d of them its own failure); %s it: %v", ErrDependencyFilterUnavailable, e.Namespace, e.Label, e.EventID, e.Sequence, e.Passes, e.Since.UTC().Format(time.RFC3339), e.Failures, what, e.Err)
 }
 
 func (e *DependencyFilterError) Unwrap() []error {
@@ -853,13 +862,16 @@ type subscription struct {
 }
 
 // unansweredEvent is an Event a subscription's filter could not answer
-// about: since when, how many passes asked, and the last failure.
+// about: since when, how many passes asked, how many of them the extension
+// failed on it itself and since when, and the last error.
 type unansweredEvent struct {
-	EventID  domain.ID
-	Sequence uint64
-	Since    time.Time
-	Passes   int
-	Error    string
+	EventID     domain.ID
+	Sequence    uint64
+	Since       time.Time
+	Passes      int
+	Failures    int        `json:",omitempty"`
+	FailedSince *time.Time `json:",omitempty"`
+	Error       string
 }
 
 func disableWaitSubscriptionsInTx(tx storage.Tx, id domain.ID) error {
@@ -1080,13 +1092,15 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 	rows = ordered
 	count := 0
 	var unanswered []error
-	// down is the namespaces whose filter failed to answer in this pass:
+	// down is the namespaces whose filter couldn't be reached in this pass:
 	// their other filtered subscriptions wait for the next pass rather than
 	// each spend the in-transaction deadline on a filter that isn't
-	// answering. They don't move the cursor, so the next pass starts with
-	// them.
+	// answering. A failure the extension returned about one Event says
+	// nothing about the others, so it doesn't trip it. skipped is the first
+	// row it held back: the next pass starts with it.
 	down := map[string]bool{}
-	for _, row := range rows {
+	skipped := -1
+	for i, row := range rows {
 		var sub subscription
 		if err := json.Unmarshal(row.Value, &sub); err != nil {
 			return err
@@ -1095,6 +1109,9 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			continue
 		}
 		if sub.Request.Filter != nil && down[sub.Request.Namespace] {
+			if skipped < 0 {
+				skipped = i
+			}
 			continue
 		}
 		if count >= limit {
@@ -1135,11 +1152,21 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			failed, er := s.reconcileSubscriptionInTx(tx, row.Key, &current)
 			for _, f := range failed {
 				unanswered = append(unanswered, f)
-				if f.Held {
+				if f.Held && f.Unreachable {
 					down[f.Namespace] = true
 				}
 			}
 			return er
+		}); err != nil {
+			return err
+		}
+	}
+	if skipped > 0 {
+		// Rows after the skipped ones moved the cursor past them; put it
+		// back just before the first, so they aren't always behind the
+		// subscription that tripped the breaker.
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			return putJSON(tx, waitNamespace, "subscription_cursor", rows[skipped-1].Key)
 		}); err != nil {
 			return err
 		}
@@ -1245,8 +1272,9 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 }
 
 // unansweredInTx counts one more pass whose filter couldn't answer about
-// source and decides whether the subscription holds before it or, past both
-// bounds, passes it by (recorded as PassedBy).
+// source and decides whether the subscription holds before it or passes it
+// by (recorded as PassedBy). An unreachable filter always holds; only the
+// extension's own failures on the Event, past both bounds, pass it by.
 func (s *Scheduler) unansweredInTx(sub *subscription, source domain.AcceptedEvent, cause error) *DependencyFilterError {
 	now := s.now()
 	u := sub.Unanswered
@@ -1255,8 +1283,16 @@ func (s *Scheduler) unansweredInTx(sub *subscription, source domain.AcceptedEven
 	}
 	u.Passes++
 	u.Error = cause.Error()
-	f := &DependencyFilterError{WaitID: sub.Request.WaitID, WorkID: sub.WorkID, Namespace: sub.Request.Namespace, Label: sub.Request.Label, EventID: u.EventID, Sequence: u.Sequence, Passes: u.Passes, Since: u.Since, Held: true, Err: cause}
-	if u.Passes >= unansweredPasses && now.Sub(u.Since) >= unansweredFor {
+	unreachable := !errors.Is(cause, extension.ErrFilterFailed)
+	if !unreachable {
+		u.Failures++
+		if u.FailedSince == nil {
+			at := now
+			u.FailedSince = &at
+		}
+	}
+	f := &DependencyFilterError{WaitID: sub.Request.WaitID, WorkID: sub.WorkID, Namespace: sub.Request.Namespace, Label: sub.Request.Label, EventID: u.EventID, Sequence: u.Sequence, Passes: u.Passes, Failures: u.Failures, Since: u.Since, Unreachable: unreachable, Held: true, Err: cause}
+	if !unreachable && u.Failures >= failedPasses && now.Sub(*u.FailedSince) >= failedFor {
 		f.Held = false
 		sub.Unanswered, sub.PassedBy = nil, u
 		return f

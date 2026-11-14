@@ -324,6 +324,15 @@ type Dependency struct {
 // is versioned separately (protocol.Version, 07-01).
 const ContractVersion uint32 = 1
 
+// ErrFilterFailed marks a DependencyFilter error the extension itself
+// returned about the Event: it was reached and answered, but with a
+// failure (a panic in its handler, say), not with a match or a non-match.
+// Core bounds how long it asks again about such an Event. Any other error
+// means the filter couldn't be reached (a timeout, a transport failure, an
+// overloaded or restarting process); core asks again for as long as that
+// lasts, since passing a one-time occurrence by would strand the wait.
+var ErrFilterFailed = errors.New("dependency filter failed on the event")
+
 // PureFilter is a Registration.DependencyFilter that always answers: an
 // in-process filter that decides from the filter and the Event alone.
 func PureFilter(fn func(filter domain.Payload, event domain.Event) bool) func(domain.Payload, domain.Event) (bool, error) {

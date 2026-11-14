@@ -33,3 +33,28 @@ func TestFilterRefusedRetriesNoAnswer(t *testing.T) {
 		}
 	}
 }
+
+// TestFilterAnsweredSeparatesFailureFromOutage: only a failure the live
+// extension returned (an internal error from its handler) counts as its
+// answer; no answer at all (a dead transport, the deadline, an overloaded
+// or draining process) is an outage, which core holds through however
+// long it lasts.
+func TestFilterAnsweredSeparatesFailureFromOutage(t *testing.T) {
+	for _, err := range []error{
+		protocol.ErrTransport,
+		context.DeadlineExceeded,
+		context.Canceled,
+		protocol.Errorf(protocol.CodeOverloaded, ""),
+		protocol.Errorf(protocol.CodeShuttingDown, ""),
+		protocol.Errorf(protocol.CodeCancelled, ""),
+		protocol.Errorf(protocol.CodeReentrant, ""),
+		errors.New("broken pipe"),
+	} {
+		if filterAnswered(err) {
+			t.Errorf("%v counted as the extension's own failure; it is an outage", err)
+		}
+	}
+	if !filterAnswered(protocol.Errorf(protocol.CodeInternal, "")) {
+		t.Error("an internal error from the live extension counted as an outage")
+	}
+}

@@ -221,40 +221,58 @@ func filterErrors(t *testing.T, err error) []*runtime.DependencyFilterError {
 	return out
 }
 
-// TestTranslatedWaitUnansweredFilterIsBoundedAndNamed: while a filter
-// can't answer, each pass asks it once per namespace, not once per held
-// subscription; the diagnostic names the Wait, Work, dependency and Event;
-// the route trace shows the Work held rather than not matched; and past
-// both bounds the subscription passes the Event by, so an Event the filter
-// always fails on can't hold the wait for good.
-func TestTranslatedWaitUnansweredFilterIsBoundedAndNamed(t *testing.T) {
+// twoDeps waits on the named PR through two filtered dependencies, and a
+// third without a filter on a type that never comes, so a pass has filtered
+// and unfiltered subscriptions in one namespace.
+func twoDeps(a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+	p, err := depPlan(false, `{"number":8}`)(a, in)
+	d := p.Dependencies[0]
+	d.ID, d.Label = "dep:other:merged:2", "dep:other:merged:2"
+	never := p.Dependencies[0]
+	never.ID, never.Label, never.Types, never.Filter = "dep:other:never", "dep:other:never", []string{"fixture.never"}, domain.Payload{}
+	p.Dependencies = append(p.Dependencies, d, never)
+	return p, err
+}
+
+func setFilter(h *toolbeltHarness, down bool, failsOn string) {
+	h.mu.Lock()
+	h.filterDown, h.filterFailsOn, h.filterCalls = down, failsOn, 0
+	h.mu.Unlock()
+}
+
+func filterCalls(h *toolbeltHarness) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.filterCalls
+}
+
+// TestTranslatedWaitOutageNeverPassesTheMergeBy: while a filter can't be
+// reached, each pass asks it once (not once per held subscription), each
+// held subscription gets its turn, the diagnostic names the Wait, Work,
+// dependency and Event, and the route trace shows the Work held. However
+// long the outage lasts, the one merge is never passed by: once the filter
+// answers again it wakes the wait (#613).
+func TestTranslatedWaitOutageNeverPassesTheMergeBy(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
-	two := func(a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
-		p, err := depPlan(false, `{"number":8}`)(a, in)
-		d := p.Dependencies[0]
-		d.ID, d.Label, d.Filter = "dep:other:merged:2", "dep:other:merged:2", domain.Payload{Schema: "fixture.filter.v1", Data: json.RawMessage(`{"number":8}`)}
-		p.Dependencies = append(p.Dependencies, d)
-		return p, err
-	}
-	h.plan = two
+	h.plan = twoDeps
 	out := declareAndFinish(t, h)
-	h.mu.Lock()
-	h.filterDown, h.filterCalls = true, 0
-	h.mu.Unlock()
-	acceptSource(t, h, "poison", "fixture.merged", `{"number":8}`)
-	start := h.f.Clock.Now()
+	setFilter(h, true, "")
+	acceptSource(t, h, "merged", "fixture.merged", `{"number":8}`)
 	failed := filterErrors(t, h.scheduler.ReconcileSubscriptions(context.Background(), 10))
-	h.mu.Lock()
-	calls := h.filterCalls
-	h.mu.Unlock()
-	// Negative control for the breaker: without it both subscriptions
-	// would ask the filter that isn't answering.
-	if calls != 1 || len(failed) != 1 {
-		t.Fatalf("a pass asked the unanswering filter %d times and reported %d; want once", calls, len(failed))
+	// Negative control for the breaker: without it both filtered
+	// subscriptions would ask the filter that isn't answering.
+	if calls := filterCalls(h); calls != 1 || len(failed) != 1 {
+		t.Fatalf("a pass asked the unreachable filter %d times and reported %d; want once", calls, len(failed))
 	}
 	f := failed[0]
-	if !f.Held || f.WaitID != out.Wait.ID || f.WorkID != "work/item" || f.Namespace != "fixture" || f.EventID != "poison" || f.Sequence == 0 || f.Passes != 1 {
+	if !f.Held || !f.Unreachable || f.WaitID != out.Wait.ID || f.WorkID != "work/item" || f.Namespace != "fixture" || f.EventID != "merged" || f.Sequence == 0 || f.Passes != 1 || f.Failures != 0 {
 		t.Fatalf("diagnostic: %+v", f)
+	}
+	// The next pass asks the subscription the breaker held back, not the
+	// same one again.
+	second := filterErrors(t, h.scheduler.ReconcileSubscriptions(context.Background(), 10))
+	if len(second) != 1 || second[0].Label == f.Label {
+		t.Fatalf("the held-back subscription didn't get the next pass: first %s, then %+v", f.Label, second)
 	}
 	tr, err := h.f.Driver.(*schedulerDriver).Router.Trace(context.Background(), "routing-scope", domain.Event{ID: "probe", Type: "fixture.merged", Source: "fixture/account", DeliveryID: "probe", CorrelationKey: &depKey, Data: domain.Payload{Schema: "fixture.dep.v1", Data: json.RawMessage(`{"number":8}`)}}, h.belt.DependencyFilter)
 	if err != nil {
@@ -265,42 +283,83 @@ func TestTranslatedWaitUnansweredFilterIsBoundedAndNamed(t *testing.T) {
 		held = held || e.Kind == runtime.EffectHeld && e.WorkID == "work/item"
 	}
 	if !held || tr.Effect.Kind == runtime.EffectWake {
-		t.Fatalf("the trace hid the unanswered filter: %+v", tr)
+		t.Fatalf("the trace hid the unreachable filter: %+v", tr)
 	}
-	// Within the time bound the subscription keeps holding, however many
-	// passes ask.
-	for range 45 {
+	// An outage far past the failure bounds still holds.
+	for range 3 {
+		for range 30 {
+			for _, f := range filterErrors(t, h.scheduler.ReconcileSubscriptions(context.Background(), 10)) {
+				if !f.Held {
+					t.Fatalf("an outage passed the merge by: %+v", f)
+				}
+			}
+		}
+		h.f.Clock.Advance(time.Hour)
+	}
+	setFilter(h, false, "")
+	if err := h.scheduler.ReconcileSubscriptions(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	w, work := waitState(t, h, out.Wait.ID)
+	if w.State != domain.WaitWoken || work.State != domain.WorkReady {
+		t.Fatalf("the merge held through the outage didn't wake: %v %v", w.State, work.State)
+	}
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		alias, err := tx.Event(w.WakeEventID)
+		if err == nil && alias.Event.CausationID != "merged" {
+			t.Fatalf("woken by %s, want the original merge", alias.Event.CausationID)
+		}
+		return err
+	})
+}
+
+// TestTranslatedWaitPoisonEventIsPassedByWithinBounds: when the live
+// extension fails on one Event every time it is asked, that says nothing
+// about the namespace's other subscriptions, so it doesn't trip the
+// breaker; the subscription holds within the bounds and then passes the
+// Event by, recorded, so the wait isn't held for good.
+func TestTranslatedWaitPoisonEventIsPassedByWithinBounds(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	h.plan = twoDeps
+	out := declareAndFinish(t, h)
+	acceptSource(t, h, "poison", "fixture.merged", `{"number":8}`)
+	setFilter(h, false, "poison")
+	start := h.f.Clock.Now()
+	failed := filterErrors(t, h.scheduler.ReconcileSubscriptions(context.Background(), 10))
+	if calls := filterCalls(h); calls != 2 || len(failed) != 2 {
+		t.Fatalf("a failure on one Event held back other subscriptions: %d calls, %d reported", calls, len(failed))
+	}
+	for _, f := range failed {
+		if !f.Held || f.Unreachable || f.Failures != 1 {
+			t.Fatalf("diagnostic: %+v", f)
+		}
+	}
+	// Many passes within the time bound keep holding.
+	for range 30 {
 		h.scheduler.ReconcileSubscriptions(context.Background(), 10)
 	}
 	if w, _ := waitState(t, h, out.Wait.ID); w.State != domain.WaitActive {
 		t.Fatalf("held wait: %v", w.State)
 	}
-	// Past both bounds the Event is passed by, and the pass says so.
 	h.f.Clock.Advance(time.Hour + time.Minute)
-	gave := false
+	gave := 0
 	for _, f := range filterErrors(t, h.scheduler.ReconcileSubscriptions(context.Background(), 10)) {
 		if !f.Held {
-			gave = true
-			if f.EventID != "poison" || !f.Since.Equal(start) || f.Passes < 20 {
+			gave++
+			if f.EventID != "poison" || !f.Since.Equal(start) || f.Failures < 20 {
 				t.Fatalf("gave up with %+v", f)
 			}
 		}
 	}
-	if !gave {
-		t.Fatal("a subscription held past both bounds didn't pass the Event by")
+	if gave != 2 {
+		t.Fatalf("%d subscriptions passed the poison Event by, want 2", gave)
 	}
-	// The next merge, which the filter answers about, still wakes it.
-	h.mu.Lock()
-	h.filterDown = false
-	h.mu.Unlock()
 	acceptSource(t, h, "named-pr", "fixture.merged", `{"number":8}`)
-	for range 2 {
-		if err := h.scheduler.ReconcileSubscriptions(context.Background(), 10); err != nil {
-			t.Fatal(err)
-		}
+	if err := h.scheduler.ReconcileSubscriptions(context.Background(), 10); err != nil {
+		t.Fatal(err)
 	}
 	if w, _ := waitState(t, h, out.Wait.ID); w.State != domain.WaitWoken {
-		t.Fatalf("a merge after the passed-by one didn't wake: %v", w.State)
+		t.Fatalf("an Event after the passed-by one didn't wake: %v", w.State)
 	}
 }
 
