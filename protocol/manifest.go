@@ -740,6 +740,11 @@ type SandboxDecl struct {
 type ContainerDecl struct {
 	Type    string `json:"type"`
 	Forward bool   `json:"forward,omitempty"`
+	// Probe marks a provider whose doctor check runs each of its bindings'
+	// version probes (CheckBinding.Probe) in the binding's container, so
+	// the executor's own check can leave those bindings to it
+	// (CheckBinding.Probed).
+	Probe bool `json:"probe,omitempty"`
 }
 
 // TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).

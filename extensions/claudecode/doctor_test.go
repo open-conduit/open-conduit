@@ -70,11 +70,12 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-// TestCheckContainerBindings: a binding that runs in a container is not
-// looked for on the host (its image's binary is the container provider's
-// to test), so with no host claude and only container bindings the check
-// is info, not claude_missing; a host binding beside it is still run. The
-// control: the same binding without isolation fails as missing.
+// TestCheckContainerBindings: a binding whose container provider runs its
+// version probe (Probed) is not looked for on the host, so with no host
+// claude and only such bindings the check is info, not claude_missing; a
+// host binding beside it is still run. The controls: the same binding on
+// the host, or in a container whose provider runs no probe (as ssh), fails
+// as missing.
 func TestCheckContainerBindings(t *testing.T) {
 	x := claudecode.NewExtension()
 	var ran []string
@@ -88,7 +89,7 @@ func TestCheckContainerBindings(t *testing.T) {
 	check := x.Checks()[0]
 	binding := func(name, isolation string, cfg map[string]any) protocol.CheckBinding {
 		raw, _ := json.Marshal(cfg)
-		return protocol.CheckBinding{Name: name, Executor: claudecode.Name, Config: raw, Isolation: isolation}
+		return protocol.CheckBinding{Name: name, Executor: claudecode.Name, Config: raw, Isolation: isolation, Probed: isolation == protocol.IsolationContainer}
 	}
 	cfg := func(bs ...protocol.CheckBinding) protocol.CheckConfig {
 		return protocol.CheckConfig{Scopes: []protocol.CheckScope{{ID: "eng", Bindings: bs}}}
@@ -110,6 +111,12 @@ func TestCheckContainerBindings(t *testing.T) {
 	got = check.Run(context.Background(), cfg(binding("boxed", "", map[string]any{"binary": "/opt/missing"})))
 	if got.Status != inproc.CheckFail || got.Code != "claude_missing" {
 		t.Errorf("control: the binding on the host is %+v, want claude_missing", got)
+	}
+	unprobed := binding("remote", protocol.IsolationContainer, map[string]any{"binary": "/opt/missing"})
+	unprobed.Probed = false
+	got = check.Run(context.Background(), cfg(unprobed))
+	if got.Status != inproc.CheckFail || got.Code != "claude_missing" {
+		t.Errorf("control: a container binding no provider probes is %+v, want claude_missing", got)
 	}
 }
 

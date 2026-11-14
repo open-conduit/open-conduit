@@ -47,7 +47,7 @@ func Manifest() protocol.Manifest {
 		Summary: "Runs a container binding's launches in Docker containers, behind a gateway that holds the operator's network policy.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{
-			Containers: []protocol.ContainerDecl{{Type: docker.Type, Forward: true}},
+			Containers: []protocol.ContainerDecl{{Type: docker.Type, Forward: true, Probe: true}},
 			Checks:     []protocol.CheckDecl{{Name: Name}},
 		}}
 }

@@ -427,7 +427,7 @@ func (d *daemon) packageChecks(deep bool) []func(context.Context) runtime.Check 
 			run := check.Run
 			out = append(out, func(ctx context.Context) runtime.Check {
 				s, _ := d.configs.Current()
-				cfg := checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath))
+				cfg := checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath), probingContainers(d.packages))
 				d.hooks.mu.Lock()
 				cfg.Tunnel = tunnelView(x, d.hooks.options)
 				d.hooks.mu.Unlock()
@@ -454,7 +454,7 @@ func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string
 		}
 		for _, check := range x.Checks() {
 			if check.Offline && !check.Deep {
-				cfg := checkConfig(s, x, executors, dir)
+				cfg := checkConfig(s, x, executors, dir, probingContainers(pkgs))
 				cfg.Tunnel = tunnelView(x, tunnel)
 				out = append(out, check.Run(ctx, cfg))
 			}
@@ -484,7 +484,12 @@ func tunnelView(x *installed, t TunnelOptions) *protocol.CheckTunnel {
 // one granted its operations), with the scope's routes and bindings, its
 // own entries, the sandboxes and containers of its own providers, and the
 // connections of its own types they name. Secret reference text never enters it.
-func checkConfig(s *config.Snapshot, x *installed, executors map[string]extension.Executor, dir string) protocol.CheckConfig {
+//
+// probing are the container provider types whose package runs an
+// executor's version probe in its checks (containers[].probe): a binding
+// in one of them, whose executor gives a probe, is marked Probed in every
+// view, and carries the probe in its provider's own.
+func checkConfig(s *config.Snapshot, x *installed, executors map[string]extension.Executor, dir string, probing map[string]bool) protocol.CheckConfig {
 	cfg := protocol.CheckConfig{Dir: dir}
 	if s == nil {
 		return cfg
@@ -569,9 +574,14 @@ func checkConfig(s *config.Snapshot, x *installed, executors map[string]extensio
 			}
 			if b.Container != nil && ownContainers[b.Container.Provider] {
 				cb.Container = &protocol.CheckContainer{Provider: b.Container.Provider, Config: b.Container.Config}
+			}
+			if b.Container != nil && probing[b.Container.Provider] {
 				if p, ok := executors[b.Executor].(extension.VersionProber); ok {
 					if argv, env := p.VersionProbe(b.Config); len(argv) > 0 {
-						cb.Probe = &protocol.Probe{Argv: argv, Env: env}
+						cb.Probed = true
+						if cb.Container != nil {
+							cb.Probe = &protocol.Probe{Argv: argv, Env: env}
+						}
 					}
 				}
 			}
@@ -592,6 +602,20 @@ func checkConfig(s *config.Snapshot, x *installed, executors map[string]extensio
 		}
 	}
 	return cfg
+}
+
+// probingContainers are the container provider types whose package
+// declares it runs executors' version probes (containers[].probe).
+func probingContainers(pkgs []*installed) map[string]bool {
+	out := map[string]bool{}
+	for _, x := range pkgs {
+		for _, c := range x.m.Provides.Containers {
+			if c.Probe {
+				out[c.Type] = true
+			}
+		}
+	}
+	return out
 }
 
 // ownExecutors are the executors a package declares, whether or not it is

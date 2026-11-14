@@ -698,9 +698,14 @@ type CheckBinding struct {
 	Container *CheckContainer `json:"container,omitempty"`
 	// Probe is the command that shows the binding's executor is installed
 	// (extension.VersionProber), given with Container when the executor
-	// declares version_probe, so the container provider's check runs it in
-	// the binding's image.
+	// declares version_probe and the provider declares containers[].probe,
+	// so the container provider's check runs it in the binding's image.
 	Probe *Probe `json:"probe,omitempty"`
+	// Probed says, in every extension's view, that the binding's container
+	// provider runs its executor's version probe where the binding runs
+	// (containers[].probe), so the executor's own check need not look for
+	// its program on the host. Without it the executor checks as before.
+	Probed bool `json:"probed,omitempty"`
 }
 
 // Probe is an executor's version probe: the argv to run and the variables

@@ -16,10 +16,10 @@ import (
 
 // Checks() is doctor's claude-code: `--version` for every claude-code
 // binding's binary on the host and, for a binding that sets usage, its
-// login's subscription usage windows. A binding that runs in a container
-// runs the binary in its image, not the host's: the container provider's
-// doctor runs its version probe there (VersionProbe), so this one only
-// names it. It reads only the configuration and the machine, so doctor
+// login's subscription usage windows. A binding whose container provider
+// runs its version probe in the binding's image (CheckBinding.Probed) runs
+// the binary there, not on the host, so this one only names it; any other
+// binding is looked for on the host. It reads only the configuration and the machine, so doctor
 // runs it without a daemon too.
 func (x *Extension) Checks() []inproc.Check {
 	return []inproc.Check{{Offline: true, Run: x.diagnose}}
@@ -48,7 +48,7 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 			if err != nil {
 				continue
 			}
-			if b.Isolation == protocol.IsolationContainer {
+			if b.Probed {
 				contained = append(contained, scope.ID+"/"+b.Name)
 			} else {
 				binaries[c.Binary] = append(binaries[c.Binary], scope.ID+"/"+b.Name)
