@@ -20,7 +20,8 @@ import (
 // made again with the credential re-read from the token file, which
 // recovery replaces, keeping its request ID; the caller sees only the
 // answer. A call still refused once the budget is spent reports the
-// refusal, and any other refusal is reported at once, never retried.
+// refusal, and any other refusal is reported at once, never retried. git's
+// credential helper retries its serving lookup the same way.
 func TestToolbeltRetriesWhileAuthorityRecovers(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ocrc")
 	if err != nil {
@@ -50,6 +51,14 @@ func TestToolbeltRetriesWhileAuthorityRecovers(t *testing.T) {
 			}
 			w.WriteHeader(status)
 			fmt.Fprint(w, refusal)
+			return
+		}
+		if r.URL.Path == "/v1/toolbelt/serving" {
+			fmt.Fprint(w, `{"data":{"operations":["github.git.credential"]}}`)
+			return
+		}
+		if call["operation"] == "github.git.credential" {
+			fmt.Fprint(w, `{"data":{"output":{"schema":"github.tool.v1","data":{"username":"x-access-token","password":"ghs_minted"}}}}`)
 			return
 		}
 		fmt.Fprint(w, `{"data":{"output":{"schema":"fixture.v1","data":{"opened":true}}}}`)
@@ -109,6 +118,21 @@ func TestToolbeltRetriesWhileAuthorityRecovers(t *testing.T) {
 		}
 		if len(slept) != 2 || slept[0] != 250*time.Millisecond || slept[1] != 500*time.Millisecond {
 			t.Fatalf("slept %v", slept)
+		}
+	})
+
+	t.Run("git credential", func(t *testing.T) {
+		// The helper's first request, which operations serve git's
+		// credential, is the one a push makes during recovery.
+		reset("stale")
+		onSleep = func() { _ = os.WriteFile(tokenFile, []byte("fresh\n"), 0o600) }
+		var out, errOut bytes.Buffer
+		code := RunToolbelt("t", "c", []string{"git-credential", "get"}, env, strings.NewReader("protocol=https\nhost=github.com\n\n"), &out, &errOut)
+		if code != 0 || out.String() != "username=x-access-token\npassword=ghs_minted\n" {
+			t.Fatalf("exit %d: %q %s", code, out.String(), errOut.String())
+		}
+		if len(seen) != 3 || !strings.HasPrefix(seen[0], "Bearer stale") || len(slept) != 1 {
+			t.Fatalf("calls %v, slept %v", seen, slept)
 		}
 	})
 

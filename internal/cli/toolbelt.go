@@ -221,31 +221,40 @@ var recoverySleep = func(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// toolbeltCall makes one toolbelt call with the execution's current
-// credential. A refusal with authority_recovering says the call did not run
-// because the run's lease lapsed (the host slept or stalled) and recovery
-// is adopting this process with fresh authority, so it re-reads the
-// credential (recovery replaces the token file) and makes the call again,
-// backing off, until it is answered or recoveryBudget is spent. Any other
-// answer or error is returned as it came.
-func (t *toolbelt) toolbeltCall(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+// withRecovery runs one toolbelt request with the execution's current
+// credential. A refusal with authority_recovering says the request did not
+// run because the run's lease lapsed (the host slept or stalled) and
+// recovery is adopting this process with fresh authority, so it re-reads
+// the credential (recovery replaces the token file) and makes the request
+// again, backing off, until it is answered, ctx ends or recoveryBudget is
+// spent. Any other answer or error is returned as it came.
+func (t *toolbelt) withRecovery(ctx context.Context, request func(*client.Client) error) error {
 	delay, waited := 250*time.Millisecond, time.Duration(0)
 	for {
 		c, err := t.client()
 		if err != nil {
-			return client.ToolResult{}, err
+			return err
 		}
-		result, err := c.ToolbeltCall(ctx, call)
+		err = request(c)
 		var api *client.Error
 		if !errors.As(err, &api) || api.Code != "authority_recovering" || waited+delay > recoveryBudget {
-			return result, err
+			return err
 		}
 		if e := recoverySleep(ctx, delay); e != nil {
-			return result, err
+			return err
 		}
 		waited += delay
 		delay = min(2*delay, 4*time.Second)
 	}
+}
+
+// toolbeltCall is one toolbelt call made through withRecovery.
+func (t *toolbelt) toolbeltCall(ctx context.Context, call client.ToolCall) (result client.ToolResult, err error) {
+	err = t.withRecovery(ctx, func(c *client.Client) (e error) {
+		result, e = c.ToolbeltCall(ctx, call)
+		return e
+	})
+	return result, err
 }
 
 func (t *toolbelt) do(f *toolFlags, operation string, input any, pick func(client.ToolResult) any) int {
@@ -480,14 +489,17 @@ func (t *toolbelt) gitCredential(args []string) int {
 			in[k] = v
 		}
 	}
-	c, err := t.client()
-	if err != nil {
+	if _, err := t.client(); err != nil {
 		fmt.Fprintf(t.errOut, "os: %s\n", err)
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
-	ops, err := c.ToolbeltServing(ctx, extension.CapabilityGitCredential)
+	var ops []string
+	err := t.withRecovery(ctx, func(c *client.Client) (e error) {
+		ops, e = c.ToolbeltServing(ctx, extension.CapabilityGitCredential)
+		return e
+	})
 	if err != nil {
 		t.noCredential(err)
 		return 1

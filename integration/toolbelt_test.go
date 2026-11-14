@@ -298,6 +298,34 @@ func TestProductionToolbeltServing(t *testing.T) {
 	}
 }
 
+// TestProductionToolbeltServingWhileRecovering: the toolbelt's reads (the
+// operations serving a capability, the guidance) refuse a token recovery
+// superseded as ErrAuthorityRecovering while the execution is still
+// running, as a call with it is, so git's credential helper and the MCP
+// server retry with the recovered token. Once the execution has finished,
+// the same token gets the bare ErrUnauthorized.
+func TestProductionToolbeltServingWhileRecovering(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	h.f.Clock.Advance(conformance.RuntimeLease + time.Second)
+	recovered, err := h.scheduler.Recover(ctx, h.attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Serving(ctx, h.token, "", "fixture.capability"); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("serving with a superseded token: %v, want ErrAuthorityRecovering", err)
+	}
+	if _, err := h.belt.Guidance(ctx, h.token, ""); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("guidance with a superseded token: %v, want ErrAuthorityRecovering", err)
+	}
+	if err := h.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Serving(ctx, h.token, "", "fixture.capability"); !errors.Is(err, extension.ErrUnauthorized) || errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("serving once the execution finished: %v, want the bare ErrUnauthorized", err)
+	}
+}
+
 // TestProductionToolbeltGuidance serves an operation's guidance only to a
 // token whose grant includes it, while current config still enables it.
 func TestProductionToolbeltGuidance(t *testing.T) {

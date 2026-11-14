@@ -423,8 +423,13 @@ func (t *Toolbelt) granted(ctx context.Context, token string, execution domain.I
 		return err
 	}
 	a := record.Authority
-	if record.Revoked || !t.now().Before(a.ExpiresAt) || execution != "" && execution != a.ExecutionID {
+	if execution != "" && execution != a.ExecutionID {
 		return extension.ErrUnauthorized
+	}
+	if record.Revoked || !t.now().Before(a.ExpiresAt) {
+		// A token recovery superseded while it adopts the process is
+		// refused as recovering, as a call with it is.
+		return t.recoveringRefusal(ctx, record, unauthorized(RefusalTokenEnded))
 	}
 	seen := map[string]bool{}
 	for _, name := range a.Operations {

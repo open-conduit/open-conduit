@@ -188,13 +188,13 @@ const mcpBaseInstructions = "The Open Conduit toolbelt for this execution: read 
 // owning the operation supplies. Without them (an older daemon, an
 // unreachable endpoint) the base sentence still serves.
 func (t *toolbelt) mcpInstructions() string {
-	c, err := t.client()
-	if err != nil {
-		return mcpBaseInstructions
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	guide, err := c.ToolbeltGuide(ctx)
+	var guide client.ToolbeltGuide
+	err := t.withRecovery(ctx, func(c *client.Client) (e error) {
+		guide, e = c.ToolbeltGuide(ctx)
+		return e
+	})
 	if err != nil {
 		return mcpBaseInstructions
 	}
