@@ -114,6 +114,12 @@ func TestDeclaredOperationIsServedTyped(t *testing.T) {
 		{`{"city":"Leeds","when":"now"}`, `weather.forecast: unknown field "when"`},
 		{`{"city":3}`, `weather.forecast: field "city" has the wrong type (got a JSON number)`},
 		{`["Leeds"]`, `weather.forecast: the input must be a JSON object`},
+		// encoding/json would match these to "city" case-insensitively,
+		// the last winning: a gate reading the input would see another
+		// city than the handler.
+		{`{"City":"Leeds"}`, `weather.forecast: unknown field "City"`},
+		{`{"city":"Leeds","CITY":"York"}`, `weather.forecast: unknown field "CITY"`},
+		{`{"city":"Leeds","city":"York"}`, `weather.forecast: field "city" is given twice`},
 	} {
 		_, err := h.Operation(ctx, "weather.forecast", domain.Payload{Data: json.RawMessage(c.in)})
 		var oe *extension.OperationError
