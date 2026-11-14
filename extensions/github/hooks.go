@@ -19,13 +19,18 @@ var HookEvents = []string{"issues", "issue_comment", "pull_request", "pull_reque
 
 // Access is what the connection's identities may do on a repository.
 type Access struct {
-	// Known is false when GitHub reported no permissions (App installation
-	// tokens carry them on the installation instead).
+	// Known is true when Pull, Push and Admin are the token's user's role
+	// on the repository. It is false for a GitHub App sign-in: GitHub
+	// answers an installation token with a permissions object too, all
+	// false, since it describes a user's role, not the installation's.
 	Known             bool
 	Pull, Push, Admin bool
 	// Writer is true when a separate bot identity performs writes and it
 	// can read the repository too.
 	Writer bool
+	// App is true when the connection signs in as a GitHub App, whose
+	// installation's permissions ReaderPermissions reads.
+	App bool
 	// DefaultBranch is the repository's default branch.
 	DefaultBranch string
 	// Public is true when the repository is public: anyone can open an
@@ -49,8 +54,11 @@ func (c *Client) Verify(ctx context.Context, repo string) (Access, error) {
 	if _, err := c.call(ctx, false, repo, http.MethodGet, "/repos/"+repo, nil, &out); err != nil {
 		return Access{}, err
 	}
+	who := c.who.Load()
 	a := Access{DefaultBranch: out.DefaultBranch, Public: out.Private != nil && !*out.Private}
-	if out.Permissions != nil {
+	if _, ok := who.read.(*appToken); ok {
+		a.App = true
+	} else if out.Permissions != nil {
 		p := *out.Permissions
 		a.Known, a.Pull, a.Push, a.Admin = true, p["pull"], p["push"] || p["maintain"] || p["admin"], p["admin"]
 	}

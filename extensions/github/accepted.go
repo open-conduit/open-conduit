@@ -42,15 +42,16 @@ func permissionLabel(name string) string {
 // permissionLabels are GitHub's names for the permissions as its settings
 // pages show them.
 var permissionLabels = map[string]string{
-	"actions":        "Actions",
-	"administration": "Administration",
-	"checks":         "Checks",
-	"contents":       "Contents",
-	"issues":         "Issues",
-	"metadata":       "Metadata",
-	"pull_requests":  "Pull requests",
-	"statuses":       "Commit statuses",
-	"workflows":      "Workflows",
+	"actions":          "Actions",
+	"administration":   "Administration",
+	"checks":           "Checks",
+	"contents":         "Contents",
+	"issues":           "Issues",
+	"metadata":         "Metadata",
+	"pull_requests":    "Pull requests",
+	"repository_hooks": "Webhooks",
+	"statuses":         "Commit statuses",
+	"workflows":        "Workflows",
 }
 
 // levels orders permission levels: write includes read, admin both.
@@ -139,6 +140,20 @@ func joinPermissions(ps []Permission) string {
 // permissions GitHub doesn't report.
 func (c *Client) WriterPermissions(ctx context.Context, repo string) (perms map[string]string, known bool, err error) {
 	app, ok := c.who.Load().write.(*appToken)
+	if !ok {
+		return nil, false, nil
+	}
+	perms, err = app.permissions(ctx, repo)
+	if err != nil {
+		return nil, false, err
+	}
+	return perms, true, nil
+}
+
+// ReaderPermissions are the permissions of the App the client signs in and
+// reads as on repo, read afresh; known is false for a token sign-in.
+func (c *Client) ReaderPermissions(ctx context.Context, repo string) (perms map[string]string, known bool, err error) {
+	app, ok := c.who.Load().read.(*appToken)
 	if !ok {
 		return nil, false, nil
 	}

@@ -78,7 +78,7 @@ The `github-auth` check lists each repository's entry, and each should include `
 - `credential_unavailable`: the key reference doesn't resolve, or what it holds isn't a private key.
 - `repo_unreachable`: the App isn't installed on that repository.
 
-Doctor proves that the App is installed and can read the repository. It doesn't prove the App has the permissions in step 1. A permission that is missing shows up as a refused write the first time an agent needs it, so check the list if a comment or label fails.
+The entry also lists what the App's installation holds on the repository, such as `bot App 123456 holds Contents write, Issues write, Pull requests write, …`. When the configuration needs a permission it lacks, the check warns `permission_missing` and names it, for example `projection needs Issues write, but bot App 123456 has Issues read on acme/widgets`. Grant it in the App's settings; the installation may need you to accept the new permission.
 
 ## Push and commit as the bot
 
