@@ -266,6 +266,29 @@ func TestCheckAuthComparesGrantedScopesWithTheManifest(t *testing.T) {
 	if r := slack.CheckAuth(ctx, client, settings("T0123")); r.Severity != slack.DoctorFail || !strings.Contains(r.Item, "chat:write") {
 		t.Fatalf("missing chat:write: %+v", r)
 	}
+	// An entry that sets identities needs chat:write.customize: without it
+	// those bindings' messages are refused, so doctor fails and says why.
+	named, err := slack.ParseExtension([]byte(`{"namespace":"slack/T0123","scope":"support","team":"T0123","channels":["C0SUPPORT"],"bot_user_id":"`+fake.BotUser()+`","identities":[{"binding":"engineer","username":"Steve"}]}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lacking []string
+	for _, s := range slack.BotScopes {
+		if s != slack.CustomizeScope {
+			lacking = append(lacking, s)
+		}
+	}
+	fake.SetScopes(lacking)
+	if r := slack.CheckAuth(ctx, client, named); r.Severity != slack.DoctorFail || r.Code != "identity_scope_missing" || !strings.Contains(r.Item, slack.CustomizeScope) {
+		t.Fatalf("identities without the scope: %+v", r)
+	}
+	if r := slack.CheckAuth(ctx, client, settings("T0123")); r.Severity != slack.DoctorWarn || r.Code != "scopes_missing" {
+		t.Fatalf("no identities, no customize scope: %+v", r)
+	}
+	fake.SetScopes(nil)
+	if r := slack.CheckAuth(ctx, client, named); r.Severity != slack.DoctorOK {
+		t.Fatalf("identities with the scope: %+v", r)
+	}
 	if r := slack.CheckAuth(ctx, client, settings("T9999")); r.Severity != slack.DoctorFail || r.Code != "team_mismatch" {
 		t.Fatalf("team: %+v", r)
 	}

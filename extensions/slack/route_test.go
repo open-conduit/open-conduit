@@ -206,6 +206,15 @@ func TestConfigValidation(t *testing.T) {
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":["C1","C1"]}]}`,
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"Nightly","channels":["C1"]}]}`,
 		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"post":[{"binding":"nightly","channels":["C1"]},{"binding":"nightly","channels":["C1"]}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"username":"Steve"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","username":"Steve"},{"binding":"engineer","username":"Sam"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","username":" Steve"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","username":"` + strings.Repeat("s", 81) + `"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","icon_emoji":"wrench"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","icon_url":"http://example.com/s.png"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","icon_emoji":":wrench:","icon_url":"https://example.com/s.png"}]}`,
+		`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","username":"Steve","as_user":true}]}`,
 	} {
 		if _, err := slack.ParseExtension([]byte(bad), nil); err == nil {
 			t.Fatalf("accepted %s", bad)
@@ -214,6 +223,19 @@ func TestConfigValidation(t *testing.T) {
 	posting, err := slack.ParseExtension([]byte(`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C2","C1"],"post":[{"binding":"nightly","channels":["C2"]}]}`), nil)
 	if err != nil || !posting.MayPost("nightly", "C2") || posting.MayPost("nightly", "C1") || posting.MayPost("other", "C2") || !posting.Posts("C2") || posting.Posts("C1") {
 		t.Fatalf("post grants: %+v %v", posting.Post, err)
+	}
+	named, err := slack.ParseExtension([]byte(`{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C1"],"identities":[{"binding":"engineer","username":"Steve","icon_emoji":":wrench:"},{"binding":"designer","icon_url":"https://example.com/d.png"}]}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := named.IdentityOf("engineer"); !ok || id.Username != "Steve" || id.IconEmoji != ":wrench:" {
+		t.Fatalf("engineer identity: %+v %v", id, ok)
+	}
+	if _, ok := named.IdentityOf("agent"); ok {
+		t.Fatal("a binding without an identity has one")
+	}
+	if _, ok := named.IdentityOf(""); ok {
+		t.Fatal("no binding has an identity")
 	}
 	if _, err := slack.ParseConnection([]byte(`{"api_url":"https://user:pw@slack.com/api"}`)); err == nil {
 		t.Fatal("credentials in api_url accepted")

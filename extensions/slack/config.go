@@ -141,6 +141,11 @@ type ExtensionConfig struct {
 	// (slack.post) and the channels each may post in. A channel must be one
 	// the entry watches, so replies in the new thread are observed.
 	Post []PostGrant `json:"post,omitempty"`
+	// Identities give the messages of named bindings' Work their own name
+	// and icon (chat.postMessage username and icon_emoji or icon_url, which
+	// need the chat:write.customize scope). A binding without one posts as
+	// the app.
+	Identities []BindingIdentity `json:"identities,omitempty"`
 	// DirectMessages, when set, makes a direct message with the app a
 	// place where Work starts: every person's top-level message there
 	// starts a conversation, whatever start says, if the limit admits its
@@ -157,6 +162,22 @@ type DirectMessages struct {
 	// Anyone admits every person who can message the app.
 	Anyone bool `json:"anyone,omitempty"`
 }
+
+// BindingIdentity is the name and icon a binding's Work posts under: its replies,
+// posts and the prompts of its runs. At least one field besides Binding is
+// set, and at most one icon.
+type BindingIdentity struct {
+	Binding   string `json:"binding"`
+	Username  string `json:"username,omitempty"`
+	IconEmoji string `json:"icon_emoji,omitempty"`
+	IconURL   string `json:"icon_url,omitempty"`
+}
+
+// CustomizeScope is the bot scope that lets a message carry its own name
+// and icon (BindingIdentity).
+const CustomizeScope = "chat:write.customize"
+
+var emojiPattern = regexp.MustCompile(`^:[a-z0-9_+'-]{1,100}:$`)
 
 // PostGrant lets Work running on Binding post to Channels (slack.post).
 type PostGrant struct {
@@ -191,6 +212,9 @@ type Settings struct {
 	// FollowUp maps each binding whose posts' replies open a successor
 	// once its Work has finished to the grants that successor gets.
 	FollowUp map[string][]string
+	// Identities maps each binding that posts under its own name and icon
+	// to that identity.
+	Identities map[string]BindingIdentity
 	// DirectMessages turns on direct messages with the app. DMUsers (sorted)
 	// is who may start Work by one; DMAnyone admits everyone instead.
 	DirectMessages bool
@@ -219,6 +243,13 @@ func (s Settings) AdmitsDirect(user string) bool {
 	}
 	i := sort.SearchStrings(s.DMUsers, user)
 	return i < len(s.DMUsers) && s.DMUsers[i] == user
+}
+
+// IdentityOf is the name and icon Work running on binding posts under, if
+// the entry gives it one.
+func (s Settings) IdentityOf(binding string) (BindingIdentity, bool) {
+	id, ok := s.Identities[binding]
+	return id, ok && binding != ""
 }
 
 // FollowsUp reports whether a reply to binding's post in channel, once
@@ -389,6 +420,24 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			s.FollowUp[g.Binding] = append([]string{}, grants...)
 		}
 	}
+	if len(c.Identities) > 100 {
+		return s, errors.New("slack extension: identities must list at most 100 bindings")
+	}
+	for _, id := range c.Identities {
+		if !idPattern.MatchString(id.Binding) {
+			return s, errors.New("slack extension: each identities entry must name a binding")
+		}
+		if _, dup := s.Identities[id.Binding]; dup {
+			return s, fmt.Errorf("slack extension: identities lists binding %s more than once", id.Binding)
+		}
+		if err := validIdentity(id); err != nil {
+			return s, fmt.Errorf("slack extension: identity for binding %s: %w", id.Binding, err)
+		}
+		if s.Identities == nil {
+			s.Identities = map[string]BindingIdentity{}
+		}
+		s.Identities[id.Binding] = id
+	}
 	s.Receiver = c.Receiver
 	switch s.Receiver {
 	case "":
@@ -410,6 +459,28 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		}
 	}
 	return s, nil
+}
+
+func validIdentity(id BindingIdentity) error {
+	if id.Username == "" && id.IconEmoji == "" && id.IconURL == "" {
+		return errors.New("set a username, an icon_emoji or an icon_url")
+	}
+	if id.Username != "" && (strings.TrimSpace(id.Username) != id.Username || len([]rune(id.Username)) > 80 || strings.ContainsAny(id.Username, "\r\n\t")) {
+		return errors.New("username must be 1-80 characters on one line, without surrounding spaces")
+	}
+	if id.IconEmoji != "" && id.IconURL != "" {
+		return errors.New("set icon_emoji or icon_url, not both")
+	}
+	if id.IconEmoji != "" && !emojiPattern.MatchString(id.IconEmoji) {
+		return errors.New("icon_emoji must be an emoji code between colons (:wrench:)")
+	}
+	if id.IconURL != "" {
+		u, err := url.Parse(id.IconURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || len(id.IconURL) > 2000 {
+			return errors.New("icon_url must be an https URL without credentials")
+		}
+	}
+	return nil
 }
 
 // ValidateExtension is the config.Registry extension validator.

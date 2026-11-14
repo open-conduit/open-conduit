@@ -51,6 +51,9 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 	type waiting struct {
 		work            domain.ID
 		channel, thread string
+		// binding is the Work's latest attempt's: its prompts post under
+		// that binding's identity.
+		binding string
 	}
 	var ws []waiting
 	err := p.transact(ctx, func(tx storage.Tx) error {
@@ -67,8 +70,19 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			if !ok {
 				continue
 			}
+			xs, err := tx.ListExecutions(w.ID)
+			if err != nil {
+				return err
+			}
+			binding := ""
+			var latest uint32
+			for _, x := range xs {
+				if x.Attempt >= latest {
+					latest, binding = x.Attempt, x.ExecutorBinding
+				}
+			}
 			if w.State == domain.WorkReady {
-				ws = append(ws, waiting{w.ID, channel, thread})
+				ws = append(ws, waiting{w.ID, channel, thread, binding})
 				continue
 			}
 			waits, err := tx.ListWaits(w.ID)
@@ -77,7 +91,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			}
 			for _, wt := range waits {
 				if wt.State == domain.WaitActive {
-					ws = append(ws, waiting{w.ID, channel, thread})
+					ws = append(ws, waiting{w.ID, channel, thread, binding})
 					break
 				}
 			}
@@ -107,7 +121,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 				continue
 			}
 			seen[id] = true
-			out = append(out, Intent{ID: id, Work: w.work, Channel: w.channel, Thread: w.thread, Text: o.Label, Blocks: blocks})
+			out = append(out, Intent{ID: id, Work: w.work, Channel: w.channel, Thread: w.thread, Text: o.Label, Blocks: blocks, Binding: w.binding})
 		}
 	}
 	return out, nil

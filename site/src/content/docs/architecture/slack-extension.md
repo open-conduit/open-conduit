@@ -16,14 +16,14 @@ This page records two decisions: the manifest requests `metadata.message:read` f
 | Interactivity | On, over Socket Mode, so it needs no request URL. It carries the button presses of [prompts](#prompts-and-button-answers) |
 | Bot user | Yes, always online |
 | App Home | The messages tab on and writable, so people can send the app a [direct message](#direct-messages) |
-| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read`, `im:history`, `im:read` |
+| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `chat:write.customize`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read`, `im:history`, `im:read` |
 | Bot events | `message.channels`, `message.groups`, `message.im`, `app_mention` |
 | App-level token | `connections:write` (Socket Mode only) |
 
 The extension's own calls need only part of this:
 
 - `conversations.history` and `conversations.replies` need `channels:history` (public channels), `groups:history` (private channels) or `im:history` (direct messages).
-- `chat.postMessage` and `chat.postEphemeral` need `chat:write`.
+- `chat.postMessage` and `chat.postEphemeral` need `chat:write`. A message posted under a binding's own name and icon ([identities](#binding-identities)) also needs `chat:write.customize`.
 - `auth.test` needs no scope.
 - `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`; listing the app's direct messages for reconcile needs `im:read`.
 - `apps.connections.open` uses the app-level token.
@@ -52,7 +52,7 @@ With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts
 
 The `slack-cli` path is unverified against a real Slack CLI. The manifest URL path and the token checks have been run against real Slack.
 
-**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). The extension maps its severity onto the check it serves.
+**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). When the entry sets `identities` and the token lacks `chat:write.customize`, or doesn't report its scopes, the check fails with `identity_scope_missing`, because those bindings' messages are refused. The extension maps its severity onto the check it serves.
 
 ## Configuration
 
@@ -80,6 +80,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `refresh_minutes` | Default 60. How long an unchanged thread's replies are taken from memory. |
 | `projection` | `disabled`, `dry_run`. `serve --dry-run` forces a dry run. |
 | `post` | Which bindings may post a new message (`slack.post`) and where: `[{"binding": "nightly", "channels": ["C0123"]}]`. Each channel must be one of `channels`, so the new thread's replies are observed. An entry's `follow_up` (`{"grants": ["…"]}`, or `{}` for none) lets a person's reply to that binding's post open a successor once the posting Work has finished, with only those binding grants. Without it such a reply starts nothing. Empty: no binding may post. |
+| `identities` | The name and icon each binding's messages post under: `[{"binding": "engineer", "username": "Steve", "icon_emoji": ":wrench:"}]`, with `icon_url` (https) instead of `icon_emoji` if you like. Each entry sets a `username`, an icon or both. Needs `chat:write.customize`. A binding with no entry posts as the app. See [binding identities](#binding-identities). |
 
 The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread`, `slack.reply` and `slack.post`.
 
@@ -98,7 +99,7 @@ One entry is one namespace. A thread's correlation key is `channel/<C>/thread/<t
 | --- | --- | --- |
 | `slack.message.human` | A person's message (top level or reply, including edits) | Yes |
 | `slack.message.bot` | Another integration's message | Yes |
-| `slack.message.agent` | A message carrying this app's marker, or the app's own unmarked message (`bot_user_id`) | Yes |
+| `slack.message.agent` | A message carrying this app's marker, or the app's own unmarked message (`bot_user_id`). A message posted under a binding's own name is the app's by its marker, never by its name | Yes |
 | `slack.message.deleted` | A deleted parent Slack keeps as a tombstone | Yes |
 | `slack.message.removed` | A push-only deletion notice for a message Slack no longer shows | **No** (declared loss) |
 | `slack.thread.opened` | A message a Work posted with `slack.post`; its thread is attached to that Work. The projector accepts it when the post is made; sealed, so the builtin `emit` can't | **No** (declared loss) |
@@ -212,6 +213,17 @@ The binding `init slack` writes reuses the Claude Code executor through the publ
 
 [`TestDaemonSlackSupportConversation`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_slack_support_test.go) drives this with a fake claude on the composed daemon over Socket Mode. The first turn replies and parks. A reply resumes the same session. A message mid-turn is injected once and consumed, with no wake and no extra segment. A restart mid-wait keeps the thread's Work, and the next reply resumes the same session. The run uses no workspace, `github` stays `not_configured`, and only fixtures are involved. The same sequence has also been run once on real Slack and real Claude (see [History](#history)). The multi-day wait is the fake-clock scenario under [Verification](#verification).
 
+## Binding identities
+
+One app can serve many agents: a front agent in a thread, the specialists it hands work to, scheduled jobs posting reports. The entry's `identities` give a binding's messages its own name and icon, so people see which agent wrote each one without the agent saying so in the text.
+
+- **What carries it.** `slack.reply`, `slack.post`, outcome replies and the [prompts](#prompts-and-button-answers) of Work on the binding post with `chat.postMessage` `username` and `icon_emoji` or `icon_url`. A prompt takes the binding of the Work's latest attempt. A binding without an identity posts as the app, as before.
+- **Authority at the host.** The binding is read from the writing attempt's stored Execution and recorded on the intent, never taken from the call's input, so a prompt can't make an agent post as a different agent. A re-driven intent keeps the binding it was recorded with.
+- **Refused, not shown as the app.** Slack posts under the app's name when the token lacks `chat:write.customize`. So before posting with an identity the projector checks the token's granted scopes (`auth.test`, kept for ten minutes). If the scope is missing, or the scopes aren't reported, nothing is posted. A tool call (`slack.reply`, `slack.post`) ends its intent `failed` with `identity_scope_missing`, and the refusal names the scope and asks the agent to report it, so the agent decides what to do next. An outcome reply or a prompt has nobody waiting for a refusal, so it stays `pending` and each projector pass reports `reply:identity_scope_missing`. It is posted under the binding's name once the scope is granted and the cached scopes are read again. Doctor fails the entry for the same reason.
+- **Still the app's own.** Slack shows such a message as a `bot_message` with the app's bot ID and the name, without the bot user. The marker identifies it as `slack.message.agent`, so it wakes no Work and reconcile doesn't take it for a person's message. When Slack withholds metadata, the marker search's fallback matches the app's bot ID (from `auth.test`) as well as its bot user, so a lost post is found again rather than repeated. The name is display only, and it never identifies the author.
+
+`TestSlackBindingsPostUnderTheirOwnIdentity` and `TestSlackIdentityWithoutScopeIsRefused` cover this against the fake, which posts as Slack does with the scope and silently under the app's name without it.
+
 ## Marked replies
 
 Replies are not re-derivable. Each one has a stable intent ID, a durable KV record and a discoverable marker:
@@ -227,7 +239,7 @@ The record moves through these states:
 
 A rate limit or a credential failure returns the record to `pending`. A lost answer (a network error or 5xx) leaves it `attempted`. After 30 seconds the projector reads the thread and completes the record when it finds the marker, instead of posting again. A reused intent ID with different content is refused (`intent_conflict`).
 
-The marker is message metadata: `event_type` `open_conduit_reply`, with payload `{work, execution, intent}` where intent is `i<digest>`. When Slack returns no metadata for the app's messages, the search falls back to the app's bot user posting exactly this text, and normalization still recognizes the app's own messages (`bot_user_id`) as agent messages that are never input. That fallback could confuse two identical replies of different intents in one thread. Links are never unfurled.
+The marker is message metadata: `event_type` `open_conduit_reply`, with payload `{work, execution, intent}` where intent is `i<digest>`. When Slack returns no metadata for the app's messages, the search falls back to the app's bot user, or its bot ID, posting exactly this text, and normalization still recognizes the app's own messages (`bot_user_id`) as agent messages that are never input. That fallback could confuse two identical replies of different intents in one thread. Links are never unfurled.
 
 The projector runs at most every five seconds in the background. `slack.context` returns the thread's identity, and `slack.thread` reads the thread (normalized and classified). Both act only on the Work's own thread.
 
@@ -283,6 +295,7 @@ Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take 
 
 - **Real Slack.** Real Slack has been exercised by one short run (see [History](#history)). Not covered on real Slack: a rate limit, `app_mention` duplication, the HTTP Events API, the `slack-cli` setup path, a reply missed by push and recovered by reconcile, a SIGKILL during an active turn, and a multi-day wait. The drills cover the missed reply and the SIGKILL, and the fake-clock scenario covers the multi-day wait in CI.
 - **Posting.** `slack.post` has not been run on real Slack. A Work that posts several threads owns them all, but `slack.reply` and `slack.thread` act on the first thread key it holds. A successor answers only the thread whose question opened it. A message in another thread its predecessor posted, while the successor is live or after it has finished, is skipped and starts nothing, so it is never answered in the wrong thread. A thread posted before the binding was recorded (by Work from before this change) holds no posted key and opens no successor.
+- **Identities.** Posting under a binding's own name has not been run on real Slack; the fake follows Slack's documented shape. A message posted under a custom name while Slack withholds metadata has no marker and no bot user, so normalization classifies it as `slack.message.bot`. That is never input either, but `slack.thread` shows it as a bot's message, not the agent's.
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
 - **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
 

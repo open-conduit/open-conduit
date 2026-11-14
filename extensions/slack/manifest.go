@@ -20,7 +20,9 @@ import (
 // bot-user/text fallback (04-02 decision; see the extension doc). users:read,
 // reactions:write and app_mentions:read are granted for names and
 // acknowledgements, and are not required by this extension's calls.
-var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "metadata.message:read", "reactions:write", "users:read", "app_mentions:read"}
+// chat:write.customize (CustomizeScope) lets chat.postMessage post under a
+// binding's own name and icon (the entry's identities).
+var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "chat:write.customize", "metadata.message:read", "reactions:write", "users:read", "app_mentions:read"}
 
 // DirectScopes are the bot scopes direct messages need: im:history for
 // conversations.history and conversations.replies in a DM, im:read to list

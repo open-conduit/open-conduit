@@ -591,6 +591,8 @@ Extension entry `config`:
 | `receiver` | `socket` | One of socket, events, none. |
 | `signing_secret` |  |  |
 | `projection` |  |  |
+| `post` |  |  |
+| `identities` |  | a binding's own name and icon: [{binding, username, icon_emoji or icon_url}] |
 
 ### srt sandbox (`srt`)
 
