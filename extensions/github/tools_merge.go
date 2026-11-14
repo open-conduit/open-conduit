@@ -359,9 +359,11 @@ func (t *Tools) stillWorking(ctx context.Context, w domain.Work) (string, error)
 			return err
 		}
 		for i := range xs {
-			// An attempt that hasn't ended (pending, running, parked
-			// mid-turn) is still working.
-			if !xs[i].State.Terminal() {
+			// A pending or running attempt is mid-turn. A parked one has
+			// ended its turn on a wait (a resumable binding keeps the
+			// attempt to resume it) and carries that turn's outcome, so it
+			// is judged by its declaration like an attempt that has ended.
+			if xs[i].State == domain.ExecutionPending || xs[i].State == domain.ExecutionRunning {
 				return errWorking
 			}
 			if latest == nil || xs[i].Attempt > latest.Attempt {

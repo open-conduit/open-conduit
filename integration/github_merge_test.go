@@ -369,3 +369,46 @@ func TestGitHubMergeWakesWhenThePullsReviewerHandsBack(t *testing.T) {
 		t.Fatalf("merge after the reviewer handed back: %v %v", out, err)
 	}
 }
+
+// A reviewer on a resumable binding that ends its turn done on a wait is
+// parked, not ended, and carries that turn's outcome: it has handed back,
+// so the merge goes through (#642).
+func TestGitHubMergeCountsAParkedReviewerAsHandedBack(t *testing.T) {
+	e := newPullEnv(t)
+	e.agent.Mu.Lock()
+	e.agent.Caps.Resume = true
+	e.agent.Mu.Unlock()
+	bob := githubtest.User{Login: "bob", Type: "User"}
+	n, builder := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	e.fake.SetCheck("h1", "ci", "completed", "success")
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	e.fake.AddReview(pr, bob, "APPROVED", "")
+	e.sync()
+	b := e.start(builder.ID)
+	e.finish(b, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	reviewer, ok := e.workFor(gh.PullRequestKey(pr))
+	if !ok {
+		t.Fatal("no Work for the PR")
+	}
+	r := e.start(reviewer.ID)
+	e.must(r, gh.OpWait, "park", map[string]any{"conditions": []string{"pr:" + string(ghScope) + "/" + itoa(pr) + ":pushed"}, "reason": "approved; waiting for a push"})
+	e.finish(r, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.publishTurns()
+	var parked bool
+	e.read(func(tx storage.Tx) error {
+		x, err := tx.Execution(r.Lease.ExecutionID)
+		parked = err == nil && x.State == domain.ExecutionParked
+		return err
+	})
+	if !parked || e.work(reviewer.ID).State != domain.WorkWaiting {
+		t.Fatalf("the reviewer did not park on its wait: %v", e.work(reviewer.ID).State)
+	}
+
+	m := e.start(e.request("merge-bot").ID)
+	out, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+	if err != nil || decodeMap(t, out)["state"] != "merged" {
+		t.Fatalf("merge with the reviewer parked after done: %v %v", out, err)
+	}
+}
