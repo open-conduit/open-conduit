@@ -387,20 +387,22 @@ func (t *Tools) stillWorking(ctx context.Context, w domain.Work) (string, error)
 		// Without the host's read, unread input can't be ruled out.
 		return "may have unread input (this host can't say)", nil
 	}
+	// The newest attempt decides, whatever it ended in: one cancelled or
+	// interrupted mid-turn has consumed its input and declared nothing, and
+	// an earlier attempt's review must not stand in for it.
 	var latest *domain.Execution
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		xs, err := tx.ListExecutions(w.ID)
 		if err != nil {
 			return err
 		}
-		sort.Slice(xs, func(i, j int) bool { return xs[i].Attempt < xs[j].Attempt })
 		for i := range xs {
 			// An attempt that hasn't ended (pending, running, parked
 			// mid-turn) is still working.
 			if !xs[i].State.Terminal() {
 				return errWorking
 			}
-			if xs[i].Outcome != nil {
+			if latest == nil || xs[i].Attempt > latest.Attempt {
 				latest = &xs[i]
 			}
 		}
@@ -419,14 +421,21 @@ func (t *Tools) stillWorking(ctx context.Context, w domain.Work) (string, error)
 	if len(pending) > 0 {
 		return fmt.Sprintf("has %d unread input(s) (%s) it hasn't started on", len(pending), pending[0].Type), nil
 	}
+	if latest == nil {
+		return "hasn't started yet", nil
+	}
 	d, ok := declaration(latest)
 	switch {
-	case !ok || d.Status == "":
-		return "hasn't ended a turn yet", nil
-	case !slices.Contains(handedBack, d.Status):
+	case ok && slices.Contains(handedBack, d.Status):
+		return "", nil
+	case ok && d.Status != "":
 		return "ended its last turn in " + d.Status, nil
+	case latest.State == domain.ExecutionCancelled:
+		return "had its last turn cancelled before it ended, so what that turn read is unanswered", nil
+	case latest.State == domain.ExecutionFailed:
+		return "had its last turn fail before it ended, so what that turn read is unanswered", nil
 	}
-	return "", nil
+	return "ended its last turn without handing back (no review or done)", nil
 }
 
 var errWorking = errors.New("an attempt is running")

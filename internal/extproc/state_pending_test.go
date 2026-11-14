@@ -21,6 +21,8 @@ type pendingStore struct {
 	works  map[domain.ID]domain.Work
 	queue  map[string][]byte
 	events map[domain.ID]domain.AcceptedEvent
+	// unrouted are accepted Events the router has yet to route.
+	unrouted []domain.AcceptedEvent
 }
 
 func (s pendingStore) Transact(_ context.Context, _ storage.Guard, fn func(storage.Tx) error) error {
@@ -46,6 +48,10 @@ func (t pendingTx) Event(id domain.ID) (domain.AcceptedEvent, error) {
 		return a, storage.ErrNotFound
 	}
 	return a, nil
+}
+
+func (t pendingTx) UnroutedEvents(uint64, int) ([]domain.AcceptedEvent, error) {
+	return t.s.unrouted, nil
 }
 
 func (t pendingTx) Get(ns, key string) ([]byte, error) {
@@ -75,9 +81,10 @@ func queueRow(work domain.ID, seq uint64, event domain.ID) (string, []byte) {
 	return hex.EncodeToString(h.Sum(nil)) + fmt.Sprintf("/%020d", seq), v
 }
 
-// state.pending answers the input routed to a Work that no attempt has
-// read, so an extension can tell Work that has read everything from Work
-// about to start, both ready (#608). Another scope's Work is not found.
+// state.pending answers the input for a Work that no attempt has read,
+// queued or accepted and not yet routed, so an extension can tell Work that
+// has read everything from Work about to start, both ready (#608). Another
+// scope's Work is not found.
 func TestStatePendingReadsTheQueueInScope(t *testing.T) {
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	k1, v1 := queueRow("busy", 7, "comment")
@@ -86,9 +93,12 @@ func TestStatePendingReadsTheQueueInScope(t *testing.T) {
 		works: map[domain.ID]domain.Work{
 			"busy": {ID: "busy", ScopeID: "eng", State: domain.WorkReady}, "idle": {ID: "idle", ScopeID: "eng", State: domain.WorkReady},
 			"foreign": {ID: "foreign", ScopeID: "other", State: domain.WorkReady},
+			"late":    {ID: "late", ScopeID: "eng", State: domain.WorkReady},
 		},
-		queue:  map[string][]byte{k1: v1, k2: v2},
-		events: map[domain.ID]domain.AcceptedEvent{"comment": {Sequence: 7, Event: domain.Event{ID: "comment", Type: "github.comment.human"}}},
+		// Accepted, not routed yet, and bound for late.
+		unrouted: []domain.AcceptedEvent{{Sequence: 9, Event: domain.Event{ID: "fresh", Type: "github.comment.human", WorkID: "late"}}},
+		queue:    map[string][]byte{k1: v1, k2: v2},
+		events:   map[domain.ID]domain.AcceptedEvent{"comment": {Sequence: 7, Event: domain.Event{ID: "comment", Type: "github.comment.human"}}},
 	}
 	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1.0.0", Command: []string{"./acme"}}
 	s, err := NewService(m, Deps{Store: store, Now: func() time.Time { return now }, Scopes: func() []domain.ID { return []domain.ID{"eng"} }})
@@ -109,6 +119,9 @@ func TestStatePendingReadsTheQueueInScope(t *testing.T) {
 	}
 	if idle, err := call("idle"); err != nil || len(idle) != 0 || idle == nil {
 		t.Fatalf("state.pending of Work that has read everything: %#v %v, want an empty list", idle, err)
+	}
+	if late, err := call("late"); err != nil || len(late) != 1 || late[0] != (protocol.PendingInput{EventID: "fresh", Sequence: 9, Type: "github.comment.human", Unrouted: true}) {
+		t.Fatalf("state.pending of Work with a comment not yet routed: %#v %v", late, err)
 	}
 	if _, err := call("foreign"); protocol.ErrorCode(err) != protocol.CodeNotFound {
 		t.Fatalf("state.pending of another scope's Work: %v, want not_found", err)

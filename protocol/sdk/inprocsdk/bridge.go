@@ -667,7 +667,7 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 			}
 			out := make([]inproc.PendingInput, 0, len(in))
 			for _, p := range in {
-				out = append(out, inproc.PendingInput{EventID: domain.ID(p.EventID), Sequence: p.Sequence, Type: p.Type, Binding: p.Binding})
+				out = append(out, inproc.PendingInput{EventID: domain.ID(p.EventID), Sequence: p.Sequence, Type: p.Type, Binding: p.Binding, Unrouted: p.Unrouted})
 			}
 			return out, nil
 		},

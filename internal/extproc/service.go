@@ -777,9 +777,10 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			}
 			out = list
 		case "state.pending":
-			// The input routed to the Work that no attempt has read: the
-			// read that tells Work that has read everything from Work
-			// about to start on something new, both of which are ready.
+			// The input for the Work that no attempt has read, queued or
+			// accepted and not yet routed: the read that tells Work that
+			// has read everything from Work about to start on something
+			// new, both of which are ready.
 			w, err := tx.Work(domain.ID(p.ID))
 			if err != nil {
 				return err
@@ -787,19 +788,13 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
 				return notFound
 			}
-			queued, err := runtime.PendingInputsInTx(tx, w.ID)
+			unread, err := runtime.UnreadInputsInTx(tx, w.ID)
 			if err != nil {
 				return err
 			}
 			list := []protocol.PendingInput{}
-			for _, q := range queued {
-				in := protocol.PendingInput{EventID: string(q.EventID), Sequence: q.Sequence, Binding: q.Binding}
-				if a, err := tx.Event(q.EventID); err == nil {
-					in.Type = a.Event.Type
-				} else if !errors.Is(err, storage.ErrNotFound) {
-					return err
-				}
-				list = append(list, in)
+			for _, q := range unread {
+				list = append(list, protocol.PendingInput{EventID: string(q.EventID), Sequence: q.Sequence, Type: q.Type, Binding: q.Binding, Unrouted: q.Unrouted})
 			}
 			out = list
 		case "state.timers":

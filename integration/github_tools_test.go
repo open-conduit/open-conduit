@@ -211,13 +211,9 @@ func (e *toolsEnv) compose() {
 	// As the host serves state.pending (inproc.Host.Pending).
 	pending := func(ctx context.Context, work domain.ID) (out []inproc.PendingInput, err error) {
 		err = e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
-			queued, err := runtime.PendingInputsInTx(tx, work)
-			for _, q := range queued {
-				in := inproc.PendingInput{EventID: q.EventID, Sequence: q.Sequence, Binding: q.Binding}
-				if a, er := tx.Event(q.EventID); er == nil {
-					in.Type = a.Event.Type
-				}
-				out = append(out, in)
+			unread, err := runtime.UnreadInputsInTx(tx, work)
+			for _, q := range unread {
+				out = append(out, inproc.PendingInput{EventID: q.EventID, Sequence: q.Sequence, Type: q.Type, Binding: q.Binding, Unrouted: q.Unrouted})
 			}
 			return err
 		})

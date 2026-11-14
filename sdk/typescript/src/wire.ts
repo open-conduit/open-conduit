@@ -106,13 +106,14 @@ export const Work = t.object(
 );
 export type Work = Infer<typeof Work>;
 
-/** One Event routed to a Work that no attempt of it has read yet. */
+/** One Event for a Work that no attempt of it has read yet: queued, or accepted and not yet routed (unrouted). */
 export const PendingInput = t.object(
   {
     event_id: t.string(),
     sequence: t.integer(),
     type: t.string(),
     binding: t.optional(t.string()),
+    unrouted: t.optional(t.boolean()),
   },
   open,
 );

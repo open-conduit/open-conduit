@@ -298,14 +298,16 @@ func (x Execution) Domain() domain.Execution {
 	return out
 }
 
-// PendingInput is one Event routed to a Work that no attempt of it has read
-// yet, oldest first, as state.pending returns it. Binding is the binding the
-// route queued it for.
+// PendingInput is one Event for a Work that no attempt of it has read yet,
+// as state.pending returns it: queued for it (Binding is the binding the
+// route queued it for), or accepted and not yet routed but bound for it
+// (Unrouted), after the queued input.
 type PendingInput struct {
 	EventID  string `json:"event_id"`
 	Sequence uint64 `json:"sequence"`
 	Type     string `json:"type"`
 	Binding  string `json:"binding,omitempty"`
+	Unrouted bool   `json:"unrouted,omitempty"`
 }
 
 // Wait is a Work's Wait, as state.waits returns it.

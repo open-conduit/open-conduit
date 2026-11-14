@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // github.pr.merge merges only when every rule holds, checked where the call
@@ -205,4 +208,54 @@ func decodeMap(t *testing.T, out extension.ToolResult) map[string]any {
 		t.Fatalf("output %s: %v", out.Output.Data, err)
 	}
 	return m
+}
+
+// The builder's newest turn decides whether it has handed back, however it
+// ended: a turn cancelled after it read a comment leaves that comment
+// unanswered, and an earlier turn's review doesn't stand in for it. A
+// comment accepted but not yet routed is unread too.
+func TestGitHubMergeWaitsOnACancelledTurnAndUnroutedInput(t *testing.T) {
+	e := newToolsEnv(t)
+	bob := githubtest.User{Login: "bob", Type: "User"}
+	n, builder := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	e.fake.SetCheck("h1", "ci", "completed", "success")
+	e.fake.AddReview(pr, bob, "APPROVED", "")
+	e.sync()
+	a := e.start(builder.ID)
+	e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	m := e.start(e.request("merge-bot").ID)
+	merge := func() error {
+		_, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+		return err
+	}
+
+	// Accepted, not yet routed: the router hasn't queued it, but it is the
+	// builder's.
+	e.fake.AddComment(n, ghAlice, "Can the logo move too?")
+	e.reconcile()
+	refusedSaying(t, merge(), "work_active", "unread")
+	e.route()
+
+	// The builder reads it, and its turn is cancelled before it ends.
+	b := e.start(builder.ID)
+	var x domain.Execution
+	e.read(func(tx storage.Tx) error { var err error; x, err = tx.Execution(b.Lease.ExecutionID); return err })
+	ctl, err := runtime.NewControl(e.store, e.clock.Now, e.router, e.scheduler, runtime.CausalLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ctl.CancelExecution(context.Background(), x.ID, x.Revision, "stop", "cancel-1"); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+	refusedSaying(t, merge(), "work_active", "cancelled")
+
+	// Retried by the operator, it has the retry to read before it hands
+	// back again.
+	if _, err := ctl.RetryWork(context.Background(), builder.ID, e.work(builder.ID).Revision, "go on", "retry-1"); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+	refusedSaying(t, merge(), "work_active", "unread")
 }
