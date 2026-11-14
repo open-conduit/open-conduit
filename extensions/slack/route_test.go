@@ -36,9 +36,19 @@ func event(t *testing.T, typ string, p slack.MessagePayload, received time.Time)
 		CorrelationKey: &domain.CorrelationKey{Source: ns, ExternalID: slack.ThreadKey(chanA, p.Thread)}, Data: domain.Payload{Schema: slack.SchemaMessage, Data: data}}}
 }
 
+// registered is a route whose entry registered its channels long before
+// any message the tests write.
+func registered() slack.Route {
+	b := slack.NewBook()
+	for _, ch := range []string{chanA, chanB, slack.DirectStart} {
+		b.SetStart(ns, ch, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	}
+	return slack.Route{Book: b}
+}
+
 func match(t *testing.T, sc domain.Scope, e domain.AcceptedEvent, w *domain.Work) extension.RouteDecision {
 	t.Helper()
-	d, err := slack.Route{}.Match(context.Background(), extension.RouteInput{Event: e, Scope: sc, Work: w})
+	d, err := registered().Match(context.Background(), extension.RouteInput{Event: e, Scope: sc, Work: w})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +299,7 @@ func TestRouteChannelsNarrowTheRoute(t *testing.T) {
 		`{"channels":"` + chanA + `"}`:                   false,
 	} {
 		for _, w := range []*domain.Work{nil, {ID: "w", Kind: slack.WorkKind}} {
-			d, err := slack.Route{}.Match(context.Background(), extension.RouteInput{Event: root, Scope: sc, Work: w, Route: route(cfg)})
+			d, err := registered().Match(context.Background(), extension.RouteInput{Event: root, Scope: sc, Work: w, Route: route(cfg)})
 			if err != nil || d.Match != want {
 				t.Fatalf("config %q (work %v): match %v, want %v (%v)", cfg, w != nil, d.Match, want, err)
 			}
@@ -393,7 +403,7 @@ func TestRouteAttachesAPostedThread(t *testing.T) {
 	owned.CorrelationKeys = []domain.CorrelationKey{want}
 	narrowed := extension.RouteInput{Event: event(t, slack.TypeMessageHuman, reply, written.Add(time.Minute)), Scope: sc, Work: &owned,
 		Route: domain.Route{Config: domain.Payload{Data: json.RawMessage(`{"channels":["C0OTHER"]}`)}}}
-	d, err := slack.Route{}.Match(context.Background(), narrowed)
+	d, err := registered().Match(context.Background(), narrowed)
 	if err != nil || !d.Match || d.Deliver != extension.DeliverCurrent {
 		t.Fatalf("a reply to a job's post did not go to its binding: %+v %v", d, err)
 	}

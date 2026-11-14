@@ -54,7 +54,7 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 	fake.Join(channel, "UBOB")
 
 	e := newExtEnv(t)
-	entry := json.RawMessage(`{"namespace":"slack/` + team + `","scope":"support","team":"` + team + `","channels":["` + channel + `"],"bot_user_id":"UBOT"}`)
+	entry := json.RawMessage(`{"namespace":"slack/` + team + `","scope":"support","team":"` + team + `","channels":["` + channel + `"],"bot_user_id":"UBOT","claim_from":"all"}`)
 	meta, _ := json.Marshal(map[string]any{"enabled": true, "extensions": []map[string]any{{"name": "helpdesk", "type": "slack", "connection": "slack", "config": entry, "secret_names": []string{}}}})
 	if err := e.store.Transact(context.Background(), storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
 		return tx.PutScope(domain.Scope{ID: "support", Name: "support", Bindings: []domain.Binding{{Name: "agent", Executor: "fixture"}},

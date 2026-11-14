@@ -100,6 +100,15 @@ const (
 	StartMention = "mention"
 )
 
+// Start points (claim_from): which threads no Work owns an entry may claim.
+const (
+	// ClaimRegistration claims threads begun at or after the channel's
+	// first registration on this daemon.
+	ClaimRegistration = "registration"
+	// ClaimAll claims any thread, however old.
+	ClaimAll = "all"
+)
+
 // Projection controls reply publication.
 type Projection struct {
 	Disabled bool `json:"disabled,omitempty"`
@@ -122,6 +131,13 @@ type ExtensionConfig struct {
 	// received, and still start a conversation (default 24), so a first
 	// reconcile does not turn history into Work.
 	StartWindowHours int `json:"start_window_hours,omitempty"`
+	// ClaimFrom is the entry's start point: which threads no Work owns it
+	// may claim. registration (default) claims only threads begun at or
+	// after the time this daemon first registered the entry's channel (a
+	// durable record, so a restart does not move it and a restored backup
+	// keeps it); an RFC 3339 time claims threads begun from then; all
+	// claims any thread reconcile reads.
+	ClaimFrom string `json:"claim_from,omitempty"`
 	// HistoryHours is the reconcile horizon for top-level messages and their
 	// threads (default 336, 14 days).
 	HistoryHours int `json:"history_hours,omitempty"`
@@ -203,9 +219,13 @@ type Settings struct {
 	Start, BotUser         string
 	Receiver               string
 	StartWindow            time.Duration
-	History, Refresh       time.Duration
-	SigningSecret          string
-	Projection             Projection
+	// Claim is ClaimRegistration, ClaimAll or "" with ClaimSince set (an
+	// explicit start point).
+	Claim            string
+	ClaimSince       time.Time
+	History, Refresh time.Duration
+	SigningSecret    string
+	Projection       Projection
 	// Post maps each binding that may post (slack.post) to the sorted
 	// channels it may post in.
 	Post map[string][]string
@@ -351,6 +371,18 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	s.BotUser = c.BotUserID
 	if s.Start == StartMention && s.BotUser == "" {
 		return s, errors.New("slack extension: start mention needs bot_user_id")
+	}
+	switch c.ClaimFrom {
+	case "", ClaimRegistration:
+		s.Claim = ClaimRegistration
+	case ClaimAll:
+		s.Claim = ClaimAll
+	default:
+		t, err := time.Parse(time.RFC3339, c.ClaimFrom)
+		if err != nil {
+			return s, errors.New("slack extension: claim_from must be registration, all or an RFC 3339 time")
+		}
+		s.ClaimSince = t.UTC()
 	}
 	s.History = 336 * time.Hour
 	if c.HistoryHours != 0 {

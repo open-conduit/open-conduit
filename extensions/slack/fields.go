@@ -23,6 +23,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "start"},
 		{Name: "bot_user_id"},
 		{Name: "start_window_hours"},
+		{Name: "claim_from", Help: "registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time", Default: "registration"},
 		{Name: "history_hours"},
 		{Name: "refresh_minutes"},
 		{Name: "receiver", Default: "socket", Options: []string{"socket", "events", "none"}},

@@ -90,6 +90,18 @@ func TestRouteStartsDirectMessagesForAdmittedPeople(t *testing.T) {
 	if d := match(t, sc, dmEvent(t, dmAlice, reply, written.Add(time.Minute)), w); !d.Match || d.Kind != "" {
 		t.Fatalf("a second message in the DM thread must reach its Work: %+v", d)
 	}
+	// Every direct message shares the entry's start point: one written
+	// before the entry registered with direct messages on starts nothing.
+	b := slack.NewBook()
+	b.SetStart(ns, slack.DirectStart, written.Add(time.Hour))
+	d, err := slack.Route{Book: b}.Match(context.Background(), extension.RouteInput{Event: dmEvent(t, dmBob, slack.MessagePayload{TS: root.TS, User: alice, Text: "old"}, written.Add(time.Second)), Scope: sc})
+	if err != nil || d.Match || !strings.Contains(d.Reason, "start point") {
+		t.Fatalf("a DM from before the entry's start point started Work: %+v %v", d, err)
+	}
+	later := slack.MessagePayload{TS: slack.TS(written.Add(2 * time.Hour)), User: alice, Text: "new"}
+	if d, _ := (slack.Route{Book: b}).Match(context.Background(), extension.RouteInput{Event: dmEvent(t, dmAlice, later, written.Add(2*time.Hour)), Scope: sc}); !d.Match {
+		t.Fatalf("a DM after the entry's start point started nothing: %+v", d)
+	}
 }
 
 func TestRouteSelectsDirectMessages(t *testing.T) {

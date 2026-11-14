@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,28 @@ type IngressOptions struct {
 	// history_hours, so a multi-day wait still recovers missed replies. It is
 	// a read of durable state supplied by the host; nil means none.
 	ActiveThreads func(context.Context) (map[string][]string, error)
+	// StartPoint is a channel's start point (Settings.StartPoint); nil or
+	// false means none is known, and every thread counts as begun after it.
+	StartPoint func(channel string) (time.Time, bool)
+	// Unowned reports which of a channel's threads no Work here holds a
+	// key for. It reads durable state; nil means every thread is owned, so
+	// nothing is marked or counted.
+	Unowned func(ctx context.Context, channel string, threads []string) (map[string]bool, error)
+	// Foreign is given a channel's threads no Work here owns that hold
+	// replies marked by a Work, with the Work IDs the markers name. It
+	// records, durably, those whose markers name Work this daemon has no
+	// record of, before the page they are in is returned, so the route
+	// refuses to claim them, and returns the threads it recorded. An error
+	// fails the page.
+	Foreign func(ctx context.Context, channel string, marked map[string][]string) ([]string, error)
+}
+
+// Unclaimed is what a channel's last complete reconcile found that no Work
+// here owns and the entry will not claim for its start point: threads that
+// began before it and hold a message the start policy asks for, other than
+// those with marked replies (which Foreign records durably).
+type Unclaimed struct {
+	BeforeStart int
 }
 
 // Ingress is one app installation's (push, reconcile) pair.
@@ -51,9 +74,18 @@ type Ingress struct {
 	answered map[string]int
 	memoID   string
 	lastID   string
+	// staged collects a generation's unclaimed threads per channel;
+	// unclaimed is the last complete generation's.
+	stagedID  string
+	staged    map[string]map[string]bool
+	unclaimed map[string]Unclaimed
 }
 
 type threadMemo struct {
+	// asks says whether the replies hold a message the start policy asks
+	// for, and marked the Work IDs their markers name.
+	asks   bool
+	marked []string
 	latest string
 	count  int
 	readAt time.Time
@@ -369,6 +401,13 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 				delete(g.threads, key)
 			}
 		}
+		if g.stagedID == scanID {
+			out := map[string]Unclaimed{}
+			for ch, u := range g.staged {
+				out[ch] = Unclaimed{BeforeStart: len(u)}
+			}
+			g.unclaimed = out
+		}
 	}
 	g.mu.Unlock()
 	return snap, nil
@@ -499,6 +538,12 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 		return extension.Snapshot{}, extension.ErrInvalid
 	}
 	var out []extension.Observation
+	var before []string
+	marked := map[string][]string{}
+	start, bounded := time.Time{}, false
+	if g.o.StartPoint != nil {
+		start, bounded = g.o.StartPoint(channel)
+	}
 	i := c.offset
 	for ; i < len(messages); i++ {
 		if i > c.offset && b.spent() {
@@ -508,19 +553,34 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 		if m.ThreadTS != "" && m.ThreadTS != m.TS {
 			continue // a broadcast reply: observed with its thread
 		}
+		asks := false
 		if o, err := normalize(g.s, channel, m, g.now()); err == nil {
 			out = append(out, o)
+			asks = g.asks(o)
 		} else if !errors.Is(err, errSkip) {
 			return extension.Snapshot{}, err
 		}
-		if m.ReplyCount == 0 && m.LatestReply == "" {
-			continue
+		if m.ReplyCount != 0 || m.LatestReply != "" {
+			obs, err := g.thread(ctx, scanID, channel, m.TS, m, latest, false, b)
+			if err != nil {
+				return extension.Snapshot{}, err
+			}
+			out = append(out, obs...)
+			g.mu.Lock()
+			if memo := g.threads[ThreadKey(channel, m.TS)]; memo != nil {
+				asks = asks || memo.asks
+				if len(memo.marked) > 0 {
+					marked[m.TS] = memo.marked
+				}
+			}
+			g.mu.Unlock()
 		}
-		obs, err := g.thread(ctx, scanID, channel, m.TS, m, latest, false, b)
-		if err != nil {
-			return extension.Snapshot{}, err
+		if began, ok := TSTime(m.TS); ok && asks && bounded && began.Before(start) {
+			before = append(before, m.TS)
 		}
-		out = append(out, obs...)
+	}
+	if err := g.unclaimedThreads(ctx, scanID, channel, before, marked); err != nil {
+		return extension.Snapshot{}, err
 	}
 	snap := extension.Snapshot{Observations: out}
 	switch {
@@ -607,6 +667,7 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 		return nil, err
 	}
 	var out []extension.Observation
+	asks, marked := false, []string(nil)
 	for _, msg := range messages {
 		if msg.ThreadTS == "" {
 			msg.ThreadTS = thread
@@ -622,13 +683,88 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 			return nil, err
 		}
 		out = append(out, o)
+		asks = asks || g.asks(o)
+		if a := markerOf(msg.Metadata); a != nil && a.Work != "" && !slices.Contains(marked, a.Work) {
+			marked = append(marked, a.Work)
+		}
 	}
 	if !withParent {
 		g.mu.Lock()
-		g.threads[key] = &threadMemo{latest: parent.LatestReply, count: parent.ReplyCount, readAt: now, seen: scanID, obs: out}
+		g.threads[key] = &threadMemo{asks: asks, marked: marked, latest: parent.LatestReply, count: parent.ReplyCount, readAt: now, seen: scanID, obs: out}
 		g.mu.Unlock()
 	}
 	return out, nil
+}
+
+// asks reports whether an observation is a person's message the start
+// policy asks for (Settings.asks), whatever its age.
+func (g *Ingress) asks(o extension.Observation) bool {
+	if o.Event.Type != TypeMessageHuman {
+		return false
+	}
+	var p MessagePayload
+	return json.Unmarshal(o.Event.Data.Data, &p) == nil && g.s.asks(p)
+}
+
+// unclaimedThreads finds which of a page's threads (begun before the start
+// point and asking for a conversation, or holding marked replies) no Work
+// here owns, records the marked ones before the page is returned, and
+// stages both for doctor (Unclaimed).
+func (g *Ingress) unclaimedThreads(ctx context.Context, scanID, channel string, before []string, marked map[string][]string) error {
+	if g.o.Unowned == nil || len(before)+len(marked) == 0 {
+		return nil
+	}
+	threads := append([]string{}, before...)
+	for t := range marked {
+		threads = append(threads, t)
+	}
+	unowned, err := g.o.Unowned(ctx, channel, threads)
+	if err != nil {
+		return err
+	}
+	candidates := map[string][]string{}
+	for t, works := range marked {
+		if unowned[t] {
+			candidates[t] = works
+		}
+	}
+	var foreign []string
+	if len(candidates) > 0 && g.o.Foreign != nil {
+		if foreign, err = g.o.Foreign(ctx, channel, candidates); err != nil {
+			return err
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.stagedID != scanID {
+		g.stagedID, g.staged = scanID, map[string]map[string]bool{}
+	}
+	u := g.staged[channel]
+	if u == nil {
+		u = map[string]bool{}
+		g.staged[channel] = u
+	}
+	for _, t := range before {
+		if unowned[t] && !slices.Contains(foreign, t) {
+			u[t] = true
+		}
+	}
+	return nil
+}
+
+// Unclaimed is, per channel, what the last complete reconcile found no
+// Work here owns and the entry will not claim.
+func (g *Ingress) Unclaimed() map[string]Unclaimed {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make(map[string]Unclaimed, len(g.unclaimed))
+	for ch, u := range g.unclaimed {
+		out[ch] = u
+	}
+	return out
 }
 
 // dedupe drops exact repeats within one page (same item and version).

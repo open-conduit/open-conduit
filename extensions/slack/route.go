@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,7 +23,12 @@ const WorkKind = "slack.conversation"
 // channels narrow the threads it claims. The thread key is the Work's
 // identity, so every later message of the thread reaches the same Work
 // through its owned correlation, across any number of messages and restarts.
-type Route struct{}
+//
+// Book is where the route reads the entry's start points and the threads
+// found with replies marked by Work this daemon has no record of (the
+// extension's durable claim records). A channel with none recorded is
+// evaluated as if it registers before the thread (claimRefusal).
+type Route struct{ Book StartBook }
 
 var _ extension.RouteHandler = Route{}
 
@@ -72,20 +78,24 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 	if !ok || e.ReceivedAt.Sub(written) > s.StartWindow {
 		return false
 	}
+	return s.asks(p)
+}
+
+// asks reports whether a person's message is the kind the start policy
+// starts a conversation for: a top-level message (start all) or one that
+// mentions the bot (start mention); in a direct message, a top-level
+// message from a sender direct_messages admits.
+func (s Settings) asks(p MessagePayload) bool {
+	if p.Deleted || p.Agent != nil {
+		return false
+	}
 	if IsDirect(p.Channel) {
 		return p.Root && s.AdmitsDirect(p.User)
 	}
-	switch s.Start {
-	case StartMention:
-		for _, m := range p.Mentions {
-			if m == s.BotUser {
-				return true
-			}
-		}
-		return false
-	default:
-		return p.Root
+	if s.Start == StartMention {
+		return slices.Contains(p.Mentions, s.BotUser)
 	}
+	return p.Root
 }
 
 // Match selects input for an existing conversation and starts one for an
@@ -103,7 +113,7 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 // are input on the binding that Work runs on, not this route's, so the
 // agent that wrote the post answers; once that Work has finished, a
 // person's message opens its successor (followUp).
-func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	if e.Type == TypeThreadOpened {
 		return opened(in)
@@ -163,7 +173,15 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if !s.Starts(e, p) {
 			return extension.Skip(s.startRefusal(e, p)), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(channel), Display: Display(p)}, nil
+		refusal, note := s.claimRefusal(r.Book, channel, thread)
+		if refusal != "" {
+			return extension.Skip(refusal), nil
+		}
+		reason := s.startReason(channel)
+		if note != "" {
+			reason += " (" + note + ")"
+		}
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: reason, Display: Display(p)}, nil
 	}
 	switch e.Type {
 	case TypeMessageHuman:

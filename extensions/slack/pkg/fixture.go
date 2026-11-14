@@ -29,9 +29,11 @@ const (
 	fixtureSecret  = "signing-secret"
 )
 
-// FixtureEntry is the slack entry config the fixture configures.
+// FixtureEntry is the slack entry config the fixture configures. The fake's
+// messages are written before the entry is registered, so it claims
+// threads of any age (claim_from all).
 func FixtureEntry() json.RawMessage {
-	return json.RawMessage(`{"namespace":"slack/` + FixtureTeam + `","scope":"` + FixtureScope + `","team":"` + FixtureTeam + `","channels":["` + FixtureChannel + `"],"bot_user_id":"UBOT","receiver":"none"}`)
+	return json.RawMessage(`{"namespace":"slack/` + FixtureTeam + `","scope":"` + FixtureScope + `","team":"` + FixtureTeam + `","channels":["` + FixtureChannel + `"],"bot_user_id":"UBOT","receiver":"none","claim_from":"all"}`)
 }
 
 // NewFixture builds the certification fixture against a running fake: a
