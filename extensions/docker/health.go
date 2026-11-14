@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
 )
@@ -217,4 +218,34 @@ func (p *Provider) sharedPath(ctx context.Context, dctx, image, dir string) erro
 		return fmt.Errorf("a file written in a container under %s is owned by uid %d on the host, not %d", dir, st.Uid, p.o.UID)
 	}
 	return nil
+}
+
+// probeTimeout bounds a version probe, which may pull the image.
+const probeTimeout = 2 * time.Minute
+
+// Probe runs an executor's version probe (extension.VersionProber) in a
+// container from image on the context, as the operator, with no network,
+// mounts or capabilities, a read-only root and a scratch /tmp as its home,
+// and returns the first line of its output.
+func (p *Provider) Probe(ctx context.Context, dctx, image string, argv, env []string) (string, error) {
+	if len(argv) == 0 {
+		return "", fmt.Errorf("no command to probe")
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	args := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--user", fmt.Sprintf("%d:%d", p.o.UID, p.o.GID), "--env", "HOME=/tmp"}
+	for _, kv := range env {
+		args = append(args, "--env", kv)
+	}
+	args = append(append(args, "--entrypoint", argv[0], image), argv[1:]...)
+	out, err := p.docker(ctx, dctx, args...)
+	if err != nil {
+		return "", err
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	if len(line) > 120 {
+		line = line[:120]
+	}
+	return line, nil
 }

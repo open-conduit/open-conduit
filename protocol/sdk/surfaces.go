@@ -27,7 +27,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		switch p.Kind {
-		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorFolder:
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorProbe, protocol.ValidateExecutorFolder:
 			return s.workspaceCheck(p)
 		}
 		if s.ext.Validate != nil {
@@ -520,7 +520,8 @@ var _ extension.SetupHost = (*setupHost)(nil)
 // (extension.ResourceModeDefaulter), whether a sandboxed binding may use it
 // (extension.ResourceSandboxChecker) and the mode a binding config makes an
 // executor request (extension.ResourceModer), and the playbook a binding
-// config starts its turns on (extension.PlaybookNamer), and a binding config
+// config starts its turns on (extension.PlaybookNamer), the command that
+// shows the executor is installed (extension.VersionProber), and a binding config
 // adapted to the included folder it comes from (extension.FolderConfigurer).
 // A type that doesn't implement the interface names no mode, passes the
 // sandbox check and keeps its config, as a first-party registration without
@@ -545,6 +546,12 @@ func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 	case protocol.ValidateExecutorPlaybook:
 		if n, ok := s.ext.Executors[p.Type].(extension.PlaybookNamer); ok {
 			return protocol.ValidateResult{Playbook: n.Playbook(p.Config)}, nil
+		}
+	case protocol.ValidateExecutorProbe:
+		if v, ok := s.ext.Executors[p.Type].(extension.VersionProber); ok {
+			if argv, env := v.VersionProbe(p.Config); len(argv) > 0 {
+				return protocol.ValidateResult{Probe: &protocol.Probe{Argv: argv, Env: env}}, nil
+			}
 		}
 	case protocol.ValidateExecutorFolder:
 		f, ok := s.ext.Executors[p.Type].(extension.FolderConfigurer)

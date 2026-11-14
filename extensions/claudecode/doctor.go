@@ -15,9 +15,12 @@ import (
 )
 
 // Checks() is doctor's claude-code: `--version` for every claude-code
-// binding's binary and, for a binding that sets usage, its login's
-// subscription usage windows. It reads only the configuration and the
-// machine, so doctor runs it without a daemon too.
+// binding's binary on the host and, for a binding that sets usage, its
+// login's subscription usage windows. A binding that runs in a container
+// runs the binary in its image, not the host's: the container provider's
+// doctor runs its version probe there (VersionProbe), so this one only
+// names it. It reads only the configuration and the machine, so doctor
+// runs it without a daemon too.
 func (x *Extension) Checks() []inproc.Check {
 	return []inproc.Check{{Offline: true, Run: x.diagnose}}
 }
@@ -34,6 +37,7 @@ func readUsage(ctx context.Context, configDir string) ([]UsageWindow, error) {
 func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 	res := inproc.CheckResult{Name: "claude-code", Status: inproc.CheckOK, Code: "installed"}
 	binaries := map[string][]string{}
+	var contained []string
 	logins := map[string]bool{}
 	for _, scope := range cfg.Scopes {
 		for _, b := range scope.Bindings {
@@ -44,15 +48,22 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 			if err != nil {
 				continue
 			}
-			binaries[c.Binary] = append(binaries[c.Binary], scope.ID+"/"+b.Name)
+			if b.Isolation == protocol.IsolationContainer {
+				contained = append(contained, scope.ID+"/"+b.Name)
+			} else {
+				binaries[c.Binary] = append(binaries[c.Binary], scope.ID+"/"+b.Name)
+			}
 			if c.Usage {
 				logins[c.Env["CLAUDE_CONFIG_DIR"]] = true
 			}
 		}
 	}
-	if len(binaries) == 0 {
+	if len(binaries) == 0 && len(contained) == 0 {
 		res.Status, res.Code, res.Detail = inproc.CheckInfo, "not_configured", "no claude-code bindings"
 		return res
+	}
+	if len(binaries) == 0 {
+		res.Status, res.Code, res.Detail = inproc.CheckInfo, "in_container", "every claude-code binding runs claude in its container image, which the container provider's doctor entry tests"
 	}
 	names := make([]string, 0, len(binaries))
 	for bin := range binaries {
@@ -67,6 +78,9 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 			continue
 		}
 		res.Items = append(res.Items, fmt.Sprintf("%s: %s", filepath.Base(bin), v))
+	}
+	if len(contained) > 0 {
+		res.Items = append(res.Items, fmt.Sprintf("in their container images, not on the host: %s", strings.Join(contained, ", ")))
 	}
 	if x.h.DryRun {
 		res.Items = append(res.Items, "dry run: turns are stubs on a cheap model")
@@ -93,7 +107,7 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 			continue
 		}
 		for _, w := range windows {
-			if w.Used >= 90 && res.Status == inproc.CheckOK {
+			if w.Used >= 90 && (res.Status == inproc.CheckOK || res.Status == inproc.CheckInfo) {
 				res.Status, res.Code = inproc.CheckWarn, "usage_high"
 			}
 			res.Items = append(res.Items, fmt.Sprintf("%s %s: %.0f%% (resets %s)", label, w.Name, w.Used, w.ResetsAt.UTC().Format(time.RFC3339)))

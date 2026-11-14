@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/protocol"
 )
@@ -173,5 +174,39 @@ func TestCheckName(t *testing.T) {
 		if got := checkName(tc[0], tc[1]); got != tc[2] {
 			t.Errorf("checkName(%q, %q) = %q, want %q", tc[0], tc[1], got, tc[2])
 		}
+	}
+}
+
+// probingExecutor is a shell executor that gives a version probe
+// (extension.VersionProber) naming its binding config.
+type probingExecutor struct{ extension.Executor }
+
+func (probingExecutor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	return []string{"tool", "--version", string(raw)}, []string{"PATH=/bin"}
+}
+
+// A container provider's checks see the version probe of each binding
+// that runs in one of its containers, when the binding's executor gives
+// one; a binding in another provider's container, or whose executor gives
+// none, carries no probe.
+func TestCheckConfigProbe(t *testing.T) {
+	x := &installed{m: protocol.Manifest{Name: "docker", Provides: protocol.Provides{Containers: []protocol.ContainerDecl{{Type: "docker"}}}}}
+	executors := withShell()
+	executors["prober"] = probingExecutor{executors["shell"]}
+	s := &config.Snapshot{Order: []domain.ID{"s"}, Scopes: map[domain.ID]*config.EffectiveScope{"s": {ID: "s", Enabled: true, Bindings: []config.Binding{
+		{Name: "probed", Executor: "prober", Config: json.RawMessage(`{"a":1}`), Container: &config.Container{Provider: "docker"}},
+		{Name: "elsewhere", Executor: "prober", Container: &config.Container{Provider: "podman"}},
+		{Name: "plain", Executor: "shell", Container: &config.Container{Provider: "docker"}},
+	}}}}
+	cfg := checkConfig(s, x, executors, "/cfg")
+	if len(cfg.Scopes) != 1 || len(cfg.Scopes[0].Bindings) != 3 {
+		t.Fatalf("scopes %+v", cfg.Scopes)
+	}
+	bs := cfg.Scopes[0].Bindings
+	if p := bs[0].Probe; p == nil || strings.Join(p.Argv, " ") != `tool --version {"a":1}` || strings.Join(p.Env, " ") != "PATH=/bin" {
+		t.Errorf("probed binding's probe %+v", p)
+	}
+	if bs[1].Probe != nil || bs[2].Probe != nil {
+		t.Errorf("probes for another provider's container or an executor with none: %+v %+v", bs[1].Probe, bs[2].Probe)
 	}
 }

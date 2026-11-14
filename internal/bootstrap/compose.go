@@ -569,6 +569,11 @@ func checkConfig(s *config.Snapshot, x *installed, executors map[string]extensio
 			}
 			if b.Container != nil && ownContainers[b.Container.Provider] {
 				cb.Container = &protocol.CheckContainer{Provider: b.Container.Provider, Config: b.Container.Config}
+				if p, ok := executors[b.Executor].(extension.VersionProber); ok {
+					if argv, env := p.VersionProbe(b.Config); len(argv) > 0 {
+						cb.Probe = &protocol.Probe{Argv: argv, Env: env}
+					}
+				}
 			}
 			switch {
 			case b.Sandbox != nil:

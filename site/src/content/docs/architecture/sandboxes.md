@@ -343,6 +343,8 @@ The CLI starts it with `docker start -a -i` on the operator's terminal. There cl
 
 Any failure blocks the provider, on Docker Desktop as on anything else: `Plan` runs the same checks (a pass stands for ten minutes) and refuses as `sandbox_unavailable` when one fails.
 
+When those pass, the check also runs each binding's version probe in its image, when the binding's executor gives one (`extension.VersionProber`; Claude Code's is `claude --version` with the PATH its launches get). It runs once for each context, image and probe, in a container with no network, a read-only root, no capabilities, the operator's uid and gid and a scratch `/tmp` as its home, and the check reports the first line of its output with the image. A probe that fails fails the check (`probe_failed`), naming the image and the bindings that run it. The host needs no copy of the program the image runs.
+
 ### The gateway
 
 Each launch's container gets a gateway container, created and started with it and removed with it (`oc-<execution key>-<segment>-gw`). The gateway is the container's only way out: to the hosts its grant allows, through the gateway's proxy, and to its own toolbelt, through the gateway's forward.

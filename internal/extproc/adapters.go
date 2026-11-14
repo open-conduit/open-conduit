@@ -501,6 +501,16 @@ func (e *remoteExecutor) FolderConfig(raw json.RawMessage, folder string, resour
 	return e.r.ExecutorFolderConfig(e.decl.Name)(raw, folder, resource)
 }
 
+// VersionProbe is the command that shows the executor is installed where a
+// binding config runs it (extension.VersionProber), asked through validate
+// when the manifest declares version_probe; none otherwise.
+func (e *remoteExecutor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	if !e.decl.VersionProbe {
+		return nil, nil
+	}
+	return e.r.ExecutorVersionProbe(e.decl.Name)(raw)
+}
+
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can
 // re-adopt the execution after the extension crashes.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/extension"
@@ -194,5 +195,47 @@ func TestExecutorFolder(t *testing.T) {
 	}
 	if validated {
 		t.Fatal("executor_folder reached Validate")
+	}
+}
+
+// probeExecutor gives a version probe naming its binding config.
+type probeExecutor struct{ extension.Executor }
+
+func (probeExecutor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	return []string{"tool", "--version", string(raw)}, []string{"PATH=/bin"}
+}
+
+// TestExecutorProbe: validate's executor_probe kind answers with the
+// executor's version probe (extension.VersionProber) and never reaches
+// Validate. An executor without the interface answers none (the negative
+// control).
+func TestExecutorProbe(t *testing.T) {
+	validated := false
+	ext := &sdk.Extension{Manifest: manifest(),
+		Executors: map[string]extension.Executor{"probe": probeExecutor{}, "plain": struct{ extension.Executor }{}},
+		Validate: func(context.Context, protocol.ValidateParams) error {
+			validated = true
+			return errors.New("not for this kind")
+		},
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	probe := func(typ string) (*protocol.Probe, error) {
+		t.Helper()
+		var out protocol.ValidateResult
+		err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutorProbe, Type: typ, Config: json.RawMessage(`{"a":1}`)}, &out)
+		return out.Probe, err
+	}
+	if p, err := probe("probe"); err != nil || p == nil || !slices.Equal(p.Argv, []string{"tool", "--version", `{"a":1}`}) || !slices.Equal(p.Env, []string{"PATH=/bin"}) {
+		t.Fatalf("probe %+v: %v", p, err)
+	}
+	if p, err := probe("plain"); err != nil || p != nil {
+		t.Fatalf("an executor without VersionProber probes %+v: %v", p, err)
+	}
+	if validated {
+		t.Fatal("executor_probe reached Validate")
 	}
 }

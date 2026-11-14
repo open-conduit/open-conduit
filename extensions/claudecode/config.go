@@ -509,6 +509,21 @@ func (e *Executor) Playbook(raw json.RawMessage) string {
 	return c.Playbook
 }
 
+// VersionProbe is `<binary> --version` with the PATH a container launch
+// runs it with (extension.VersionProber), so a container binding's binary
+// is checked in its image; none for a config the executor refuses.
+func (e *Executor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil, nil
+	}
+	path := c.Env["PATH"]
+	if path == "" {
+		path = containerPath
+	}
+	return []string{c.Binary, "--version"}, []string{"PATH=" + path}
+}
+
 // FolderConfig adapts a binding from an included folder's config
 // (extension.FolderConfigurer): relative dir and plugin_dir resolve against the
 // folder, and a workspace-free binding without dir runs in the folder itself.

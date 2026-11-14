@@ -492,6 +492,9 @@ func (*liveExecutor) Recover(context.Context, extension.RunRequest, domain.Paylo
 }
 func (*liveExecutor) ResourceMode(json.RawMessage) string { return "work" }
 func (*liveExecutor) Playbook(json.RawMessage) string     { return "operate" }
+func (*liveExecutor) VersionProbe(json.RawMessage) ([]string, []string) {
+	return []string{"agent", "--version"}, nil
+}
 func (e *liveExecutor) Live(_ context.Context, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -517,8 +520,8 @@ func TestLiveAndContainerAttachAreCarried(t *testing.T) {
 		t.Fatal(err)
 	}
 	decl := b.Extension().Manifest.Provides.Executors
-	if len(decl) != 1 || !decl[0].Controls.Live || !decl[0].Controls.ContainerAttach || !decl[0].ResourceMode || !decl[0].Playbook {
-		t.Fatalf("executors %+v, want live and container_attach controls, resource_mode and playbook", decl)
+	if len(decl) != 1 || !decl[0].Controls.Live || !decl[0].Controls.ContainerAttach || !decl[0].ResourceMode || !decl[0].Playbook || !decl[0].VersionProbe {
+		t.Fatalf("executors %+v, want live and container_attach controls, resource_mode, playbook and version_probe", decl)
 	}
 	h := sdktest.New(t, b.Extension())
 	ctx := context.Background()

@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -306,6 +307,19 @@ type ContainerAttachRequest struct {
 type ContainerAttachSpec struct {
 	Needs  SandboxNeeds
 	Launch SandboxLaunch
+}
+
+// VersionProber is optional, for an executor whose launches run a program
+// that may be missing where they run: VersionProbe is the command that
+// shows it is there and which version it is (`claude --version`) for a
+// binding config, with the variables it runs with in a container, or no
+// argv for none. The host gives it to the doctor check of the binding's
+// container provider, which runs it in the binding's image, so a binding
+// that runs in a container is checked where it runs, not on the host. It
+// runs with no network, mounts or secrets, and its first line of output is
+// what doctor shows.
+type VersionProber interface {
+	VersionProbe(config json.RawMessage) (argv, env []string)
 }
 
 // InteractiveLauncher is optional. InteractiveLaunch returns the command
