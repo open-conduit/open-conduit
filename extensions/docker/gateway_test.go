@@ -2,18 +2,25 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 const testGateway = "ghcr.io/open-conduit/open-conduit-gateway@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // gatewayDocker is a docker CLI stand-in whose daemon has the gateway image
 // once a pull has made the file have; each pull appends a line to pulls,
-// and a pull fails while the file fail exists.
+// and a pull fails while the file fail exists. It answers the rest of a
+// health check as a healthy Docker 28 would: info, the shared-path write
+// (the probe file, the run's last argument), and the preflight's network
+// and probe containers.
 func gatewayDocker(t *testing.T, o Options) (p *Provider, dir string, logs func() []string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -21,6 +28,9 @@ func gatewayDocker(t *testing.T, o Options) (p *Provider, dir string, logs func(
 case "$3" in
 image) [ -f "$d/have" ] && echo sha256:x && exit 0; echo "No such image" >&2; exit 1;;
 pull) echo "$4 $5" >> "$d/pulls"; [ -f "$d/fail" ] && { echo "net/http: TLS handshake timeout" >&2; exit 1; }; touch "$d/have";;
+info) echo 'daemon-1|28.0.0|linux';;
+network) if [ "$4" = inspect ]; then echo 'false|172.30.0.0/16 172.30.0.1;'; fi;;
+run) case "$*" in *--entrypoint*) for a; do last=$a; done; echo open-conduit > "$last";; esac;;
 esac`
 	bin := filepath.Join(dir, "docker")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
@@ -119,5 +129,34 @@ func TestGatewayNoPull(t *testing.T) {
 	}
 	if got := append(pulls(t, dir), pulls(t, ldir)...); len(got) != 0 {
 		t.Fatalf("pulled with pulls off or nothing to pull: %q", got)
+	}
+}
+
+// TestGatewayPulledByPlanNotByHealth: on a context without the gateway
+// image, doctor's view (Health) only reports it missing and pulls nothing,
+// while a launch's plan pulls it once and goes on to plan. Flipping either
+// path's pull flag fails this test.
+func TestGatewayPulledByPlanNotByHealth(t *testing.T) {
+	paths, _ := layout(t)
+	p, dir, _ := gatewayDocker(t, Options{Home: filepath.Dir(paths.Workspace) + "/home"})
+	if h := p.Health(context.Background(), "default", image, paths.Records, false); h.Status != "fail" || h.Code != "gateway_missing" {
+		t.Fatalf("health on a missing gateway: %+v", h)
+	}
+	if got := pulls(t, dir); len(got) != 0 {
+		t.Fatalf("doctor's health check pulled: %q", got)
+	}
+	config := `{"image":"` + image + `","write":["{workspace}"],"provider":{"context":"default"}}`
+	policy := extension.ContainerPolicy{Config: domain.Payload{Data: []byte(config)}, Paths: paths}
+	launch := extension.SandboxLaunch{Argv: []string{"true"}, Dir: paths.Workspace, RunDir: paths.Run}
+	if _, err := p.Plan(context.Background(), extension.ResourceOwner{ExecutionID: "x"}, policy, extension.SandboxNeeds{}, launch); err != nil {
+		t.Fatalf("plan with the gateway pulled: %v", err)
+	}
+	if got := pulls(t, dir); len(got) != 1 {
+		t.Fatalf("plan pulled %q, want once", got)
+	}
+	// The control: with pulls off the same plan is refused and pulls nothing.
+	off, offDir, _ := gatewayDocker(t, Options{NoPull: true, Home: filepath.Dir(paths.Workspace) + "/home"})
+	if _, err := off.Plan(context.Background(), extension.ResourceOwner{ExecutionID: "x"}, policy, extension.SandboxNeeds{}, launch); !errors.Is(err, extension.ErrSandboxUnavailable) || len(pulls(t, offDir)) != 0 {
+		t.Fatalf("plan with pulls off: %v, pulls %q", err, pulls(t, offDir))
 	}
 }

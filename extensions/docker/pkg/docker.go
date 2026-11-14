@@ -116,10 +116,20 @@ func (x *provider) pullGateways(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	startPulls(ctx, p, contexts)
+}
+
+// startPulls starts EnsureGateway on each context and returns at once,
+// with what finishes once they have (configure doesn't wait on it); the
+// pulls outlive ctx's cancellation (configure's call), not its values.
+func startPulls(ctx context.Context, p *docker.Provider, contexts []string) *sync.WaitGroup {
 	bg := context.WithoutCancel(ctx)
+	var wg sync.WaitGroup
 	for _, dctx := range contexts {
-		go func() { _ = p.EnsureGateway(bg, dctx) }()
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = p.EnsureGateway(bg, dctx) }()
 	}
+	return &wg
 }
 
 // configured are the Docker contexts the last configure's bindings use.
