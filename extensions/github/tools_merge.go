@@ -293,6 +293,9 @@ func (t *Tools) agentsOn(ctx context.Context, b *bound, src Source, p rawPull) (
 // other than review or done. The refusal names the conditions to wait on,
 // for every Work it names: an issue's agent's turn, or the PR's own.
 func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPull) error {
+	// Read before any agent's state is, so a turn that ends after the read
+	// that says "busy" is never earlier than when it was seen busy.
+	seen := t.o.Now()
 	agents, err := t.agentsOn(ctx, b, src, p)
 	if err != nil {
 		return err
@@ -335,7 +338,7 @@ func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPu
 	// The caller is told now that these agents haven't handed back, so a
 	// wait it registers this turn on their handing back counts one that
 	// lands before the wait does.
-	if err := t.sawBusy(ctx, b, items); err != nil {
+	if err := t.sawBusy(ctx, b, seen, items); err != nil {
 		return err
 	}
 	q := make([]string, len(conds))

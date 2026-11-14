@@ -35,12 +35,13 @@ func busyItem(kind CondKind, scope domain.ID, number int) string {
 	return fmt.Sprintf("%s:%s/%d", kind, scope, number)
 }
 
-// sawBusy records that b's caller was told, now, that the agents behind
-// items haven't handed back. An earlier sighting in the same turn stands.
-func (t *Tools) sawBusy(ctx context.Context, b *bound, items []string) error {
-	now := t.o.Now()
+// sawBusy records that b's caller was told that the agents behind items
+// haven't handed back, as of seen: a time taken before their state was
+// read, so a turn ending after that read is never earlier than seen. An
+// earlier sighting in the same turn stands.
+func (t *Tools) sawBusy(ctx context.Context, b *bound, seen time.Time, items []string) error {
 	key := string(b.work.ID)
-	return t.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+	return t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		var rec busyRecord
 		data, err := tx.Get(busyNamespace, key)
 		switch {
@@ -55,7 +56,7 @@ func (t *Tools) sawBusy(ctx context.Context, b *bound, items []string) error {
 		}
 		for _, item := range items {
 			if _, ok := rec.Seen[item]; !ok {
-				rec.Seen[item] = now
+				rec.Seen[item] = seen
 			}
 		}
 		out, err := json.Marshal(rec)
