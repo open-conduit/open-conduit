@@ -434,11 +434,27 @@ func (t *toolbelt) outcome(args []string) int {
 	return t.do(f, "declare_outcome", in, func(client.ToolResult) any { return map[string]string{"declared": pos[0]} })
 }
 
+// builtinCommands are the commands that serve the builtin operations, which
+// `os call` refuses.
+var builtinCommands = map[string]string{
+	"read_context":    "context",
+	"emit":            "emit",
+	"create_work":     "work create",
+	"cancel_work":     "work cancel",
+	"wait":            "wait",
+	"declare_outcome": "outcome",
+}
+
 func (t *toolbelt) call(args []string) int {
 	f := newToolFlags("schema", "data", "data-file")
 	pos, err := f.parse(args)
 	if err != nil || len(pos) != 1 || pos[0] == "" {
 		return t.usage("call requires one operation")
+	}
+	if command, ok := builtinCommands[pos[0]]; ok {
+		// call shows an extension operation's output, which a builtin has
+		// none of: refuse rather than print an empty result.
+		return t.usage(pos[0] + " is a command of its own: use os " + command)
 	}
 	data, err := t.payload(f)
 	if err != nil {

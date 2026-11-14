@@ -280,6 +280,19 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 			return fail("arguments must be an object")
 		}
 	}
+	if name == "call" {
+		if op, builtin := builtinCall(args); builtin {
+			// A builtin reached through call does exactly what its own tool
+			// does: the same input on the wire and the same part of the result
+			// shown (read_context's context, emit's event), never call's empty
+			// output.
+			rerouted, err := builtinArguments(args)
+			if err != nil {
+				return fail(err.Error())
+			}
+			return t.mcpCall(op, rerouted)
+		}
+	}
 	call := client.ToolCall{Operation: name}
 	if raw, ok := args["request_id"]; ok {
 		if json.Unmarshal(raw, &call.RequestID) != nil {
@@ -340,6 +353,40 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 	}
 	text, _ := json.MarshalIndent(shown, "", "  ")
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}, "isError": false}
+}
+
+// builtinCall reports the operation of a `call` tool call and whether it
+// names one of the builtin tools (read_context, emit, wait, …) rather than an
+// operation an extension registered.
+func builtinCall(args map[string]json.RawMessage) (string, bool) {
+	var op string
+	if json.Unmarshal(args["operation"], &op) != nil || op == "call" {
+		return op, false
+	}
+	for _, tool := range mcpTools {
+		if tool.Name == op {
+			return op, true
+		}
+	}
+	return op, false
+}
+
+// builtinArguments are a `call` tool call's arguments as the builtin tool it
+// names takes them: the input object's fields, with the call's request_id.
+func builtinArguments(args map[string]json.RawMessage) (json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+	if input, ok := args["input"]; ok && string(input) != "null" {
+		if err := json.Unmarshal(input, &out); err != nil {
+			return nil, errors.New("call input must be an object")
+		}
+		if out == nil {
+			out = map[string]json.RawMessage{}
+		}
+	}
+	if raw, ok := args["request_id"]; ok {
+		out["request_id"] = raw
+	}
+	return json.Marshal(out)
 }
 
 // callInput is a `call` tool input as the toolbelt wire expects it: the

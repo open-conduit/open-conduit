@@ -161,7 +161,7 @@ The playbooks, waits and GitHub tools themselves are described in [engineering t
 - **Playbooks.** Bootstrap writes the playbook plugin to `<state>/playbooks/plugin`, the default `Options.PluginDir` for bindings without `plugin_dir`.
 - **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`) and appended to the turn body.
 - **Rendering.** The host renders each input through the extension that owns its family (`inproc.Host.Render`, `event.render_owned`); GitHub's adds reply hints naming toolbelt calls.
-- **Tool calls.** The MCP `call` tool sends its `input` object as payload data, with the `file_path`/`save_to` file conventions.
+- **Tool calls.** The MCP `call` tool sends its `input` object as payload data, with the `file_path`/`save_to` file conventions. A `call` that names a builtin (`call {"operation": "read_context"}`) is that builtin's own tool call: its `input` is the tool's arguments, and it shows what the tool shows (the context, the event, the Work), never an empty output (#623).
 
 A `call github.wait` parks the attempt exactly like `wait`, because `Complete` applies the declaration.
 
