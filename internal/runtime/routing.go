@@ -60,11 +60,15 @@ type RouteRecord struct {
 	// and the Event was routed as usual.
 	DisplayRefused string `json:",omitempty"`
 	// Error and Attempts say why routing gave up on the Event (Policy
-	// "failed") and after how many tries.
+	// "failed") and after how many tries. For input of finished Work
+	// (Policy "terminal"), Error is why a route failed, so none could
+	// open a successor.
 	Error    string `json:",omitempty"`
 	Attempts int    `json:",omitempty"`
 	// Refusals is, for an Event no route selected (Policy "unmatched"),
-	// each route that declined it and why, in route order.
+	// each route that declined it and why, in route order. For input of
+	// finished Work (Policy "terminal"), it is each route asked and why it
+	// opened no successor.
 	Refusals []RouteRefusal `json:",omitempty"`
 }
 
@@ -530,10 +534,36 @@ type routePlan struct {
 	// refusals are the routes tried before one matched, or all of them
 	// when none did, with each handler's reason.
 	refusals []RouteRefusal
+	// failure, for input of finished Work, is why a route could not be
+	// evaluated (terminalPlan).
+	failure string
 	// addressed says no route took the Event and it is its Work's input
 	// because the operator addressed it there; selected then names no
 	// route, only the Work's binding.
 	addressed bool
+}
+
+// terminalPlan is the plan for input of finished Work that opens no
+// successor: it routes nowhere, and keeps why, so the record says which
+// route declined it and its handler's reason (a reply to a post whose
+// config has no follow_up), which one matched without asking for a
+// successor, or which one failed and how.
+func terminalPlan(a domain.AcceptedEvent, p routePlan, err error) routePlan {
+	out := routePlan{event: a, refusals: p.refusals}
+	switch {
+	case err != nil:
+		out.failure = extension.Clip(err.Error(), MaxRefusalReason)
+	case p.selected != nil && p.selected.Name != "":
+		why := "matched without opening a successor"
+		if p.decision.Successor {
+			why = "asked for a successor, but a match that only attaches opens none"
+		}
+		if p.decision.Reason != "" {
+			why += " (" + p.decision.Reason + ")"
+		}
+		out.refusals = append(out.refusals, RouteRefusal{Route: p.selected.Name, Reason: extension.Clip(why, MaxRefusalReason)})
+	}
+	return out
 }
 
 // binding resolves the whole nearest Scope binding before looking up its
@@ -796,7 +826,7 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 			if err == nil && p.selected != nil && !p.addressed && p.decision.Successor && p.decision.Deliver != extension.DeliverNone {
 				predecessor = s.work
 			} else {
-				p = routePlan{event: s.event}
+				p = terminalPlan(s.event, p, err)
 			}
 		}
 		var projected *domain.Work
@@ -1061,6 +1091,9 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 	}
 	if w != nil && w.State.Terminal() {
 		rec.Policy, rec.Reason = "terminal", "terminal_work"
+		// Why no successor was opened: each route's answer, or the
+		// failure that stopped them being asked.
+		rec.Refusals, rec.Error = p.refusals, p.failure
 	} else if p.selected != nil && p.decision.Deliver == extension.DeliverNone {
 		// Only the keys were for the Work; the Event is in its history
 		// but is not its input.

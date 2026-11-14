@@ -3,6 +3,9 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/conformance"
@@ -218,4 +221,73 @@ func TestSuccessorDeliversOnItsPredecessorsBinding(t *testing.T) {
 			t.Fatalf("%s: the successor's input is not on %s: %+v %v", c.name, c.binding, pending, err)
 		}
 	}
+}
+
+// TestTerminalInputRecordsWhyNoSuccessor: input for finished Work that
+// opens no successor is terminal, and its route record says why: each
+// route's reason for declining it, the route that matched without asking
+// for one, or the failure that stopped a route being asked (issue #639).
+func TestTerminalInputRecordsWhyNoSuccessor(t *testing.T) {
+	start := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		if in.Work != nil {
+			return extension.Skip("owned"), nil
+		}
+		return routingDecision(in)
+	})
+	reply := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		switch in.Work.ID {
+		case "work/declined":
+			return extension.Skip("binding job's post config does not let a reply follow up"), nil
+		case "work/matched":
+			return extension.RouteDecision{Match: true, Reason: "a later message"}, nil
+		}
+		return extension.RouteDecision{}, errors.New("work kind not declared")
+	})
+	o := conformance.RuntimeOptions{Routes: []conformance.RuntimeRoute{
+		{Route: domain.Route{Name: "start"}, Handler: start},
+		{Route: domain.Route{Name: "reply"}, Handler: reply},
+	}}
+	f, executor := schedulerFixture(t, "reopen", o)
+	executor.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "done"}}}, nil
+	}
+	driver := f.Driver.(*schedulerDriver)
+	ctx := context.Background()
+	want := map[string]runtime.RouteRecord{
+		"declined": {Refusals: []runtime.RouteRefusal{{Route: "start", Reason: "owned"}, {Route: "reply", Reason: "binding job's post config does not let a reply follow up"}}},
+		"matched":  {Refusals: []runtime.RouteRefusal{{Route: "start", Reason: "owned"}, {Route: "reply", Reason: "matched without opening a successor (a later message)"}}},
+		"failed":   {Refusals: []runtime.RouteRefusal{{Route: "start", Reason: "owned"}}},
+	}
+	for name := range want {
+		key := domain.CorrelationKey{Source: "fixture/account", ExternalID: name}
+		requireAccept(t, f, "started-"+name, &key)
+		requireRoute(t, f.Driver, domain.ID("started-"+name))
+		a, err := driver.Scheduler.Start(ctx, domain.ID("work/"+name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = driver.Scheduler.Observe(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		requireAccept(t, f, "late-"+name, &key)
+		requireRoute(t, f.Driver, domain.ID("late-"+name))
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		for name, w := range want {
+			rec, ok, err := runtime.RouteDecisionInTx(tx, domain.ID("late-"+name))
+			if err != nil || !ok {
+				return fmt.Errorf("%s: no decision: %v", name, err)
+			}
+			if rec.Policy != "terminal" || rec.Reason != "terminal_work" || rec.WorkID != domain.ID("work/"+name) || !reflect.DeepEqual(rec.Refusals, w.Refusals) {
+				return fmt.Errorf("%s: %+v", name, rec)
+			}
+			if failed := name == "failed"; failed != strings.Contains(rec.Error, "work kind not declared") {
+				return fmt.Errorf("%s: error %q", name, rec.Error)
+			}
+		}
+		return nil
+	})
 }

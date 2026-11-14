@@ -173,7 +173,7 @@ func (r *Remote) routeMatch(handler string) routeFunc {
 			return extension.RouteDecision{}, err
 		}
 		d := out.Extension()
-		if d.Match && d.Kind != "" && !r.ownKind(d.Kind) {
+		if undeclaredKind(d, in.Work, r.ownKind) {
 			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeUndeclared, "work kind not declared")
 		}
 		if err := extension.ValidateDisplay(d.Display); err != nil {
@@ -184,6 +184,19 @@ func (r *Remote) routeMatch(handler string) routeFunc {
 		}
 		return d, nil
 	})
+}
+
+// undeclaredKind reports whether a route's decision d, for input of
+// Work w (nil for none), would create Work of a kind the extension does
+// not declare. A route creates Work only of its extension's kinds, except
+// a successor that carries on the finished Work it was asked about as
+// that Work's own kind (a reply to the Slack post of a finished webhook
+// delivery): that creates no new kind of Work.
+func undeclaredKind(d extension.RouteDecision, w *domain.Work, own func(string) bool) bool {
+	if !d.Match || d.Kind == "" || own(d.Kind) {
+		return false
+	}
+	return !(d.Successor && w != nil && w.State.Terminal() && d.Kind == w.Kind)
 }
 
 type routeFunc func(context.Context, extension.RouteInput) (extension.RouteDecision, error)
