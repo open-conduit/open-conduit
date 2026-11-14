@@ -50,7 +50,7 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 			return ErrInvalidConfig
 		}
 		if kind == protocol.ValidateExtension || kind == protocol.ValidateRoute {
-			r.described.put(describeKey(kind, typ, config), validated{out.Describe, out.WorkKinds})
+			r.described.put(describeKey(kind, typ, config), validated{out.Describe, out.WorkKinds, out.Bindings})
 		}
 		return nil
 	}
@@ -74,10 +74,20 @@ func (r *Remote) WorkKinds(typ string, config json.RawMessage) (kinds []protocol
 	return v.kinds, ok
 }
 
+// Bindings are the binding names the package said an entry config of
+// extension type typ refers to when it last validated that config
+// (protocol.ValidateResult.Bindings); ok is false when it has not
+// validated it.
+func (r *Remote) Bindings(typ string, config json.RawMessage) (names []string, ok bool) {
+	v, ok := r.described.get(describeKey(protocol.ValidateExtension, typ, config))
+	return v.bindings, ok
+}
+
 // validated is what the package said about a config object it validated.
 type validated struct {
-	lines []protocol.DescribeLine
-	kinds []protocol.WorkKind
+	lines    []protocol.DescribeLine
+	kinds    []protocol.WorkKind
+	bindings []string
 }
 
 // describedCap bounds each of describedCache's two maps.

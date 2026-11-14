@@ -39,15 +39,18 @@ const (
 // timeout, refuses it with an operation error, once. A gate that escalates
 // instead widens an unanswered request to its escalation responders at its
 // timeout, and refuses only at the escalation's. A later identical call
-// asks again. Calls the scope's gates don't name pass, and so does every
-// call in a scope without a `human` entry.
+// asks again. A gate with for_bindings holds only calls from a run on one
+// of those bindings, read from the calling Execution as stored. A call
+// several gates hold is asked about once: whoever any of them names may
+// answer, and the first of them sets the timeout and escalation. Calls the
+// scope's gates don't hold pass, and so does every call in a scope without
+// a `human` entry.
 func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
 	entry, ok := t.o.Entry(a.ScopeID)
 	if !ok {
 		return nil, nil
 	}
-	rule, ok := entry.Config.gate(c.Operation)
-	if !ok {
+	if len(entry.Config.gates(c.Operation, "", false)) == 0 {
 		return nil, nil
 	}
 	now := t.o.Now()
@@ -62,6 +65,22 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 		if err != nil || w.ScopeID != a.ScopeID {
 			return extension.ErrUnauthorized
 		}
+		// The calling run's binding, as stored, never as the call says:
+		// a gate's for_bindings narrows it to calls from those bindings.
+		// Unknown, every gate that names the operation holds it.
+		binding, known := "", false
+		switch x, err := tx.Execution(a.ExecutionID); {
+		case err == nil && x.WorkID == a.WorkID:
+			binding, known = x.ExecutorBinding, true
+		case err != nil && !errors.Is(err, storage.ErrNotFound):
+			return err
+		}
+		matched := entry.Config.gates(c.Operation, binding, known)
+		if len(matched) == 0 {
+			allowed = true
+			return nil
+		}
+		rule := gate(matched)
 		if id, err := tx.Get(Namespace, pointer); err == nil {
 			// The call asked before: settle that request and act on it.
 			if err = settle(tx, string(id), now, &SyncResult{}); err != nil && !errors.Is(err, storage.ErrNotFound) {

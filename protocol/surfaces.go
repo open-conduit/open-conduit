@@ -124,6 +124,11 @@ type ValidateParams struct {
 // (its work_kinds) only when an enabled route of its scope binds it, and an
 // asking agent is shown the description. The host keeps them with the
 // describe lines.
+//
+// For kind extension, Bindings are the names of the bindings a valid
+// entry's config refers to (a human gate's bindings). config check refuses
+// an entry, in each scope it applies to, that names a binding the scope
+// has no enabled binding of. The host keeps them with the describe lines.
 type ValidateResult struct {
 	Mode      string          `json:"mode,omitempty"`
 	Playbook  string          `json:"playbook,omitempty"`
@@ -131,6 +136,7 @@ type ValidateResult struct {
 	Warnings  []string        `json:"warnings,omitempty"`
 	Describe  []DescribeLine  `json:"describe,omitempty"`
 	WorkKinds []WorkKind      `json:"work_kinds,omitempty"`
+	Bindings  []string        `json:"bindings,omitempty"`
 }
 
 // DescribeLine is one thing a config object sets up: a named element of

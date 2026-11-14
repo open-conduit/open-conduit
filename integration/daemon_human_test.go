@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
 )
 
 // humanDaemonConfig binds GitHub issues to an agent stand-in that asks a
@@ -115,6 +116,51 @@ func TestDaemonHumanAskFromGitHubWork(t *testing.T) {
 	for _, c := range fake.Comments(n) {
 		if strings.Contains(c.Body, "migration tonight") || strings.Contains(c.Body, "yes") {
 			t.Fatalf("the ask reached the issue: %q", c.Body)
+		}
+	}
+}
+
+// TestHumanGateBindingsValidateAtLoad: the documented one-agent gate
+// validates offline in a scope with those bindings, and config check
+// refuses a gate naming a binding the scope doesn't have, as for_bindings
+// or bindings, at the entry's config.
+func TestHumanGateBindingsValidateAtLoad(t *testing.T) {
+	releaseLayout(t)
+	var entry string
+	for _, block := range fencedBlocks(t, "../site/src/content/docs/workflows/human-decisions.md", "json") {
+		if strings.Contains(block, `"for_bindings": ["newbie", "newbie--job"]`) {
+			entry = block
+		}
+	}
+	if entry == "" {
+		t.Fatal("the human docs lost the one-agent gate example")
+	}
+	doc := func(entry string, bindings ...string) []byte {
+		var x any
+		if err := json.Unmarshal([]byte(entry), &x); err != nil {
+			t.Fatal(err)
+		}
+		var bs []any
+		for _, name := range bindings {
+			bs = append(bs, map[string]any{"name": name, "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"},
+				"secret_names": []any{}, "config": map[string]any{"command": "true"}})
+		}
+		b, _ := json.Marshal(map[string]any{"version": 1, "settings": map[string]any{}, "connections": []any{},
+			"scopes": []any{map[string]any{"id": "eng", "name": "Engineering",
+				"authorization": map[string]any{"connections": []any{}, "operations": []string{"read_context"}, "read_scopes": []any{}},
+				"bindings":      bs, "routes": []any{}, "extensions": []any{x}, "secret_refs": map[string]any{}}}})
+		return b
+	}
+	if diags, err := bootstrap.ValidateConfig(doc(entry, "newbie", "newbie--job", "trusted")); err != nil || len(diags) != 0 {
+		t.Fatalf("documented config: %v %v", diags, err)
+	}
+	for name, bad := range map[string][]byte{
+		"for_bindings": doc(entry, "newbie", "trusted"),
+		"bindings":     doc(`{"name": "decisions", "type": "human", "secret_names": [], "config": {"gates": [{"bindings": ["release"]}]}}`, "newbie"),
+	} {
+		diags, err := bootstrap.ValidateConfig(bad)
+		if err != nil || len(diags) != 1 || diags[0].Path != "scopes/0/extensions/0/config" || diags[0].Code != "missing_binding" {
+			t.Fatalf("%s naming a missing binding: %+v %v", name, diags, err)
 		}
 	}
 }

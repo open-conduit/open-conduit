@@ -69,7 +69,7 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 			case protocol.ValidateConnection:
 				reg.Connections[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 			case protocol.ValidateExtension:
-				reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings, Describe: c.Describe}
+				reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings, Describe: c.Describe, Bindings: c.Bindings}
 			case protocol.ValidateRoute:
 				reg.HandlerConfig[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 				if c.Binding != nil {

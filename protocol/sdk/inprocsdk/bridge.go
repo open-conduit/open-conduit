@@ -295,6 +295,7 @@ func (b *Bridge) wire() {
 	e.Validate = b.validate
 	e.Configure = b.configure
 	e.Describe = b.describe
+	e.Bindings = b.bindings
 	if s, ok := b.x.(extension.SetupProbes); ok {
 		e.Probes = s.SetupProbes()
 	}
@@ -536,6 +537,16 @@ func (b *Bridge) describe(p protocol.ValidateParams) []protocol.DescribeLine {
 		out = append(out, protocol.DescribeLine{Name: e.Name, Detail: e.Detail})
 	}
 	return out
+}
+
+// bindings are the binding names a valid entry's config refers to, by its
+// config type's Bindings.
+func (b *Bridge) bindings(p protocol.ValidateParams) []string {
+	ct, ok := b.types[p.Kind+"/"+p.Type]
+	if !ok || ct.Bindings == nil {
+		return nil
+	}
+	return ct.Bindings(p.Config)
 }
 
 // configure starts the extension unless it has started (retrying a

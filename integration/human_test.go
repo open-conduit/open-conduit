@@ -637,6 +637,60 @@ func TestHumanGateRefusalAndTimeout(t *testing.T) {
 	}
 }
 
+// A gate with for_bindings holds a call only from a run on one of its
+// bindings, read from the stored Execution (the harness runs on "fixture"):
+// a gate for another binding lets the call through, and its responders
+// can't answer for this one. Two gates that hold one call ask once, and
+// either gate's responders may answer.
+func TestHumanGateForBindings(t *testing.T) {
+	alice, bob, carol := extension.Caller{Kind: "operator", ID: "alice"}, extension.Caller{Kind: "operator", ID: "bob"}, extension.Caller{Kind: "operator", ID: "carol"}
+	t.Run("another binding passes", func(t *testing.T) {
+		h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.deploy"],"for_bindings":["trusted"],"responders":["operator:bob"]}]}}`)
+		if out, err := h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+			t.Fatalf("a gate for another binding held the call: %+v %v", out, err)
+		}
+	})
+	t.Run("its binding waits", func(t *testing.T) {
+		h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[`+
+			`{"operations":["fixture.deploy"],"for_bindings":["fixture"],"responders":["operator:alice"]},`+
+			`{"operations":["fixture.deploy"],"for_bindings":["trusted"],"responders":["operator:bob"]}]}}`)
+		out, err := h.deploy(t, `{"env":"prod"}`)
+		if err != nil || out.Wait == nil || *h.deploys != 0 {
+			t.Fatalf("the named binding's call was not held: %+v %v", out, err)
+		}
+		h.park(t, out)
+		_, err = h.answer(t, bob, "approve", "bob")
+		refusedWith(t, err, "not_allowed")
+		if _, err = h.answer(t, alice, "approve", "alice"); err != nil {
+			t.Fatal(err)
+		}
+		h.reconcile(t)
+		h.reconcile(t)
+		h.resume(t)
+		if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+			t.Fatalf("the approved call did not run: %+v %v", out, err)
+		}
+	})
+	t.Run("two gates ask once", func(t *testing.T) {
+		h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[`+
+			`{"operations":["fixture.deploy"],"for_bindings":["fixture"],"responders":["operator:alice"]},`+
+			`{"operations":["fixture.*"],"responders":["operator:carol"]}]}}`)
+		out, err := h.deploy(t, `{"env":"prod"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.park(t, out)
+		if acts, err := h.actions.Actions(context.Background(), h.target(t)); err != nil || len(acts) != 1 {
+			t.Fatalf("one call, asked %d times: %v", len(acts), err)
+		}
+		_, err = h.answer(t, bob, "approve", "bob")
+		refusedWith(t, err, "not_allowed")
+		if _, err = h.answer(t, carol, "approve", "carol"); err != nil {
+			t.Fatalf("the second gate's responder could not answer: %v", err)
+		}
+	})
+}
+
 // Without a `human` entry, gates are off and every call passes.
 func TestHumanGateNeedsAnEntry(t *testing.T) {
 	h := newHumanHarness(t, "persistent", gated)

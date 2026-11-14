@@ -2,6 +2,7 @@ package human
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -49,8 +50,29 @@ func TestParseConfig(t *testing.T) {
 			t.Errorf("start gate for %s on %s: %v", tc.kind, tc.binding, ok)
 		}
 	}
-	if _, ok := c.gate("github.issue"); ok {
+	if len(c.gates("github.issue", "", false)) != 0 {
 		t.Error("a kind gate gated an operation")
+	}
+	if _, err := ParseConfig(json.RawMessage(`{"gates":[{"kinds":["github.*"],"for_bindings":["newbie"]}]}`)); err == nil {
+		t.Error("accepted for_bindings without operations")
+	}
+	c, err = ParseConfig(json.RawMessage(`{"gates":[{"operations":["slack.post"],"for_bindings":["newbie"],"responders":["operator:alice"],"timeout":"1h"},` +
+		`{"operations":["slack.*"],"responders":["operator:bob"]},{"operations":["slack.post"],"for_bindings":["other"],"responders":["operator:carol"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := gate(c.gates("slack.post", "newbie", true))
+	if !slices.Equal(rule.Responders, []string{"operator:alice", "operator:bob"}) || rule.timeout != time.Hour {
+		t.Errorf("two gates on one call: %+v", rule)
+	}
+	if got := c.gates("slack.post", "trusted", true); len(got) != 1 || got[0].Responders[0] != "operator:bob" {
+		t.Errorf("for_bindings held another binding's call: %+v", got)
+	}
+	if got := c.gates("slack.post", "", false); len(got) != 3 {
+		t.Errorf("an unknown binding must meet every gate: %+v", got)
+	}
+	if got := gateBindings(json.RawMessage(`{"gates":[{"bindings":["release"]},{"operations":["x.y"],"for_bindings":["newbie","release"]}]}`)); !slices.Equal(got, []string{"release", "newbie"}) {
+		t.Errorf("gate bindings: %v", got)
 	}
 	if ValidateExtension(nil, []string{"token"}) == nil {
 		t.Error("accepted secrets")
@@ -129,20 +151,28 @@ func TestAskGuidance(t *testing.T) {
 	}
 }
 
+// one is the only gate of gs.
+func one(gs []GateConfig) (GateConfig, bool) {
+	if len(gs) != 1 {
+		return GateConfig{}, false
+	}
+	return gs[0], true
+}
+
 func TestParseGates(t *testing.T) {
 	c, err := ParseConfig(json.RawMessage(`{"responders":["github:alice"],"gates":[{"operations":["github.pr.create","deploy.*"]},{"operations":["shell.run"],"responders":["slack_user:U1"],"timeout":"30m"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, ok := c.gate("deploy.prod")
+	g, ok := one(c.gates("deploy.prod", "", false))
 	if !ok || g.timeout != DefaultGateTimeout || len(g.Responders) != 1 || g.Responders[0] != "github:alice" {
 		t.Fatalf("prefix gate: %+v %v", g, ok)
 	}
-	if g, ok = c.gate("shell.run"); !ok || g.timeout != 30*time.Minute || g.Responders[0] != "slack_user:U1" {
+	if g, ok = one(c.gates("shell.run", "", false)); !ok || g.timeout != 30*time.Minute || g.Responders[0] != "slack_user:U1" {
 		t.Fatalf("second gate: %+v %v", g, ok)
 	}
 	for _, op := range []string{"deploy", "deployer.x", "github.pr.merge", "shell.runs"} {
-		if _, ok := c.gate(op); ok {
+		if len(c.gates(op, "", false)) > 0 {
 			t.Errorf("%s gated", op)
 		}
 	}

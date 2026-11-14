@@ -57,7 +57,8 @@ var _ extension.ConfigCandidate = (*installed)(nil)
 // package (nil accepts any), Binding a route's binding for a handler that
 // declares a binding check, and Settings and Describe an entry's safe
 // fields and what it sets up; WorkKinds, for a route type, the kinds of
-// child Work a route's config binds.
+// child Work a route's config binds; Bindings, for an extension type, the
+// binding names an entry's config refers to.
 type configType struct {
 	Kind      string
 	Type      string
@@ -67,6 +68,7 @@ type configType struct {
 	Settings  func(config json.RawMessage) []extension.Setting
 	Describe  func(config json.RawMessage) []config.Entry
 	WorkKinds func(config json.RawMessage) []extension.WorkKind
+	Bindings  func(config json.RawMessage) []string
 }
 
 // ingressSource is an ingress source a package's configure result
@@ -135,7 +137,7 @@ func (x *installed) Types() []configType {
 	}
 	for _, e := range p.Extensions {
 		out = append(out, configType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
-			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe))})
+			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe)), Bindings: x.bindings(e.Type)})
 	}
 	for _, r := range p.Routes {
 		if r.Config || r.Binding {
@@ -683,6 +685,24 @@ func (x *installed) workKinds(handler string) func(json.RawMessage) []extension.
 			out = append(out, extension.WorkKind{Kind: k.Kind, Description: k.Description})
 		}
 		return out
+	}
+}
+
+// bindings are the binding names an entry config of extension type typ
+// refers to: what the package said when it validated that config
+// (protocol.ValidateResult.Bindings), else none. It never calls the
+// package; validation does, before the names are checked.
+func (x *installed) bindings(typ string) func(json.RawMessage) []string {
+	return func(raw json.RawMessage) []string {
+		r := x.r
+		if r == nil && x.offline != nil && x.offline.started {
+			r = x.offline.r
+		}
+		if r == nil {
+			return nil
+		}
+		names, _ := r.Bindings(typ, raw)
+		return names
 	}
 }
 
