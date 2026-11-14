@@ -1704,23 +1704,39 @@ func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch
 	}
 	return attempt, nil
 }
+
+// Observe waits for the attempt's result (Await) and applies it (Complete).
 func (s *Scheduler) Observe(ctx context.Context, attempt Attempt) error {
+	result, err := s.Await(ctx, attempt)
+	if err != nil {
+		return err
+	}
+	return s.Complete(ctx, attempt.Lease, result)
+}
+
+// Await waits outside storage for the attempt's one structured result. A
+// handle returns its outcome once (an out-of-process executor forgets the
+// handle as it answers), so a caller that must apply the result again, as
+// after Complete's conflict with unrouted input, passes the same result to
+// Complete rather than awaiting again. When the handle fails, the failure
+// is applied to the attempt and returned.
+func (s *Scheduler) Await(ctx context.Context, attempt Attempt) (extension.Result, error) {
 	if attempt.Handle == nil {
-		return storage.ErrInvalid
+		return extension.Result{}, storage.ErrInvalid
 	}
 	result, err := attempt.Handle.Wait(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return extension.Result{}, ctx.Err()
 		}
 		summary, failed := "executor observation failed", ErrExecutorCall
 		if cause := FailureCause(err); cause != "" {
 			summary += ": " + cause
 			failed = errors.Join(ErrExecutorCall, failureCause(cause))
 		}
-		return errors.Join(failed, s.fail(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary}}, false, err))
+		return extension.Result{}, errors.Join(failed, s.fail(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary}}, false, err))
 	}
-	return s.Complete(ctx, attempt.Lease, result)
+	return result, nil
 }
 
 // failureCause carries a failed observation's safe cause on the error
