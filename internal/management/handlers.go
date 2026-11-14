@@ -1351,9 +1351,9 @@ func (s *Server) toolbeltGuidance(c *call) (int, any, error) {
 }
 
 // toolbeltServing answers which of the operations the caller's token is
-// granted serve ?capability= (git's credential helper asks for
-// git.credential). On an execution's own socket the token must belong to
-// that execution.
+// granted serve ?capability=. Only the host calls them (its git transport
+// asks for git.credential); this says which there are. On an execution's
+// own socket the token must belong to that execution.
 func (s *Server) toolbeltServing(c *call) (int, any, error) {
 	capability := c.r.URL.Query().Get("capability")
 	if capability == "" {
@@ -1385,7 +1385,14 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 	if in.RequestID == "" {
 		in.RequestID = c.key
 	}
-	call := extension.ToolCall{Operation: in.Operation, ScopeID: domain.ID(in.ScopeID), WorkID: domain.ID(in.WorkID), ExecutionID: domain.ID(in.ExecutionID), Capability: in.Capability}
+	// A capability is the host's to ask for (its git transport asks for
+	// git.credential), never a toolbelt request's: what an operation
+	// serving one answers is often a secret, and nothing in the run may be
+	// handed it.
+	if in.Capability != "" {
+		return 0, nil, &extension.OperationError{Code: extension.CodeCapabilityOnly, Message: extension.DescribeCapabilityCall(in.Capability, domain.Payload{Data: in.Input}).Direct}
+	}
+	call := extension.ToolCall{Operation: in.Operation, ScopeID: domain.ID(in.ScopeID), WorkID: domain.ID(in.WorkID), ExecutionID: domain.ID(in.ExecutionID)}
 	// On an execution's own socket the call asserts that execution, so a
 	// token issued to any other execution is refused by the toolbelt.
 	if id := scopedExecution(c.ctx); id != "" {

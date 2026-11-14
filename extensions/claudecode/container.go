@@ -81,23 +81,6 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 	return out, secrets, nil
 }
 
-// toolbeltGitHelper makes the toolbelt git's credential helper in a
-// container launch that has one and no other: `os git-credential` asks the
-// host for a credential for the Work's repository, which the extension
-// that owns the repository's host answers. It goes after the GIT_CONFIG
-// entries env already sets (the workspace's signing policy, a run layer's
-// helper for one host), so those are asked first; a run that already sets
-// git's general credential.helper (a binding's own, or a layer that set
-// the toolbelt itself) is left as it is.
-func toolbeltGitHelper(env []string) []string {
-	if generalCredentialHelper(env) {
-		return env
-	}
-	out := gitConfig(env, [2]string{"credential.helper", "!os git-credential"})
-	sort.Strings(out)
-	return out
-}
-
 // seedHome fills an empty home with a copy of the seed directory (its
 // .credentials.json left out) and the onboarding .claude.json, unless the
 // seed brought one. A home with anything in it is left as it is: it is the

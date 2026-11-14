@@ -110,3 +110,7 @@ A list returns `{"items": […], "next_cursor": …}` (the Work list adds `total
 | `POST` | `/v1/toolbelt/call` | execution | optional | – |
 | `GET` | `/v1/toolbelt/guidance` | execution | – | – |
 | `GET` | `/v1/toolbelt/serving` | execution | – | – |
+| `POST` | `/v1/toolbelt/git` | execution | optional | – |
+| `DELETE` | `/v1/toolbelt/git/{id}` | execution | optional | – |
+| `GET` | `/v1/toolbelt/git/{id}/{id}` | execution | – | – |
+| `POST` | `/v1/toolbelt/git/{id}/{id}` | execution | – | – |

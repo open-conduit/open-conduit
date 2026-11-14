@@ -1287,10 +1287,6 @@ type ToolCall struct {
 	ScopeID     string          `json:"scope_id,omitempty"`
 	WorkID      string          `json:"work_id,omitempty"`
 	ExecutionID string          `json:"execution_id,omitempty"`
-	// Capability is set by a capability's client (git's credential helper
-	// sets git.credential): an operation serving a capability answers only
-	// a call made for it.
-	Capability string `json:"capability,omitempty"`
 }
 type ToolResult struct {
 	Event   *Event   `json:"event,omitempty"`
@@ -1345,6 +1341,73 @@ func (c *Client) ToolbeltServing(ctx context.Context, capability string) ([]stri
 	}
 	err := c.Do(ctx, "GET", "toolbelt/serving", url.Values{"capability": {capability}}, nil, "", &out)
 	return out.Operations, err
+}
+
+// GitSession is one git command's way to a repository through the
+// toolbelt's git transport: the host signs its requests in, and the
+// credential stays with the host.
+type GitSession struct {
+	Session   string `json:"session"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// GitSessionOpen opens a session for git's command on the https repository
+// url. The host asks the operations serving git.credential for it (and any
+// gate on them); an Error with code git_no_credential says none gives one,
+// git_sign_in_held that a gate holds the sign-in.
+func (c *Client) GitSessionOpen(ctx context.Context, repository string) (GitSession, error) {
+	var out GitSession
+	err := c.Do(ctx, "POST", "toolbelt/git", nil, map[string]string{"url": repository}, "", &out)
+	return out, err
+}
+
+// GitSessionEnd ends a session once git's command is done with it.
+func (c *Client) GitSessionEnd(ctx context.Context, session string) error {
+	return c.Do(ctx, "DELETE", "toolbelt/git/"+esc(session), nil, nil, "", nil)
+}
+
+// GitAdvertise is the repository's advertisement for service
+// (git-upload-pack or git-receive-pack), as its info/refs serves it;
+// protocol is the Git-Protocol header to send ("" for none).
+func (c *Client) GitAdvertise(ctx context.Context, session, service, protocol string) (io.ReadCloser, error) {
+	return c.gitStream(ctx, http.MethodGet, session, service, protocol, nil)
+}
+
+// GitExchange sends one of git's requests for service and streams back the
+// repository's answer.
+func (c *Client) GitExchange(ctx context.Context, session, service, protocol string, body io.Reader) (io.ReadCloser, error) {
+	return c.gitStream(ctx, http.MethodPost, session, service, protocol, body)
+}
+
+func (c *Client) gitStream(ctx context.Context, method, session, service, protocol string, body io.Reader) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, method, "http://localhost/v1/toolbelt/git/"+esc(session)+"/"+esc(service), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if protocol != "" {
+		req.Header.Set("Git-Protocol", protocol)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/x-"+service+"-request")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, transportError(ctx, err)
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		var env struct {
+			Error Error `json:"error"`
+		}
+		if json.Unmarshal(data, &env) != nil || env.Error.Code == "" {
+			return nil, &Error{Status: resp.StatusCode, Code: "http_error", Message: http.StatusText(resp.StatusCode)}
+		}
+		env.Error.Status = resp.StatusCode
+		return nil, &env.Error
+	}
+	return resp.Body, nil
 }
 
 // ---- unified run history and doctor ----

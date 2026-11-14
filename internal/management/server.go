@@ -37,11 +37,13 @@ const (
 )
 
 type Options struct {
-	Store      storage.Store
-	Artifacts  storage.Artifacts
-	Now        func() time.Time
-	Control    *runtime.Control
-	Toolbelt   *runtime.Toolbelt
+	Store     storage.Store
+	Artifacts storage.Artifacts
+	Now       func() time.Time
+	Control   *runtime.Control
+	Toolbelt  *runtime.Toolbelt
+	// Git is the toolbelt's git transport (NewGitTransport when nil).
+	Git        *GitTransport
 	Config     *ConfigService
 	Version    string
 	InstanceID string
@@ -132,6 +134,9 @@ func NewServer(o Options) (*Server, error) {
 		if _, err := rand.Read(o.CursorKey); err != nil {
 			return nil, err
 		}
+	}
+	if o.Git == nil {
+		o.Git = NewGitTransport(nil, o.Now)
 	}
 	return &Server{o: o, failing: newProviderHealth()}, nil
 }
@@ -418,6 +423,12 @@ var routes = []route{
 	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
 	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
 	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
+	{"POST", []string{"toolbelt", "git"}, true, false, (*Server).gitSessionOpen},
+	{"DELETE", []string{"toolbelt", "git", "*"}, true, false, (*Server).gitSessionEnd},
+	// A git exchange streams git's own body, not JSON, so it is not read
+	// as a mutation's.
+	{"GET", []string{"toolbelt", "git", "*", "*"}, false, false, (*Server).gitRelay},
+	{"POST", []string{"toolbelt", "git", "*", "*"}, false, false, (*Server).gitRelay},
 }
 
 // listFilters are each list endpoint's query filters, by path; every list
@@ -522,6 +533,21 @@ func split(escaped string) ([]string, bool) {
 	return parts, true
 }
 
+// toolbeltPath reports whether parts name a toolbelt route, the only ones
+// an execution's socket serves.
+func toolbeltPath(parts []string) bool {
+	if len(parts) < 2 || parts[0] != "toolbelt" {
+		return false
+	}
+	switch parts[1] {
+	case "call", "guidance", "serving":
+		return len(parts) == 2
+	case "git":
+		return len(parts) <= 4
+	}
+	return false
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	parts, ok := split(r.URL.EscapedPath())
@@ -529,7 +555,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return fail(404, "not_found", "unknown endpoint")
 	}
 	// An execution's own socket serves the toolbelt and nothing else.
-	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call" && parts[1] != "guidance" && parts[1] != "serving") {
+	if scopedExecution(ctx) != "" && !toolbeltPath(parts) {
 		return fail(404, "not_found", "this socket serves only toolbelt calls")
 	}
 	who, err := s.authenticate(ctx, r)

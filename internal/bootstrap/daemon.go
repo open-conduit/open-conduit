@@ -155,8 +155,11 @@ type daemon struct {
 	external      externalState
 	endpoint      string
 	endpoints     *management.Endpoints
-	cursorKey     []byte
-	current       atomic.Pointer[components]
+	// git is the toolbelt's git transport, one across config generations
+	// so a reload doesn't end a git command's session mid-push.
+	git       *management.GitTransport
+	cursorKey []byte
+	current   atomic.Pointer[components]
 
 	ctx      context.Context
 	mu       sync.Mutex
@@ -197,7 +200,7 @@ func toolbeltBeside(self string) string {
 // <state>/toolbelt, the toolbelt directory executions are given. A package
 // manager installs each version in a directory of its own and removes the
 // old one on upgrade (Homebrew's Caskroom/open-conduit/<version>), so a run
-// whose PATH, git credential helper or MCP server named that directory
+// whose PATH, git transport or MCP server named that directory
 // would lose its toolbelt mid-turn. The link outlives the install; each
 // daemon start re-points it, atomically, at the install it runs from. With
 // no toolbelt (dir is "") it returns "".
@@ -356,6 +359,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	// Each execution's toolbelt is served on a socket of its own in its run
 	// directory, answered by the current generation's server.
+	d.git = management.NewGitTransport(nil, nil)
 	if d.endpoints, err = management.NewEndpoints(lock, o.StateDir, "", func(id domain.ID) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d.current.Load().server.ExecutionHandler(id).ServeHTTP(w, r)
@@ -621,7 +625,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	c.control = control
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Checks: d.checks(),
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Checks: d.checks(),
 		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}

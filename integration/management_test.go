@@ -84,7 +84,15 @@ type managementHarness struct {
 	// management server observes.
 	keyring  *memoryKeyring
 	observed *recordedObserver
+	// gitUpstream, when set, is how the toolbelt's git transport reaches
+	// repositories (a test's TLS server).
+	gitUpstream http.RoundTripper
 }
+
+// upstreamFunc is a function as an http.RoundTripper.
+type upstreamFunc func(*http.Request) (*http.Response, error)
+
+func (f upstreamFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func newManagementHarness(t testing.TB) *managementHarness {
 	t.Helper()
@@ -195,6 +203,12 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 	}
 	secretsFile := filepath.Join(state, "config", "secrets.json")
 	server, err := management.NewServer(management.Options{Store: served, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
+		Git: management.NewGitTransport(upstreamFunc(func(r *http.Request) (*http.Response, error) {
+			if h.gitUpstream == nil {
+				return nil, errors.New("no git upstream")
+			}
+			return h.gitUpstream.RoundTrip(r)
+		}), h.clock.Now),
 		Secrets:  &config.SecretStore{File: secretsFile, Keyring: h.keyring},
 		Resolver: &config.Resolver{SecretsFile: secretsFile, Keyring: h.keyring, LookupEnv: func(string) (string, bool) { return "", false }},
 		Observer: h.observed,

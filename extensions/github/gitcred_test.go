@@ -429,7 +429,8 @@ func (r *recorder) Write(b []byte) (int, error) { return len(b), nil }
 func (r *recorder) WriteHeader(c int)           { r.code = c }
 
 // TestRunEnvironment: a connection with git "bot" gives each run of its
-// repository's Work the toolbelt as git's only credential helper, signing
+// repository's Work the toolbelt's git transport for the GitHub web host,
+// with git's credential helpers cleared, signing
 // off and the bot user of the App that mints git's tokens (the bot App,
 // else the sign-in App) as author and committer, with the noreply address
 // GitHub links to that user. The identity is looked up once. A connection
@@ -451,11 +452,13 @@ func TestRunEnvironment(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := map[string]string{
-					"GIT_CONFIG_COUNT": "4",
+					"GIT_CONFIG_COUNT": "6",
 					"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
-					"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential",
-					"GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
-					"GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+					"GIT_CONFIG_KEY_1": "commit.gpgsign", "GIT_CONFIG_VALUE_1": "false",
+					"GIT_CONFIG_KEY_2": "tag.gpgsign", "GIT_CONFIG_VALUE_2": "false",
+					"GIT_CONFIG_KEY_3": "alias.remote-open-conduit", "GIT_CONFIG_VALUE_3": "!os git-remote",
+					"GIT_CONFIG_KEY_4": "protocol.open-conduit.allow", "GIT_CONFIG_VALUE_4": "always",
+					"GIT_CONFIG_KEY_5": "url.open-conduit::https://github.com/.insteadOf", "GIT_CONFIG_VALUE_5": "https://github.com/",
 					"GIT_AUTHOR_NAME": login, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": login, "GIT_COMMITTER_EMAIL": email,
 				}
 				if !maps.Equal(env, want) {
@@ -551,7 +554,7 @@ func TestRunEnvironmentBinding(t *testing.T) {
 			t.Fatalf("%q: %v", conn, err)
 		}
 		_, login, _ := githubtest.AppBot(app)
-		if e["GIT_AUTHOR_NAME"] != login || e["GIT_COMMITTER_NAME"] != login || e["GIT_CONFIG_VALUE_1"] != "!os git-credential" {
+		if e["GIT_AUTHOR_NAME"] != login || e["GIT_COMMITTER_NAME"] != login || e["GIT_CONFIG_VALUE_3"] != "!os git-remote" {
 			t.Errorf("binding naming %q: env %v, want App %s's bot", conn, e, app)
 		}
 		if got := minted(conn); got != app {

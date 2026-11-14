@@ -1,9 +1,10 @@
 package integration_test
 
-// git's credential in a container against real Docker (make
-// container-test and the container CI job): a GitHub App connection mints
-// a token for the Work's one repository through the toolbelt, and it stops
-// working once the execution ends. GitHub is a stand-in (fakegithub) on the
+// git in a container against real Docker (make container-test and the
+// container CI job): git pushes to the Work's one repository through the
+// toolbelt's git transport, which the host signs in with a token a GitHub
+// App connection mints; nothing in the container gets the token, and the
+// execution's way through the transport ends with it. GitHub is a stand-in (fakegithub) on the
 // gateway's egress network, reached over TLS through the gateway as
 // github.com; the test calls no real service.
 
@@ -18,7 +19,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -47,10 +47,11 @@ const dockerGitImage = "alpine/git@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e5
 // gitClaude stands in for claude: it takes its turn's message and runs git
 // as an agent would, writing "name: ALLOWED|DENIED" for each attempt to
 // $FAKE_DIR/probes. The first execution pushes to the Work's repository
-// with nothing but git's configured helper, keeps the token the helper is
-// given and its toolbelt token, and tries that token on a second
-// repository. The next one, once the first has ended, tries both of the
-// first's tokens again, and pushes with its own.
+// with nothing but the run's git config, tries to get a token from `os
+// git-credential` and from git's own credential machinery, keeps its
+// toolbelt token, and tries a second repository. The next one, once the
+// first has ended, tries the transport with the first's toolbelt token,
+// and pushes with its own.
 const gitClaude = `#!/bin/sh
 session=
 while [ $# -gt 0 ]; do
@@ -61,25 +62,24 @@ f=${FAKE_DIR:?}
 read -r line
 export GIT_TERMINAL_PROMPT=0
 t() { n=$1; shift; if "$@" >>"$f/git.log" 2>&1; then echo "$n: ALLOWED"; else echo "$n: DENIED"; fi >> "$f/probes"; }
-cred() { printf 'protocol=https\nhost=github.com\n\n' | os git-credential get 2>>"$f/git.log" | sed -n 's/^password=//p'; }
-if [ ! -f "$f/minted" ]; then
+ask='protocol=https\nhost=github.com\npath=octo/widgets.git\n\n'
+if [ ! -f "$f/belt" ]; then
   t push_own git push https://github.com/octo/widgets.git HEAD:refs/heads/agent
-  tok=$(cred); printf %s "$tok" > "$f/minted"; cp "$OS_TOKEN_FILE" "$f/belt"
-  t minted test -n "$tok"
-  t push_other_with_token git push "https://x-access-token:$tok@github.com/octo/other.git" HEAD:refs/heads/agent
+  cp "$OS_TOKEN_FILE" "$f/belt"
+  t token_from_helper sh -c 'printf "$1" | os git-credential get | grep -q "^password="' - "$ask"
+  t token_from_git sh -c 'printf "$1" | git credential fill | grep -q "^password=."' - "$ask"
+  t push_other git push https://github.com/octo/other.git HEAD:refs/heads/agent
   t read_other git ls-remote https://github.com/octo/other.git
 else
-  tok=$(cat "$f/minted")
-  t ended_token_push git push "https://x-access-token:$tok@github.com/octo/widgets.git" HEAD:refs/heads/ended
-  t ended_helper sh -c 'printf "protocol=https\nhost=github.com\n\n" | OS_TOKEN_FILE="$1" os git-credential get | grep -q "^password="' - "$f/belt"
+  t ended_transport sh -c 'OS_TOKEN_FILE="$1" git push https://github.com/octo/widgets.git HEAD:refs/heads/ended' - "$f/belt"
   t push_next git push https://github.com/octo/widgets.git HEAD:refs/heads/next
 fi
 printf '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"%s","num_turns":1,"total_cost_usd":0.01,"structured_output":{"state":"review","summary":"ok","handoff":"note"}}\n' "$session"
 `
 
 var gitExpect = map[string]string{
-	"push_own": "ALLOWED", "minted": "ALLOWED", "push_other_with_token": "DENIED", "read_other": "DENIED",
-	"ended_token_push": "DENIED", "ended_helper": "DENIED", "push_next": "ALLOWED",
+	"push_own": "ALLOWED", "token_from_helper": "DENIED", "token_from_git": "DENIED", "push_other": "DENIED", "read_other": "DENIED",
+	"ended_transport": "DENIED", "push_next": "ALLOWED",
 }
 
 // gitStore serves the one Work the GitHub tools bind a call to.
@@ -247,52 +247,17 @@ func TestDockerGitCredential(t *testing.T) {
 	}
 
 	// Each execution's toolbelt, as the daemon serves it: the execution's
-	// own token, until its end revokes it, reaches github.git.credential.
+	// own token, until its end revokes it, reaches github.git.credential,
+	// which the host's git transport asks for and signs git in with.
 	var mu sync.Mutex
 	valid := map[string]domain.ID{}
+	transport := management.NewGitTransport(httpClient.Transport, nil)
 	endpoints, err := management.NewEndpoints(nil, l.state, l.root+"/s", func(exec domain.ID) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// The input is a payload, as the management handler decodes it.
-			var call struct {
-				Operation string
-				Input     struct {
-					Schema string          `json:"schema"`
-					Data   json.RawMessage `json:"data"`
-				}
-			}
-			_ = json.NewDecoder(r.Body).Decode(&call)
+		return transport.Handler(exec, testGitBelt{exec: exec, ops: map[string]extension.Operation{credOp.Name: credOp}, valid: func(token string) bool {
 			mu.Lock()
-			owner, ok := valid[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			if ok && owner == exec && r.URL.Path == "/v1/toolbelt/serving" {
-				// os git-credential asks which granted operations serve
-				// git credentials; GitHub's declares it does.
-				serving := []string{}
-				if credOp.Serves == r.URL.Query().Get("capability") {
-					serving = append(serving, credOp.Name)
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"operations": serving}})
-				return
-			}
-			if !ok || owner != exec || call.Operation != gh.OpGitCredential {
-				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)
-				return
-			}
-			out, err := credOp.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec}, domain.Payload{Schema: call.Input.Schema, Data: call.Input.Data})
-			var refused *extension.OperationError
-			if errors.As(err, &refused) {
-				w.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": refused.Code, "message": refused.Message}})
-				return
-			} else if err != nil {
-				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprint(w, `{"error":{"code":"unavailable","message":"failed"}}`)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"output": map[string]any{"schema": out.Schema, "data": out.Data}}})
-		})
+			defer mu.Unlock()
+			return valid[token] == exec
+		}})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +304,7 @@ func TestDockerGitCredential(t *testing.T) {
 		r := extension.RunRequest{Work: work, Execution: domain.Execution{ID: exec, WorkID: work.ID, Attempt: 1, Lease: domain.Lease{Epoch: 1}},
 			Trigger: domain.Event{ID: domain.ID("ev-" + exec), Type: "note"},
 			Context: extension.ExecutionContext{Config: domain.Payload{Data: cfg}, Container: b, ContainerHome: home, Resources: b.Resources(dockerWorkspace{l.ws}),
-				ToolbeltEndpoint: endpoint, ToolbeltToken: token, ToolbeltTokenFile: tokenFile},
+				ToolbeltEndpoint: endpoint, ToolbeltToken: token, ToolbeltTokenFile: tokenFile, Env: extension.GitTransportLayer("github.com")},
 			PersistRecovery: func(domain.Payload) error { return nil }}
 		h, err := e.Run(ctx, r)
 		if err != nil {
@@ -375,7 +340,8 @@ func TestDockerGitCredential(t *testing.T) {
 			t.Errorf("%s: %q from inside the container, want %s", k, got[k], want)
 		}
 	}
-	// What reached GitHub: the pushes with the helper, and nothing else.
+	// What reached GitHub: the pushes through the transport, and nothing
+	// else.
 	ref := func(repo, name string) string {
 		out, _ := l.docker("exec", id, "git", "--git-dir", "/tmp/git/"+repo+".git", "rev-parse", "--verify", "-q", "refs/heads/"+name)
 		return out

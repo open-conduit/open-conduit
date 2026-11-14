@@ -165,7 +165,7 @@ Review GitHub PRs: read them and their checks, comment, reply in and resolve thr
 
 ### `@github.workspace`
 
-Push from a git workspace: git's credential helper asks for a short-lived token.
+Push from a git workspace: git signs in through Open Conduit with a short-lived token it never sees.
 
 | Operation | Since version |
 | --- | --- |

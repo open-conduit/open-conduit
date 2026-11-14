@@ -19,7 +19,7 @@ The bot App does these things, shown on GitHub as the App:
 Git is separate. By default:
 
 - **An unsandboxed run or a process-sandboxed run** pushes with your own git credentials, and commits carry your `user.name` and `user.email`. Only the PR is opened by the bot.
-- **A container run** has no credential of its own. When it pushes, Open Conduit mints a short-lived token from the bot App for that one repository ([git credentials](../sandboxes/#git-credentials)). Its commits still carry the name and email the container's git has.
+- **A container run** has no credential of its own. When it pushes, Open Conduit mints a short-lived token from the bot App for that one repository and signs the push in itself, so the token never enters the container ([git credentials](../sandboxes/#git-credentials)). Its commits still carry the name and email the container's git has.
 
 To have git work as the bot too, see [push and commit as the bot](#push-and-commit-as-the-bot).
 
@@ -90,7 +90,7 @@ open-conduit config set /connections/github/config/git '"bot"'
 
 Every run of Work on that connection's repositories, unsandboxed, in a process sandbox or in a container, then works like this:
 
-- **Pushes come from the bot.** When git needs a credential, Open Conduit mints a token from the bot App. The token works only for the Work's one repository, with `contents: write`, and Open Conduit revokes it when the run ends. Your own credential helpers, such as the macOS keychain or `gh`, aren't asked.
+- **Pushes come from the bot.** Git in the run just works: the agent runs `git push` as usual. Open Conduit signs git's requests in itself, with a token it mints from the bot App, so the token never enters the run and the agent can't read it. The token works only for the Work's one repository, with `contents: write`, and Open Conduit revokes it when the run ends. Your own credential helpers, such as the macOS keychain or `gh`, aren't asked.
 - **Commits come from the bot.** The author and committer are `your-app[bot]` with the bot's `users.noreply.github.com` address, so GitHub shows the bot's name and avatar on them.
 - **Commits are unsigned.** Signing is turned off for these runs, because your signing key isn't the bot's.
 
@@ -110,8 +110,8 @@ and give that binding `"connection": "github-builder"`. The App needs **Contents
 
 A few things to know:
 
-- **Use an HTTPS remote.** Only `https://` remotes go through Open Conduit's credential helper. An `ssh://` or `git@github.com:` remote still pushes with your own SSH key. `open-conduit doctor` warns about this in its `github-git-bot` check. Change the remote with `git remote set-url origin https://github.com/acme/web.git` in the checkout.
-- **Grant `github.git.credential`.** Without it, the push is refused and git has no other helper to fall back on. `open-conduit doctor` warns about a git workspace binding that isn't granted it, in its `github-git-bot` check.
+- **Use an HTTPS remote.** Only `https://` remotes go through Open Conduit's git transport. An `ssh://` or `git@github.com:` remote still pushes with your own SSH key. `open-conduit doctor` warns about this in its `github-git-bot` check. Change the remote with `git remote set-url origin https://github.com/acme/web.git` in the checkout.
+- **Grant `github.git.credential`.** Without it, Open Conduit has no credential to sign in with. Git then reaches the repository directly, unsigned, and a push is refused. `open-conduit doctor` warns about a git workspace binding that isn't granted it, in its `github-git-bot` check.
 - **A run that can't get the bot's identity doesn't start.** It fails as `run environment unavailable`, for example when GitHub can't be reached or the bot App's key is wrong.
 - **Without a sandbox, your credentials are still there.** An unsandboxed run uses the bot's credentials by default, but it runs as you. An agent that goes looking can still find your SSH key, your keychain or `gh`'s token. To keep it to the bot's access, run the binding in a [sandbox](../sandboxes/).
 
