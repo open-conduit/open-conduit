@@ -298,6 +298,34 @@ func TestProductionToolbeltServing(t *testing.T) {
 	}
 }
 
+// TestProductionToolbeltServingWhileRecovering: the toolbelt's reads (the
+// operations serving a capability, the guidance) refuse a token recovery
+// superseded as ErrAuthorityRecovering while the execution is still
+// running, as a call with it is, so git's credential helper and the MCP
+// server retry with the recovered token. Once the execution has finished,
+// the same token gets the bare ErrUnauthorized.
+func TestProductionToolbeltServingWhileRecovering(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	h.f.Clock.Advance(conformance.RuntimeLease + time.Second)
+	recovered, err := h.scheduler.Recover(ctx, h.attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Serving(ctx, h.token, "", "fixture.capability"); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("serving with a superseded token: %v, want ErrAuthorityRecovering", err)
+	}
+	if _, err := h.belt.Guidance(ctx, h.token, ""); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("guidance with a superseded token: %v, want ErrAuthorityRecovering", err)
+	}
+	if err := h.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Serving(ctx, h.token, "", "fixture.capability"); !errors.Is(err, extension.ErrUnauthorized) || errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("serving once the execution finished: %v, want the bare ErrUnauthorized", err)
+	}
+}
+
 // TestProductionToolbeltGuidance serves an operation's guidance only to a
 // token whose grant includes it, while current config still enables it.
 func TestProductionToolbeltGuidance(t *testing.T) {
@@ -725,35 +753,94 @@ func TestProductionToolbeltRecordsConfigDrift(t *testing.T) {
 // execution's lease lapsed under it (a host that slept or stalled past the
 // lease) records lease_lost, and one with the token recovery then revoked
 // records token_ended, so the record says the authority ended rather than
-// that the caller reached outside it. A lapsed lease is never configuration drift,
-// even for an operation the host would classify as drift. The caller still
-// sees only ErrUnauthorized.
+// that the caller reached outside it. A lapsed lease is never configuration
+// drift, even for an operation the host would classify as drift. The
+// execution is still running, so both refusals are
+// ErrAuthorityRecovering: the call did not run and the same call with the
+// recovered credential is accepted.
 func TestProductionToolbeltRecordsLapsedLease(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
 	h.refusal = func(runtime.AuthorityCheck) string { return runtime.RefusalConfigDrift }
 	echo := extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}}
 	h.f.Clock.Advance(conformance.RuntimeLease + time.Second)
-	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrUnauthorized) || err.Error() != extension.ErrUnauthorized.Error() {
-		t.Fatalf("a call under a lapsed lease: %v, want the bare ErrUnauthorized", err)
+	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("a call under a lapsed lease: %v, want ErrAuthorityRecovering", err)
 	}
-	if _, err := h.scheduler.Recover(ctx, h.attempt.Lease.ExecutionID); err != nil {
+	recovered, err := h.scheduler.Recover(ctx, h.attempt.Lease.ExecutionID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrUnauthorized) {
-		t.Fatalf("a superseded token: %v", err)
+	if _, err := h.belt.Call(ctx, h.token, echo); !errors.Is(err, extension.ErrAuthorityRecovering) {
+		t.Fatalf("a token recovery superseded: %v, want ErrAuthorityRecovering", err)
+	}
+	if *h.echoes != 0 {
+		t.Fatalf("a refused call ran its handler %d times", *h.echoes)
+	}
+	a := h.authority()
+	a.ExecutionID, a.Lease = recovered.Lease.ExecutionID, recovered.Lease
+	fresh, err := h.belt.Issue(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.belt.Call(ctx, fresh, echo); err != nil {
+		t.Fatalf("the same call with the recovered credential: %v", err)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var refusals []string
 	for _, r := range *h.records {
 		if r.Name == "toolbelt.rejected" {
-			refusals = append(refusals, r.Attributes["toolbelt.refusal"])
+			refusals = append(refusals, r.Attributes["toolbelt.result"]+" "+r.Attributes["toolbelt.refusal"])
 		}
 	}
-	if strings.Join(refusals, ",") != "lease_lost,token_ended" {
-		t.Fatalf("refusals %q, want lease_lost for the lapsed lease, then token_ended for the token recovery revoked", refusals)
+	if strings.Join(refusals, ",") != "authority_recovering lease_lost,authority_recovering token_ended" {
+		t.Fatalf("refusals %q, want lease_lost for the lapsed lease, then token_ended for the token recovery revoked, both recovering", refusals)
 	}
+}
+
+// TestProductionToolbeltRecoveringOnlyWhileAdoptable is the negative
+// control for ErrAuthorityRecovering: a refusal says "retry" only when the
+// call did not run and recovery can still give the process fresh
+// authority. A lease that lapses while the handler runs (its effect may
+// have happened), a token past its expiry under a live lease, and a token
+// whose execution has finished keep the bare ErrUnauthorized.
+func TestProductionToolbeltRecoveringOnlyWhileAdoptable(t *testing.T) {
+	echo := extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}}
+	bare := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, extension.ErrUnauthorized) || errors.Is(err, extension.ErrAuthorityRecovering) {
+			t.Fatalf("got %v, want the bare ErrUnauthorized", err)
+		}
+	}
+	t.Run("lapsed while the handler ran", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		h.onEcho = func(string) { h.f.Clock.Advance(conformance.RuntimeLease + time.Second) }
+		_, err := h.belt.CallRequest(context.Background(), h.token, "lapse-mid-call", echo)
+		bare(t, err)
+	})
+	t.Run("token expired under a live lease", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		a := h.authority()
+		a.ExpiresAt = h.f.Clock.Now().Add(time.Second)
+		short, err := h.belt.Issue(context.Background(), a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.f.Clock.Advance(2 * time.Second)
+		_, err = h.belt.Call(context.Background(), short, echo)
+		bare(t, err)
+	})
+	t.Run("execution finished", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		ctx := context.Background()
+		if err := h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+			t.Fatal(err)
+		}
+		h.f.Clock.Advance(conformance.RuntimeLease + time.Second)
+		_, err := h.belt.Call(ctx, h.token, echo)
+		bare(t, err)
+	})
 }
 
 // TestProductionToolbeltGateSkipsItsOwnOperations: a gate never decides on
