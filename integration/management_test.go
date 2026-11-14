@@ -553,9 +553,12 @@ func TestManagementAuthRotationRevocationAndLease(t *testing.T) {
 	if _, err = exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); err != nil {
 		t.Fatal(err)
 	}
+	// The execution is still running, so the refusal says recovery will
+	// restore its authority and the call can be made again.
 	h.clock.Advance(2 * time.Minute)
-	if _, err = exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); !isStatus(err, 403) {
-		t.Fatalf("expired lease accepted: %v", err)
+	var api *client.Error
+	if _, err = exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); !errors.As(err, &api) || api.Status != 503 || api.Code != "authority_recovering" {
+		t.Fatalf("expired lease accepted, or not refused as recovering: %v", err)
 	}
 	recovered, err := h.scheduler.Recover(ctx, attempt.Lease.ExecutionID)
 	if err != nil && !errors.Is(err, extension.ErrNotAdoptable) {

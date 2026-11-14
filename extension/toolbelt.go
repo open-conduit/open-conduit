@@ -25,6 +25,15 @@ var (
 	// refuses an unauthorized call refuses it too; it only lets the caller
 	// tell "already parked" apart from "not authorised".
 	ErrAuthorityReleased = fmt.Errorf("%w: authority released by a declared wait or outcome", ErrUnauthorized)
+	// ErrAuthorityRecovering refuses a call, before it runs, made with a
+	// genuine token whose execution is still running but whose lease
+	// lapsed under it (the host slept or stalled past the lease) or which
+	// recovery has already superseded with a newer epoch's token. Recovery
+	// adopts the same process with fresh authority, so the same call made
+	// again with the execution's current credential is accepted. It wraps
+	// ErrUnauthorized, so the call is refused all the same; it only lets
+	// the caller tell "retry shortly" apart from "not authorised".
+	ErrAuthorityRecovering = fmt.Errorf("%w: lease lapsed, recovery is restoring authority", ErrUnauthorized)
 )
 
 const (

@@ -85,12 +85,25 @@ type unauthorized string
 func (u unauthorized) Error() string { return extension.ErrUnauthorized.Error() }
 func (u unauthorized) Unwrap() error { return extension.ErrUnauthorized }
 
+// recovering is extension.ErrAuthorityRecovering with the check that
+// refused (RefusalLeaseLost or RefusalTokenEnded): a call refused before it
+// ran whose execution recovery is adopting, or has adopted, with fresh
+// authority.
+type recovering string
+
+func (r recovering) Error() string { return extension.ErrAuthorityRecovering.Error() }
+func (r recovering) Unwrap() error { return extension.ErrAuthorityRecovering }
+
 // refusalReason is the Refusal* reason an unauthorized refusal carries, or
 // "".
 func refusalReason(err error) string {
 	var u unauthorized
 	if errors.As(err, &u) {
 		return string(u)
+	}
+	var r recovering
+	if errors.As(err, &r) {
+		return string(r)
 	}
 	if errors.Is(err, storage.ErrLeaseLost) {
 		return RefusalLeaseLost
@@ -742,6 +755,48 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	return record, x, w, state, nil
 }
 
+// recoveringRefusal is err, a refusal of a call that did not run, as
+// recovering when the check that refused it was the lease or the token's
+// end and the token's execution is still running with its Work open: its
+// lease lapsed at the token's epoch (recovery will adopt the process) or
+// recovery has already adopted it at a newer epoch, which superseded the
+// token. Either way the process holds, or is about to hold, fresh
+// authority, so the same call made again with its current credential is
+// accepted. A token that ended for any other reason (expiry, its segment
+// ending) and every other refusal are returned unchanged.
+func (t *Toolbelt) recoveringRefusal(ctx context.Context, record tokenRecord, err error) error {
+	reason := refusalReason(err)
+	if reason != RefusalLeaseLost && reason != RefusalTokenEnded {
+		return err
+	}
+	a := record.Authority
+	adoptable := false
+	_ = t.store.Transact(context.WithoutCancel(ctx), storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		x, e := tx.Execution(a.ExecutionID)
+		if e != nil {
+			return e
+		}
+		w, e := tx.Work(x.WorkID)
+		if e != nil {
+			return e
+		}
+		if x.WorkID != a.WorkID || x.State != domain.ExecutionRunning || w.State.Terminal() {
+			return nil
+		}
+		switch reason {
+		case RefusalLeaseLost:
+			adoptable = x.Lease.Epoch >= a.Lease.Epoch
+		case RefusalTokenEnded:
+			adoptable = record.Revoked && x.Lease.Epoch > a.Lease.Epoch
+		}
+		return nil
+	})
+	if !adoptable {
+		return err
+	}
+	return recovering(reason)
+}
+
 // callCode classifies a call result without provider or request text.
 func callCode(err error) string {
 	switch {
@@ -751,6 +806,8 @@ func callCode(err error) string {
 		return "gate_refused"
 	case errors.Is(err, extension.ErrAuthorityReleased):
 		return "authority_released"
+	case errors.Is(err, extension.ErrAuthorityRecovering):
+		return "authority_recovering"
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost), errors.Is(err, storage.ErrNotFound):
 		return "unauthorized"
 	case errors.Is(err, extension.ErrUndeclared):
@@ -774,6 +831,9 @@ func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operatio
 		name = "toolbelt.rejected"
 	}
 	rec := observability.Record{Name: name, At: t.now(), Correlation: observability.Correlation{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, ExecutorBinding: record.Binding}, Attributes: map[string]string{"toolbelt.operation": operation, "toolbelt.result": callCode(callErr), "lease.epoch": strconv.FormatUint(a.Lease.Epoch, 10)}}
+	if rec.Attributes["toolbelt.result"] == "authority_recovering" {
+		rec.Attributes["toolbelt.refusal"] = refusalReason(callErr)
+	}
 	if rec.Attributes["toolbelt.result"] == "unauthorized" {
 		// Only a refusal of the grant can be the configuration lagging the
 		// playbook; a lapsed lease or an ended token is not drift.
@@ -851,6 +911,17 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if t.options.Observer != nil {
 		defer func() { t.observeCall(ctx, record, c.Operation, requestID, gatedBy, err) }()
 	}
+	// ran is set once an extension handler is called: from then on its
+	// effect may have happened, so a refusal can no longer say the call
+	// did not run. Every other path commits under one fenced transaction
+	// or not at all. Deferred after observeCall, so its record carries the
+	// classification.
+	var ran bool
+	defer func() {
+		if !ran {
+			err = t.recoveringRefusal(ctx, record, err)
+		}
+	}()
 	a := record.Authority
 	if record.Revoked || !t.now().Before(a.ExpiresAt) {
 		return out, unauthorized(RefusalTokenEnded)
@@ -927,6 +998,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		if op.Emit != nil {
 			return t.translatedEmit(hctx, digest, owner, op, handlerAuthority, c.Input, replayKey, hash)
 		}
+		ran = true
 		output, e := op.Handler(hctx, handlerAuthority, c.Input)
 		if e != nil {
 			return out, e

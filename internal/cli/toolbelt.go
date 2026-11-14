@@ -204,21 +204,65 @@ func (t *toolbelt) client() (*client.Client, error) {
 	return client.New(endpoint, token)
 }
 
+// recoveryBudget bounds how long a call refused with authority_recovering
+// is made again: the daemon recovers a lapsed lease on its next poll (about
+// a second), so a refusal that outlasts this is not recovery.
+const recoveryBudget = 30 * time.Second
+
+// recoverySleep waits between those attempts; tests replace it.
+var recoverySleep = func(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// toolbeltCall makes one toolbelt call with the execution's current
+// credential. A refusal with authority_recovering says the call did not run
+// because the run's lease lapsed (the host slept or stalled) and recovery
+// is adopting this process with fresh authority, so it re-reads the
+// credential (recovery replaces the token file) and makes the call again,
+// backing off, until it is answered or recoveryBudget is spent. Any other
+// answer or error is returned as it came.
+func (t *toolbelt) toolbeltCall(ctx context.Context, call client.ToolCall) (client.ToolResult, error) {
+	delay, waited := 250*time.Millisecond, time.Duration(0)
+	for {
+		c, err := t.client()
+		if err != nil {
+			return client.ToolResult{}, err
+		}
+		result, err := c.ToolbeltCall(ctx, call)
+		var api *client.Error
+		if !errors.As(err, &api) || api.Code != "authority_recovering" || waited+delay > recoveryBudget {
+			return result, err
+		}
+		if e := recoverySleep(ctx, delay); e != nil {
+			return result, err
+		}
+		waited += delay
+		delay = min(2*delay, 4*time.Second)
+	}
+}
+
 func (t *toolbelt) do(f *toolFlags, operation string, input any, pick func(client.ToolResult) any) int {
-	c, err := t.client()
-	if err != nil {
+	if _, err := t.client(); err != nil {
 		fmt.Fprintf(t.errOut, "os: %s\n", err)
 		return 2
 	}
 	call := client.ToolCall{Operation: operation, RequestID: f.get("request-id")}
 	if input != nil {
+		var err error
 		if call.Input, err = json.Marshal(input); err != nil {
 			return t.usage("invalid input")
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
-	result, err := c.ToolbeltCall(ctx, call)
+	result, err := t.toolbeltCall(ctx, call)
 	if err != nil {
 		fmt.Fprintf(t.errOut, "os: %s\n", callError(err))
 		return 1
@@ -459,7 +503,7 @@ func (t *toolbelt) gitCredential(args []string) int {
 	data, _ := json.Marshal(client.Payload{Data: attrs})
 	var refused error
 	for _, op := range ops {
-		result, err := c.ToolbeltCall(ctx, client.ToolCall{Operation: op, Input: data})
+		result, err := t.toolbeltCall(ctx, client.ToolCall{Operation: op, Input: data})
 		if err != nil {
 			// Another operation may still own the URL; report the
 			// refusal only if none does.
