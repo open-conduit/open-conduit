@@ -26,8 +26,8 @@ const WorkKind = "slack.conversation"
 //
 // Book is where the route reads the entry's start points and the threads
 // found with replies marked by Work this daemon has no record of (the
-// extension's durable claim records). Without one, an entry whose
-// claim_from is registration claims nothing.
+// extension's durable claim records). A channel with none recorded is
+// evaluated as if it registers before the thread (claimRefusal).
 type Route struct{ Book StartBook }
 
 var _ extension.RouteHandler = Route{}
@@ -173,10 +173,15 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 		if !s.Starts(e, p) {
 			return extension.Skip(s.startRefusal(e, p)), nil
 		}
-		if reason := s.claimRefusal(r.Book, channel, thread); reason != "" {
-			return extension.Skip(reason), nil
+		refusal, note := s.claimRefusal(r.Book, channel, thread)
+		if refusal != "" {
+			return extension.Skip(refusal), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(channel), Display: Display(p)}, nil
+		reason := s.startReason(channel)
+		if note != "" {
+			reason += " (" + note + ")"
+		}
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: reason, Display: Display(p)}, nil
 	}
 	switch e.Type {
 	case TypeMessageHuman:

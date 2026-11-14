@@ -79,8 +79,10 @@ func TestRouteClaimsOnlyThreadsFromTheStartPoint(t *testing.T) {
 	if d := try(r, sc, mention(fresh, old), &domain.Work{ID: "w", Kind: slack.WorkKind}); !d.Match {
 		t.Fatalf("an owned thread lost its input: %+v", d)
 	}
-	if d := try(slack.Route{}, sc, mention(fresh, fresh), nil); d.Match || !strings.Contains(d.Reason, "no recorded start point") {
-		t.Fatalf("a route without a recorded start point claimed a thread: %+v", d)
+	// A channel not registered yet (a config trace) answers for a thread
+	// begun after it registers, and says so.
+	if d := try(slack.Route{Book: slack.NewBook()}, sc, mention(fresh, fresh), nil); !d.Match || !strings.Contains(d.Reason, "no start point yet") {
+		t.Fatalf("an unregistered channel's mention: %+v", d)
 	}
 	all := scopeWith(t, `,"start":"mention","claim_from":"all"`)
 	if d := try(slack.Route{}, all, mention(old, old), nil); !d.Match {
@@ -105,6 +107,7 @@ func TestRouteClaimsOnlyThreadsFromTheStartPoint(t *testing.T) {
 // the rest for doctor once the generation completes.
 func TestReconcileFindsUnclaimedThreads(t *testing.T) {
 	var asked, recorded []string
+	var works []string
 	owned := map[string]bool{}
 	f := newFixture(t, `,"start":"mention"`, slack.IngressOptions{})
 	start := f.fake.Now().Add(time.Hour)
@@ -118,9 +121,12 @@ func TestReconcileFindsUnclaimedThreads(t *testing.T) {
 			}
 			return out, nil
 		},
-		Foreign: func(_ context.Context, _ string, threads []string) error {
-			recorded = append(recorded, threads...)
-			return nil
+		Foreign: func(_ context.Context, _ string, marked map[string][]string) ([]string, error) {
+			for t, ids := range marked {
+				recorded = append(recorded, t)
+				works = append(works, ids...)
+			}
+			return recorded, nil
 		},
 	}
 	o.ActiveThreads = func(context.Context) (map[string][]string, error) { return nil, nil }
@@ -142,8 +148,8 @@ func TestReconcileFindsUnclaimedThreads(t *testing.T) {
 	f.fake.Advance(time.Minute)
 	f.sync()
 	f.scan()
-	if len(recorded) != 1 || recorded[0] != marked {
-		t.Fatalf("recorded %v, want only the marked thread no Work owns", recorded)
+	if len(recorded) != 1 || recorded[0] != marked || len(works) != 1 || works[0] != "w-gone" {
+		t.Fatalf("offered %v naming %v, want only the marked thread no Work owns, naming its marker's Work", recorded, works)
 	}
 	got := f.in.Unclaimed()[chanA]
 	if got.BeforeStart != 9 {

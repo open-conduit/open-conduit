@@ -244,26 +244,30 @@ func (s Settings) StartPoint(book StartBook, channel string) (time.Time, bool) {
 }
 
 // claimRefusal says why the entry may not claim the thread ("" when it
-// may): it began before the channel's start point, the start point is not
-// recorded, or the thread holds replies a daemon whose state is not here
-// marked.
-func (s Settings) claimRefusal(book StartBook, channel, thread string) string {
+// may): the thread holds replies marked by Work this daemon has no record
+// of, or it began before the channel's start point. note qualifies a claim
+// made with no recorded start point: the channel is not registered yet,
+// as when a route trace evaluates a config not yet applied. Its start
+// point will be recorded when it registers, before its source ingests
+// anything, so no real Event of the channel reaches the route without one
+// (an entry that cannot record its start points never registers its
+// source), and the trace answers for a thread begun after registration.
+func (s Settings) claimRefusal(book StartBook, channel, thread string) (refusal, note string) {
 	if book != nil && book.Foreign(s.Namespace, channel, thread) {
-		return "the thread has replies marked by Work this daemon has no record of: a daemon whose state was not moved here owned it"
+		return "the thread has replies marked by Work this daemon has no record of: a daemon whose state was not moved here owned it", ""
 	}
 	start, ok := s.StartPoint(book, channel)
 	if !ok {
-		return "channel " + channel + " has no recorded start point (the entry is not registered on this daemon)"
+		return "", "channel " + channel + " has no start point yet: it is recorded when the entry registers, and only threads begun after it are claimed"
 	}
 	began, ok := TSTime(thread)
 	if !ok {
-		return "the thread has no readable time"
+		return "the thread has no readable time", ""
 	}
 	if began.Before(start) {
-		how := "claim_from " + s.claimFrom()
-		return "the thread began before channel " + channel + "'s start point " + start.Format(time.RFC3339) + " (" + how + ")"
+		return "the thread began before channel " + channel + "'s start point " + start.Format(time.RFC3339) + " (claim_from " + s.claimFrom() + ")", ""
 	}
-	return ""
+	return "", ""
 }
 
 func (s Settings) claimFrom() string {

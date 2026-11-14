@@ -43,11 +43,13 @@ type IngressOptions struct {
 	// key for. It reads durable state; nil means every thread is owned, so
 	// nothing is marked or counted.
 	Unowned func(ctx context.Context, channel string, threads []string) (map[string]bool, error)
-	// Foreign records a channel's threads that hold replies marked by
-	// Work while no Work here owns them, durably, before the page they are
-	// in is returned, so the route refuses to claim them. An error fails
-	// the page.
-	Foreign func(ctx context.Context, channel string, threads []string) error
+	// Foreign is given a channel's threads no Work here owns that hold
+	// replies marked by a Work, with the Work IDs the markers name. It
+	// records, durably, those whose markers name Work this daemon has no
+	// record of, before the page they are in is returned, so the route
+	// refuses to claim them, and returns the threads it recorded. An error
+	// fails the page.
+	Foreign func(ctx context.Context, channel string, marked map[string][]string) ([]string, error)
 }
 
 // Unclaimed is what a channel's last complete reconcile found that no Work
@@ -80,14 +82,15 @@ type Ingress struct {
 }
 
 type threadMemo struct {
-	// asks and marked say whether the replies hold a message the start
-	// policy asks for, and one marked by a Work.
-	asks, marked bool
-	latest       string
-	count        int
-	readAt       time.Time
-	seen         string // generation that last used it
-	obs          []extension.Observation
+	// asks says whether the replies hold a message the start policy asks
+	// for, and marked the Work IDs their markers name.
+	asks   bool
+	marked []string
+	latest string
+	count  int
+	readAt time.Time
+	seen   string // generation that last used it
+	obs    []extension.Observation
 }
 
 // directMemo is a generation's listing of the app's direct messages.
@@ -535,7 +538,8 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 		return extension.Snapshot{}, extension.ErrInvalid
 	}
 	var out []extension.Observation
-	var before, marked []string
+	var before []string
+	marked := map[string][]string{}
 	start, bounded := time.Time{}, false
 	if g.o.StartPoint != nil {
 		start, bounded = g.o.StartPoint(channel)
@@ -565,8 +569,8 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 			g.mu.Lock()
 			if memo := g.threads[ThreadKey(channel, m.TS)]; memo != nil {
 				asks = asks || memo.asks
-				if memo.marked {
-					marked = append(marked, m.TS)
+				if len(memo.marked) > 0 {
+					marked[m.TS] = memo.marked
 				}
 			}
 			g.mu.Unlock()
@@ -663,7 +667,7 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 		return nil, err
 	}
 	var out []extension.Observation
-	asks, marked := false, false
+	asks, marked := false, []string(nil)
 	for _, msg := range messages {
 		if msg.ThreadTS == "" {
 			msg.ThreadTS = thread
@@ -680,7 +684,9 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 		}
 		out = append(out, o)
 		asks = asks || g.asks(o)
-		marked = marked || (markerOf(msg.Metadata) != nil && markerOf(msg.Metadata).Work != "")
+		if a := markerOf(msg.Metadata); a != nil && a.Work != "" && !slices.Contains(marked, a.Work) {
+			marked = append(marked, a.Work)
+		}
 	}
 	if !withParent {
 		g.mu.Lock()
@@ -704,22 +710,27 @@ func (g *Ingress) asks(o extension.Observation) bool {
 // point and asking for a conversation, or holding marked replies) no Work
 // here owns, records the marked ones before the page is returned, and
 // stages both for doctor (Unclaimed).
-func (g *Ingress) unclaimedThreads(ctx context.Context, scanID, channel string, before, marked []string) error {
+func (g *Ingress) unclaimedThreads(ctx context.Context, scanID, channel string, before []string, marked map[string][]string) error {
 	if g.o.Unowned == nil || len(before)+len(marked) == 0 {
 		return nil
 	}
-	unowned, err := g.o.Unowned(ctx, channel, append(append([]string{}, before...), marked...))
+	threads := append([]string{}, before...)
+	for t := range marked {
+		threads = append(threads, t)
+	}
+	unowned, err := g.o.Unowned(ctx, channel, threads)
 	if err != nil {
 		return err
 	}
-	var foreign []string
-	for _, t := range marked {
+	candidates := map[string][]string{}
+	for t, works := range marked {
 		if unowned[t] {
-			foreign = append(foreign, t)
+			candidates[t] = works
 		}
 	}
-	if len(foreign) > 0 && g.o.Foreign != nil {
-		if err := g.o.Foreign(ctx, channel, foreign); err != nil {
+	var foreign []string
+	if len(candidates) > 0 && g.o.Foreign != nil {
+		if foreign, err = g.o.Foreign(ctx, channel, candidates); err != nil {
 			return err
 		}
 	}

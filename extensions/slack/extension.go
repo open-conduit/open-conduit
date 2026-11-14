@@ -378,30 +378,41 @@ func (x *Extension) unowned(s Settings) func(context.Context, string, []string) 
 	}
 }
 
-// foreign records threads found with replies marked by Work while no Work
-// here owns them, so the route claims none of them.
-func (x *Extension) foreign(s Settings) func(context.Context, string, []string) error {
-	return func(ctx context.Context, channel string, threads []string) error {
-		var fresh []string
-		for _, t := range threads {
-			if !x.book.Foreign(s.Namespace, channel, t) {
-				fresh = append(fresh, t)
-			}
-		}
-		if len(fresh) == 0 {
-			return nil
-		}
+// foreign records the threads no Work here owns whose markers name Work
+// this daemon has no record of (in any namespace), so the route claims
+// none of them. A thread already recorded counts as recorded; a marker
+// naming Work that exists here (another entry's reply in a shared
+// channel) records nothing.
+func (x *Extension) foreign(s Settings) func(context.Context, string, map[string][]string) ([]string, error) {
+	return func(ctx context.Context, channel string, marked map[string][]string) ([]string, error) {
+		var known, fresh []string
 		err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+			known, fresh = nil, nil
+			for t, works := range marked {
+				if x.book.Foreign(s.Namespace, channel, t) {
+					known = append(known, t)
+					continue
+				}
+				for _, id := range works {
+					if _, err := tx.Work(domain.ID(id)); errors.Is(err, storage.ErrNotFound) {
+						fresh = append(fresh, t)
+						break
+					} else if err != nil {
+						return err
+					}
+				}
+			}
+			sort.Strings(fresh)
 			return MarkForeign(tx, s.Namespace, channel, fresh, x.now())
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		x.book.Remember(s.Namespace, channel, fresh)
-		if x.h.Log != nil {
-			x.h.Log.Warn("slack threads with marked replies and no Work here are not claimed", "namespace", s.Namespace, "channel", channel, "threads", len(fresh))
+		if len(fresh) > 0 && x.h.Log != nil {
+			x.h.Log.Warn("slack threads with replies marked by Work this daemon has no record of are not claimed", "namespace", s.Namespace, "channel", channel, "threads", len(fresh))
 		}
-		return nil
+		return append(known, fresh...), nil
 	}
 }
 
@@ -633,7 +644,7 @@ func (x *Extension) startNote(set Settings) string {
 	}
 	switch {
 	case missing == len(set.Channels):
-		return "no start point recorded, so no thread is claimed"
+		return "no start point recorded yet"
 	case first.Equal(last):
 		return "claims threads begun from " + first.UTC().Format(time.RFC3339) + " (claim_from " + set.claimFrom() + ")"
 	}
