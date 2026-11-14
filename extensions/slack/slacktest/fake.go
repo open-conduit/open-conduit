@@ -86,6 +86,19 @@ func New(team string, tokens ...string) *Server {
 	return s
 }
 
+func (s *Server) granted(scope string) bool {
+	scopes := s.scopes
+	if scopes == nil {
+		scopes = slack.BotScopes
+	}
+	for _, g := range scopes {
+		if g == scope {
+			return true
+		}
+	}
+	return false
+}
+
 // SetScopes sets the bot token's granted scopes auth.test reports (nil: the
 // manifest's).
 func (s *Server) SetScopes(scopes []string) { s.mu.Lock(); s.scopes = scopes; s.mu.Unlock() }
@@ -516,6 +529,12 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 	}
 	ts := s.tick()
 	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata, Blocks: p.Blocks}
+	if (p.Username != "" || p.IconEmoji != "" || p.IconURL != "") && s.granted(slack.CustomizeScope) {
+		// As Slack shows a message posted under its own name: a bot
+		// message carrying the app's bot ID and the name, with no user.
+		// Without the scope Slack posts it under the app's name instead.
+		m.User, m.Subtype, m.Username = "", "bot_message", p.Username
+	}
 	if p.Broadcast {
 		m.Subtype = "thread_broadcast"
 	}

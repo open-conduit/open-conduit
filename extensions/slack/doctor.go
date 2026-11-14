@@ -22,7 +22,8 @@ type AuthReport struct {
 // CheckAuth is the extension-owned connection test (doctor --check-secrets):
 // auth.test with the bot token must belong to the entry's team and bot user,
 // and the token's granted scopes are compared with the manifest. Missing
-// history or chat:write scopes fail (reconcile or replies cannot work);
+// history or chat:write scopes fail (reconcile or replies cannot work), as
+// does a missing chat:write.customize when the entry sets identities;
 // any other missing manifest scope warns, naming what it costs. An entry
 // that turns direct messages on fails without DirectScopes, since DMs could
 // then be neither read nor recovered.
@@ -46,7 +47,17 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	}
 	if id.Scopes == nil {
 		r.Item += "; granted scopes not reported"
+		if len(s.Identities) > 0 {
+			raise(DoctorFail, "identity_scope_missing")
+			r.Item += "; identities need " + CustomizeScope + ", which the token cannot be shown to have, so those bindings' messages are refused"
+		}
 		return r
+	}
+	if len(s.Identities) > 0 && !id.Grants(CustomizeScope) {
+		// Checked before the general comparison: without the scope every
+		// message of a binding with its own identity is refused.
+		raise(DoctorFail, "identity_scope_missing")
+		r.Item += "; identities need " + CustomizeScope + ", which the token lacks, so those bindings' messages are refused"
 	}
 	missing := MissingScopes(id.Scopes)
 	var direct []string
@@ -61,7 +72,7 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	for _, g := range id.Scopes {
 		have[g] = true
 	}
-	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"] || len(direct) > 0
+	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"] || len(direct) > 0 || len(s.Identities) > 0 && !have[CustomizeScope]
 	if essential {
 		raise(DoctorFail, "scopes_missing")
 	} else {

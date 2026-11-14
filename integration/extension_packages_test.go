@@ -173,6 +173,13 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 			reply = op
 		}
 	}
+	// The reply's binding is read from the calling attempt's stored
+	// Execution, as the host's toolbelt always has one.
+	if err := e.store.Transact(context.Background(), storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		return tx.PutExecution(domain.Execution{ID: "exec-1", WorkID: work.ID, ExecutorBinding: "agent", Attempt: 1, State: domain.ExecutionPending, TriggerID: accepted.Event.ID}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ctx := extension.WithCallRequestID(context.Background(), "reply-1")
 	out, err := reply.Handler(ctx, extension.Authority{ScopeID: "support", WorkID: work.ID, ExecutionID: "exec-1"}, domain.Payload{Schema: "slack.tool.v1", Data: json.RawMessage(`{"text":"looking into it"}`)})
 	if err != nil || !strings.Contains(string(out.Data), `"posted"`) {

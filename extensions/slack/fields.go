@@ -28,5 +28,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "receiver", Default: "socket", Options: []string{"socket", "events", "none"}},
 		{Name: "signing_secret"},
 		{Name: "projection"},
+		{Name: "post"},
+		{Name: "identities", Help: "a binding's own name and icon: [{binding, username, icon_emoji or icon_url}]"},
 	}
 }

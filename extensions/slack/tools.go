@@ -154,6 +154,35 @@ func refusal(err error) error {
 	return refuse("slack_unavailable", "Slack could not be reached or answered with an error; try again")
 }
 
+// failed is the refusal for a reply or post that was not made.
+func failed(what, binding, code string) error {
+	if code == CodeIdentityScope {
+		return refuse("identity_scope_missing", "nothing was posted: binding %s posts under its own name and icon, which needs the Slack app's %s scope, and its token lacks it; report it as a problem so the owner adds the scope and reinstalls the app", binding, CustomizeScope)
+	}
+	return refuse("slack_refused", "Slack refused the %s (%s)", what, code)
+}
+
+// execution is the calling attempt's stored Execution, read within its own
+// Work's executions.
+func (t *Tools) execution(ctx context.Context, a extension.Authority) (domain.Execution, error) {
+	var x domain.Execution
+	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		xs, err := tx.ListExecutions(a.WorkID)
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(xs, func(x domain.Execution) bool { return x.ID == a.ExecutionID })
+		if i < 0 {
+			return storage.ErrNotFound
+		}
+		x = xs[i]
+		return nil
+	}); err != nil {
+		return x, extension.ErrUnauthorized
+	}
+	return x, nil
+}
+
 // bound is the conversation a call serves, resolved from durable state.
 type bound struct {
 	a               extension.Authority
@@ -312,8 +341,14 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 	if len(in.Text) > maxText {
 		return nil, refuse("text_too_long", "the text is longer than Slack's 40,000 characters")
 	}
+	// The binding, and so the name the reply posts under, is the calling
+	// attempt's own, read from its stored Execution, never the input.
+	x, err := t.execution(ctx, b.a)
+	if err != nil {
+		return nil, err
+	}
 	intent := Intent{ID: intentID(ctx, b, OpReply, data), Work: b.work.ID, Execution: b.a.ExecutionID, Channel: b.channel, Thread: b.thread,
-		Text: in.Text, Broadcast: in.Broadcast, Durable: true}
+		Text: in.Text, Broadcast: in.Broadcast, Durable: true, Binding: x.ExecutorBinding}
 	state, err := b.src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err
@@ -323,7 +358,7 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 		return map[string]any{"state": IntentPosted, "ts": st.TS}, nil
 	}
 	if e == nil && st.State == IntentFailed {
-		return nil, refuse("slack_refused", "Slack refused the reply (%s)", st.Code)
+		return nil, failed("reply", x.ExecutorBinding, st.Code)
 	}
 	if b.src.Settings.Projection.DryRun {
 		return map[string]any{"state": "dry_run", "note": "dry run: nothing was posted"}, nil
@@ -416,7 +451,7 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	case st.State == IntentPosted:
 		return map[string]any{"state": IntentPosted, "channel": in.Channel, "ts": st.TS, "reply": fmt.Sprintf("call %s {\"text\": …}", OpReply)}, nil
 	case st.State == IntentFailed:
-		return nil, refuse("slack_refused", "Slack refused the post (%s)", st.Code)
+		return nil, failed("post", x.ExecutorBinding, st.Code)
 	case src.Settings.Projection.DryRun:
 		return map[string]any{"state": "dry_run", "note": "dry run: nothing was posted"}, nil
 	}

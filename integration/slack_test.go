@@ -1380,3 +1380,198 @@ func TestSlackPostOpensAThreadTheJobOwns(t *testing.T) {
 		t.Fatalf("a question after the successor finished did not open the next generation: %v", q)
 	}
 }
+
+// slIdentities gives two bindings their own name and icon; "agent" has none.
+const slIdentities = `,"identities":[{"binding":"engineer","username":"Steve","icon_emoji":":wrench:"},{"binding":"designer","username":"Dana","icon_url":"https://example.com/dana.png"}]`
+
+// slIdentityEnv is a Slack env whose scope has the engineer, designer and
+// agent bindings, each threads route on agent.
+func slIdentityEnv(t *testing.T) *slEnv {
+	return newSlackEnvWith(t, slIdentities, sl.IngressOptions{}, []string{slChannel},
+		[]domain.Binding{{Name: "agent", Executor: "fixture"}, {Name: "engineer", Executor: "fixture"}, {Name: "designer", Executor: "fixture"}},
+		[]domain.Route{{Name: "threads", Handler: "slack", Binding: "agent", ActivePolicy: "queue"}})
+}
+
+// slReplier calls slack.reply as attempt of work.
+func (e *slEnv) slReplier(work, attempt domain.ID) func(request, text string) (map[string]any, error) {
+	tools, err := sl.NewTools(sl.ToolsOptions{Store: e.store, Now: e.clock.Now, Sources: func() []sl.Source {
+		return []sl.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}
+	}})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	var reply extension.Operation
+	for _, op := range tools.Registration().Operations {
+		if op.Name == sl.OpReply {
+			reply = op
+		}
+	}
+	auth := extension.Authority{ScopeID: slScope, WorkID: work, ExecutionID: attempt}
+	return func(request, text string) (map[string]any, error) {
+		in, _ := json.Marshal(map[string]string{"text": text})
+		out, err := reply.Handler(extension.WithCallRequestID(context.Background(), request), auth, domain.Payload{Schema: "json", Data: in})
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		_ = json.Unmarshal(out.Data, &m)
+		return m, nil
+	}
+}
+
+// TestSlackBindingsPostUnderTheirOwnIdentity: two bindings reply in one
+// channel under their own names, read from each attempt's stored
+// Execution; a binding without an identity posts as the app. A reply with
+// a custom name is the app's own by its marker, or by its bot ID when
+// Slack withholds metadata, never by its name: it wakes nothing, reconcile
+// takes it for no person's message, and a lost post is found again rather
+// than repeated. A waiting Work's prompt posts under its latest attempt's
+// binding.
+func TestSlackBindingsPostUnderTheirOwnIdentity(t *testing.T) {
+	e := slIdentityEnv(t)
+	roots := map[string]string{}
+	for _, b := range []string{"engineer", "designer", "agent"} {
+		roots[b] = e.fake.Post(slChannel, slAlice, "a question for "+b)
+	}
+	e.sync()
+	e.reconcile()
+	e.route()
+	works := map[string]domain.Work{}
+	for b, root := range roots {
+		w, ok := e.workFor(root)
+		if !ok {
+			t.Fatalf("no Work for %s", b)
+		}
+		works[b] = w
+		attempt, _ := e.startAttemptOn(w.ID, b)
+		if out, err := e.slReplier(w.ID, attempt)("r1", "answer from "+b); err != nil || out["state"] != sl.IntentPosted {
+			t.Fatalf("%s reply: %v %v", b, out, err)
+		}
+	}
+	for b, want := range map[string]string{"engineer": "Steve", "designer": "Dana", "agent": ""} {
+		got := e.fake.AgentReplies(slChannel, roots[b])
+		if len(got) != 1 || got[0].Username != want {
+			t.Fatalf("%s posted %+v, want name %q", b, got, want)
+		}
+		if want != "" && (got[0].User != "" || got[0].BotID == "" || got[0].Subtype != "bot_message") {
+			t.Fatalf("%s's reply is not shown as Slack shows a custom name: %+v", b, got[0])
+		}
+		if want == "" && got[0].User != e.fake.BotUser() {
+			t.Fatalf("agent's reply is not the app's: %+v", got[0])
+		}
+	}
+	// The replies come back by push and by reconcile: each is the app's own
+	// and wakes no Work.
+	steve := e.fake.AgentReplies(slChannel, roots["engineer"])[0]
+	if code := e.deliver(e.fake.MessageEvent(slChannel, steve.TS)); code != http.StatusOK {
+		t.Fatalf("delivery: %d", code)
+	}
+	e.sync()
+	e.reconcile()
+	e.route()
+	if got := e.events(sl.TypeMessageAgent); len(got) != 3 {
+		t.Fatalf("agent events: %d, want the three replies", len(got))
+	}
+	if got := e.events(sl.TypeMessageHuman); len(got) != 3 {
+		t.Fatalf("human events: %d, want only the three questions", len(got))
+	}
+	for b, w := range works {
+		for _, q := range e.queued(w.ID) {
+			if !strings.HasSuffix(q, ":"+roots[b]) {
+				t.Fatalf("%s's Work woke for %s", b, q)
+			}
+		}
+	}
+
+	// Slack withholds metadata and the answer to a post is lost: the reply
+	// is found again by the app's bot ID, not posted twice, and reconcile
+	// takes it for no person's message.
+	e.fake.WithholdMetadata(true)
+	w := works["engineer"]
+	xs := []domain.Execution{}
+	e.read(func(tx storage.Tx) error { var err error; xs, err = tx.ListExecutions(w.ID); return err })
+	e.fake.FailNextPost("lost")
+	if out, err := e.slReplier(w.ID, xs[0].ID)("r2", "one more thing"); err != nil || out["state"] != "pending" {
+		t.Fatalf("lost reply: %v %v", out, err)
+	}
+	e.clock.Add(31 * time.Second)
+	own := func() int {
+		n := 0
+		for _, m := range e.fake.Thread(slChannel, roots["engineer"]) {
+			if m.BotID != "" {
+				n++
+			}
+		}
+		return n
+	}
+	if res := e.converge(); res.Recovered != 1 || own() != 2 {
+		t.Fatalf("recovery by bot ID: %+v, replies %d", res, own())
+	}
+	e.sync()
+	e.reconcile()
+	e.route()
+	if got := e.events(sl.TypeMessageHuman); len(got) != 3 {
+		t.Fatalf("an unmarked custom-named reply was taken for a person's: %d human events", len(got))
+	}
+	e.fake.WithholdMetadata(false)
+
+	// A ready Work's prompt posts under its latest attempt's binding.
+	d := works["designer"]
+	e.read(func(tx storage.Tx) error { var err error; xs, err = tx.ListExecutions(d.ID); return err })
+	e.finishAttempt(xs[0].ID, domain.WorkReady, "")
+	e.actions = func(_ context.Context, _, work domain.ID) ([]extension.ActionOffer, error) {
+		if work != d.ID {
+			return nil, nil
+		}
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Ship it?", Choices: []string{"yes", "no"}}}}, nil
+	}
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	got := e.fake.AgentReplies(slChannel, roots["designer"])
+	if len(got) != 2 || got[1].Username != "Dana" {
+		t.Fatalf("prompt not posted as Dana: %+v", got)
+	}
+}
+
+// TestSlackIdentityWithoutScopeIsRefused: a token without
+// chat:write.customize posts nothing for a binding with its own identity,
+// where Slack would post under the app's name: the tool gives a clear
+// refusal, a declared reply fails rather than retrying, and a binding with
+// no identity still posts as the app.
+func TestSlackIdentityWithoutScopeIsRefused(t *testing.T) {
+	e := slIdentityEnv(t)
+	var scopes []string
+	for _, s := range sl.BotScopes {
+		if s != sl.CustomizeScope {
+			scopes = append(scopes, s)
+		}
+	}
+	e.fake.SetScopes(scopes)
+	eng := e.fake.Post(slChannel, slAlice, "for the engineer")
+	plain := e.fake.Post(slChannel, slAlice, "for the agent")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(eng)
+	attempt, _ := e.startAttemptOn(w.ID, "engineer")
+	var op *extension.OperationError
+	if _, err := e.slReplier(w.ID, attempt)("r1", "hello"); !errors.As(err, &op) || op.Code != "identity_scope_missing" || !strings.Contains(op.Message, sl.CustomizeScope) {
+		t.Fatalf("refusal: %v", err)
+	}
+	if got := e.fake.AgentReplies(slChannel, eng); len(got) != 0 {
+		t.Fatalf("posted without the scope: %+v", got)
+	}
+	e.finishAttempt(attempt, domain.WorkReady, "declared answer")
+	if res := e.converge(); res.Failed != 1 || res.Posted != 0 || len(e.fake.AgentReplies(slChannel, eng)) != 0 {
+		t.Fatalf("declared reply without the scope: %+v", res)
+	}
+	if res := e.converge(); res.Failed != 0 || res.Posted != 0 {
+		t.Fatalf("a refused reply was retried: %+v", res)
+	}
+	p, _ := e.workFor(plain)
+	pa := e.startAttempt(p.ID)
+	if out, err := e.slReplier(p.ID, pa)("r1", "hello"); err != nil || out["state"] != sl.IntentPosted {
+		t.Fatalf("a binding without an identity: %v %v", out, err)
+	}
+}

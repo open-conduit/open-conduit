@@ -119,9 +119,11 @@ type Intent struct {
 	// Cause is the Event a top-level post derives from (the posting
 	// attempt's trigger), so the thread's attachment joins its chain.
 	Cause domain.ID
-	// Binding is the binding the posting attempt ran on, read from its
-	// stored Execution: the thread's attachment names it, so a reply's
-	// follow-up is checked against that binding's post config.
+	// Binding is the binding the writing attempt ran on (the Work's
+	// latest, for a prompt), read from its stored Execution, never from a
+	// caller: the message posts under that binding's identity, and a
+	// post's thread attachment names it, so a reply's follow-up is checked
+	// against that binding's post config.
 	Binding string
 }
 
@@ -166,6 +168,10 @@ func (p *Projector) put(tx storage.Tx, key string, v any) error {
 func (p *Projector) transact(ctx context.Context, fn func(storage.Tx) error) error {
 	return p.o.Store.Transact(ctx, storage.Guard{Now: p.o.Now()}, fn)
 }
+
+// CodeIdentityScope is the failed intent code when a binding posts under its
+// own identity and the token lacks CustomizeScope: nothing was posted.
+const CodeIdentityScope = "identity_scope_missing"
 
 // MarkerID is the marker form of an intent ID carried in reply metadata.
 func MarkerID(intent string) string { return "i" + digest(intent)[:32] }
@@ -219,12 +225,26 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if err != nil {
 			return rec.State, err
 		}
-		if ts, ok := p.find(messages, marker, in.Text); ok {
+		if ts, ok := p.find(ctx, messages, marker, in.Text); ok {
 			return p.finish(ctx, key, IntentPosted, ts, "", true)
 		}
 	}
 	if p.o.Settings.Projection.DryRun {
 		return rec.State, nil
+	}
+	post := Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: in.Blocks, Metadata: Marker(in.Work, in.Execution, in.ID)}
+	if id, ok := p.o.Settings.IdentityOf(rec.Binding); ok {
+		// Slack posts under the app's name when the token lacks the
+		// scope, so the scope is checked first: a binding with its own
+		// identity is never shown as the app.
+		self, err := p.o.Client.Self(ctx)
+		if err != nil {
+			return rec.State, err
+		}
+		if !self.Grants(CustomizeScope) {
+			return p.finish(ctx, key, IntentFailed, "", CodeIdentityScope, false)
+		}
+		post.Username, post.IconEmoji, post.IconURL = id.Username, id.IconEmoji, id.IconURL
 	}
 	err = p.transact(ctx, func(tx storage.Tx) error {
 		var cur intentRecord
@@ -240,7 +260,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if err != nil {
 		return rec.State, err
 	}
-	ts, err := p.o.Client.PostMessage(ctx, Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: in.Blocks, Metadata: Marker(in.Work, in.Execution, in.ID)})
+	ts, err := p.o.Client.PostMessage(ctx, post)
 	var limit *RateLimitError
 	var refused *APIError
 	switch {
@@ -289,7 +309,7 @@ func (p *Projector) since(ctx context.Context, channel, thread, oldest string) (
 // find locates a published reply: by its metadata marker, or, when Slack
 // returned no metadata at all for the app's messages (a token or workspace
 // that withholds it), by the app's bot user posting exactly this text.
-func (p *Projector) find(messages []Message, marker, text string) (string, bool) {
+func (p *Projector) find(ctx context.Context, messages []Message, marker, text string) (string, bool) {
 	fallback := ""
 	for _, m := range messages {
 		if a := markerOf(m.Metadata); a != nil {
@@ -298,11 +318,25 @@ func (p *Projector) find(messages []Message, marker, text string) (string, bool)
 			}
 			continue
 		}
-		if fallback == "" && p.o.Settings.BotUser != "" && m.User == p.o.Settings.BotUser && m.Metadata == nil && m.Text == text {
+		if fallback == "" && p.own(ctx, m) && m.Metadata == nil && m.Text == text {
 			fallback = m.TS
 		}
 	}
 	return fallback, fallback != ""
+}
+
+// own reports whether the app posted m: by its bot user, or by its bot ID,
+// which a message posted under a binding's own name carries instead. Never
+// by the name a message shows.
+func (p *Projector) own(ctx context.Context, m Message) bool {
+	if p.o.Settings.BotUser != "" && m.User == p.o.Settings.BotUser {
+		return true
+	}
+	if m.BotID == "" {
+		return false
+	}
+	self, err := p.o.Client.Self(ctx)
+	return err == nil && self.BotID != "" && m.BotID == self.BotID
 }
 
 func (p *Projector) finish(ctx context.Context, key, state, ts, code string, recovered bool) (string, error) {
@@ -411,7 +445,7 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 			sort.Slice(xs, func(i, j int) bool { return xs[i].Attempt < xs[j].Attempt })
 			for _, x := range xs {
 				if d, ok := replyDeclaration(x); ok {
-					out = append(out, Intent{ID: "outcome/" + string(x.ID), Work: w.ID, Execution: x.ID, Channel: channel, Thread: thread, Text: d.Text, Broadcast: d.Broadcast})
+					out = append(out, Intent{ID: "outcome/" + string(x.ID), Work: w.ID, Execution: x.ID, Channel: channel, Thread: thread, Text: d.Text, Broadcast: d.Broadcast, Binding: x.ExecutorBinding})
 				}
 			}
 		}
@@ -446,7 +480,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Text != "" && rec.State != IntentPosted && rec.State != IntentFailed {
-				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause})
+				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause, Binding: rec.Binding})
 			}
 		}
 		return err

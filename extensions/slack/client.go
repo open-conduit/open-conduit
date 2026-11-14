@@ -75,7 +75,13 @@ type Client struct {
 	mu     sync.Mutex
 	tokens map[string]string // by secret name
 	paused map[string]time.Time
+	// self is the last auth.test answer and when it was read (Self).
+	self   Identity
+	selfAt time.Time
 }
+
+// selfTTL bounds how long Self answers from memory.
+const selfTTL = 10 * time.Minute
 
 // NewClient binds connection config to a secret resolver.
 func NewClient(c ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Client, error) {
@@ -276,6 +282,9 @@ type Message struct {
 	} `json:"edited,omitempty"`
 	Files    []File    `json:"files,omitempty"`
 	Metadata *Metadata `json:"metadata,omitempty"`
+	// Username is the name a bot message was posted under, when it set
+	// one. It is display only: it never says who posted the message.
+	Username string `json:"username,omitempty"`
 	// Blocks are the message's layout (a prompt's buttons), as posted.
 	Blocks []map[string]any `json:"blocks,omitempty"`
 }
@@ -374,6 +383,11 @@ type Post struct {
 	// Links are not unfurled: a reply never creates follow-up previews.
 	UnfurlLinks bool `json:"unfurl_links"`
 	UnfurlMedia bool `json:"unfurl_media"`
+	// Username and IconEmoji or IconURL post the message under a binding's
+	// own name and icon (chat:write.customize); empty posts as the app.
+	Username  string `json:"username,omitempty"`
+	IconEmoji string `json:"icon_emoji,omitempty"`
+	IconURL   string `json:"icon_url,omitempty"`
 }
 
 // PostMessage posts and returns the new message's ts.
@@ -445,6 +459,38 @@ func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 		}
 	}
 	return out, err
+}
+
+// Self is the bot token's identity and granted scopes, read with auth.test
+// and kept for selfTTL, so a post that needs a scope is checked before it
+// is made without a call per post.
+func (c *Client) Self(ctx context.Context) (Identity, error) {
+	c.mu.Lock()
+	if !c.selfAt.IsZero() && c.now().Sub(c.selfAt) < selfTTL {
+		id := c.self
+		c.mu.Unlock()
+		return id, nil
+	}
+	c.mu.Unlock()
+	id, err := c.AuthTest(ctx)
+	if err != nil {
+		return id, err
+	}
+	c.mu.Lock()
+	c.self, c.selfAt = id, c.now()
+	c.mu.Unlock()
+	return id, nil
+}
+
+// Grants reports whether the identity's token was granted scope. Scopes
+// Slack did not report are not granted.
+func (id Identity) Grants(scope string) bool {
+	for _, s := range id.Scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
 }
 
 // Channel is a conversation the bot is a member of.
