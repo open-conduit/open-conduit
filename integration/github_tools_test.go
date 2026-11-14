@@ -2273,3 +2273,79 @@ func TestGitHubWaitOnPRChecks(t *testing.T) {
 		refused(t, err, "invalid_condition")
 	})
 }
+
+// gatedBelt holds the first call it serves until release closes, so a
+// test can move the attempt's lease while the hold executor decides.
+type gatedBelt struct {
+	gh.ToolbeltClient
+	entered chan struct{}
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (g gatedBelt) ToolbeltCall(ctx context.Context, c client.ToolCall) (client.ToolResult, error) {
+	first := false
+	g.once.Do(func() { first = true })
+	if first {
+		close(g.entered)
+		<-g.release
+	}
+	return g.ToolbeltClient.ToolbeltCall(ctx, c)
+}
+
+// A held issue's attempt whose lease lapses while the hold executor
+// decides (a stalled host missing its renewals) is recovered under a new
+// epoch and still parks the issue: the executor re-acknowledges its state
+// under the adopting lease and decides under the new credential, whether
+// its old one was refused before the recovery or during it.
+func TestGitHubHeldIssueSurvivesALostLease(t *testing.T) {
+	for _, recoverFirst := range []bool{false, true} {
+		t.Run("recovered_while_deciding="+strconv.FormatBool(recoverFirst), func(t *testing.T) {
+			e := newToolsEnv(t)
+			at := e.clock.Now().Add(2 * time.Hour).UTC().Format("2006-01-02T15:04Z")
+			_, w := e.heldClaim("Match day", "Report on the match.\n\n<!-- runAt: "+at+" -->")
+			dial := e.hold.Dial
+			gate := gatedBelt{entered: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
+			gated := false
+			e.hold.Dial = func(endpoint, token string) (gh.ToolbeltClient, error) {
+				c, err := dial(endpoint, token)
+				if err != nil || gated {
+					return c, err
+				}
+				gated = true
+				gate.ToolbeltClient = c
+				return gate, nil
+			}
+			a := e.start(w.ID)
+			<-gate.entered
+			// The lease is lost under the deciding attempt, as a stalled
+			// host's lapses.
+			if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error { return tx.Release(a.Lease) }); err != nil {
+				t.Fatal(err)
+			}
+			var recovered runtime.Attempt
+			var err error
+			if recoverFirst {
+				if recovered, err = e.scheduler.Recover(context.Background(), a.Lease.ExecutionID); err != nil {
+					t.Fatalf("recover while deciding: %v", err)
+				}
+				close(gate.release)
+			} else {
+				close(gate.release)
+				if _, err = a.Handle.Wait(context.Background()); err == nil {
+					t.Fatal("the lapsed lease's credential was not refused")
+				}
+				if recovered, err = e.scheduler.Recover(context.Background(), a.Lease.ExecutionID); err != nil {
+					t.Fatalf("recover after the refusal: %v", err)
+				}
+			}
+			if recovered.Lease.Epoch <= a.Lease.Epoch {
+				t.Fatalf("recovered at epoch %d, was %d", recovered.Lease.Epoch, a.Lease.Epoch)
+			}
+			e.finish(recovered, nil)
+			if got := e.work(w.ID); got.State != domain.WorkWaiting {
+				t.Fatalf("held Work after recovery: %v", got.State)
+			}
+		})
+	}
+}

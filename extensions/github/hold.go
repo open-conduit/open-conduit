@@ -81,13 +81,12 @@ type ReleasedPayload struct {
 // process: Run calls the toolbelt (SDK transport) with the attempt's own
 // credential and finishes at once.
 type HoldExecutorImpl struct {
-	mu      sync.Mutex
-	running map[domain.ID]bool
-	// handles are this instance's recent attempts, which Recover adopts
+	mu sync.Mutex
+	// attempts are this instance's recent attempts, which Recover adopts
 	// (a lease lost while it decided, or once it had decided); order is
 	// their start order, so the oldest go first past maxHandles.
-	handles map[domain.ID]*holdHandle
-	order   []domain.ID
+	attempts map[domain.ID]*holdAttempt
+	order    []domain.ID
 	// Dial opens a toolbelt client (default client.New over the endpoint).
 	Dial func(endpoint, token string) (ToolbeltClient, error)
 	Now  func() time.Time
@@ -101,7 +100,7 @@ type ToolbeltClient interface {
 
 // NewHoldExecutor returns the executor.
 func NewHoldExecutor() *HoldExecutorImpl {
-	return &HoldExecutorImpl{running: map[domain.ID]bool{}, handles: map[domain.ID]*holdHandle{}, Now: time.Now}
+	return &HoldExecutorImpl{attempts: map[domain.ID]*holdAttempt{}, Now: time.Now}
 }
 
 func (h *HoldExecutorImpl) Capabilities() domain.Capabilities {
@@ -123,6 +122,26 @@ func (r *holdHandle) Wait(ctx context.Context) (extension.Result, error) {
 	}
 }
 
+// holdAttempt is one attempt this instance runs, under the credential of
+// the lease that holds it now. Its fields are guarded by the executor's mu.
+//
+// A lease the host lost (a stalled runner missing its renewals) moves the
+// attempt to a newer epoch when it is recovered: the old credential is
+// refused from the moment the lease lapses, and Recover hands over the new
+// one (gen counts them). A decision refused under an older credential than
+// the attempt now holds is decided again under the newest: a refused call
+// changed nothing, and every call the decision makes is idempotent (a read,
+// a wait the newer epoch declares, an emit keyed by the attempt).
+type holdAttempt struct {
+	tb       ToolbeltClient
+	gen      int
+	deciding bool
+	// refusedGen is the credential a finished decision was refused under
+	// (0: it was not refused).
+	refusedGen int
+	handle     *holdHandle
+}
+
 // Run decides the held attempt in the background: wait (a declared
 // translated wait) or release (emit TypeHoldReleased, hand off).
 func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
@@ -136,67 +155,138 @@ func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (ext
 		close(done)
 		handle := &holdHandle{done: done, result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed,
 			Summary: "github-hold needs the toolbelt: this attempt has no toolbelt endpoint"}}}
-		h.keep(r.Execution.ID, handle)
+		h.mu.Lock()
+		h.keep(r.Execution.ID, &holdAttempt{handle: handle})
+		h.mu.Unlock()
 		return handle, nil
 	}
+	tb, err := h.dial(r)
+	if err != nil {
+		return nil, err
+	}
+	att := &holdAttempt{tb: tb, gen: 1}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.keep(r.Execution.ID, att)
+	h.decideLocked(att, r)
+	return att.handle, nil
+}
+
+func (h *HoldExecutorImpl) dial(r extension.RunRequest) (ToolbeltClient, error) {
 	dial := h.Dial
 	if dial == nil {
 		dial = func(endpoint, token string) (ToolbeltClient, error) { return client.New(endpoint, token) }
 	}
-	tb, err := dial(r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken)
-	if err != nil {
-		return nil, err
-	}
-	h.mu.Lock()
-	h.running[r.Execution.ID] = true
-	h.mu.Unlock()
-	handle := &holdHandle{done: make(chan struct{})}
-	h.keep(r.Execution.ID, handle)
-	go func() {
-		defer close(handle.done)
-		defer func() {
-			h.mu.Lock()
-			delete(h.running, r.Execution.ID)
-			h.mu.Unlock()
-		}()
-		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		handle.result, handle.err = h.decide(cctx, tb, r)
-	}()
-	return handle, nil
+	return dial(r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken)
 }
 
-// Recover adopts an attempt this instance started (its handle, deciding or
-// decided); one interrupted by a restart, or past maxHandles, is retried.
+// decideLocked starts deciding att in the background on a new handle.
+func (h *HoldExecutorImpl) decideLocked(att *holdAttempt, r extension.RunRequest) {
+	handle := &holdHandle{done: make(chan struct{})}
+	att.handle, att.deciding, att.refusedGen = handle, true, 0
+	go func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		for {
+			h.mu.Lock()
+			tb, gen := att.tb, att.gen
+			h.mu.Unlock()
+			result, err := h.decide(cctx, tb, r)
+			h.mu.Lock()
+			lost := authorityLost(err)
+			if lost && att.gen != gen && cctx.Err() == nil {
+				// Recovered while it decided: decide again under the
+				// credential the attempt holds now.
+				h.mu.Unlock()
+				continue
+			}
+			if lost {
+				att.refusedGen = gen
+			}
+			att.deciding = false
+			handle.result, handle.err = result, err
+			close(handle.done)
+			h.mu.Unlock()
+			return
+		}
+	}()
+}
+
+// authorityLost reports a call refused for the attempt's authority (its
+// lease lapsed or moved on), as against a declared wait or outcome having
+// released it. Over the management endpoint that is a forbidden refusal,
+// or authority_recovering where the host says recovery is under way.
+func authorityLost(err error) bool {
+	if err == nil || errors.Is(err, extension.ErrAuthorityReleased) {
+		return false
+	}
+	var api *client.Error
+	var op *extension.OperationError
+	code := ""
+	switch {
+	case errors.As(err, &api):
+		code = api.Code
+	case errors.As(err, &op):
+		code = op.Code
+	}
+	return errors.Is(err, extension.ErrUnauthorized) || code == "forbidden" || code == "authority_recovering"
+}
+
+// Recover adopts an attempt this instance started (deciding or decided)
+// under the recovering lease: it re-acknowledges the recovery state, as the
+// host requires of an adopting executor, and hands the attempt the newly
+// issued credential, the old one being fenced. A decision its old
+// credential was refused is decided again under the new one. One
+// interrupted by a restart, or past maxHandles, is retried.
 func (h *HoldExecutorImpl) Recover(_ context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
 	if state.Schema != SchemaHoldRecovery {
 		return nil, extension.ErrNotAdoptable
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if handle := h.handles[r.Execution.ID]; handle != nil {
-		return handle, nil
+	att := h.attempts[r.Execution.ID]
+	h.mu.Unlock()
+	if att == nil {
+		return nil, extension.ErrNotAdoptable
 	}
-	return nil, extension.ErrNotAdoptable
+	if r.PersistRecovery == nil {
+		return nil, extension.ErrInvalid
+	}
+	if err := r.PersistRecovery(state); err != nil {
+		return nil, err
+	}
+	var tb ToolbeltClient
+	if r.Context.ToolbeltEndpoint != "" {
+		var err error
+		if tb, err = h.dial(r); err != nil {
+			return nil, err
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if tb != nil && att.tb != nil {
+		att.tb, att.gen = tb, att.gen+1
+		if !att.deciding && att.refusedGen != 0 && att.refusedGen < att.gen {
+			h.decideLocked(att, r)
+		}
+	}
+	return att.handle, nil
 }
 
 // maxHandles bounds the attempts Recover can adopt; an older one is
 // retried instead, as one interrupted by a restart is.
 const maxHandles = 256
 
-// keep remembers an attempt's handle for Recover.
-func (h *HoldExecutorImpl) keep(id domain.ID, handle *holdHandle) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.handles == nil {
-		h.handles = map[domain.ID]*holdHandle{}
+// keep remembers an attempt for Recover. The caller holds h.mu.
+func (h *HoldExecutorImpl) keep(id domain.ID, att *holdAttempt) {
+	if h.attempts == nil {
+		h.attempts = map[domain.ID]*holdAttempt{}
 	}
-	if _, ok := h.handles[id]; !ok {
+	if _, ok := h.attempts[id]; !ok {
 		h.order = append(h.order, id)
 	}
-	h.handles[id] = handle
+	h.attempts[id] = att
 	for len(h.order) > maxHandles {
-		delete(h.handles, h.order[0])
+		delete(h.attempts, h.order[0])
 		h.order = h.order[1:]
 	}
 }
@@ -206,7 +296,7 @@ func (h *HoldExecutorImpl) keep(id domain.ID, handle *holdHandle) {
 func (h *HoldExecutorImpl) Stop(_ context.Context, id domain.ID, _ uint64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.running[id] {
+	if att := h.attempts[id]; att != nil && att.deciding {
 		return errors.New("github-hold: attempt still deciding")
 	}
 	return nil
