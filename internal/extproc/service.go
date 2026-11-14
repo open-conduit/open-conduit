@@ -217,7 +217,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.pending": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -252,7 +252,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.kvCommit(ctx, p)
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -774,6 +774,32 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			list := []protocol.Wait{}
 			for _, x := range waits {
 				list = append(list, protocol.FromWait(x))
+			}
+			out = list
+		case "state.pending":
+			// The input routed to the Work that no attempt has read: the
+			// read that tells Work that has read everything from Work
+			// about to start on something new, both of which are ready.
+			w, err := tx.Work(domain.ID(p.ID))
+			if err != nil {
+				return err
+			}
+			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
+				return notFound
+			}
+			queued, err := runtime.PendingInputsInTx(tx, w.ID)
+			if err != nil {
+				return err
+			}
+			list := []protocol.PendingInput{}
+			for _, q := range queued {
+				in := protocol.PendingInput{EventID: string(q.EventID), Sequence: q.Sequence, Binding: q.Binding}
+				if a, err := tx.Event(q.EventID); err == nil {
+					in.Type = a.Event.Type
+				} else if !errors.Is(err, storage.ErrNotFound) {
+					return err
+				}
+				list = append(list, in)
 			}
 			out = list
 		case "state.timers":

@@ -241,6 +241,17 @@ func (h *Host) Works(ctx context.Context, scope domain.ID) ([]domain.Work, error
 	return works, nil
 }
 
+// Pending is the input routed to work that no attempt of it has read yet,
+// oldest first (state.pending). A Work outside the extension's scopes, and
+// not of its own kinds, is refused as not found.
+func (h *Host) Pending(ctx context.Context, work domain.ID) ([]protocol.PendingInput, error) {
+	var out []protocol.PendingInput
+	if err := h.conn.Call(ctx, "state.pending", protocol.StateParams{ID: string(work)}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WaitProgress sets the progress line of work's active Wait ("3 of 7 checks
 // finished"), which one of the extension's own operations declared; ""
 // clears it. Another's Wait is refused as unauthorized, and Work with no

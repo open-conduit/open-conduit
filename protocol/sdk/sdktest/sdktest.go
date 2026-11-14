@@ -80,6 +80,18 @@ func WithWaits(ws ...domain.Wait) Option {
 	return func(h *Host) { h.waits = append(h.waits, ws...) }
 }
 
+// WithPending seeds the input routed to Work that no attempt has read yet,
+// read with state.pending (for a Work seeded with WithWorks in a configured
+// scope), by Work.
+func WithPending(work domain.ID, in ...protocol.PendingInput) Option {
+	return func(h *Host) {
+		if h.pending == nil {
+			h.pending = map[domain.ID][]protocol.PendingInput{}
+		}
+		h.pending[work] = append(h.pending[work], in...)
+	}
+}
+
 // WithExecutions seeds Executions, read with state.executions.
 func WithExecutions(xs ...domain.Execution) Option {
 	return func(h *Host) { h.executions = append(h.executions, xs...) }
@@ -157,6 +169,7 @@ type Host struct {
 	works      []domain.Work
 	executions []domain.Execution
 	waits      []domain.Wait
+	pending    map[domain.ID][]protocol.PendingInput
 	events     []domain.AcceptedEvent
 	causal     map[domain.ID]causal
 	kv         map[string]map[string][]byte
@@ -655,7 +668,7 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
 		return out, nil
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -1006,6 +1019,13 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 					}
 				}
 				return list, nil
+			}
+		}
+		return nil, notFound
+	case "state.pending":
+		for i := range h.works {
+			if h.works[i].ID == domain.ID(p.ID) && h.allowedLocked(h.works[i].ScopeID) {
+				return append([]protocol.PendingInput{}, h.pending[h.works[i].ID]...), nil
 			}
 		}
 		return nil, notFound

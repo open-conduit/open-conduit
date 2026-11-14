@@ -106,6 +106,18 @@ export const Work = t.object(
 );
 export type Work = Infer<typeof Work>;
 
+/** One Event routed to a Work that no attempt of it has read yet. */
+export const PendingInput = t.object(
+  {
+    event_id: t.string(),
+    sequence: t.integer(),
+    type: t.string(),
+    binding: t.optional(t.string()),
+  },
+  open,
+);
+export type PendingInput = Infer<typeof PendingInput>;
+
 export const LeaseRef = t.object(
   {
     execution_id: t.string(),
