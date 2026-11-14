@@ -1117,13 +1117,14 @@ func resourceDir(state, typ string) string { return filepath.Join(state, "resour
 func containerDir(state, typ string) string { return filepath.Join(state, "containers", typ) }
 
 // containerSwitchNames are the host's container switches: the gateway
-// image a build without a pinned one runs (make gateway-image), and the
-// toolbelt forward a test forces. They are the operator's settings for
+// image a build without a pinned one runs (make gateway-image), whether a
+// missing gateway image is pulled (off on a host with no registry access),
+// and the toolbelt forward a test forces. They are the operator's settings for
 // the host's container isolation, never secrets, so the host sets them
 // itself in a container provider package's environment, which the
 // sanitized baseline and the operator's grant (OPEN_CONDUIT_* is the
 // host's own) would otherwise never carry.
-var containerSwitchNames = []string{"OPEN_CONDUIT_GATEWAY_IMAGE", "OPEN_CONDUIT_CONTAINER_FORWARD"}
+var containerSwitchNames = []string{"OPEN_CONDUIT_GATEWAY_IMAGE", "OPEN_CONDUIT_GATEWAY_PULL", "OPEN_CONDUIT_CONTAINER_FORWARD"}
 
 // containerSwitches are the container switches set in environ.
 func containerSwitches(environ []string) []string {

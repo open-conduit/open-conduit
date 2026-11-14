@@ -46,11 +46,14 @@ A binding names the Docker context it uses (`docker context ls`), so changing yo
 
 ### 2. The gateway image
 
-A released `open-conduit` binary carries the digest of the gateway image built with it. Pull the image once, using the exact command `open-conduit doctor` prints:
+A released `open-conduit` binary carries the digest of the gateway image built with it. Open Conduit pulls that image itself on each Docker context your bindings use: when `serve` starts or applies a new config, and again before a run if it's still missing. You don't need to do anything, after an upgrade either. The package's log, `docker.log` beside the daemon's logs, records each pull.
+
+If the host can't reach the registry, turn pulls off where the daemon runs and load the image yourself. Doctor's `docker` check prints the exact image to load:
 
 ```sh
-open-conduit doctor        # the docker check names the image to pull
-docker pull ghcr.io/open-conduit/open-conduit-gateway@sha256:…
+export OPEN_CONDUIT_GATEWAY_PULL=off
+open-conduit doctor        # the docker check names the image
+docker --context default pull ghcr.io/open-conduit/open-conduit-gateway@sha256:…   # or docker load it
 ```
 
 A build from source has no pinned gateway image. Build one for your Docker and point Open Conduit at it:
@@ -202,7 +205,7 @@ Doctor's `docker` check runs for each Docker context and image your bindings use
 
 - the daemon is reachable and runs version 28 or later;
 - a file written in a container is owned by you;
-- the gateway image is present;
+- the gateway image is present (if it's missing, the check says whether a pull is under way or why the last one failed);
 - a container on a run's network can reach its gateway but can't resolve outside names or reach a port on your machine.
 
 Each failure names its fix. While any check fails, container bindings run nothing.

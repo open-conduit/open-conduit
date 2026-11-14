@@ -95,3 +95,13 @@ case "$*" in *"good@"*) echo '2.1.0 (Claude Code)';; *) echo 'claude: not found'
 		t.Fatalf("an image without claude: %+v", out)
 	}
 }
+
+// TestPullOff: OPEN_CONDUIT_GATEWAY_PULL turns the gateway pull off only
+// when it says so; unset or anything else leaves pulls on.
+func TestPullOff(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "on": false, "true": false, "off": true, "OFF": true, "false": true, "0": true, "never": true} {
+		if got := pullOff(v); got != want {
+			t.Errorf("pullOff(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
