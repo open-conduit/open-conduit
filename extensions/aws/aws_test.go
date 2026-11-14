@@ -25,7 +25,7 @@ func now() time.Time { return at }
 // harness configures the package against the fake STS with the fixture's
 // entry: Work run on the helper binding, which may use both roles, and
 // Work run on another binding, which may use neither.
-func harness(t *testing.T, conn string, secrets bool) (*sdktest.Host, *awstest.Server) {
+func harness(t *testing.T, conn string, secrets bool, extra ...sdktest.Option) (*sdktest.Host, *awstest.Server) {
 	t.Helper()
 	fake := awstest.New(aws.FixtureRegion)
 	fake.Now = now
@@ -38,9 +38,10 @@ func harness(t *testing.T, conn string, secrets bool) (*sdktest.Host, *awstest.S
 	if !secrets {
 		names = nil
 	}
-	h := sdktest.New(t, aws.Build(aws.Options{Now: now, Ambient: func(string) func(context.Context) (aws.Keys, error) {
+	ext := aws.Build(aws.Options{Now: now, Ambient: func(string) func(context.Context) (aws.Keys, error) {
 		return func(context.Context) (aws.Keys, error) { return aws.Keys{}, aws.ErrNoBaseIdentity }
-	}}),
+	}})
+	opts := append([]sdktest.Option{
 		sdktest.WithWorks(
 			domain.Work{ID: "github/acme/infra/issue/12", ScopeID: scope, State: domain.WorkRunning},
 			domain.Work{ID: "other", ScopeID: scope, State: domain.WorkRunning},
@@ -49,7 +50,9 @@ func harness(t *testing.T, conn string, secrets bool) (*sdktest.Host, *awstest.S
 			domain.Execution{ID: "github/acme/infra/issue/12/1", WorkID: "github/acme/infra/issue/12", ExecutorBinding: "helper", State: domain.ExecutionRunning},
 			domain.Execution{ID: "other/1", WorkID: "other", ExecutorBinding: "reviewer", State: domain.ExecutionRunning},
 		),
-		sdktest.WithConnectionSecrets(scope, "aws-main", map[string]string{aws.SecretAccessKeyID: aws.FixtureKeyID, aws.SecretSecretAccessKey: aws.FixtureSecret}))
+		sdktest.WithConnectionSecrets(scope, "aws-main", map[string]string{aws.SecretAccessKeyID: aws.FixtureKeyID, aws.SecretSecretAccessKey: aws.FixtureSecret}),
+	}, extra...)
+	h := sdktest.New(t, ext, opts...)
 	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: scope, Type: aws.Name, Name: "main",
 		Config: aws.FixtureEntry(), Connection: &protocol.ConnectionEntry{ID: "aws-main", Type: aws.Name, Config: json.RawMessage(conn), Secrets: names}}}}); err != nil {
 		t.Fatal(err)
@@ -198,8 +201,15 @@ func TestRunLayer(t *testing.T) {
 		return out
 	}
 	got := layer("helper", "/run/x/token/files/aws")
-	want := "[profile read]\ncredential_process = os call aws.credentials --output data --data '{\"role\":\"read\"}'\nregion = eu-west-2\nendpoint_url = " + fake.URL + "\n\n" +
-		"[profile write]\ncredential_process = os call aws.credentials --output data --data '{\"role\":\"write\"}'\nregion = eu-west-2\nendpoint_url = " + fake.URL + "\n\n"
+	// The STS endpoint is the host's alone: a VPC endpoint for STS must
+	// not take the run's S3 or DynamoDB calls.
+	if strings.Contains(got.Files[aws.ConfigFile], "endpoint_url") {
+		t.Fatalf("the STS endpoint reached the run's profiles:\n%s", got.Files[aws.ConfigFile])
+	}
+	h, _ = harness(t, `{"region":"`+aws.FixtureRegion+`","endpoint":"`+fake.URL+`","run_endpoint":"http://localhost:4566"}`, true)
+	got = layer("helper", "/run/x/token/files/aws")
+	want := "[profile read]\ncredential_process = os call aws.credentials --output data --data '{\"role\":\"read\"}'\nregion = eu-west-2\nendpoint_url = http://localhost:4566\n\n" +
+		"[profile write]\ncredential_process = os call aws.credentials --output data --data '{\"role\":\"write\"}'\nregion = eu-west-2\nendpoint_url = http://localhost:4566\n\n"
 	if got.Files[aws.ConfigFile] != want {
 		t.Fatalf("config:\n%s\nwant:\n%s", got.Files[aws.ConfigFile], want)
 	}
@@ -346,5 +356,18 @@ func TestPrune(t *testing.T) {
 	kv := h.KV(aws.IssuedNS)
 	if _, ok := kv[old]; ok || len(kv) != 1 {
 		t.Fatalf("records after pruning: %v", kv)
+	}
+}
+
+// Credentials whose record can't be written are not handed out: the
+// record is what maps CloudTrail's access key ID back to the run.
+func TestCredentialsUnrecorded(t *testing.T) {
+	h, fake := harness(t, "", true, sdktest.WithCommitFailure())
+	if p, err := call(t, h, "github/acme/infra/issue/12", "github/acme/infra/issue/12/1", `{"role":"read"}`, ""); code(err) != "aws_unavailable" || p.AccessKeyID != "" {
+		t.Fatalf("an unrecorded issue: %+v %v", p, err)
+	}
+	// Control: STS did issue them; only the record failed.
+	if len(fake.Assumed()) != 1 {
+		t.Fatalf("assumed %+v", fake.Assumed())
 	}
 }

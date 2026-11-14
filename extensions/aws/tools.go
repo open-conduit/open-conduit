@@ -152,22 +152,33 @@ func (t tools) credentials(ctx context.Context, a extension.Authority, in Creden
 	}
 	rec := Record{Scope: string(a.ScopeID), Work: string(a.WorkID), Execution: string(a.ExecutionID), Binding: binding, Entry: e.name, Role: role.Name, RoleARN: role.ARN,
 		Account: account, SessionName: req.SessionName, AccessKeyID: c.AccessKeyID, IssuedAt: now.UTC(), Expiration: c.Expiration, Tagged: role.TagSession}
-	t.record(ctx, rec)
+	// No credential leaves without its record: the record is what maps
+	// the access key ID CloudTrail shows back to this run. Unrecorded, the
+	// session just expires unused.
+	if err := t.record(ctx, rec); err != nil {
+		return Process{}, refuse("aws_unavailable", "the credentials for role %q could not be recorded, so they were not handed out; try again", in.Role)
+	}
 	return Process{Version: 1, AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, Expiration: c.Expiration.Format(time.RFC3339)}, nil
 }
 
-// record leaves the issue's trail: a durable record and a telemetry event
-// linked to the Work. Neither holds a credential; the access key ID is
-// what CloudTrail shows beside the session name.
-func (t tools) record(ctx context.Context, r Record) {
+// record leaves the issue's trail: a durable record, which must be
+// written, and a telemetry event linked to the Work, which is best-effort.
+// Neither holds a credential; the access key ID is what CloudTrail shows
+// beside the session name.
+func (t tools) record(ctx context.Context, r Record) error {
 	h := sdk.HostFrom(ctx)
-	if raw, err := json.Marshal(r); err == nil {
-		key := r.IssuedAt.Format("20060102T150405.000000000Z") + "/" + r.Execution + "/" + r.AccessKeyID
-		_ = h.Commit(ctx, protocol.KVCommitParams{Puts: []protocol.KVPut{{Namespace: IssuedNS, Key: key, Value: raw}}})
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	key := r.IssuedAt.Format("20060102T150405.000000000Z") + "/" + r.Execution + "/" + r.AccessKeyID
+	if err := h.Commit(ctx, protocol.KVCommitParams{Puts: []protocol.KVPut{{Namespace: IssuedNS, Key: key, Value: raw}}}); err != nil {
+		return err
 	}
 	_ = h.Capture(ctx, domain.ID(r.Scope), EventIssued, r.IssuedAt, map[string]any{
 		"work_id": r.Work, "execution_id": r.Execution, "binding": r.Binding, "role": r.Role, "account": r.Account,
 		"session_name": r.SessionName, "access_key_id": r.AccessKeyID, "expiration": r.Expiration.Format(time.RFC3339), "tagged": r.Tagged})
+	return nil
 }
 
 // prune deletes the records older than RecordRetention.

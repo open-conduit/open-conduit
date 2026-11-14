@@ -19,7 +19,8 @@ The connection holds the base identity and the region:
 | Field | Meaning |
 | --- | --- |
 | `region` | Required. STS is called in this region, and every profile the run gets uses it too. |
-| `endpoint` | Optional. A URL to call instead of STS's regional endpoint, such as LocalStack, moto or a VPC endpoint. The run's profiles also send every call there (`endpoint_url`), so a test deployment talks only to the emulator. |
+| `endpoint` | Optional. A URL the host calls instead of STS's regional endpoint, such as an STS VPC endpoint, LocalStack or moto. The run never calls STS, so this goes nowhere near the run's profiles. |
+| `run_endpoint` | Optional. A URL the run's profiles send every AWS call to (`endpoint_url`), for an emulator such as LocalStack that serves every service at one address, so a test deployment talks only to the emulator. Leave it unset for real AWS, so each service's own endpoint is used. |
 | `profile` | Optional. The AWS CLI profile that gives the daemon's own identity when the connection has no key pair. |
 | `access_key_id`, `secret_access_key` (secrets) | The base identity's key pair. Give both or neither. |
 
@@ -72,7 +73,7 @@ The extension's run layer writes two files into the run ([extension protocol](..
   region = eu-west-2
   ```
 
-  and `endpoint_url` when the connection sets `endpoint`.
+  and `endpoint_url` when the connection sets `run_endpoint`.
 - `credentials`, empty, so that a profile with the same name in the operator's own `~/.aws/credentials` can't stand in for one of the run's.
 
 It sets `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` to these files, and `AWS_SDK_LOAD_CONFIG=1` for the v1 Go SDK. `aws --profile read s3 ls`, or any SDK with `AWS_PROFILE=read`, then works with no step by the agent. The CLI and the SDKs run the `credential_process` when they need credentials, and again once those expire. `os call --output data` prints only the operation's output data ([shell executor](../shell-executor/)). A run without a toolbelt gets no files, because nothing could answer its profiles.
@@ -97,7 +98,7 @@ When the gate holds a call, the operation doesn't run and the run's Work is park
 
 ## Record
 
-Each issue leaves a trail with no credential in it:
+Each issue leaves a trail with no credential in it. The record must be written before the credentials are handed out: when it can't be, the call is refused (`aws_unavailable`, try again) and the STS session expires unused.
 
 - A record in the extension's KV namespace `aws.issued`: the scope, Work, execution, binding, entry, role and its ARN, account, session name, access key ID (CloudTrail shows it beside the session name), issue time, expiry, and whether the session was tagged. The `aws-prune` task deletes records older than 90 days, once a day.
 - A telemetry event `aws_credentials_issued` linked to the Work, with the same fields except the role ARN and the entry.

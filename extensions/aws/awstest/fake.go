@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,7 +131,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch form.Get("Action") {
 	case "GetCallerIdentity":
-		fmt.Fprintf(w, `<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>%s</Arn><UserId>AIDAFAKE</UserId><Account>%s</Account></GetCallerIdentityResult></GetCallerIdentityResponse>`, k.arn, k.account)
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprintf(w, `<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>%s</Arn><UserId>AIDAFAKE</UserId><Account>%s</Account></GetCallerIdentityResult></GetCallerIdentityResponse>`, esc(k.arn), esc(k.account))
 	case "AssumeRole":
 		s.assume(w, form)
 	default:
@@ -170,8 +172,17 @@ func (s *Server) assume(w http.ResponseWriter, form url.Values) {
 	assumed := "arn:aws:sts::" + account + ":assumed-role/" + roleName + "/" + name
 	s.keys[id] = key{secret, account, assumed}
 	exp := s.Now().Add(time.Duration(secs) * time.Second).UTC().Format(time.RFC3339)
+	w.Header().Set("Content-Type", "text/xml")
 	fmt.Fprintf(w, `<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>%s</AccessKeyId><SecretAccessKey>%s</SecretAccessKey><SessionToken>%s</SessionToken><Expiration>%s</Expiration></Credentials><AssumedRoleUser><Arn>%s</Arn><AssumedRoleId>AROAFAKE:%s</AssumedRoleId></AssumedRoleUser></AssumeRoleResult></AssumeRoleResponse>`,
-		id, secret, token, exp, assumed, name)
+		esc(id), esc(secret), esc(token), esc(exp), esc(assumed), esc(name))
+}
+
+// esc is a value as XML text: STS escapes its answers, and so must the
+// fake, which echoes what the request named.
+func esc(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
 }
 
 func random(n int) string {

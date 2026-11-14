@@ -31,9 +31,14 @@ type Connection struct {
 	// Region is the STS region, which every profile the run gets uses
 	// too.
 	Region string `json:"region"`
-	// Endpoint replaces the STS endpoint (an emulator such as LocalStack,
-	// a VPC endpoint). A run's profiles send every call to it as well.
+	// Endpoint replaces the STS endpoint the host calls (an emulator such
+	// as LocalStack, an STS VPC endpoint). The run never calls it.
 	Endpoint string `json:"endpoint,omitempty"`
+	// RunEndpoint, when set, is where the run's profiles send every AWS
+	// call (endpoint_url): an emulator that serves every service at one
+	// address. A real deployment leaves it unset, so each service's own
+	// endpoint is used.
+	RunEndpoint string `json:"run_endpoint,omitempty"`
 	// Profile is the AWS CLI profile that gives the daemon's ambient
 	// identity when the connection has no key pair ("" for the default
 	// chain).
@@ -102,8 +107,10 @@ func ParseConnection(raw json.RawMessage) (Connection, error) {
 	if !regionRE.MatchString(c.Region) {
 		return c, errors.New("an aws connection needs its region, such as eu-west-2")
 	}
-	if c.Endpoint != "" && !strings.HasPrefix(c.Endpoint, "https://") && !strings.HasPrefix(c.Endpoint, "http://") {
-		return c, errors.New("endpoint must be an http or https URL")
+	for field, u := range map[string]string{"endpoint": c.Endpoint, "run_endpoint": c.RunEndpoint} {
+		if u != "" && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") || strings.ContainsAny(u, " \t\r\n") {
+			return c, fmt.Errorf("%s must be an http or https URL", field)
+		}
 	}
 	return c, nil
 }

@@ -191,7 +191,8 @@ Connection `config`:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `region` |  | Required. the AWS region STS is called in, which every profile the run gets uses too, such as eu-west-2 |
-| `endpoint` |  | an endpoint to call instead of STS's regional one (LocalStack, a VPC endpoint); the run's profiles send every call to it as well |
+| `endpoint` |  | an endpoint the host calls instead of STS's regional one (an STS VPC endpoint, an emulator); the run never calls it |
+| `run_endpoint` |  | an endpoint the run's profiles send every AWS call to (endpoint_url), for an emulator such as LocalStack that serves every service at one address; leave it unset for real AWS |
 | `profile` |  | the AWS CLI profile that gives the daemon's own identity when the connection has no key pair (default: the AWS CLI's default chain) |
 
 Connection `secret_refs`:

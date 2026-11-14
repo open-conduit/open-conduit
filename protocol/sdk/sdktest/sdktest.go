@@ -135,6 +135,11 @@ func WithKV(namespace, key string, value []byte) Option {
 	return func(h *Host) { h.kvPut(namespace, key, value) }
 }
 
+// WithCommitFailure makes every kv.commit fail, as a host whose store is
+// unavailable would, so a test can see what the extension does when a
+// write it relies on doesn't land.
+func WithCommitFailure() Option { return func(h *Host) { h.failCommits = true } }
+
 // WithKVVersion sets the KV layout the host has recorded for the
 // extension, so Configure asks it to migrate from that version (default:
 // the manifest's kv_version, so no migration runs).
@@ -174,17 +179,19 @@ type Host struct {
 	causal     map[domain.ID]causal
 	kv         map[string]map[string][]byte
 	kvVersion  int
-	commits    []protocol.KVCommitParams
-	secrets    map[secretKey]map[string]string
-	sources    map[string]protocol.SourceDecl
-	writers    map[string]*writer
-	artifacts  []Artifact
-	captured   []protocol.TelemetryEvent
-	authority  extension.Authority
-	calls      int
-	eventsRead int
-	tunnels    map[string]chan<- string
-	seeds      []func() // run once every option is applied (the clock is set)
+	// failCommits makes every kv.commit fail (WithCommitFailure).
+	failCommits bool
+	commits     []protocol.KVCommitParams
+	secrets     map[secretKey]map[string]string
+	sources     map[string]protocol.SourceDecl
+	writers     map[string]*writer
+	artifacts   []Artifact
+	captured    []protocol.TelemetryEvent
+	authority   extension.Authority
+	calls       int
+	eventsRead  int
+	tunnels     map[string]chan<- string
+	seeds       []func() // run once every option is applied (the clock is set)
 }
 
 type secretKey struct {
@@ -635,6 +642,9 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		var p protocol.KVCommitParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
+		}
+		if h.failCommits {
+			return nil, protocol.Errorf(protocol.CodeInternal, "sdktest: commits fail")
 		}
 		if err := h.checkBatch(p.Checks, p.Puts, p.Deletes); err != nil {
 			return nil, err

@@ -107,7 +107,8 @@ func Build(o Options) *sdk.Extension {
 	ext.Manifest.Title = "AWS"
 	ext.Manifest.Provides.Connections = []protocol.TypeDecl{{Type: Name, Fields: []protocol.FieldDecl{
 		{Name: "region", Help: "the AWS region STS is called in, which every profile the run gets uses too, such as eu-west-2", Required: true},
-		{Name: "endpoint", Help: "an endpoint to call instead of STS's regional one (LocalStack, a VPC endpoint); the run's profiles send every call to it as well"},
+		{Name: "endpoint", Help: "an endpoint the host calls instead of STS's regional one (an STS VPC endpoint, an emulator); the run never calls it"},
+		{Name: "run_endpoint", Help: "an endpoint the run's profiles send every AWS call to (endpoint_url), for an emulator such as LocalStack that serves every service at one address; leave it unset for real AWS"},
 		{Name: "profile", Help: "the AWS CLI profile that gives the daemon's own identity when the connection has no key pair (default: the AWS CLI's default chain)"},
 		{Name: SecretAccessKeyID, Help: "the base identity's access key ID (with secret_access_key); without both, the daemon's own AWS identity", Secret: true},
 		{Name: SecretSecretAccessKey, Help: "the base identity's secret access key", Secret: true},
@@ -238,7 +239,7 @@ func (st *state) configure(_ context.Context, h *sdk.Host, p protocol.ConfigureP
 
 // runLayer is the run's AWS config: a profile for each role the run's
 // binding may ask for, whose credential_process asks the toolbelt, with
-// the connection's region and, when it sets one, its endpoint. A run whose
+// the connection's region and, when it sets one, its run endpoint. A run whose
 // binding may use no role, or that has no directory for files (no
 // toolbelt, so nothing could answer the profiles), gets nothing.
 func (st *state) runLayer(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (extension.RunLayer, error) {
@@ -251,8 +252,8 @@ func (st *state) runLayer(_ context.Context, _ *sdk.Host, r extension.RunEnviron
 		for _, role := range e.settings.RolesFor(r.Binding) {
 			n++
 			fmt.Fprintf(&b, "[profile %s]\ncredential_process = %s\nregion = %s\n", role.Name, CredentialProcess(role.Name), e.conn.Region)
-			if e.conn.Endpoint != "" {
-				fmt.Fprintf(&b, "endpoint_url = %s\n", e.conn.Endpoint)
+			if e.conn.RunEndpoint != "" {
+				fmt.Fprintf(&b, "endpoint_url = %s\n", e.conn.RunEndpoint)
 			}
 			b.WriteString("\n")
 		}
