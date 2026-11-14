@@ -72,7 +72,7 @@ func slExtensionConfig(extra string) string {
 
 func slExtensionConfigFor(channels []string, extra string) string {
 	list, _ := json.Marshal(channels)
-	return `{"namespace":"` + slNS + `","scope":"` + slScope + `","team":"` + slTeam + `","channels":` + string(list) + `,"bot_user_id":"UBOT","signing_secret":"signing"` + extra + `}`
+	return `{"namespace":"` + slNS + `","scope":"` + slScope + `","team":"` + slTeam + `","channels":` + string(list) + `,"bot_user_id":"UBOT","signing_secret":"signing","claim_from":"all"` + extra + `}`
 }
 
 func newSlackEnv(t *testing.T, extra string, o sl.IngressOptions) *slEnv {

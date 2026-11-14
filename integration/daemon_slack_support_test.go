@@ -82,7 +82,7 @@ func supportDaemonConfig(apiURL, root, binary string) []byte {
 					"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}},
 			"routes": []any{map[string]any{"name": "conversations", "handler": "slack", "binding": "support", "active_policy": "inject", "config": map[string]any{}}},
 			"extensions": []any{map[string]any{"name": "support", "type": "slack", "connection": "slack", "secret_names": []any{},
-				"config": map[string]any{"namespace": "slack/T0TEAM", "scope": "support", "team": "T0TEAM", "channels": []string{"C0SUPPORT"}, "bot_user_id": "UBOT", "receiver": "socket"}}},
+				"config": map[string]any{"namespace": "slack/T0TEAM", "scope": "support", "team": "T0TEAM", "channels": []string{"C0SUPPORT"}, "bot_user_id": "UBOT", "receiver": "socket", "claim_from": "all"}}},
 			"secret_refs": map[string]any{},
 		}},
 	}

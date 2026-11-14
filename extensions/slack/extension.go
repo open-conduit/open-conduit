@@ -47,6 +47,9 @@ type source struct {
 type Extension struct {
 	h     inproc.Host
 	tools *Tools
+	// book holds the entries' start points and marked threads (claims.go),
+	// which the route reads.
+	book *Book
 
 	mu       sync.Mutex
 	sources  map[string]*source // by namespace, for the daemon's lifetime
@@ -63,7 +66,7 @@ type Extension struct {
 // New returns the Slack extension.
 func New() *Extension {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Extension{sources: map[string]*source{}, failed: map[string]string{}, replies: map[string]string{}, codes: map[string]string{}, stopping: ctx, stop: cancel}
+	return &Extension{book: NewBook(), sources: map[string]*source{}, failed: map[string]string{}, replies: map[string]string{}, codes: map[string]string{}, stopping: ctx, stop: cancel}
 }
 
 var (
@@ -100,8 +103,8 @@ func (*Extension) Operations() []string { return Operations() }
 
 func (*Extension) Declarations() []extension.Operation { return Declared() }
 
-func (*Extension) Routes() map[string]extension.RouteHandler {
-	return map[string]extension.RouteHandler{Type: Route{}}
+func (x *Extension) Routes() map[string]extension.RouteHandler {
+	return map[string]extension.RouteHandler{Type: Route{Book: x.book}}
 }
 
 func (*Extension) Playbooks() map[string]string { return playbooks.All() }
@@ -182,7 +185,7 @@ func (e codeError) Error() string { return string(e) }
 // Configure registers every enabled scope's entry not yet registered.
 // Registrations are immutable for one runtime instance: a changed entry
 // keeps its registration until restart and reports restart_required.
-func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
+func (x *Extension) Configure(ctx context.Context, p protocol.ConfigureParams) {
 	restart := false
 	for _, e := range p.Entries {
 		if e.Type != Type {
@@ -200,7 +203,7 @@ func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
 			continue
 		}
 		code := ""
-		if err := x.add(e, settings); err != nil {
+		if err := x.add(ctx, e, settings); err != nil {
 			var named codeError
 			if code = ErrorCode(err); errors.As(err, &named) {
 				code = string(named)
@@ -230,7 +233,7 @@ func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
 	x.report("register", code)
 }
 
-func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
+func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Settings) error {
 	if e.Connection == nil {
 		return codeError("slack_connection_required")
 	}
@@ -258,8 +261,21 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 	if err != nil {
 		return err
 	}
+	// Each channel's start point is recorded the first time this daemon
+	// registers it, before its source ingests anything, so the route
+	// reads it for every Event of the channel.
+	if x.h.Store == nil {
+		return codeError("slack_state_unavailable")
+	}
+	if err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+		return x.book.Register(tx, settings.Namespace, settings.Channels, x.now())
+	}); err != nil {
+		return codeError("slack_state_unavailable")
+	}
 	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...), settings: settings, client: client, projector: projector}
-	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings)})
+	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings),
+		StartPoint: func(channel string) (time.Time, bool) { return settings.StartPoint(x.book, channel) },
+		Unowned:    x.unowned(settings), Foreign: x.foreign(settings)})
 	if settings.Receiver == ReceiverSocket {
 		name := s.name
 		s.socket = NewSocket(client, SocketOptions{Now: x.now, Interact: func(ctx context.Context, payload []byte) {
@@ -337,6 +353,55 @@ func (x *Extension) activeThreads(s Settings) func(context.Context) (map[string]
 			return err
 		})
 		return out, err
+	}
+}
+
+// unowned reports which of a channel's threads no Work in the entry's
+// namespace holds the thread's key for, finished or not. It only reads
+// durable state.
+func (x *Extension) unowned(s Settings) func(context.Context, string, []string) (map[string]bool, error) {
+	return func(ctx context.Context, channel string, threads []string) (map[string]bool, error) {
+		out := map[string]bool{}
+		err := storage.View(ctx, x.h.Store, x.now(), func(tx storage.Tx) error {
+			for _, t := range threads {
+				_, err := tx.WorkByCorrelation(domain.CorrelationKey{Source: s.Namespace, ExternalID: ThreadKey(channel, t)})
+				switch {
+				case errors.Is(err, storage.ErrNotFound):
+					out[t] = true
+				case err != nil:
+					return err
+				}
+			}
+			return nil
+		})
+		return out, err
+	}
+}
+
+// foreign records threads found with replies marked by Work while no Work
+// here owns them, so the route claims none of them.
+func (x *Extension) foreign(s Settings) func(context.Context, string, []string) error {
+	return func(ctx context.Context, channel string, threads []string) error {
+		var fresh []string
+		for _, t := range threads {
+			if !x.book.Foreign(s.Namespace, channel, t) {
+				fresh = append(fresh, t)
+			}
+		}
+		if len(fresh) == 0 {
+			return nil
+		}
+		err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+			return MarkForeign(tx, s.Namespace, channel, fresh, x.now())
+		})
+		if err != nil {
+			return err
+		}
+		x.book.Remember(s.Namespace, channel, fresh)
+		if x.h.Log != nil {
+			x.h.Log.Warn("slack threads with marked replies and no Work here are not claimed", "namespace", s.Namespace, "channel", channel, "threads", len(fresh))
+		}
+		return nil
 	}
 }
 
@@ -499,6 +564,17 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		if set.DirectMessages {
 			notes = append(notes, "direct messages on")
 		}
+		notes = append(notes, x.startNote(set))
+		unclaimed := s.ingress.Unclaimed()
+		for _, ch := range set.Channels {
+			if n := x.book.ForeignCount(set.Namespace, ch); n > 0 {
+				raise(inproc.CheckWarn, "state_not_moved")
+				notes = append(notes, fmt.Sprintf("%s in %s %s replies marked by Work this daemon has no record of: state was not moved here, and none is claimed (restore a backup bundle to continue them)", threads(n), ch, map[bool]string{true: "has", false: "have"}[n == 1]))
+			}
+			if n := unclaimed[ch].BeforeStart; n > 0 {
+				notes = append(notes, fmt.Sprintf("%s in %s began before its start point and %s not claimed (claim_from %s)", threads(n), ch, map[bool]string{true: "is", false: "are"}[n == 1], set.claimFrom()))
+			}
+		}
 		switch set.Receiver {
 		case ReceiverHTTP:
 			notes = append(notes, "POST /"+s.name+" (set it as the app's Events API Request URL)")
@@ -526,6 +602,42 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+func threads(n int) string {
+	if n == 1 {
+		return "1 thread"
+	}
+	return fmt.Sprintf("%d threads", n)
+}
+
+// startNote says from when the entry claims threads no Work owns.
+func (x *Extension) startNote(set Settings) string {
+	if set.Claim == ClaimAll {
+		return "claims threads of any age (claim_from all)"
+	}
+	var first, last time.Time
+	missing := 0
+	for _, ch := range set.Channels {
+		t, ok := set.StartPoint(x.book, ch)
+		if !ok {
+			missing++
+			continue
+		}
+		if first.IsZero() || t.Before(first) {
+			first = t
+		}
+		if t.After(last) {
+			last = t
+		}
+	}
+	switch {
+	case missing == len(set.Channels):
+		return "no start point recorded, so no thread is claimed"
+	case first.Equal(last):
+		return "claims threads begun from " + first.UTC().Format(time.RFC3339) + " (claim_from " + set.claimFrom() + ")"
+	}
+	return "claims threads begun from each channel's start point, " + first.UTC().Format(time.RFC3339) + " to " + last.UTC().Format(time.RFC3339) + " (claim_from " + set.claimFrom() + ")"
 }
 
 // authCheck (check_secrets only) runs the connection test per entry

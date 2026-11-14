@@ -586,6 +586,7 @@ Extension entry `config`:
 | `start` |  |  |
 | `bot_user_id` |  |  |
 | `start_window_hours` |  |  |
+| `claim_from` | `registration` | registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time |
 | `history_hours` |  |  |
 | `refresh_minutes` |  |  |
 | `receiver` | `socket` | One of socket, events, none. |

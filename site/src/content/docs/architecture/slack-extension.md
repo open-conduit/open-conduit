@@ -76,6 +76,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `start` | `all` (default): every human top-level message starts a conversation. `mention`: a human message mentioning `bot_user_id` in a thread no Work owns starts one. |
 | `bot_user_id` | The app's bot user. Required for `mention`; also recognizes the app's own unmarked messages. |
 | `start_window_hours` | Default 24. A message starts a conversation only if it was first received within this time of being written, so the first reconcile does not turn history into Work. |
+| `claim_from` | The entry's start point: which threads no Work owns it may claim. `registration` (default): only threads begun at or after the time this daemon first registered the channel for the entry. `all`: threads of any age reconcile reads. An RFC 3339 time (`2026-11-13T00:00:00Z`): threads begun from then. See [start points](#start-points). |
 | `history_hours` | Default 336 (14 days), 1–2160. The reconcile window. |
 | `refresh_minutes` | Default 60. How long an unchanged thread's replies are taken from memory. |
 | `projection` | `disabled`, `dry_run`. `serve --dry-run` forces a dry run. |
@@ -161,6 +162,8 @@ A thread whose reply count and latest reply are unchanged is taken from memory f
 
 Messages that disappear become generic `core.ingress.absent`, which the route ignores.
 
+While it reads a page, reconcile also finds the threads the entry will not claim (see [start points](#start-points)). Of the page's threads that began before the channel's start point and hold a message the start policy asks for, and of those holding a reply marked by a Work, it asks the host which ones no Work here holds the thread's key for (`IngressOptions.Unowned`, a read of durable state). It records the marked ones durably (`IngressOptions.Foreign`) before it returns the page, so the route already refuses them when it sees the page's Events. Each complete generation's counts per channel are what doctor reports.
+
 **Declared service limits and what cannot be re-derived.**
 
 - **Push-only deletion detail.** A message deleted without a tombstone is announced only by push (`slack.message.removed`, declared non-re-derivable). Reconcile reports it as absence within the window, without the deletion time.
@@ -175,7 +178,7 @@ Messages that disappear become generic `core.ingress.absent`, which the route ig
 
 Handler `slack` reads only the detached Event, Scope and Work, and its own route config. It finds its entry in the scope metadata by namespace. A route's config may list `channels`: the route then claims only threads in those channels, so one entry can serve several routes, each with its own binding and playbook ([example](../../workflows/slack/#start-a-different-playbook-per-channel)). Config validation rejects anything but distinct Slack channel IDs.
 
-- **Unowned threads.** A human, non-deleted message creates `slack.conversation` Work. The kind is namespaced because B02 requires every Work kind to be. It must also pass the start policy: it is a top-level message (`all`), or it mentions the bot (`mention`), and it was received within `start_window_hours` of being written. In a [direct message](#direct-messages) it is a top-level message from a person `direct_messages` admits. A parent first seen in its edited form still starts the conversation, because its push may have been missed.
+- **Unowned threads.** A human, non-deleted message creates `slack.conversation` Work. The kind is namespaced because B02 requires every Work kind to be. It must also pass the start policy: it is a top-level message (`all`), or it mentions the bot (`mention`), and it was received within `start_window_hours` of being written. In a [direct message](#direct-messages) it is a top-level message from a person `direct_messages` admits. Its thread must also have begun at or after the channel's [start point](#start-points) and hold no reply marked by Work this daemon has no record of. A parent first seen in its edited form still starts the conversation, because its push may have been missed.
 - **Existing conversations receive:** human messages (including edits) and replies marked by *another* Work.
 - **Never delivered:**
   - The Work's own replies.
@@ -185,6 +188,19 @@ Handler `slack` reads only the detached Event, Scope and Work, and its own route
   A reply therefore cannot start an event loop. Ingress Events are external roots, so provenance travels in the marker instead, and the core chain limits still bound every derived Event.
 
 Completed Work keeps its thread key, and later messages are checkpointed against the terminal Work.
+
+### Start points
+
+A new daemon state, a new entry, or a channel newly added to an entry would otherwise claim every thread reconcile finds in `history_hours`, and `start_window_hours` admits a day of it: on a move to a new host, every recent thread with a mention got a turn hours later, and an agent that read an earlier daemon's reply as its own corrected it. Two rules stop that, and both apply only to a thread no Work here owns. Work that owns a thread takes its input as before, however old the thread is.
+
+- **A thread is claimed only from its channel's start point.** The thread's first message, not the message at hand, must be at or after it, so a new mention in an old thread starts nothing either. With `claim_from` `registration` (the default) the start point is the time this daemon first registered the channel for the entry. The extension records it in its KV namespace `slack.claims` (`start/<namespace>/<channel>`) when it registers the entry, before the source ingests anything, and never moves it: a restart or a config change keeps it, a channel added later gets its own, and since KV is in the coordination database, a backup bundle carries it and a restore keeps it. Every channel's start point is recorded whatever `claim_from` says, so switching back to `registration` keeps the first one. A channel that Work here already holds a thread of when its start point is first recorded (an entry upgraded from before start points) gets the earliest such Work's creation time instead, so a mention missed during the upgrade is still claimed. `all` claims any age; a time claims from then.
+- **A thread with a reply marked by Work this daemon has no record of is never claimed.** Such a reply shows that a daemon owned the thread before and its state is not here. Reconcile records the thread (`foreign/<namespace>/<channel>/<thread ts>`) before the page with it is routed, so the thread's first message does not start Work, and the record stays.
+
+The route reads both from the extension's in-memory copy of these records (`StartBook`), loaded at registration and updated as each record commits. It takes no transaction, and each record is written once before any Event it bears on is accepted, so a route evaluated again decides the same way. A route with no copy (the zero `Route`) claims nothing under `registration`, so it fails closed. Each refusal is the route's reason in the route trace ("the thread began before channel C…'s start point …").
+
+Doctor's `slack` check says from when each entry claims threads. For each channel, it also counts the threads with marked replies and no Work here (a warning, `state_not_moved`, with the remedy: restore a backup bundle), and the threads the last complete reconcile found begun before the start point that asked for a conversation and are not claimed. The extension logs each newly recorded marked thread.
+
+A reconcile on a daemon that keeps its state still recovers a message missed in a short outage: its thread began after the start point, so the start window alone decides, as before.
 
 ## Posting from other Work
 
@@ -278,6 +294,12 @@ While a conversation's Work waits, or is ready but hasn't started (held until a 
 A press arrives over Socket Mode as an `interactive` envelope, which is acknowledged at once. A `block_actions` press of one of the prompt's buttons, from the entry's team and a watched channel, goes to `Host.Act` as the presser, `slack:<user id>`, keyed by the user and the press's `action_ts`. The action's provider decides whether that user may act; for a `human` entry, its responders. The presser then gets a message only they see, in the thread: the provider's message when the answer was taken, or its refusal ("you are not one of the people this question is for", "this question has already been answered"). A press the host couldn't take for any other reason asks them to press again; it isn't retried.
 
 Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take interactivity, and an app created before this needs **Interactivity** turned on in its settings.
+
+## Moving to a new host
+
+Copy the state, not just the config. Stop the daemon, `backup create` a bundle, and on the new host `backup restore` it and point the daemon at the restored directory ([backups](../../guides/backups/)). The bundle carries every Work and its thread keys, its waits, and the entry's start points and marked-thread records, so waiting conversations continue in their threads and nothing is claimed twice.
+
+If the new host starts with an empty state directory instead, the entry registers afresh and its start point is the new daemon's first start. No thread from before then is claimed, and the conversations the old daemon was holding open are not continued: a person's reply in one of those threads reaches no Work. Doctor's `slack` check counts the threads whose replies carry an earlier daemon's marker. To continue them, stop the new daemon and restore the old state instead. To have the new daemon claim recent history anyway, set `claim_from` to a time (or `all`); threads with marked replies are still not claimed.
 
 ## Limitations
 
