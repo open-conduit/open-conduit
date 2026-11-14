@@ -226,12 +226,14 @@ func CheckExecutor(e extension.Executor, r extension.RunRequest) error {
 		return err
 	}
 	// Recovery must not call Run or overwrite metadata and must keep the outcome.
-	// It may re-acknowledge the identical metadata under its new lease, which
-	// the production scheduler requires before accepting an adopted handle.
+	// It must re-acknowledge the identical metadata under its new lease: the
+	// production scheduler fails an adopted handle that wasn't.
+	reacknowledged := false
 	r.PersistRecovery = func(p domain.Payload) error {
 		if !reflect.DeepEqual(p, state) {
 			return fmt.Errorf("recovery launched replacement")
 		}
+		reacknowledged = true
 		return nil
 	}
 	adopted, err := e.Recover(context.Background(), r, state)
@@ -240,6 +242,9 @@ func CheckExecutor(e extension.Executor, r extension.RunRequest) error {
 	}
 	if adopted == nil {
 		return fmt.Errorf("recovery returned no handle")
+	}
+	if !reacknowledged {
+		return fmt.Errorf("recovery adopted without re-acknowledging its metadata under the new lease")
 	}
 	recovered, err := adopted.Wait(context.Background())
 	if err != nil {

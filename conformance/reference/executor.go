@@ -28,12 +28,21 @@ func (e *Executor) Run(ctx context.Context, r extension.RunRequest) (extension.R
 	}
 	return resultHandle{e.Result}, nil
 }
-func (e *Executor) Recover(ctx context.Context, _ extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+
+// Recover adopts the attempt, re-acknowledging its identical metadata under
+// the adopting lease as the host requires.
+func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if state.Schema != "fixture.adoption.v1" || string(state.Data) != `{"handle":"opaque"}` {
 		return nil, extension.ErrNotAdoptable
+	}
+	if r.PersistRecovery == nil {
+		return nil, extension.ErrInvalid
+	}
+	if err := r.PersistRecovery(state); err != nil {
+		return nil, err
 	}
 	return resultHandle{e.Result}, nil
 }

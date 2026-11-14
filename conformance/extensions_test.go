@@ -208,7 +208,7 @@ func TestReferenceExecutor(t *testing.T) {
 }
 
 // replacingExecutor relaunches on recovery, persisting new metadata; the
-// shared case must reject it while permitting identical re-acknowledgement.
+// shared case must reject it while accepting identical re-acknowledgement.
 type replacingExecutor struct{ reference.Executor }
 
 func (e *replacingExecutor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
@@ -233,6 +233,16 @@ func (e *reacknowledgingExecutor) Recover(ctx context.Context, r extension.RunRe
 	return e.Executor.Recover(ctx, r, state)
 }
 
+// silentExecutor adopts without re-acknowledging its metadata under the
+// adopting lease; the shared case must reject it, as the scheduler fails
+// the adoption.
+type silentExecutor struct{ reference.Executor }
+
+func (e *silentExecutor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+	r.PersistRecovery = func(domain.Payload) error { return nil }
+	return e.Executor.Recover(ctx, r, state)
+}
+
 func TestExecutorRecoveryReplacement(t *testing.T) {
 	r := extension.RunRequest{Work: domain.Work{ID: "work"}, Execution: domain.Execution{ID: "execution", WorkID: "work"}}
 	result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}
@@ -241,6 +251,9 @@ func TestExecutorRecoveryReplacement(t *testing.T) {
 	}
 	if err := conformance.CheckExecutor(&reacknowledgingExecutor{reference.Executor{Result: result}}, r); err != nil {
 		t.Fatalf("identical re-acknowledgement rejected: %v", err)
+	}
+	if err := conformance.CheckExecutor(&silentExecutor{reference.Executor{Result: result}}, r); err == nil || !strings.Contains(err.Error(), "re-acknowledging") {
+		t.Fatalf("adoption without re-acknowledgement accepted: %v", err)
 	}
 }
 
