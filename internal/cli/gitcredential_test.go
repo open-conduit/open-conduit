@@ -142,6 +142,38 @@ func TestToolbeltGitCredential(t *testing.T) {
 			t.Fatalf("%s: %d %q", op, code, out)
 		}
 	}
+	// The agent's own calls of the same operation with the same input, the
+	// MCP call tool and os call, never say they are made for git.credential,
+	// so the host refuses them and no token reaches the agent's transcript.
+	direct := map[string]func() (int, string){
+		"os call": func() (int, string) {
+			var out, errOut bytes.Buffer
+			code := RunToolbelt("t", "c", []string{"call", "--data", `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`, "github.git.credential"}, env, nil, &out, &errOut)
+			return code, out.String() + errOut.String()
+		},
+		"mcp call": func() (int, string) {
+			var out, errOut bytes.Buffer
+			in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"call","arguments":{"operation":"github.git.credential","input":{"protocol":"https","host":"github.com","path":"octo/widgets.git"}}}}` + "\n"
+			code := RunToolbelt("t", "c", []string{"mcp"}, env, strings.NewReader(in), &out, &errOut)
+			if !strings.Contains(out.String(), `"isError":true`) {
+				code = -1
+			}
+			return code, out.String() + errOut.String()
+		},
+	}
+	for name, do := range direct {
+		calls = nil
+		code, out := do()
+		if strings.Contains(out, "ghs_") || !strings.Contains(out, "git signs in by itself") || len(calls) != 1 || calls[0]["capability"] != nil {
+			t.Fatalf("%s: %d %q, calls %v: want a capability_only refusal and no token", name, code, out, calls)
+		}
+		if name == "os call" && code == 0 {
+			t.Fatalf("os call of github.git.credential exited 0: %q", out)
+		}
+		if name == "mcp call" && code == -1 {
+			t.Fatalf("mcp call of github.git.credential is not an error result: %q", out)
+		}
+	}
 	token = "revoked"
 	if code, out, errOut := run("protocol=https\nhost=github.com\n\n", "get"); code != 1 || out != "" || !strings.Contains(errOut, "no git credential") {
 		t.Fatalf("revoked: %d %q %q", code, out, errOut)
