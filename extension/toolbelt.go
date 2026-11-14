@@ -333,6 +333,21 @@ type Dependency struct {
 // is versioned separately (protocol.Version, 07-01).
 const ContractVersion uint32 = 1
 
+// ErrFilterFailed marks a DependencyFilter error the extension itself
+// returned about the Event: it was reached and answered, but with a
+// failure (a panic in its handler, say), not with a match or a non-match.
+// Core bounds how long it asks again about such an Event. Any other error
+// means the filter couldn't be reached (a timeout, a transport failure, an
+// overloaded or restarting process); core asks again for as long as that
+// lasts, since passing a one-time occurrence by would strand the wait.
+var ErrFilterFailed = errors.New("dependency filter failed on the event")
+
+// PureFilter is a Registration.DependencyFilter that always answers: an
+// in-process filter that decides from the filter and the Event alone.
+func PureFilter(fn func(filter domain.Payload, event domain.Event) bool) func(domain.Payload, domain.Event) (bool, error) {
+	return func(filter domain.Payload, event domain.Event) (bool, error) { return fn(filter, event), nil }
+}
+
 type Registration struct {
 	Version uint32
 	// Name is the extension's name and the namespace of everything it
@@ -350,9 +365,14 @@ type Registration struct {
 	SealedEventTypes []string
 	Operations       []Operation
 	// DependencyFilter evaluates the opaque Filter of this registration's
-	// dependencies against a type-matching source Event. It must be pure and
-	// deterministic: core calls it inside coordination transactions.
-	DependencyFilter func(filter domain.Payload, event domain.Event) bool
+	// dependencies against a type-matching source Event. Its answer must be
+	// pure and deterministic: core calls it inside coordination
+	// transactions. An error means it could not answer now (a remote
+	// extension that timed out or is restarting), not that the Event
+	// doesn't match: core asks again about the same Event later rather than
+	// passing it by, since a dependency such as a merge happens only once.
+	// A filter that answers in process returns no error (PureFilter).
+	DependencyFilter func(filter domain.Payload, event domain.Event) (bool, error)
 	// Gate, when set, is consulted before every call of another
 	// registration's operation, after the toolbelt has checked the caller's
 	// authority and before the operation runs. It is how an extension puts

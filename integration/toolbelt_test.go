@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,14 @@ type toolbeltHarness struct {
 	// plan translates the fixture.wait operation (see translated wait cases).
 	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
 	aliasOK bool
+	// filterDown makes the fixture's dependency filter fail to answer, as
+	// a remote extension's does while it times out or restarts.
+	filterDown bool
+	// filterFailsOn makes the live filter fail on that Event ID, as an
+	// extension whose handler panics on it does.
+	filterFailsOn string
+	// filterCalls counts the fixture's dependency filter calls.
+	filterCalls int
 	// records are the toolbelt's call records; refusal classifies a
 	// refused call (ToolbeltOptions.Refusal) when set.
 	records *[]observability.Record
@@ -120,8 +129,18 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
 		return h.plan(a, in)
-	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) bool {
-		return string(filter.Data) == string(e.Data.Data)
+	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) (bool, error) {
+		h.mu.Lock()
+		unavailable, failing := h.filterDown, h.filterFailsOn
+		h.filterCalls++
+		h.mu.Unlock()
+		if unavailable {
+			return false, errors.New("filter unavailable")
+		}
+		if failing != "" && string(e.ID) == failing {
+			return false, fmt.Errorf("%w: handler panicked", extension.ErrFilterFailed)
+		}
+		return string(filter.Data) == string(e.Data.Data), nil
 	}}); err != nil {
 		t.Fatal(err)
 	}

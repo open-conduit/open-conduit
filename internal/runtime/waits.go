@@ -17,6 +17,62 @@ import (
 const waitNamespace = "core.waits"
 const wakeReadyNamespace = "core.waits.ready"
 const subscriptionNamespace = "core.waits.subscriptions"
+
+// ErrDependencyFilterUnavailable is what every DependencyFilterError is
+// (errors.Is): an extension's dependency filter could not answer about an
+// Event (it timed out, its process was restarting, or it failed on it).
+var ErrDependencyFilterUnavailable = errors.New("dependency filter unavailable")
+
+// A subscription whose filter can't answer about an Event stops before it
+// and is asked again on later passes. While the filter can't be reached it
+// holds for as long as that lasts: an outage never passes a one-time
+// occurrence by. Only when the live extension itself fails on the Event
+// (extension.ErrFilterFailed), on at least failedPasses passes over at least
+// failedFor, does it pass the Event by as a non-match and record that, so an
+// Event the filter always fails on can't hold the wait for good.
+const (
+	failedPasses = 20
+	failedFor    = time.Hour
+)
+
+// DependencyFilterError names a subscription whose dependency filter could
+// not answer about an Event in a subscription pass. Held: the subscription
+// stopped before the Event and asks again on a later pass. Otherwise it
+// gave up after the bounds and passed the Event by. ReconcileSubscriptions
+// returns them joined (errors.Join), each errors.Is
+// ErrDependencyFilterUnavailable.
+type DependencyFilterError struct {
+	WaitID, WorkID domain.ID
+	// Namespace is the registration whose filter was asked; Label the
+	// dependency (for example "pr:12:merged").
+	Namespace, Label string
+	EventID          domain.ID
+	Sequence         uint64
+	// Passes is how many passes have asked about the Event, since Since;
+	// Failures how many of them the extension answered with a failure of
+	// its own (extension.ErrFilterFailed), which alone count towards
+	// passing it by.
+	Passes, Failures int
+	Since            time.Time
+	// Unreachable: this time the filter couldn't be reached at all, so the
+	// pass asks the namespace's filter no more.
+	Unreachable bool
+	Held        bool
+	Err         error
+}
+
+func (e *DependencyFilterError) Error() string {
+	what := "holds " + string(e.WaitID) + " before"
+	if !e.Held {
+		what = "gave up and passed by"
+	}
+	return fmt.Sprintf("%s: %s's filter for %s could not answer about %s (sequence %d, %d passes since %s, %d of them its own failure); %s it: %v", ErrDependencyFilterUnavailable, e.Namespace, e.Label, e.EventID, e.Sequence, e.Passes, e.Since.UTC().Format(time.RFC3339), e.Failures, what, e.Err)
+}
+
+func (e *DependencyFilterError) Unwrap() []error {
+	return []error{ErrDependencyFilterUnavailable, e.Err}
+}
+
 const pendingSubscriptionNamespace = "core.waits.pending_subscriptions"
 
 // pendingSubscriptions are a registered Wait's translated dependencies not
@@ -799,6 +855,23 @@ type subscription struct {
 	WorkID, TargetScopeID domain.ID
 	Checkpoint            uint64
 	Active                bool
+	// Unanswered is the Event the filter could not answer about, which the
+	// subscription is held before; PassedBy the last one it gave up on.
+	Unanswered *unansweredEvent `json:",omitempty"`
+	PassedBy   *unansweredEvent `json:",omitempty"`
+}
+
+// unansweredEvent is an Event a subscription's filter could not answer
+// about: since when, how many passes asked, how many of them the extension
+// failed on it itself and since when, and the last error.
+type unansweredEvent struct {
+	EventID     domain.ID
+	Sequence    uint64
+	Since       time.Time
+	Passes      int
+	Failures    int        `json:",omitempty"`
+	FailedSince *time.Time `json:",omitempty"`
+	Error       string
 }
 
 func disableWaitSubscriptionsInTx(tx storage.Tx, id domain.ID) error {
@@ -967,7 +1040,10 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 		if er = putJSON(tx, subscriptionNamespace, key, sub); er != nil {
 			return er
 		}
-		return s.reconcileSubscriptionInTx(tx, key, &sub)
+		// An unanswered filter leaves the subscription installed, stopped
+		// before that Event: the next pass asks again.
+		_, er = s.reconcileSubscriptionInTx(tx, key, &sub)
+		return er
 	})
 }
 func (s *Scheduler) authorizeAlias(ctx context.Context, sub subscription) error {
@@ -1015,12 +1091,27 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 	}
 	rows = ordered
 	count := 0
-	for _, row := range rows {
+	var unanswered []error
+	// down is the namespaces whose filter couldn't be reached in this pass:
+	// their other filtered subscriptions wait for the next pass rather than
+	// each spend the in-transaction deadline on a filter that isn't
+	// answering. A failure the extension returned about one Event says
+	// nothing about the others, so it doesn't trip it. skipped is the first
+	// row it held back: the next pass starts with it.
+	down := map[string]bool{}
+	skipped := -1
+	for i, row := range rows {
 		var sub subscription
 		if err := json.Unmarshal(row.Value, &sub); err != nil {
 			return err
 		}
 		if !sub.Active {
+			continue
+		}
+		if sub.Request.Filter != nil && down[sub.Request.Namespace] {
+			if skipped < 0 {
+				skipped = i
+			}
 			continue
 		}
 		if count >= limit {
@@ -1058,31 +1149,57 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			if !current.Active {
 				return nil
 			}
-			return s.reconcileSubscriptionInTx(tx, row.Key, &current)
+			failed, er := s.reconcileSubscriptionInTx(tx, row.Key, &current)
+			for _, f := range failed {
+				unanswered = append(unanswered, f)
+				if f.Held && f.Unreachable {
+					down[f.Namespace] = true
+				}
+			}
+			return er
 		}); err != nil {
 			return err
 		}
 	}
-	return nil
+	if skipped > 0 {
+		// Rows after the skipped ones moved the cursor past them; put it
+		// back just before the first, so they aren't always behind the
+		// subscription that tripped the breaker.
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			return putJSON(tx, waitNamespace, "subscription_cursor", rows[skipped-1].Key)
+		}); err != nil {
+			return err
+		}
+	}
+	return errors.Join(unanswered...)
 }
-func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription) error {
+
+// reconcileSubscriptionInTx scans the subscription's source from its
+// checkpoint, aliasing the first matching Event onto the waiting Work. When
+// the dependency filter can't answer about an Event, the checkpoint stays
+// before it, so a later pass asks again rather than passing a one-time
+// occurrence (a merge) by, and failed names it (Held). Past the bounds
+// (unansweredPasses, unansweredFor) the Event is passed by instead, recorded
+// on the subscription and in failed.
+func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription) (failed []*DependencyFilterError, err error) {
 	wait, err := tx.Wait(sub.Request.WaitID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	work, err := tx.Work(sub.WorkID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if wait.State != domain.WaitActive || work.State.Terminal() {
 		sub.Active = false
-		return putJSON(tx, subscriptionNamespace, key, sub)
+		return nil, putJSON(tx, subscriptionNamespace, key, sub)
 	}
 	all, err := tx.Events(sub.Checkpoint, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, source := range all {
+		before := sub.Checkpoint
 		sub.Checkpoint = source.Sequence
 		if source.Event.CorrelationKey == nil || *source.Event.CorrelationKey != sub.Request.SourceKey {
 			continue
@@ -1097,16 +1214,32 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 			continue
 		}
 		if sub.Request.Filter != nil {
-			if s.options.AliasFilter == nil || !s.options.AliasFilter(sub.Request.Namespace, *sub.Request.Filter, source.Event) {
+			if s.options.AliasFilter == nil {
+				continue
+			}
+			match, er := s.options.AliasFilter(sub.Request.Namespace, *sub.Request.Filter, source.Event)
+			if er != nil {
+				f := s.unansweredInTx(sub, source, er)
+				failed = append(failed, f)
+				if f.Held {
+					sub.Checkpoint = before
+					return failed, putJSON(tx, subscriptionNamespace, key, sub)
+				}
+				continue
+			}
+			if sub.Unanswered != nil && sub.Unanswered.Sequence == source.Sequence {
+				sub.Unanswered = nil
+			}
+			if !match {
 				continue
 			}
 		}
 		scope, er := scopeForEvent(tx, source)
 		if er != nil {
-			return er
+			return nil, er
 		}
 		if scope != sub.Request.SourceScopeID {
-			return storage.ErrConflict
+			return nil, storage.ErrConflict
 		}
 		data, _ := json.Marshal(struct {
 			Subscription string `json:"subscription"`
@@ -1117,25 +1250,55 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 		event := domain.Event{ID: domain.ID("alias/" + identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID))), Source: "core.subscription", DeliveryID: identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID)), Type: sub.Request.AliasType, WorkID: sub.WorkID, CorrelationKey: &sub.Request.TargetKey, CausationID: source.Event.ID, OccurredAt: source.Event.OccurredAt, ReceivedAt: s.now(), Data: domain.Payload{Schema: "core.subscription.alias.v1", Data: data}}
 		_, _, er = AcceptDerivedInTx(tx, s.now(), s.options.CausalLimits, work.ScopeID, source.Event.ID, event)
 		if er != nil && !errors.Is(er, ErrCausalRejected) {
-			return er
+			return nil, er
 		}
 		// A refused branch is diagnosed and checkpointed, never retried in a tight loop.
 		if er = putJSON(tx, subscriptionNamespace, key, sub); er != nil {
-			return er
+			return nil, er
 		}
 		if _, er = WakeWaitInTx(tx, s.now(), s.options.CausalLimits, wait.ID); er != nil {
-			return er
+			return nil, er
 		}
 		current, er := tx.Wait(wait.ID)
 		if er != nil {
-			return er
+			return nil, er
 		}
 		if current.State != domain.WaitActive {
 			sub.Active = false
 			break
 		}
 	}
-	return putJSON(tx, subscriptionNamespace, key, sub)
+	return failed, putJSON(tx, subscriptionNamespace, key, sub)
+}
+
+// unansweredInTx counts one more pass whose filter couldn't answer about
+// source and decides whether the subscription holds before it or passes it
+// by (recorded as PassedBy). An unreachable filter always holds; only the
+// extension's own failures on the Event, past both bounds, pass it by.
+func (s *Scheduler) unansweredInTx(sub *subscription, source domain.AcceptedEvent, cause error) *DependencyFilterError {
+	now := s.now()
+	u := sub.Unanswered
+	if u == nil || u.Sequence != source.Sequence {
+		u = &unansweredEvent{EventID: source.Event.ID, Sequence: source.Sequence, Since: now}
+	}
+	u.Passes++
+	u.Error = cause.Error()
+	unreachable := !errors.Is(cause, extension.ErrFilterFailed)
+	if !unreachable {
+		u.Failures++
+		if u.FailedSince == nil {
+			at := now
+			u.FailedSince = &at
+		}
+	}
+	f := &DependencyFilterError{WaitID: sub.Request.WaitID, WorkID: sub.WorkID, Namespace: sub.Request.Namespace, Label: sub.Request.Label, EventID: u.EventID, Sequence: u.Sequence, Passes: u.Passes, Failures: u.Failures, Since: u.Since, Unreachable: unreachable, Held: true, Err: cause}
+	if !unreachable && u.Failures >= failedPasses && now.Sub(*u.FailedSince) >= failedFor {
+		f.Held = false
+		sub.Unanswered, sub.PassedBy = nil, u
+		return f
+	}
+	sub.Unanswered = u
+	return f
 }
 
 // routeWaitingInTx handles predicates before ordinary route policy. It queues

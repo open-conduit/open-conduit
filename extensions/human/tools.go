@@ -69,7 +69,7 @@ func NewTools(o Options) (*Tools, error) {
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type,
 		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask, Guidance: AskGuidance()}},
-		DependencyFilter: DependencyFilter, Gate: t.Gate, StartGate: t.StartGate}
+		DependencyFilter: extension.PureFilter(DependencyFilter), Gate: t.Gate, StartGate: t.StartGate}
 }
 
 // askGuidance tells an agent when and how to ask; the toolbelt serves it

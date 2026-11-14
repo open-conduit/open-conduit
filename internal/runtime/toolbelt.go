@@ -149,7 +149,7 @@ type Toolbelt struct {
 	registrations map[string]bool
 	operations    map[string]extension.Operation
 	owners        map[string]string // operation → registration name
-	filters       map[string]func(domain.Payload, domain.Event) bool
+	filters       map[string]func(domain.Payload, domain.Event) (bool, error)
 	gates         map[string]extension.Gate // registration name → gate
 	startGates    map[string]extension.StartGate
 	events        map[string]string // emitted family → registration name
@@ -196,7 +196,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) (bool, error){}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -472,12 +472,17 @@ func (t *Toolbelt) declaredLocked(op string) bool {
 
 // DependencyFilter evaluates a translated dependency's opaque filter with the
 // filter its registering extension declared. Composition passes it to the
-// scheduler (SchedulerOptions.AliasFilter); an unknown namespace never matches.
-func (t *Toolbelt) DependencyFilter(namespace string, filter domain.Payload, e domain.Event) bool {
+// scheduler (SchedulerOptions.AliasFilter); an unknown namespace never
+// matches. An error is the extension's filter failing to answer, not a
+// non-match (extension.Registration.DependencyFilter).
+func (t *Toolbelt) DependencyFilter(namespace string, filter domain.Payload, e domain.Event) (bool, error) {
 	t.mu.RLock()
 	f := t.filters[namespace]
 	t.mu.RUnlock()
-	return f != nil && f(filter, e)
+	if f == nil {
+		return false, nil
+	}
+	return f(filter, e)
 }
 
 // sealedEvent reports whether only its registration's Emit operations may

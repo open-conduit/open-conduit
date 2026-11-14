@@ -319,9 +319,12 @@ func (b *Bridge) wire() {
 	for _, d := range e.Manifest.Provides.Operations {
 		e.Operations = append(e.Operations, b.operation(d))
 	}
+	// An in-process registration's filter answers from the Event alone
+	// (extension.PureFilter), so it has no error to carry over the wire.
 	e.Filter = func(filter domain.Payload, ev domain.Event) bool {
 		if f := b.registration().DependencyFilter; f != nil {
-			return f(filter, ev)
+			ok, err := f(filter, ev)
+			return ok && err == nil
 		}
 		return false
 	}
