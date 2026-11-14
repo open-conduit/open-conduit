@@ -65,7 +65,7 @@ const (
 // fails every write of it.
 func Schemas() []string {
 	return []string{SchemaIssue, SchemaPull, SchemaComment, SchemaChecks, SchemaConflict, SchemaDelivery,
-		SchemaClaim, SchemaFilter, SchemaHold, SchemaHoldRecovery, SchemaHoldReleased, SchemaTool}
+		SchemaClaim, SchemaFilter, SchemaHold, SchemaHoldRecovery, SchemaHoldReleased, SchemaPullOwned, SchemaTool}
 }
 
 // DeliveryLoss is the declared loss limitation of raw webhook deliveries.

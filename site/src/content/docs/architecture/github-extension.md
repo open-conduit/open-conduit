@@ -136,7 +136,7 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
 
 Labels influence only this claim decision. Work lifecycle never reads them.
 
-A route with `claim` `issues` never takes input for a PR's Work, so the two can share a scope in either order.
+A route with `claim` `issues` never takes input for a PR's Work, so the two can share a scope in either order. Any `github` route takes the news of a PR that Work without an issue opened ([below](#prs-that-work-without-an-issue-opened)).
 
 ### Pull request Work
 
@@ -147,6 +147,14 @@ A route with `{"claim": "pull_requests"}` claims each open PR as its own `github
 - **Lifecycle.** Each pass is an Execution. Between passes the agent parks with `github.wait`, and needs no condition: what wakes an issue's agent (comments, check results, conflicts, the merge or close) and a push to its PR wake it, and another agent's comment wakes it through the same peer dependency an issue's agent has ([waits](../engineering-tools/#waits)). Its `ignore` drops news its role doesn't act on: a reviewer ignores `conflicts`, which are the author's to resolve, and re-reviews on the push that follows. Nothing is posted for the wait. The agent ends the Work when the PR merges or closes.
 
 The agent reads which PR its Work is for from `github.context` (`pr`, `pr_url`, `repo`), and the PR operations default to its repository; it never sees the key. The projector leaves a PR's Work alone: it has no issue to label.
+
+### PRs that Work without an issue opened
+
+Work that owns no issue (a Slack thread, a job, child Work) can open a PR with `github.pr.create` ([code work without an issue](../engineering-tools/#code-work-without-an-issue)). The tools then accept `github.pull_request.owned` for that Work, and every `github` route, whatever it claims, handles it and the PR's news before its claim rules:
+
+- **The attachment.** A `github.pull_request.owned` Event is matched only for the Work it names (`work_id`), only from the namespace its payload names and only when that entry is in the scope; an issue's, a PR's own and an acknowledgement's Work are skipped. The match attaches the PR's key `pr/N` with `deliver: none`, so the Event is in the Work's history without being input: the turn that opened the PR may still be running. The family is sealed, so no executor can emit it.
+- **The news.** Work of a kind that isn't this extension's and that owns a `pr/N` key hears that PR's merge, close, conflicts, completed checks, new human comments and reviews with a body, and other agents' comments, as an issue's Work hears its PRs. Pushes and other open-state updates, edits and its own notes are not delivered. Matches use `deliver: current`, so the input is queued on the binding the Work runs on, not the route's: the agent that opened the PR answers, whichever route took the Event. The Work's display is left as it is.
+- **What the scope needs.** A `github` entry for the repository (`track_issues: false` when the repository's issues aren't used) and at least one `github` route, so its Events are routed; the route's binding is not used for this news. A PR keyed to a tracker issue (from an `agent/issue-N` branch or a body that links the issue) belongs to that issue's Work instead, which is why `github.pr.create` refuses both for Work without an issue.
 
 ### Acknowledgement Work
 

@@ -462,3 +462,53 @@ func TestRouteClaimsAcknowledgements(t *testing.T) {
 		t.Fatalf("a widened admit did not claim the acknowledged issue: %+v", d)
 	}
 }
+
+// A PR that Work without an issue opened is attached to that Work alone,
+// from the entry's own source, without being input; its news is queued on
+// the binding that Work runs on, under any github route (#590).
+func TestRouteGivesAnOwnedPRToTheWorkThatOpenedIt(t *testing.T) {
+	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","webhook_secret":"hook"}`)
+	opener := &domain.Work{ID: "work/thread", Kind: "slack.conversation", ScopeID: "eng"}
+	ownedEvent := func(source, work string, n int) domain.AcceptedEvent {
+		data, _ := json.Marshal(gh.PullOwned{Namespace: ns, Repo: repo, Number: n})
+		return domain.AcceptedEvent{Event: domain.Event{ID: "o", Type: gh.TypePullOwned, Source: source, DeliveryID: "d", WorkID: domain.ID(work),
+			Data: domain.Payload{Schema: gh.SchemaPullOwned, Data: data}}}
+	}
+	d := match(t, scope, ownedEvent(ns, "work/thread", 7), opener)
+	want := []domain.CorrelationKey{{Source: ns, ExternalID: gh.PullKey(7)}}
+	if !d.Match || d.Deliver != extension.DeliverNone || !reflect.DeepEqual(d.AttachKeys, want) || d.Display != nil {
+		t.Fatalf("owned: %+v", d)
+	}
+	for name, tc := range map[string]struct {
+		e domain.AcceptedEvent
+		w *domain.Work
+	}{
+		"no work":         {ownedEvent(ns, "work/thread", 7), nil},
+		"another work":    {ownedEvent(ns, "work/other", 7), opener},
+		"another source":  {ownedEvent("github/github.com/octo/elsewhere", "work/thread", 7), opener},
+		"an issue's work": {ownedEvent(ns, "work/issue", 7), &domain.Work{ID: "work/issue", Kind: gh.WorkKind}},
+		"no number":       {ownedEvent(ns, "work/thread", 0), opener},
+	} {
+		if d := match(t, scope, tc.e, tc.w); d.Match {
+			t.Fatalf("%s: attached %+v", name, d)
+		}
+	}
+
+	opener.CorrelationKeys = want
+	checks := event(gh.TypeChecksFailed, gh.PullKey(7), gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 7})
+	for _, claim := range []string{`{}`, `{"claim":"pull_requests"}`, `{"claim":"acknowledgements"}`} {
+		d := gh.Route{}
+		got, err := d.Match(context.Background(), extension.RouteInput{Event: checks, Scope: scope, Work: opener, Route: domain.Route{Config: domain.Payload{Data: []byte(claim)}}})
+		if err != nil || !got.Match || got.Deliver != extension.DeliverCurrent {
+			t.Fatalf("checks under %s: %+v %v", claim, got, err)
+		}
+	}
+	if d := match(t, scope, event(gh.TypePullOpen, gh.PullKey(7), gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 7, State: "open"}), opener); d.Match {
+		t.Fatalf("a push was input: %+v", d)
+	}
+	// An issue's Work hears its PRs on its route's binding, as before.
+	issueWork := &domain.Work{ID: "work/issue", Kind: gh.WorkKind, CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueKey(3, "")}}}
+	if d := match(t, scope, event(gh.TypeChecksFailed, gh.IssueKey(3, ""), gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 7}), issueWork); !d.Match || d.Deliver != extension.DeliverRoute {
+		t.Fatalf("issue's checks: %+v", d)
+	}
+}

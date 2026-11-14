@@ -143,7 +143,23 @@ func (x *Extension) startTools(h inproc.Host) error {
 		}
 		return func(from, to domain.ID) error { return h.Authorize(kind, from, to) }
 	}
-	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file")})
+	// A PR Work without an issue opened is given to it as a TypePullOwned
+	// Event in its attempt's causal chain.
+	own := func(ctx context.Context, scope, cause domain.ID, e domain.Event) error {
+		return h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+			var err error
+			switch {
+			case cause != "" && h.AcceptDerivedInTx != nil:
+				_, _, err = h.AcceptDerivedInTx(tx, scope, cause, e)
+			case h.AcceptInTx != nil:
+				_, _, err = h.AcceptInTx(tx, scope, e)
+			default:
+				err = storage.ErrInvalid
+			}
+			return err
+		})
+	}
+	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file"), Own: own})
 	if err != nil {
 		return err
 	}

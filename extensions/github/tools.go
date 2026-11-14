@@ -25,7 +25,8 @@ import (
 // acts only on that Work's issue and repository (or another scope's, for an
 // authorized cross-scope wait). The PR operations also reach any PR in a
 // repository the Work's scope registers, so Work without an issue (a Slack
-// request, a job) can review one. Non-re-derivable writes are marked and
+// request, a job) can review one, and such Work opens, lists and edits PRs
+// of its own there (tools_owned.go). Non-re-derivable writes are marked and
 // idempotent.
 
 // Event families the tools and the host add to the extension's ingress
@@ -36,13 +37,20 @@ const (
 	TypeDependencyMet = "github.dependency.met"
 	// TypeHoldReleased starts a held issue's first agent turn.
 	TypeHoldReleased = "github.hold.released"
+	// TypePullOwned gives a PR to the Work without an issue that opened it
+	// (github.pr.create): the route attaches the PR's key to that Work, so
+	// its news reaches it. Only the tools accept it; the family is sealed,
+	// so no executor can emit one with the builtin emit and take a PR.
+	TypePullOwned = "github.pull_request.owned"
 )
 
 // Payload schemas of the tools' families and outputs.
 const (
 	SchemaHoldReleased = "github.hold.released.v1"
-	SchemaFilter       = "github.dependency.filter.v1"
-	SchemaHold         = "github.hold.v1"
+	// SchemaPullOwned is TypePullOwned's payload (PullOwned).
+	SchemaPullOwned = "github.pull_request.owned.v1"
+	SchemaFilter    = "github.dependency.filter.v1"
+	SchemaHold      = "github.hold.v1"
 	// SchemaHoldRecovery is the hold executor's persisted recovery state.
 	SchemaHoldRecovery = "github.hold.recovery.v1"
 	// SchemaClaim is an operator's claim request (TypeClaimRequested).
@@ -94,11 +102,11 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[issueListInput]()},
 		{Name: OpIssueCreate, Summary: "Open a new issue, optionally held until conditions are met or a time comes, or put on the backlog.",
 			Input: extension.InputSchema[issueCreateInput]()},
-		{Name: OpPRList, Summary: "List the PRs of this Work's issue, open or not.",
-			Input: extension.InputSchema[noInput]()},
+		{Name: OpPRList, Summary: "List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not.",
+			Input: extension.InputSchema[prListInput]()},
 		{Name: OpPRView, Summary: "Read a PR with every comment, inline review comment and review on it.",
 			Input: extension.InputSchema[prViewInput]()},
-		{Name: OpPRCreate, Summary: "Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise.",
+		{Name: OpPRCreate, Summary: "Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise; without an issue, from the branch you name.",
 			Input: extension.InputSchema[prCreateInput]()},
 		{Name: OpPRComment, Summary: "Comment on a PR's conversation.",
 			Input: extension.InputSchema[prCommentInput]()},
@@ -165,6 +173,11 @@ type ToolsOptions struct {
 	// another scope's tracker (its authorization.file_scopes). Nil allows
 	// no other scope.
 	MayFile func(filer, target domain.ID) error
+	// Own accepts a TypePullOwned Event into scope, derived from cause (the
+	// calling attempt's trigger) when there is one, else as a root
+	// (inproc.Host.AcceptDerivedInTx and AcceptInTx). Nil: a PR that Work
+	// without an issue opens isn't given to it, and the call says so.
+	Own func(ctx context.Context, scope, cause domain.ID, e domain.Event) error
 }
 
 // Tools implements the operations.
@@ -209,7 +222,9 @@ func (t *Tools) Registration() extension.Registration {
 		}
 	}
 	// h binds the Work's issue; pr binds the Work with or without one;
-	// repo binds a Work that has a repository, its issue's or its PR's.
+	// repo binds a Work that has a repository, its issue's or its PR's;
+	// code binds Work that opens PRs of its own: an issue's, or one that
+	// owns no issue.
 	h := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return wrap(t.bind, f)
 	}
@@ -219,7 +234,11 @@ func (t *Tools) Registration() extension.Registration {
 	pr := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return wrap(t.bindWork, f)
 	}
-	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeHoldReleased},
+	code := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return wrap(t.bindCode, f)
+	}
+	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeHoldReleased, TypePullOwned},
+		SealedEventTypes: []string{TypePullOwned},
 		DependencyFilter: DependencyFilter,
 		Operations: []extension.Operation{
 			{Name: OpContext, Handler: pr(t.context)},
@@ -230,12 +249,13 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpIssueComment, Handler: pr(t.issueComment)},
 			{Name: OpIssueList, Handler: pr(t.issueList)},
 			{Name: OpIssueCreate, Handler: pr(t.issueCreate)},
-			{Name: OpPRList, Handler: h(t.prList)},
+			{Name: OpPRList, Handler: code(t.prList)},
 			{Name: OpPRView, Handler: pr(t.prView)},
-			{Name: OpPRCreate, Handler: h(t.prCreate)},
-			// Edit acts only on a PR whose body carries the calling Work's
-			// marker, which only create (an issue's Work) puts there.
-			{Name: OpPREdit, Handler: h(t.prEdit)},
+			{Name: OpPRCreate, Handler: code(t.prCreate)},
+			// Edit acts only on a PR this Work opened: whose body carries
+			// its marker, which only create puts there, from its issue's
+			// branch, or given to it when it opened it (TypePullOwned).
+			{Name: OpPREdit, Handler: code(t.prEdit)},
 			{Name: OpPRComment, Handler: pr(t.prComment)},
 			{Name: OpPRReply, Handler: pr(t.prReply)},
 			{Name: OpPRResolve, Handler: pr(t.prResolve)},
@@ -330,6 +350,25 @@ func (t *Tools) bindRepo(ctx context.Context, a extension.Authority) (*bound, er
 	}
 	if b.number == 0 && b.pull == 0 {
 		return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+	}
+	return b, nil
+}
+
+// bindCode resolves a Work that opens PRs of its own: an issue's Work, or
+// Work that owns no issue (a Slack thread, a job, a webhook delivery, child
+// Work), which opens them in a repository its scope registers and keeps
+// those it opened (tools_owned.go). A PR's own Work works on that PR, and an
+// acknowledgement only comments, so neither opens one.
+func (t *Tools) bindCode(ctx context.Context, a extension.Authority) (*bound, error) {
+	b, err := t.bindWork(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if b.ack {
+		return nil, refuse("acknowledgement", "this Work acknowledges issue #%d; it may read the issue and comment on it, and nothing more", b.number)
+	}
+	if b.pull > 0 {
+		return nil, refuse("pull_request_work", "this Work is PR #%d's own: it works on that PR and opens or edits no PR of its own", b.pull)
 	}
 	return b, nil
 }
@@ -555,7 +594,7 @@ func (t *Tools) context(ctx context.Context, b *bound, data json.RawMessage) (an
 	}
 	if b.number == 0 {
 		if b.pull == 0 {
-			return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+			return t.ownedContext(ctx, b)
 		}
 		// A PR's own Work: the PR is what it is about.
 		return map[string]any{"repo": b.code.Settings.Repo, "pr": b.pull,
@@ -955,9 +994,19 @@ func pullState(p rawPull) string {
 	return "open"
 }
 
+type prListInput struct {
+	Repo string `json:"repo,omitempty" doc:"only the PRs in this repository (owner/name); without an issue, defaults to every repository this project registers"`
+}
+
 func (t *Tools) prList(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in noInput
+	var in prListInput
 	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	if b.number == 0 {
+		return t.ownedList(ctx, b, in.Repo)
+	}
+	if err := ownRepoOnly(b, in.Repo); err != nil {
 		return nil, err
 	}
 	pulls, err := t.issuePulls(ctx, b)
@@ -1027,11 +1076,12 @@ type prCreateInput struct {
 	Title string `json:"title" doc:"the PR's title; must not be empty"`
 	Body  string `json:"body" doc:"what the PR changes, in Markdown; must not be empty, and a link to the issue is added"`
 	Base  string `json:"base,omitempty" doc:"the branch to merge into; defaults to the repository's base branch"`
-	Head  string `json:"head,omitempty" doc:"the branch to open the PR from; defaults to the issue's branch, and a PR from another branch isn't linked to the issue"`
+	Head  string `json:"head,omitempty" doc:"the branch to open the PR from; defaults to the issue's branch, and a PR from another branch isn't linked to the issue; required when this Work owns no issue"`
 	Draft bool   `json:"draft,omitempty" doc:"open the PR as a draft"`
 	// ClosesIssue false links the PR without closing the issue on
 	// merge: every PR but the last of a multi-PR issue.
-	ClosesIssue *bool `json:"closes_issue,omitempty" doc:"whether merging the PR closes the issue (default true); false on every PR but the last of an issue that takes several"`
+	ClosesIssue *bool  `json:"closes_issue,omitempty" doc:"whether merging the PR closes the issue (default true); false on every PR but the last of an issue that takes several"`
+	Repo        string `json:"repo,omitempty" doc:"the repository (owner/name) to open the PR in; defaults to this Work's own, else this project's only one"`
 }
 
 func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
@@ -1041,6 +1091,12 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 	}
 	if strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Body) == "" {
 		return nil, refuse("missing_field", "title and body are required")
+	}
+	if b.number == 0 {
+		return t.ownedCreate(ctx, b, in)
+	}
+	if err := ownRepoOnly(b, in.Repo); err != nil {
+		return nil, err
 	}
 	head, body := in.Head, in.Body
 	if head == "" {
@@ -1120,9 +1176,16 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 		return nil, err
 	}
 	// The marker says which Work opened the PR, but anyone who opens a PR
-	// writes its body and can copy it; the head can't be forged: only
-	// someone who can push to the repository makes the Work's branch there.
-	own := p.Head.Ref != "" && p.Head.Ref == b.branch() && p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo)
+	// writes its body and can copy it. An issue's Work proves the PR is its
+	// own by the head, which can't be forged: only someone who can push to
+	// the repository makes the Work's branch there. Work without an issue
+	// proves it by the PR's key, which only its own create gave it.
+	own := p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo)
+	if b.number > 0 {
+		own = own && p.Head.Ref != "" && p.Head.Ref == b.branch()
+	} else {
+		own = own && b.owns(src, in.Number)
+	}
 	if a := ParseAgent(p.Body); !own || a == nil || a.Work != string(b.work.ID) {
 		return nil, refuse("not_own_pull_request", "PR #%d wasn't opened by this Work, so it can't be edited from here; comment on it with %s instead", in.Number, OpPRComment)
 	}
@@ -1144,6 +1207,8 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 					break
 				}
 			}
+		} else if err := noIssueLink(src, body); err != nil {
+			return nil, err
 		}
 		if body = withPullMarker(body, string(b.work.ID)); !sameBody(body, p.Body) {
 			fields["body"] = body

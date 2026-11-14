@@ -386,7 +386,7 @@ Comment on a PR's conversation.
 
 #### `github.pr.create`
 
-Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise.
+Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise; without an issue, from the branch you name.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -394,7 +394,8 @@ Open a PR from this issue's branch, linked to the issue so its merge closes it u
 | `body` | string | yes | what the PR changes, in Markdown; must not be empty, and a link to the issue is added |
 | `closes_issue` | boolean |  | whether merging the PR closes the issue (default true); false on every PR but the last of an issue that takes several |
 | `draft` | boolean |  | open the PR as a draft |
-| `head` | string |  | the branch to open the PR from; defaults to the issue's branch, and a PR from another branch isn't linked to the issue |
+| `head` | string |  | the branch to open the PR from; defaults to the issue's branch, and a PR from another branch isn't linked to the issue; required when this Work owns no issue |
+| `repo` | string |  | the repository (owner/name) to open the PR in; defaults to this Work's own, else this project's only one |
 | `title` | string | yes | the PR's title; must not be empty |
 
 #### `github.pr.edit`
@@ -411,9 +412,11 @@ Change the title, description or draft state of an open PR this Work opened.
 
 #### `github.pr.list`
 
-List the PRs of this Work's issue, open or not.
+List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not.
 
-Takes no input.
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `repo` | string |  | only the PRs in this repository (owner/name); without an issue, defaults to every repository this project registers |
 
 #### `github.pr.reply`
 

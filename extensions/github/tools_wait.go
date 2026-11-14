@@ -532,7 +532,13 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		if len(b.work.CorrelationKeys) == 0 {
 			return extension.WaitPlan{}, refuse("cannot_wait", "this Work has nothing of its own to be woken on")
 		}
-		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}, Timeout: h.Until, Description: h.WaitDescription()}}
+		// The news of the PRs it opened (their keys are its own) wakes it as
+		// an issue's PRs wake the issue's Work.
+		match := []string{TypeDependencyMet}
+		if len(t.ownedPulls(b, "")) > 0 {
+			match = types
+		}
+		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: match}, Timeout: h.Until, Description: h.WaitDescription()}}
 		for _, r := range resolved {
 			plan.Dependencies = append(plan.Dependencies, r.dep)
 		}

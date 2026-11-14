@@ -66,6 +66,14 @@ func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credC
 // config) the scope's bindings may name, all signing in with the same key.
 func gitCredLabWith(t *testing.T, auth string, conns map[string]string) (*githubtest.Server, *gh.Tools, credCall) {
 	t.Helper()
+	work := domain.Work{ID: "work/3", ScopeID: "eng", CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueKey(3, "")}}}
+	return gitCredLabFor(t, auth, conns, work)
+}
+
+// gitCredLabFor is gitCredLabWith for work, in a scope that also registers
+// the repositories extra names (owner/name).
+func gitCredLabFor(t *testing.T, auth string, conns map[string]string, work domain.Work, extra ...string) (*githubtest.Server, *gh.Tools, credCall) {
+	t.Helper()
 	fake := githubtest.New(repo, "pat")
 	t.Cleanup(fake.Close)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -95,12 +103,19 @@ func gitCredLabWith(t *testing.T, auth string, conns map[string]string) (*github
 	if err != nil {
 		t.Fatal(err)
 	}
-	work := domain.Work{ID: "work/3", ScopeID: "eng", CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueKey(3, "")}}}
+	sources := []gh.Source{{Settings: s, Connection: "github", Client: client}}
+	for _, r := range extra {
+		x, err := gh.ParseExtension([]byte(`{"namespace":"github/github.com/`+r+`","scope":"eng","repo":"`+r+`"}`), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, gh.Source{Settings: x, Connection: "github", Client: client})
+	}
 	writers := gh.NewWriters(func(scope domain.ID, id string) (json.RawMessage, gh.SecretFunc, bool) {
 		c, ok := conns[id]
 		return json.RawMessage(c), secrets, ok && scope == "eng"
 	}, fake.Now)
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: workStore{work}, Sources: func() []gh.Source { return []gh.Source{{Settings: s, Connection: "github", Client: client}} }, Now: fake.Now, Writers: writers})
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: workStore{work}, Sources: func() []gh.Source { return sources }, Now: fake.Now, Writers: writers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +254,35 @@ func TestGitCredential(t *testing.T) {
 	}
 	if _, ok := fake.Scope(credentialOf(t, next).Password); !ok {
 		t.Fatal("a failed listing revoked a token")
+	}
+}
+
+// TestGitCredentialWithoutAnIssue: Work that owns no issue (a Slack thread,
+// a job, child Work) gets git's credential for the repository git asks for,
+// when its scope registers it: the only one without a path, the one the
+// path names among several, and none for a repository it doesn't register
+// (#590).
+func TestGitCredentialWithoutAnIssue(t *testing.T) {
+	thread := domain.Work{ID: "work/thread", Kind: "slack.conversation", ScopeID: "eng", CorrelationKeys: []domain.CorrelationKey{{Source: "slack/T1", ExternalID: "C1/1.0"}}}
+	fake, _, call := gitCredLabFor(t, `{"auth":"app","app_id":"42"}`, nil, thread)
+	out, err := call.do("x/1", `{"protocol":"https","host":"github.com"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope, ok := fake.Scope(credentialOf(t, out).Password); !ok || !slices.Equal(scope.Repositories, []string{"widgets"}) {
+		t.Fatalf("minted for %+v (valid %v)", scope, ok)
+	}
+
+	_, _, call = gitCredLabFor(t, `{"auth":"app","app_id":"42"}`, nil, thread, "octo/gadgets")
+	if out, err := call.do("x/1", `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`); err != nil || credentialOf(t, out).Password == "" {
+		t.Fatalf("named among several: %s %v", out.Data, err)
+	}
+	if out, err := call.do("x/1", `{"protocol":"https","host":"github.com","path":"octo/elsewhere.git"}`); err != nil || credentialOf(t, out) != (credential{}) {
+		t.Fatalf("unregistered: %s %v, want no credential", out.Data, err)
+	}
+	var op *extension.OperationError
+	if _, err := call.do("x/1", `{"protocol":"https","host":"github.com"}`); !errors.As(err, &op) || op.Code != "repo_required" {
+		t.Fatalf("no path among several: %v", err)
 	}
 }
 

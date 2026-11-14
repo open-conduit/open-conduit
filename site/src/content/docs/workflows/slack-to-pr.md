@@ -123,6 +123,16 @@ When someone in the thread asks for a change to the web app, file it rather than
 3. The `web` scope's `issues` route claims the new issue. Its agent opens a PR, the checks pass, and it reports. That turn ends in `review`, which wakes the thread's agent: it posts the PR link in the thread and parks on the issue again.
 4. Someone merges the PR, which closes the issue. The thread's agent wakes, replies that the export has shipped, and goes back to waiting on the thread.
 
+## Without a GitHub issue
+
+When the team tracks its work somewhere else (Jira, Linear) and wants no GitHub issue per change, the Slack agent, or child Work it asks for with `create_work`, can do the change itself:
+
+- Put the `github` entry for the repository in the thread's scope, with `track_issues: false`, and a `github` route, so the PR's news is routed. The thread's Work keeps its binding: the route's binding isn't used for it.
+- Give the binding a `git` resource in `clone` (or `work`) mode, whose branch comes from `branch_template` (default `agent/work-{work}`), and the operations `github.context`, `github.pr.create`, `github.pr.list`, `github.pr.edit`, `github.pr.view`, `github.checks` and `github.git.credential`, plus `github.pr.comment` and `github.pr.reply` to answer reviews.
+- The agent pushes its branch and calls `github.pr.create` with `head` set to it. The PR becomes the thread's Work's own: its checks, reviews, comments and merge come back to the same thread's agent, which can fix a red check or answer a review, and `github.pr.list` and `github.context` list it. Child Work reports the PR's URL in its result, which its parent receives when the child ends.
+
+The details and refusals are in [code work without an issue](../../architecture/engineering-tools/#code-work-without-an-issue).
+
 ## Limits
 
 - **A thread message doesn't wake it early.** While the thread's agent is parked on the issue, a new message in the thread is kept and handed to it with the next wake (the PR, the merge or the time). Keep `until` short enough that a question isn't left for long.
