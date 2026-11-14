@@ -33,5 +33,6 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "manage_webhook", Help: "create or re-point the repository webhook at the listener's public URL (needs admin)"},
 		{Name: "base_branch"},
 		{Name: "no_checks_minutes", Help: "-1 disables", Default: "10"},
+		{Name: "workflows", Help: "workflow files github.workflow.run may start, such as release.yml (none by default)"},
 	}
 }

@@ -95,6 +95,10 @@ var opPermissions = map[string][]Permission{
 	OpPRReply:   {{"pull_requests", "write"}},
 	OpPRReview:  {{"pull_requests", "write"}},
 	OpPRResolve: {{"pull_requests", "write"}, {"contents", "write"}},
+	// Merging and updating a branch write the repository's contents.
+	OpPRMerge:        {{"pull_requests", "write"}, {"contents", "write"}},
+	OpPRUpdateBranch: {{"pull_requests", "write"}, {"contents", "write"}},
+	OpWorkflowRun:    {{"actions", "write"}},
 }
 
 // bindingWriterOps are the operations opPermissions lists that go out as

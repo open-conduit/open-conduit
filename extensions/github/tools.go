@@ -15,6 +15,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -102,7 +103,7 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[issueListInput]()},
 		{Name: OpIssueCreate, Summary: "Open a new issue, optionally held until conditions are met or a time comes, or put on the backlog.",
 			Input: extension.InputSchema[issueCreateInput]()},
-		{Name: OpPRList, Summary: "List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not.",
+		{Name: OpPRList, Summary: "List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not; with open, every open PR in the repository.",
 			Input: extension.InputSchema[prListInput]()},
 		{Name: OpPRView, Summary: "Read a PR with every comment, inline review comment and review on it.",
 			Input: extension.InputSchema[prViewInput]()},
@@ -118,6 +119,12 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[prEditInput]()},
 		{Name: OpPRReview, Summary: "Submit one review of a PR: approve, request changes or comment, with optional inline comments.",
 			Input: extension.InputSchema[prReviewInput]()},
+		{Name: OpPRMerge, Summary: "Merge a PR at the head you read, once it is approved, green on that head, up to date with its base and nobody on it is still working; otherwise refused, saying what is missing.",
+			Input: extension.InputSchema[prMergeInput]()},
+		{Name: OpPRUpdateBranch, Summary: "Bring a PR's branch up to date with its base, from the head you read, while no agent on it is working.",
+			Input: extension.InputSchema[prUpdateBranchInput]()},
+		{Name: OpWorkflowRun, Summary: "Start a workflow the repository's entry allows on a branch, with inputs; a retried call starts no second run.",
+			Input: extension.InputSchema[workflowRunInput]()},
 		{Name: OpChecks, Summary: "Show the state of every check on a PR's head commit, with links to failing ones.",
 			Input: extension.InputSchema[checksInput]()},
 		{Name: OpUpload, Summary: "Upload a file to this Work's issue tracker and get a link to put in a comment.",
@@ -178,6 +185,11 @@ type ToolsOptions struct {
 	// (inproc.Host.AcceptDerivedInTx and AcceptInTx). Nil: a PR that Work
 	// without an issue opens isn't given to it, and the call says so.
 	Own func(ctx context.Context, scope, cause domain.ID, e domain.Event) error
+	// Pending reads the input routed to a Work that no attempt has read
+	// (the host's state.pending), which github.pr.merge and
+	// github.pr.update-branch check every agent on the PR for. Nil: they
+	// can't rule unread input out, and refuse.
+	Pending func(ctx context.Context, work domain.ID) ([]inproc.PendingInput, error)
 }
 
 // Tools implements the operations.
@@ -249,7 +261,9 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpIssueComment, Handler: pr(t.issueComment)},
 			{Name: OpIssueList, Handler: pr(t.issueList)},
 			{Name: OpIssueCreate, Handler: pr(t.issueCreate)},
-			{Name: OpPRList, Handler: code(t.prList)},
+			// List binds any Work: with open, a PR's own Work or a job
+			// lists every open PR; otherwise it needs code work of its own.
+			{Name: OpPRList, Handler: pr(t.prList)},
 			{Name: OpPRView, Handler: pr(t.prView)},
 			{Name: OpPRCreate, Handler: code(t.prCreate)},
 			// Edit acts only on a PR this Work opened: whose body carries
@@ -261,6 +275,11 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRResolve, Handler: pr(t.prResolve)},
 			{Name: OpPRReview, Handler: pr(t.prReview)},
 			{Name: OpChecks, Handler: pr(t.checks)},
+			// Landing work binds any Work: the rules are checked here,
+			// whoever asks.
+			{Name: OpPRMerge, Handler: pr(t.prMerge)},
+			{Name: OpPRUpdateBranch, Handler: pr(t.prUpdateBranch)},
+			{Name: OpWorkflowRun, Handler: pr(t.workflowRun)},
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: repo(t.fetch)},
 			{Name: OpHoldStatus, Handler: h(t.holdStatus)},
@@ -996,12 +1015,22 @@ func pullState(p rawPull) string {
 
 type prListInput struct {
 	Repo string `json:"repo,omitempty" doc:"only the PRs in this repository (owner/name); without an issue, defaults to every repository this project registers"`
+	Open bool   `json:"open,omitempty" doc:"every open PR in the repository, whoever opened it, drafts included, instead of this Work's own"`
 }
 
 func (t *Tools) prList(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in prListInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
+	}
+	if in.Open {
+		return t.openList(ctx, b, in.Repo)
+	}
+	if b.ack {
+		return nil, refuse("acknowledgement", "this Work acknowledges issue #%d; it may read the issue and comment on it, and nothing more", b.number)
+	}
+	if b.pull > 0 {
+		return nil, refuse("pull_request_work", "this Work is PR #%d's own and has no PRs of its own; list every open PR with open", b.pull)
 	}
 	if b.number == 0 {
 		return t.ownedList(ctx, b, in.Repo)

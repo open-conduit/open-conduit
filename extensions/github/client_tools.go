@@ -550,3 +550,67 @@ func (c *Client) Fetch(ctx context.Context, repos []string, link FetchLink) ([]b
 	}
 	return data, res.Header.Get("Content-Type"), nil
 }
+
+// BehindBase is how many of base's commits head lacks (GET compare
+// base...head's behind_by): 0 when head holds every commit of base.
+func (c *Client) BehindBase(ctx context.Context, repo, base, head string) (int, error) {
+	var out struct {
+		Status   string `json:"status"`
+		BehindBy int    `json:"behind_by"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/compare/%s...%s", url.PathEscape(base), url.PathEscape(head)), nil, &out); err != nil {
+		return 0, err
+	}
+	return out.BehindBy, nil
+}
+
+// MergePull merges a PR at head (GitHub refuses with 409 when the head has
+// moved) by method (merge, squash or rebase) as the writer, and returns the
+// merge commit.
+func (c *Client) MergePull(ctx context.Context, repo string, n int, head, method string) (string, error) {
+	var out struct {
+		SHA    string `json:"sha"`
+		Merged bool   `json:"merged"`
+	}
+	_, err := c.call(ctx, true, repo, http.MethodPut, repoPath(repo, "/pulls/%d/merge", n), map[string]any{"sha": head, "merge_method": method}, &out)
+	return out.SHA, err
+}
+
+// UpdatePullBranch merges a PR's base into its head as the writer, only
+// while the head is still expected (GitHub refuses with 422 otherwise).
+func (c *Client) UpdatePullBranch(ctx context.Context, repo string, n int, expected string) error {
+	_, err := c.call(ctx, true, repo, http.MethodPut, repoPath(repo, "/pulls/%d/update-branch", n), map[string]any{"expected_head_sha": expected}, nil)
+	return err
+}
+
+// DispatchWorkflow starts a workflow_dispatch run of a workflow file on ref
+// with inputs as the writer.
+func (c *Client) DispatchWorkflow(ctx context.Context, repo, workflow, ref string, inputs map[string]any) error {
+	body := map[string]any{"ref": ref}
+	if len(inputs) > 0 {
+		body["inputs"] = inputs
+	}
+	_, err := c.call(ctx, true, repo, http.MethodPost, repoPath(repo, "/actions/workflows/%s/dispatches", url.PathEscape(workflow)), body, nil)
+	return err
+}
+
+// WorkflowRun is one run of a workflow, as the runs listing gives it.
+type WorkflowRun struct {
+	ID        int64     `json:"id"`
+	Event     string    `json:"event"`
+	Branch    string    `json:"head_branch"`
+	CreatedAt time.Time `json:"created_at"`
+	HTMLURL   string    `json:"html_url"`
+}
+
+// DispatchedRuns are a workflow's workflow_dispatch runs on ref created at
+// or after since, newest first (the first page, which is all a retried
+// dispatch needs).
+func (c *Client) DispatchedRuns(ctx context.Context, repo, workflow, ref string, since time.Time) ([]WorkflowRun, error) {
+	var out struct {
+		Runs []WorkflowRun `json:"workflow_runs"`
+	}
+	q := url.Values{"event": {"workflow_dispatch"}, "branch": {ref}, "created": {">=" + since.UTC().Format(time.RFC3339)}}
+	_, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/actions/workflows/%s/runs", url.PathEscape(workflow))+"?"+q.Encode(), nil, &out)
+	return out.Runs, err
+}

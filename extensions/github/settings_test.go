@@ -16,6 +16,15 @@ func TestExtensionSettings(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings: %+v", got)
 	}
+	got = ExtensionSettings(json.RawMessage(`{"namespace":"github/o/r","scope":"eng","repo":"o/r","workflows":["release.yml","release.yml","ci.yaml"]}`))
+	if last := got[len(got)-1]; last != (extension.Setting{Name: "workflows", Value: "release.yml, ci.yaml"}) {
+		t.Fatalf("workflows setting: %+v", last)
+	}
+	for _, bad := range []string{`"../release.yml"`, `"release"`, `""`, `"a/b.yml"`} {
+		if _, err := ParseExtension(json.RawMessage(`{"namespace":"github/o/r","scope":"eng","repo":"o/r","workflows":[`+bad+`]}`), nil); err == nil {
+			t.Fatalf("workflows %s accepted", bad)
+		}
+	}
 	if ExtensionSettings(json.RawMessage(`{"repo":1}`)) != nil {
 		t.Fatal("settings of a rejected config")
 	}

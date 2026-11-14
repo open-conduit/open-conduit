@@ -37,6 +37,7 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `webhook_secret` | Names a selected scope secret. |
 | `base_branch` | The branch PRs target (default: the repository's). |
 | `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none`, and how long a head without a check the base branch requires is held before `github.checks.missing`. With `-1` such a head stays pending. |
+| `workflows` | Default none. The workflow files in `.github/workflows` (such as `release.yml`) that [`github.workflow.run`](../engineering-tools/#tool-operations) may start in the repository; any other is refused. |
 | `track_pull_requests` | Default false. Also observes everything about each PR (its state, comments, reviews, checks and conflicts) under the PR's own key, for a route that [claims pull requests](#pull-request-work). |
 | `acknowledge_issues` | Default false. Also observes the opening of each new issue under its own key, for a route that [acknowledges issues](#acknowledgement-work) from authors `admit` doesn't admit. Needs `track_issues`. |
 | `admit` | Who may start Work. `authors[]`: the GitHub author associations admitted (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, `NONE`, case-insensitive), or `"*"` for anyone; default `OWNER`, `MEMBER`, `COLLABORATOR`; an empty list is refused. `forks`: default false; true lets a `pull_requests` route claim PRs from forks. |

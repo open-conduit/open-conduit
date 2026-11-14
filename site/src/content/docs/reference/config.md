@@ -350,6 +350,7 @@ Extension entry `config`:
 | `manage_webhook` |  | create or re-point the repository webhook at the listener's public URL (needs admin) |
 | `base_branch` |  |  |
 | `no_checks_minutes` | `10` | -1 disables |
+| `workflows` |  | workflow files github.workflow.run may start, such as release.yml (none by default) |
 
 ### Human (`human`)
 

@@ -67,6 +67,18 @@ type Pull struct {
 	// Mergeable is what a single PR's read and its webhook bodies say
 	// (nil: GitHub has not worked it out). The list never carries it.
 	Mergeable *bool
+	// Behind is how many of its base branch's commits the head lacks, as
+	// the compare endpoint reports it (0: up to date).
+	Behind int
+}
+
+// Dispatch is one workflow_dispatch a caller started.
+type Dispatch struct {
+	ID       int64
+	Workflow string
+	Ref      string
+	Inputs   map[string]any
+	At       time.Time
 }
 
 type Review struct {
@@ -168,7 +180,11 @@ type Server struct {
 	contents   map[string][]byte // attachments branch path → content
 	branches   map[string]bool
 	onBranch   map[string]map[string]bool // branch → commits in its history
-	files      map[string]string          // /files/<name> → redirect target
+	// workflows are the workflow files that may be dispatched, and
+	// dispatches those started.
+	workflows  map[string]bool
+	dispatches []Dispatch
+	files      map[string]string // /files/<name> → redirect target
 	fileReads  []Write
 	fileData   map[string][]byte
 	hooks      []*Hook
@@ -635,6 +651,30 @@ func (s *Server) SetMergeable(n int, m *bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pulls[n].Mergeable = m
+}
+
+// SetBehind sets how many of its base's commits a PR's head lacks.
+func (s *Server) SetBehind(n, by int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[n].Behind = by
+}
+
+// AddWorkflow lets a workflow file be dispatched.
+func (s *Server) AddWorkflow(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workflows == nil {
+		s.workflows = map[string]bool{}
+	}
+	s.workflows[name] = true
+}
+
+// Dispatches are the workflow runs callers started, oldest first.
+func (s *Server) Dispatches() []Dispatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Dispatch(nil), s.dispatches...)
 }
 
 // MergePull merges a PR.
@@ -1443,6 +1483,10 @@ var (
 	reCommentReact = regexp.MustCompile(`^/(issues|pulls)/comments/([0-9]+)/reactions$`)
 	rePull         = regexp.MustCompile(`^/pulls/([0-9]+)$`)
 	rePullReviews  = regexp.MustCompile(`^/pulls/([0-9]+)/reviews$`)
+	rePullMerge    = regexp.MustCompile(`^/pulls/([0-9]+)/merge$`)
+	rePullUpdate   = regexp.MustCompile(`^/pulls/([0-9]+)/update-branch$`)
+	reDispatch     = regexp.MustCompile(`^/actions/workflows/([^/]+)/dispatches$`)
+	reWorkflowRuns = regexp.MustCompile(`^/actions/workflows/([^/]+)/runs$`)
 	reCheckRuns    = regexp.MustCompile(`^/commits/([^/]+)/check-runs$`)
 	reStatus       = regexp.MustCompile(`^/commits/([^/]+)/status$`)
 	reCommitPulls  = regexp.MustCompile(`^/commits/([^/]+)/pulls$`)
@@ -1639,6 +1683,18 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 	case get && strings.HasPrefix(rest, "/compare/"):
 		branch, sha, ok := strings.Cut(strings.TrimPrefix(rest, "/compare/"), "...")
 		commits, known := s.onBranch[branch]
+		if ok && !commits[sha] {
+			// A PR's head against its base: ahead of it, or diverged by
+			// the commits the head lacks.
+			for _, p := range s.pulls {
+				if p.HeadSHA == sha && p.BaseRef == branch && p.MergedAt == nil {
+					if p.Behind > 0 {
+						return http.StatusOK, map[string]any{"status": "diverged", "ahead_by": 1, "behind_by": p.Behind}
+					}
+					return http.StatusOK, map[string]any{"status": "ahead", "ahead_by": 1, "behind_by": 0}
+				}
+			}
+		}
 		if !ok || !known {
 			return 0, nil
 		}
@@ -1714,6 +1770,82 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			}
 		}
 		return http.StatusOK, paged(r, list)
+	}
+	if x := rePullMerge.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPut {
+		n := atoi(x[1])
+		p, ok := s.pulls[n]
+		if !ok {
+			return 0, nil
+		}
+		var req struct {
+			SHA         string `json:"sha"`
+			MergeMethod string `json:"merge_method"`
+		}
+		_ = json.Unmarshal(body, &req)
+		switch {
+		case p.MergedAt != nil || s.issue(n).State != "open":
+			return http.StatusMethodNotAllowed, map[string]any{"message": "Pull Request is not mergeable"}
+		case req.SHA != "" && req.SHA != p.HeadSHA:
+			return http.StatusConflict, map[string]any{"message": "Head branch was modified. Review and try the merge again."}
+		case p.Mergeable != nil && !*p.Mergeable:
+			return http.StatusMethodNotAllowed, map[string]any{"message": "Pull Request is not mergeable"}
+		}
+		t := s.tick()
+		i := s.issue(n)
+		i.State, i.Closed, i.Updated = "closed", &t, t
+		p.MergedAt = &t
+		return http.StatusOK, map[string]any{"merged": true, "sha": "merge-" + p.HeadSHA, "message": "Pull Request successfully merged"}
+	}
+	if x := rePullUpdate.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPut {
+		n := atoi(x[1])
+		p, ok := s.pulls[n]
+		if !ok {
+			return 0, nil
+		}
+		var req struct {
+			Expected string `json:"expected_head_sha"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if req.Expected != "" && req.Expected != p.HeadSHA {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "expected head sha didn't match current head ref."}
+		}
+		if p.Mergeable != nil && !*p.Mergeable {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "merge conflict between base and head"}
+		}
+		p.HeadSHA = p.HeadSHA + "-updated"
+		p.Behind = 0
+		s.issue(n).Updated = s.tick()
+		s.commits[p.HeadSHA] = s.now
+		return http.StatusAccepted, map[string]any{"message": "Updating pull request branch."}
+	}
+	if x := reDispatch.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPost {
+		if !s.workflows[x[1]] {
+			return http.StatusNotFound, map[string]any{"message": "Not Found"}
+		}
+		var req struct {
+			Ref    string         `json:"ref"`
+			Inputs map[string]any `json:"inputs"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if req.Ref == "" {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "Invalid request: ref is required"}
+		}
+		s.dispatches = append(s.dispatches, Dispatch{ID: s.id(), Workflow: x[1], Ref: req.Ref, Inputs: req.Inputs, At: s.tick()})
+		return http.StatusNoContent, nil
+	}
+	if x := reWorkflowRuns.FindStringSubmatch(rest); x != nil && get {
+		if !s.workflows[x[1]] {
+			return http.StatusNotFound, map[string]any{"message": "Not Found"}
+		}
+		from, _ := time.Parse(time.RFC3339, strings.TrimPrefix(q.Get("created"), ">="))
+		runs := []map[string]any{}
+		for _, d := range s.dispatches {
+			if d.Workflow == x[1] && (q.Get("branch") == "" || q.Get("branch") == d.Ref) && !d.At.Before(from) {
+				runs = append(runs, map[string]any{"id": d.ID, "event": "workflow_dispatch", "head_branch": d.Ref, "created_at": ts(d.At),
+					"html_url": s.URL + "/" + s.Repo + "/actions/runs/" + strconv.FormatInt(d.ID, 10)})
+			}
+		}
+		return http.StatusOK, map[string]any{"total_count": len(runs), "workflow_runs": runs}
 	}
 	if x := reIssue.FindStringSubmatch(rest); x != nil && get {
 		if i, ok := s.issues[atoi(x[1])]; ok {

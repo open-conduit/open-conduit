@@ -412,11 +412,23 @@ Change the title, description or draft state of an open PR this Work opened.
 
 #### `github.pr.list`
 
-List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not.
+List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not; with open, every open PR in the repository.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `open` | boolean |  | every open PR in the repository, whoever opened it, drafts included, instead of this Work's own |
 | `repo` | string |  | only the PRs in this repository (owner/name); without an issue, defaults to every repository this project registers |
+
+#### `github.pr.merge`
+
+Merge a PR at the head you read, once it is approved, green on that head, up to date with its base and nobody on it is still working; otherwise refused, saying what is missing.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `head` | string | yes | the head commit you read the PR at (github.pr.view's head); it merges only at that commit |
+| `method` | string |  | squash (the default), merge or rebase |
+| `number` | integer | yes | the PR to merge |
+| `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
 
 #### `github.pr.reply`
 
@@ -451,6 +463,16 @@ Submit one review of a PR: approve, request changes or comment, with optional in
 | `number` | integer | yes | the PR to review |
 | `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
 
+#### `github.pr.update-branch`
+
+Bring a PR's branch up to date with its base, from the head you read, while no agent on it is working.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `head` | string | yes | the head commit you read the PR at (github.pr.view's head); it updates only from that commit |
+| `number` | integer | yes | the PR whose branch to bring up to date with its base |
+| `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
+
 #### `github.pr.view`
 
 Read a PR with every comment, inline review comment and review on it.
@@ -471,6 +493,17 @@ Park this Work until a PR, issue or job condition is met or a time comes; end th
 | `reason` | string | yes | what you're waiting for and why; posted on this Work's issue when it has one |
 | `repo` | string |  | the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one |
 | `until` | string |  | a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has |
+
+#### `github.workflow.run`
+
+Start a workflow the repository's entry allows on a branch, with inputs; a retried call starts no second run.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `inputs` | object |  | the workflow's workflow_dispatch inputs by name: strings, numbers or booleans |
+| `ref` | string |  | the branch or tag to run it on; defaults to the repository's base branch |
+| `repo` | string |  | the repository (owner/name) the workflow is in; defaults to this Work's own, else this project's only one |
+| `workflow` | string | yes | the workflow file to start, such as release.yml; only the ones the repository's entry lists in workflows |
 
 ### Human (`human`)
 
