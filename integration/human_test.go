@@ -68,7 +68,7 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops := []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, hu.OpAsk, "fixture.deploy", "fixture.read"}
+	ops := []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, hu.OpAsk, "fixture.deploy", "fixture.read", "fixture.git.credential"}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			return runtime.ToolbeltGrant{Operations: ops}, nil
@@ -90,7 +90,10 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 		}
 	}
 	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", Operations: []extension.Operation{
-		{Name: "fixture.deploy", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)}}}); err != nil {
+		{Name: "fixture.deploy", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)},
+		// fixture.git.credential serves git.credential, so only git's
+		// credential helper calls it; its runs count as deploys.
+		{Name: "fixture.git.credential", Handler: ran(h.deploys), Serves: extension.CapabilityGitCredential}}}); err != nil {
 		t.Fatal(err)
 	}
 	options := base.Options
@@ -586,6 +589,58 @@ func TestHumanGateApprovesTheSameCallOnce(t *testing.T) {
 				t.Fatalf("an approval let a second call through: %+v %v (runs %d)", out, err, *h.deploys)
 			}
 		})
+	}
+}
+
+// A gated call git's credential helper made for the agent is told to the
+// agent in its own terms: held, git's sign-in waits for approval; approved,
+// the agent is told to run the same git command again, not to call the
+// operation, whose direct call is refused gated or not, so its token never
+// reaches the agent. The approval lets one helper call with the same host
+// and path through, and the next asks again.
+func TestHumanGateOnACapabilityTellsTheAgentWhatToRun(t *testing.T) {
+	h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.git.credential"],"timeout":"2h"}]}}`)
+	ctx := context.Background()
+	in := domain.Payload{Data: json.RawMessage(`{"host":"github.com","path":"acme/app.git","protocol":"https"}`)}
+	helper := extension.ToolCall{Operation: "fixture.git.credential", Input: in, Capability: extension.CapabilityGitCredential}
+	direct := extension.ToolCall{Operation: "fixture.git.credential", Input: in}
+	_, err := h.belt.Call(ctx, h.token, direct)
+	refusedWith(t, err, extension.CodeCapabilityOnly)
+	if !strings.Contains(err.Error(), "git signs in by itself") {
+		t.Fatalf("direct refusal: %v", err)
+	}
+	out, err := h.belt.Call(ctx, h.token, helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var told struct{ Next string }
+	if json.Unmarshal(out.Output.Data, &told) != nil || !strings.Contains(told.Next, "git's sign-in to github.com/acme/app.git needs a person's approval") || !strings.Contains(told.Next, "run the same git command again") {
+		t.Fatalf("held: %s", out.Output.Data)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	aliases := h.eventsOfType(t, hu.TypeAnswered)
+	text, ok := hu.RenderEvent(aliases[0].Event, hu.Lookup(ctx, h.f.Store, h.f.Clock.Now))
+	if want := "### A person approved git's sign-in to github.com/acme/app.git\nRun the same git command again: it goes through once."; !ok || text != want {
+		t.Fatalf("render = %q, want %q", text, want)
+	}
+	h.resume(t)
+	// The agent does as it's told to with the operation, and is refused
+	// without using up the approval.
+	_, err = h.belt.Call(ctx, h.token, direct)
+	refusedWith(t, err, extension.CodeCapabilityOnly)
+	if out, err = h.belt.Call(ctx, h.token, helper); err != nil || out.Wait != nil || *h.deploys != 1 {
+		t.Fatalf("the approved sign-in did not go through: %+v %v (runs %d)", out, err, *h.deploys)
+	}
+	if acts, err := h.actions.Actions(ctx, h.target(t)); err != nil || len(acts) != 0 {
+		t.Fatalf("a second approval request opened: %+v %v", acts, err)
+	}
+	if out, err = h.belt.Call(ctx, h.token, helper); err != nil || out.Wait == nil || *h.deploys != 1 {
+		t.Fatalf("an approval let a second sign-in through: %+v %v (runs %d)", out, err, *h.deploys)
 	}
 }
 

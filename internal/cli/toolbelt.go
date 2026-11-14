@@ -515,12 +515,18 @@ func (t *toolbelt) gitCredential(args []string) int {
 	data, _ := json.Marshal(client.Payload{Data: attrs})
 	var refused error
 	for _, op := range ops {
-		result, err := t.toolbeltCall(ctx, client.ToolCall{Operation: op, Input: data})
+		result, err := t.toolbeltCall(ctx, client.ToolCall{Operation: op, Input: data, Capability: extension.CapabilityGitCredential})
 		if err != nil {
 			// Another operation may still own the URL; report the
 			// refusal only if none does.
 			refused = err
 			continue
+		}
+		if result.Wait != nil {
+			// A gate parked the run on the sign-in (a person's approval):
+			// git gets nothing, and the agent is told what the gate said.
+			t.heldCredential(result)
+			return 1
 		}
 		var cred struct{ Username, Password string }
 		if result.Output != nil {
@@ -537,6 +543,26 @@ func (t *toolbelt) gitCredential(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// heldCredential reports that git's sign-in parked the run: the gate's own
+// instruction (its output's next), else what the Wait is for. Git prints
+// it among its own errors, so the agent reads it.
+func (t *toolbelt) heldCredential(result client.ToolResult) {
+	var out struct{ Next string }
+	if result.Output != nil {
+		_ = json.Unmarshal(result.Output.Data, &out)
+	}
+	why := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, out.Next)
+	if why == "" {
+		why = "it waits for " + result.Wait.Description + "; end your turn now, and once resumed run the same git command again"
+	}
+	fmt.Fprintf(t.errOut, "os: no git credential yet: %s\n", why)
 }
 
 // noCredential reports why git gets no credential.

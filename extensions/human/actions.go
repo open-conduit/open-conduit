@@ -154,7 +154,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 		return refuseAction("invalid_input", "give an answer")
 	}
 	key := rec.Key()
-	data, _ := json.Marshal(AnswerPayload{Ask: rec.ID, Question: rec.Question, Answer: answer, Option: option, Responder: c.Caller.Kind + ":" + c.Caller.ID, Operation: rec.Gate})
+	data, _ := json.Marshal(AnswerPayload{Ask: rec.ID, Question: rec.Question, Answer: answer, Option: option, Responder: c.Caller.Kind + ":" + c.Caller.ID, Operation: rec.Gate, Capability: rec.Capability, Subject: rec.Subject})
 	return extension.ActionPlan{
 		Event:   domain.Event{Type: TypeAnswer, CorrelationKey: &key, Data: domain.Payload{Schema: SchemaAnswer, Data: data}},
 		Message: "answered: " + answer,

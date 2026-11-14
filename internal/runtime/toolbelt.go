@@ -316,7 +316,9 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 	var out []string
 	seen := map[string]bool{}
 	err := t.granted(ctx, token, execution, func(op extension.Operation) {
-		if op.Guidance != "" && !seen[op.Guidance] {
+		// An operation serving a capability is its client's, not the
+		// agent's, so the agent isn't told of it.
+		if op.Serves == "" && op.Guidance != "" && !seen[op.Guidance] {
 			seen[op.Guidance] = true
 			out = append(out, op.Guidance)
 		}
@@ -394,7 +396,7 @@ const childGuidance = "## You are answering another agent\n\nAnother agent asked
 func (t *Toolbelt) Described(ctx context.Context, token string, execution domain.ID) ([]extension.Operation, error) {
 	var out []extension.Operation
 	err := t.granted(ctx, token, execution, func(op extension.Operation) {
-		if op.Summary != "" || len(op.Input) > 0 {
+		if op.Serves == "" && (op.Summary != "" || len(op.Input) > 0) {
 			out = append(out, extension.Operation{Name: op.Name, Summary: op.Summary, Input: op.Input})
 		}
 	})
@@ -945,6 +947,25 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if !contains(a.Operations, c.Operation) {
 		return out, unauthorized(RefusalNotGranted)
 	}
+	// An operation that serves a capability answers only its client (git's
+	// credential helper for git.credential), never the agent's own call:
+	// its result is for the client and is often a secret, which must not
+	// reach the agent's transcript. With or without a gate, the agent is
+	// told what to do instead.
+	t.mu.RLock()
+	serves := t.operations[c.Operation].Serves
+	t.mu.RUnlock()
+	if c.Capability != serves {
+		capability := serves
+		if capability == "" {
+			capability = c.Capability
+		}
+		message := extension.DescribeCapabilityCall(capability, c.Input).Direct
+		if serves == "" {
+			message = c.Operation + " serves no capability; call it without one"
+		}
+		return out, &extension.OperationError{Code: extension.CodeCapabilityOnly, Message: message}
+	}
 	kind := ""
 	if c.Operation == extension.CreateWork && c.Child != nil {
 		// Child Work of a kind the binding isn't granted is refused here,
@@ -961,7 +982,9 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	digest := TokenDigest(token)
 	hash := requestHash(c)
 	replayKey := ""
-	if requestID != "" {
+	// A capability's answer is never kept for replay (it is often a
+	// credential): a retry asks afresh.
+	if requestID != "" && serves == "" {
 		replayKey = identity(string(a.ExecutionID), c.Operation, requestID)
 	}
 	ref := a.Lease
@@ -992,7 +1015,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		handlerAuthority.Operations = append([]string(nil), a.Operations...)
 		handlerAuthority.EventTypes = append([]string(nil), a.EventTypes...)
 		hctx := extension.WithCallRequestID(ctx, requestID)
-		plan, gate, e := t.gate(hctx, owner, c.Operation, handlerAuthority, c.Input)
+		plan, gate, e := t.gate(hctx, owner, extension.GateCall{Operation: c.Operation, Owner: owner, Input: c.Input, Capability: c.Capability}, handlerAuthority)
 		gatedBy = gate
 		if e != nil {
 			return out, e

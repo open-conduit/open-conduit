@@ -70,6 +70,13 @@ func TestToolbeltGitCredential(t *testing.T) {
 		case call["operation"] == "acme.git.credential" && in["host"] == "refusing.test":
 			w.WriteHeader(http.StatusConflict)
 			fmt.Fprint(w, `{"error":{"code":"acme_static","message":"acme refuses"}}`)
+		case call["capability"] != "git.credential":
+			// The host serves a git.credential operation only to a call
+			// made for the capability.
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			fmt.Fprint(w, `{"error":{"code":"capability_only","message":"git signs in by itself"}}`)
+		case call["operation"] == "github.git.credential" && in["host"] == "held.test":
+			fmt.Fprint(w, `{"data":{"wait":{"id":"w1","description":"a person's approval of github.git.credential"},"output":{"schema":"human.tool.v1","data":{"approval_required":true,"next":"git's sign-in to held.test needs a person's approval\nand did not go ahead. End your turn now"}}}}`)
 		case call["operation"] == "github.git.credential" && in["host"] == "github.com":
 			fmt.Fprint(w, `{"data":{"output":{"schema":"github.tool.v1","data":{"username":"x-access-token","password":"ghs_minted","expires_at":"2026-10-31T10:00:00Z"}}}}`)
 		default:
@@ -114,6 +121,12 @@ func TestToolbeltGitCredential(t *testing.T) {
 	// One operation's refusal is reported only when no other answers.
 	if code, out, errOut := run("protocol=https\nhost=refusing.test\n\n", "get"); code != 1 || out != "" || !strings.Contains(errOut, "acme refuses") {
 		t.Fatalf("refused: %d %q %q", code, out, errOut)
+	}
+	// A gate held the sign-in: git gets nothing, and stderr carries the
+	// gate's instruction on one line, which git shows the agent.
+	calls = nil
+	if code, out, errOut := run("protocol=https\nhost=held.test\n\n", "get"); code != 1 || out != "" || errOut != "os: no git credential yet: git's sign-in to held.test needs a person's approval and did not go ahead. End your turn now\n" || len(calls) != 2 {
+		t.Fatalf("held: %d %q %q %v", code, out, errOut, calls)
 	}
 	serving = `[]`
 	if code, out, errOut := run("protocol=https\nhost=github.com\n\n", "get"); code != 0 || out != "" || !strings.Contains(errOut, "no granted operation serves git.credential") {

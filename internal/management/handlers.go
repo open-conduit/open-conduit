@@ -1377,6 +1377,7 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 		ScopeID     string          `json:"scope_id"`
 		WorkID      string          `json:"work_id"`
 		ExecutionID string          `json:"execution_id"`
+		Capability  string          `json:"capability"`
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
@@ -1384,7 +1385,7 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 	if in.RequestID == "" {
 		in.RequestID = c.key
 	}
-	call := extension.ToolCall{Operation: in.Operation, ScopeID: domain.ID(in.ScopeID), WorkID: domain.ID(in.WorkID), ExecutionID: domain.ID(in.ExecutionID)}
+	call := extension.ToolCall{Operation: in.Operation, ScopeID: domain.ID(in.ScopeID), WorkID: domain.ID(in.WorkID), ExecutionID: domain.ID(in.ExecutionID), Capability: in.Capability}
 	// On an execution's own socket the call asserts that execution, so a
 	// token issued to any other execution is refused by the toolbelt.
 	if id := scopedExecution(c.ctx); id != "" {

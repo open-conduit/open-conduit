@@ -1287,6 +1287,10 @@ type ToolCall struct {
 	ScopeID     string          `json:"scope_id,omitempty"`
 	WorkID      string          `json:"work_id,omitempty"`
 	ExecutionID string          `json:"execution_id,omitempty"`
+	// Capability is set by a capability's client (git's credential helper
+	// sets git.credential): an operation serving a capability answers only
+	// a call made for it.
+	Capability string `json:"capability,omitempty"`
 }
 type ToolResult struct {
 	Event   *Event   `json:"event,omitempty"`

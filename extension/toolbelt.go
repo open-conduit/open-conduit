@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -101,6 +102,13 @@ type ToolCall struct {
 	Wait                         *WaitRequest
 	Outcome                      *domain.Outcome
 	Input                        domain.Payload
+	// Capability says the call is made for a capability's client (git's
+	// credential helper asks with CapabilityGitCredential), not by the
+	// agent. An operation that serves a capability (Operation.Serves) is
+	// served only to a call made for that capability, so its result, a
+	// secret such as a git token, never reaches an agent's transcript; a
+	// call naming a capability its operation doesn't serve is refused too.
+	Capability string
 }
 
 // CancelRequest is cancel_work's input: the child Work to cancel and,
@@ -187,6 +195,10 @@ type Operation struct {
 	// the toolbelt which of the operations its grant includes serve it
 	// (Serving) and calls each in turn until one answers, so the host routes
 	// a capability without knowing which extension's domain it belongs to.
+	// Such an operation is served only to a call made for the capability
+	// (ToolCall.Capability), never to an agent's own call, and the toolbelt
+	// neither describes it to agents nor keeps its result for replay: what
+	// it answers is for the client, and is often a secret.
 	Serves string
 }
 
@@ -204,6 +216,75 @@ func OperationNames(ops []Operation) []string {
 // password, expires_at?} for a remote the operation's extension owns, or {}
 // for any other, so the caller can ask the next operation serving it.
 const CapabilityGitCredential = "git.credential"
+
+// CodeCapabilityOnly is the OperationError code of a call refused because
+// it was not made for the capability its operation serves, or named one
+// its operation doesn't serve.
+const CodeCapabilityOnly = "capability_only"
+
+// CapabilityCall says, in an agent's own terms, what a call made for a
+// capability's client is, so that whatever holds, refuses or approves one
+// can tell the agent what to do: the agent didn't make the call, its client
+// (git, for CapabilityGitCredential) did.
+type CapabilityCall struct {
+	// Subject names the call ("git's sign-in to github.com/acme/app"), at
+	// most MaxCapabilitySubject bytes, on one line.
+	Subject string
+	// Again says how the agent makes the call again ("Run the same git
+	// command again"), without a full stop.
+	Again string
+	// Direct says why an agent's own call of an operation serving the
+	// capability is refused and what to do instead.
+	Direct string
+}
+
+// MaxCapabilitySubject bounds CapabilityCall.Subject.
+const MaxCapabilitySubject = 200
+
+// DescribeCapabilityCall is CapabilityCall for a call made for capability
+// with input. A capability it doesn't know gets generic wording.
+func DescribeCapabilityCall(capability string, input domain.Payload) CapabilityCall {
+	switch capability {
+	case CapabilityGitCredential:
+		var in struct{ Host, Path string }
+		_ = json.Unmarshal(input.Data, &in)
+		where := in.Host
+		if p := strings.Trim(in.Path, "/"); p != "" {
+			where += "/" + p
+		}
+		subject := "git's sign-in"
+		if where = oneLine(where); where != "" {
+			subject += " to " + where
+		}
+		return CapabilityCall{Subject: clip(subject, MaxCapabilitySubject), Again: "Run the same git command again",
+			Direct: "git signs in by itself: run the git command, and its credential helper asks for the token. Don't call this operation; its token is never handed to you"}
+	}
+	return CapabilityCall{Subject: clip("a call your toolbelt made for you ("+oneLine(capability)+")", MaxCapabilitySubject), Again: "Do again what made it",
+		Direct: "this operation answers the " + oneLine(capability) + " capability for your toolbelt's client, which calls it for you. Don't call it yourself"}
+}
+
+// oneLine drops control characters, so a call's input can't break the line
+// it is shown on.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// clip cuts s to at most n bytes, on a rune boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // MaxOnce bounds EmitPlan.Once.
 const MaxOnce = 1024
@@ -431,6 +512,10 @@ type GateCall struct {
 	// serves it.
 	Operation, Owner string
 	Input            domain.Payload
+	// Capability is the capability the call was made for (ToolCall.
+	// Capability), "" for an agent's own call; DescribeCapabilityCall says
+	// what to tell the agent about it.
+	Capability string
 }
 
 // RegistrationName reports whether name may name a registration: a

@@ -29,6 +29,8 @@ type toolbeltHarness struct {
 	token     string
 	echoes    *int
 	deny      *bool
+	// served counts fixture.serve's runs.
+	served *int
 	// connection is the Authority.Connection the last fixture.echo saw.
 	connection *string
 	mu         *sync.Mutex
@@ -80,10 +82,10 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	o.Capabilities = domain.Capabilities{Toolbelt: extension.ToolbeltCLI}
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
-	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}, records: new([]observability.Record)}
+	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), served: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}, records: new([]observability.Record)}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
-			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection", WorkKinds: fixtureWorkKinds}, nil
+			return runtime.ToolbeltGrant{Operations: append(allToolbeltOperations(), "fixture.serve"), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection", WorkKinds: fixtureWorkKinds}, nil
 		},
 		Authorize: func(_ context.Context, c runtime.AuthorityCheck) error {
 			h.mu.Lock()
@@ -124,7 +126,12 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 			onEcho(extension.CallRequestID(ctx))
 		}
 		return in, nil
-	}, Guidance: "Echo with fixture.echo.", Serves: "fixture.capability", Summary: "Echo the input.", Input: json.RawMessage(`{"type":"object"}`)}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+	}, Guidance: "Echo with fixture.echo.", Summary: "Echo the input.", Input: json.RawMessage(`{"type":"object"}`)}, {Name: "fixture.serve", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		h.mu.Lock()
+		*h.served++
+		h.mu.Unlock()
+		return domain.Payload{Schema: "fixture.secret.v1", Data: []byte(`{"password":"fixture-secret"}`)}, nil
+	}, Guidance: "Never shown: fixture.serve is its client's.", Serves: "fixture.capability", Summary: "Answer the fixture capability.", Input: json.RawMessage(`{"type":"object"}`)}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 		if h.plan == nil {
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
@@ -291,7 +298,7 @@ func TestProductionToolbeltServing(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
 	got, err := h.belt.Serving(ctx, h.token, "", "fixture.capability")
-	if err != nil || len(got) != 1 || got[0] != "fixture.echo" {
+	if err != nil || len(got) != 1 || got[0] != "fixture.serve" {
 		t.Fatalf("serving = %q, %v", got, err)
 	}
 	if got, err = h.belt.Serving(ctx, h.token, "", extension.CapabilityGitCredential); err != nil || len(got) != 0 {
@@ -314,6 +321,54 @@ func TestProductionToolbeltServing(t *testing.T) {
 	}}
 	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "serves", Operations: []extension.Operation{wait}}); !errors.Is(err, extension.ErrInvalid) {
 		t.Fatalf("a wait serving a capability registered: %v", err)
+	}
+}
+
+// TestProductionToolbeltServesCapabilityOnlyToItsClient: an operation
+// serving a capability answers a call made for it (git's credential helper),
+// and refuses the agent's own call of it with capability_only and what to do
+// instead, before any gate and without running, so its result (a secret)
+// never reaches the agent. Naming a capability an operation doesn't serve is
+// refused too, and the answer is never kept for replay.
+func TestProductionToolbeltServesCapabilityOnlyToItsClient(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	var gated []string
+	h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "watcher", Gate: func(_ context.Context, _ extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+		gated = append(gated, c.Operation+"/"+c.Capability)
+		return nil, nil
+	}})
+	in := domain.Payload{Schema: "fixture.v1", Data: []byte(`{}`)}
+	var op *extension.OperationError
+	for name, call := range map[string]extension.ToolCall{
+		"the agent's own call":      {Operation: "fixture.serve", Input: in},
+		"another capability":        {Operation: "fixture.serve", Input: in, Capability: extension.CapabilityGitCredential},
+		"a capability echo doesn't": {Operation: "fixture.echo", Input: in, Capability: "fixture.capability"},
+	} {
+		out, err := h.belt.Call(ctx, h.token, call)
+		if !errors.As(err, &op) || op.Code != extension.CodeCapabilityOnly || out.Output.Data != nil {
+			t.Fatalf("%s: %+v, %v, want %s", name, out, err, extension.CodeCapabilityOnly)
+		}
+	}
+	if len(gated) != 0 {
+		t.Fatalf("a refused call reached a gate: %q", gated)
+	}
+	out, err := h.belt.CallRequest(ctx, h.token, "kept", extension.ToolCall{Operation: "fixture.serve", Input: in, Capability: "fixture.capability"})
+	if err != nil || !strings.Contains(string(out.Output.Data), "fixture-secret") {
+		t.Fatalf("the client's call = %+v, %v", out, err)
+	}
+	if strings.Join(gated, ",") != "fixture.serve/fixture.capability" {
+		t.Fatalf("gates were told %q, want the capability", gated)
+	}
+	// The same request ID asks afresh rather than replaying the secret.
+	if _, err = h.belt.CallRequest(ctx, h.token, "kept", extension.ToolCall{Operation: "fixture.serve", Input: in, Capability: "fixture.capability"}); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	served := *h.served
+	h.mu.Unlock()
+	if served != 2 {
+		t.Fatalf("fixture.serve ran %d times, want 2: its answer was kept for replay", served)
 	}
 }
 
