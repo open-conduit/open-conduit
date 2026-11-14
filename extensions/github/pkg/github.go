@@ -35,6 +35,7 @@ func base() protocol.Manifest {
 	for _, t := range []string{gh.TypeClaimRequested, gh.TypeHoldReleased} {
 		p.Families = append(p.Families, protocol.Family{Type: t, Loss: emittedLoss})
 	}
+	p.Families = append(p.Families, protocol.Family{Type: gh.TypePullOwned, Loss: gh.PullOwnedLoss, Sealed: true})
 	for _, s := range gh.Schemas() {
 		name, version, ok := protocol.ParseSchemaID(s)
 		if !ok {

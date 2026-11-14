@@ -257,7 +257,7 @@ func selfAuthored(a *Agent, w *domain.Work) bool {
 // issues, saying what the Work is when the input tells (display).
 func (r Route) Match(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	d, err := r.match(ctx, in)
-	if err == nil && d.Match {
+	if err == nil && d.Match && d.Deliver != extension.DeliverNone {
 		d.Display = display(in.Work, in.Event.Event)
 	}
 	return d, err
@@ -271,6 +271,14 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	rc, err := ParseRoute(in.Route.Config.Data)
 	if err != nil {
 		return extension.Skip("the route's config is invalid"), nil
+	}
+	// A PR that Work without an issue opened is that Work's, whatever the
+	// route claims: every github route attaches it and passes on its news.
+	if e.Type == TypePullOwned {
+		return owned(in), nil
+	}
+	if ownedWork(in) {
+		return ownedNews(in), nil
 	}
 	if rc.Claim == TrackPullRequests {
 		return matchPull(in, rc), nil
@@ -344,6 +352,76 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return commentNews(e, in.Work), nil
 	}
 	return extension.Skip(e.Type + " is not passed to the agent"), nil
+}
+
+// githubKind reports whether a Work kind is one of this extension's (an
+// issue's, a held issue's, a PR's own, an acknowledgement); Work of any
+// other kind that owns a PR's key opened the PR itself.
+func githubKind(kind string) bool {
+	return kind == WorkKind || kind == WorkKindHeld || kind == WorkKindPull || kind == WorkKindAck
+}
+
+// ownedWork reports whether the Event is news of a PR that Work without an
+// issue opened: Work of another kind owns the PR's key (PullKey).
+func ownedWork(in extension.RouteInput) bool {
+	k := in.Event.Event.CorrelationKey
+	if in.Work == nil || githubKind(in.Work.Kind) || k == nil {
+		return false
+	}
+	_, rest, ok := pullItem(k.ExternalID)
+	return ok && rest == ""
+}
+
+// owned attaches a PR to the Work without an issue that opened it. Only the
+// tools accept TypePullOwned, from the entry's own source, once
+// github.pr.create opened the PR for that Work; the family is sealed, so no
+// executor can emit it, and the source is checked again here. The
+// attachment is not input: the Work's own turn opened the PR and may still
+// be running.
+func owned(in extension.RouteInput) extension.RouteDecision {
+	e := in.Event.Event
+	if in.Work == nil || e.WorkID != in.Work.ID {
+		return extension.Skip("a PR is given only to the Work that opened it")
+	}
+	if githubKind(in.Work.Kind) {
+		return extension.Skip("an issue's or a PR's own Work is linked to its PRs by its issue")
+	}
+	var p PullOwned
+	if e.Data.Schema != SchemaPullOwned || json.Unmarshal(e.Data.Data, &p) != nil || p.Number <= 0 {
+		return extension.Skip("not an owned PR payload")
+	}
+	if e.Source != p.Namespace {
+		return extension.Skip("an owned PR comes only from its entry's own source")
+	}
+	if _, ok := settingsFor(in.Scope, p.Namespace); !ok {
+		return extension.Skip("no github entry in this scope reads " + p.Namespace)
+	}
+	key := domain.CorrelationKey{Source: p.Namespace, ExternalID: PullKey(p.Number)}
+	return extension.RouteDecision{Match: true, AttachKeys: []domain.CorrelationKey{key}, Deliver: extension.DeliverNone, Reason: "a PR this Work opened"}
+}
+
+// ownedNews selects the news of a PR that Work without an issue opened,
+// as an issue's Work hears its PRs': merges, closes, conflicts, check
+// results and comments. It is queued on the binding that Work runs on, not
+// the route's, so the agent that opened the PR answers.
+func ownedNews(in extension.RouteInput) extension.RouteDecision {
+	e := in.Event.Event
+	if _, ok := settingsFor(in.Scope, e.Source); !ok {
+		return extension.Skip("no github entry in this scope reads " + e.Source)
+	}
+	var d extension.RouteDecision
+	switch e.Type {
+	case TypePullMerged, TypePullClosed, TypePullConflicts, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing:
+		d = extension.RouteDecision{Match: true, Reason: "news of a PR this Work opened"}
+	case TypeCommentHuman, TypeCommentAgent:
+		d = commentNews(e, in.Work)
+	default:
+		return extension.Skip(e.Type + " is not passed to the agent")
+	}
+	if d.Match {
+		d.Deliver = extension.DeliverCurrent
+	}
+	return d
 }
 
 // commentNews selects a human or agent comment for existing Work: new, with

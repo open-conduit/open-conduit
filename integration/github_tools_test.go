@@ -25,6 +25,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -194,7 +195,20 @@ func (e *toolsEnv) compose() {
 		}
 		return nil
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, MayFile: mayFile, Sources: func() []gh.Source {
+	// As the host accepts an extension's own Event (inproc.Host).
+	own := func(ctx context.Context, scope, cause domain.ID, ev domain.Event) error {
+		ev.ID = domain.ID(protocol.EmittedEventID(ev.Source, ev.DeliveryID))
+		return e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			var err error
+			if cause != "" {
+				_, _, err = runtime.AcceptDerivedInTx(tx, e.clock.Now(), runtime.CausalLimits{}, scope, cause, ev)
+			} else {
+				_, _, err = runtime.AcceptInTx(tx, scope, ev)
+			}
+			return err
+		})
+	}
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, MayFile: mayFile, Own: own, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Connection: "github", Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)
@@ -1249,13 +1263,11 @@ func TestGitHubPROperationsWithoutAnIssue(t *testing.T) {
 	w := e.request("thread-1")
 	a := e.start(w.ID)
 
-	// Issue-bound operations keep refusing Work without an issue.
-	for _, op := range []string{gh.OpContext, gh.OpPRCreate, gh.OpPRList} {
-		_, err := e.call(a, op, "", map[string]any{"title": "t", "body": "b"})
-		var refusal *extension.OperationError
-		if !errors.As(err, &refusal) || (refusal.Code != "no_issue" && refusal.Code != "invalid_input") {
-			t.Fatalf("%s without an issue: %v", op, err)
-		}
+	// It opens no PR without naming its branch, and lists none it didn't open.
+	_, err := e.call(a, gh.OpPRCreate, "", map[string]any{"title": "t", "body": "b"})
+	refused(t, err, "head_required")
+	if list := e.must(a, gh.OpPRList, "", map[string]any{}); len(list["prs"].([]any)) != 0 {
+		t.Fatalf("list: %v", list)
 	}
 	view := e.must(a, gh.OpPRView, "", map[string]any{"number": pr})
 	if view["repo"] != ghRepo || view["title"] != "Fix the header" || !strings.Contains(string(mustJSON(view["comments"])), `\"repo\": \"`+ghRepo+`\"`) {
@@ -1264,7 +1276,7 @@ func TestGitHubPROperationsWithoutAnIssue(t *testing.T) {
 	if c := e.must(a, gh.OpChecks, "", map[string]any{"number": pr, "repo": ghRepo}); c["state"] != "passed" {
 		t.Fatalf("checks: %v", c)
 	}
-	_, err := e.call(a, gh.OpChecks, "", map[string]any{})
+	_, err = e.call(a, gh.OpChecks, "", map[string]any{})
 	refused(t, err, "missing_field")
 
 	// A lost response leaves each post pending; the marker confirms it once.
@@ -1403,6 +1415,104 @@ func TestGitHubIssueOperationsWithoutAnIssue(t *testing.T) {
 	_, err = e.call(b, gh.OpIssueCreate, "", map[string]any{"title": "x", "body": "y"})
 	refused(t, err, "no_repository")
 	e.finish(b, nil)
+}
+
+// Work that owns no issue (a Slack thread) does code work in its scope's
+// repository: it opens a PR from a branch it names, the PR becomes its own,
+// it lists and edits it, and the PR's checks and comments reach it, while
+// another Work can't take or edit the PR (#590).
+func TestGitHubWorkWithoutAnIssueOpensAndKeepsItsPR(t *testing.T) {
+	ghBob := githubtest.User{Login: "bob", Type: "User"}
+	e := newToolsEnv(t)
+	w := e.request("thread-pr")
+	a := e.start(w.ID)
+
+	if c := e.must(a, gh.OpContext, "", map[string]any{}); c["repo"] != ghRepo || c["base"] == "" || len(c["prs"].([]any)) != 0 {
+		t.Fatalf("context: %v", c)
+	}
+	_, err := e.call(a, gh.OpPRCreate, "", map[string]any{"title": "t", "body": "b", "head": "agent/issue-3"})
+	refused(t, err, "issue_branch")
+	_, err = e.call(a, gh.OpPRCreate, "", map[string]any{"title": "t", "body": "Closes #3", "head": "fix/header"})
+	refused(t, err, "issue_link")
+	_, err = e.call(a, gh.OpPRCreate, "", map[string]any{"title": "t", "body": "b", "head": "fix/header", "closes_issue": false})
+	refused(t, err, "no_issue")
+	_, err = e.call(a, gh.OpPRCreate, "", map[string]any{"title": "t", "body": "b", "head": "fix/header", "repo": "octo/elsewhere"})
+	refused(t, err, "unregistered_repo")
+
+	out := e.must(a, gh.OpPRCreate, "c1", map[string]any{"title": "Fix the header", "body": "Centres the logo.", "head": "fix/header"})
+	pr := int(out["number"].(float64))
+	if out["state"] != "open" || out["repo"] != ghRepo || out["note"] != nil {
+		t.Fatalf("create: %v", out)
+	}
+	if a := gh.ParseAgent(e.fake.Issue(pr).Body); a == nil || a.Work != string(w.ID) {
+		t.Fatalf("body: %q", e.fake.Issue(pr).Body)
+	}
+	// A retry finds the PR the first call opened, and gives it once.
+	if again := e.must(a, gh.OpPRCreate, "c2", map[string]any{"title": "Fix the header", "body": "Centres the logo.", "head": "fix/header"}); again["number"] != out["number"] || again["note"] == nil {
+		t.Fatalf("retry: %v", again)
+	}
+	e.route()
+	key := domain.CorrelationKey{Source: e.settings.Namespace, ExternalID: gh.PullKey(pr)}
+	if got := e.work(w.ID); !slices.Contains(got.CorrelationKeys, key) {
+		t.Fatalf("keys: %+v", got.CorrelationKeys)
+	}
+	if q := e.queued(w.ID); len(q) != 0 {
+		t.Fatalf("the attachment was input: %v", q)
+	}
+	if list := e.must(a, gh.OpPRList, "", map[string]any{}); !strings.Contains(string(mustJSON(list)), `"title":"Fix the header"`) {
+		t.Fatalf("list: %v", list)
+	}
+	if c := e.must(a, gh.OpContext, "", map[string]any{}); len(c["prs"].([]any)) != 1 {
+		t.Fatalf("context: %v", c)
+	}
+	if ed := e.must(a, gh.OpPREdit, "", map[string]any{"number": pr, "title": "Centre the header logo"}); ed["state"] != "edited" {
+		t.Fatalf("edit: %v", ed)
+	}
+	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": pr, "body": "Fixes #3"})
+	refused(t, err, "issue_link")
+	e.finish(a, nil)
+
+	// Its checks and comments reach it.
+	e.fake.SetCheck(e.fake.Pull(pr).HeadSHA, "ci", "completed", "failure")
+	e.fake.AddComment(pr, ghBob, "The logo is still off.")
+	e.sync()
+	q := strings.Join(e.queued(w.ID), " ")
+	if !strings.Contains(q, gh.TypeChecksFailed) || !strings.Contains(q, gh.TypeCommentHuman) {
+		t.Fatalf("queued: %v", q)
+	}
+
+	// Another Work neither takes the PR nor edits it.
+	other := e.request("thread-other")
+	b := e.start(other.ID)
+	_, err = e.call(b, gh.OpPRCreate, "", map[string]any{"title": "Mine", "body": "b", "head": "fix/header"})
+	refused(t, err, "head_taken")
+	_, err = e.call(b, gh.OpPREdit, "", map[string]any{"number": pr, "title": "Mine"})
+	refused(t, err, "not_own_pull_request")
+	if list := e.must(b, gh.OpPRList, "", map[string]any{}); len(list["prs"].([]any)) != 0 {
+		t.Fatalf("other's list: %v", list)
+	}
+	e.finish(b, nil)
+	e.route()
+	if got := e.work(other.ID); slices.Contains(got.CorrelationKeys, key) {
+		t.Fatalf("the other Work took the PR: %+v", got.CorrelationKeys)
+	}
+
+	// Parked on something else, it is woken by its PR's news too.
+	a = e.start(w.ID)
+	parked, err := e.call(a, gh.OpWait, "w1", map[string]any{"until": e.clock.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339), "reason": "Waiting for the release."})
+	if err != nil || parked.Wait == nil {
+		t.Fatalf("wait: %v", err)
+	}
+	e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("not waiting: %v", got.State)
+	}
+	e.fake.AddComment(pr, ghBob, "Any news?")
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkReady {
+		t.Fatalf("its PR's comment did not wake it: %v", got.State)
+	}
 }
 
 // The repository must be one the scope registers, and named when it

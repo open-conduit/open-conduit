@@ -3,6 +3,7 @@ package github_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -303,7 +304,8 @@ func TestToolsRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := tools.Registration()
-	if r.Version != extension.ContractVersion || r.Name != gh.Type || r.DependencyFilter == nil || len(r.EventTypes) != 1 || r.EventTypes[0] != gh.TypeHoldReleased {
+	if r.Version != extension.ContractVersion || r.Name != gh.Type || r.DependencyFilter == nil ||
+		!slices.Equal(r.EventTypes, []string{gh.TypeHoldReleased, gh.TypePullOwned}) || !slices.Equal(r.SealedEventTypes, []string{gh.TypePullOwned}) {
 		t.Fatalf("registration %+v", r)
 	}
 	names := map[string]bool{}

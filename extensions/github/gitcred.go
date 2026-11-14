@@ -105,7 +105,18 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	src, err := t.pullSource(b, "")
+	path := strings.TrimSuffix(strings.Trim(in.Path, "/"), ".git")
+	// Work without an issue reaches the repository git names when its scope
+	// registers several; an issue's Work, and a PR's own, only their own.
+	named := ""
+	if b.number == 0 && b.pull == 0 && strings.Count(path, "/") == 1 {
+		named = path
+	}
+	src, err := t.pullSource(b, named)
+	var op *extension.OperationError
+	if named != "" && errors.As(err, &op) && op.Code == "unregistered_repo" {
+		return gitCredentialOutput{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +125,6 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 		return nil, err
 	}
 	repo := src.Settings.Repo
-	path := strings.TrimSuffix(strings.Trim(in.Path, "/"), ".git")
 	if in.Protocol != "https" || !strings.EqualFold(in.Host, client.Host()) || path != "" && !strings.EqualFold(path, repo) {
 		return gitCredentialOutput{}, nil
 	}
