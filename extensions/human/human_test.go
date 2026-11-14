@@ -50,7 +50,7 @@ func TestParseConfig(t *testing.T) {
 			t.Errorf("start gate for %s on %s: %v", tc.kind, tc.binding, ok)
 		}
 	}
-	if len(c.gates("github.issue", "", false)) != 0 {
+	if len(c.gates("github.issue", nil, "", false)) != 0 {
 		t.Error("a kind gate gated an operation")
 	}
 	if _, err := ParseConfig(json.RawMessage(`{"gates":[{"kinds":["github.*"],"for_bindings":["newbie"]}]}`)); err == nil {
@@ -61,15 +61,32 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rule := gate(c.gates("slack.post", "newbie", true))
+	rule := gate(c.gates("slack.post", nil, "newbie", true))
 	if !slices.Equal(rule.Responders, []string{"operator:alice", "operator:bob"}) || rule.timeout != time.Hour {
 		t.Errorf("two gates on one call: %+v", rule)
 	}
-	if got := c.gates("slack.post", "trusted", true); len(got) != 1 || got[0].Responders[0] != "operator:bob" {
+	if got := c.gates("slack.post", nil, "trusted", true); len(got) != 1 || got[0].Responders[0] != "operator:bob" {
 		t.Errorf("for_bindings held another binding's call: %+v", got)
 	}
-	if got := c.gates("slack.post", "", false); len(got) != 3 {
+	if got := c.gates("slack.post", nil, "", false); len(got) != 3 {
 		t.Errorf("an unknown binding must meet every gate: %+v", got)
+	}
+	c, err = ParseConfig(json.RawMessage(`{"gates":[{"operations":["aws.credentials"],"input":{"role": "write"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		input string
+		held  bool
+	}{{`{"role":"write"}`, true}, {`{ "role" : "write", "other": 1 }`, true}, {`{"role":"read"}`, false}, {`{}`, false}, {`null`, false}, {`{"role":["write"]}`, false}} {
+		if got := len(c.gates("aws.credentials", json.RawMessage(tc.input), "", false)) == 1; got != tc.held {
+			t.Errorf("input %s: held %v, want %v", tc.input, got, tc.held)
+		}
+	}
+	for _, bad := range []string{`{"gates":[{"kinds":["aws.*"],"input":{"role":"write"}}]}`, `{"gates":[{"operations":["aws.credentials"],"input":{"":"write"}}]}`} {
+		if _, err := ParseConfig(json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
 	}
 	if got := gateBindings(json.RawMessage(`{"gates":[{"bindings":["release"]},{"operations":["x.y"],"for_bindings":["newbie","release"]}]}`)); !slices.Equal(got, []string{"release", "newbie"}) {
 		t.Errorf("gate bindings: %v", got)
@@ -164,15 +181,15 @@ func TestParseGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, ok := one(c.gates("deploy.prod", "", false))
+	g, ok := one(c.gates("deploy.prod", nil, "", false))
 	if !ok || g.timeout != DefaultGateTimeout || len(g.Responders) != 1 || g.Responders[0] != "github:alice" {
 		t.Fatalf("prefix gate: %+v %v", g, ok)
 	}
-	if g, ok = one(c.gates("shell.run", "", false)); !ok || g.timeout != 30*time.Minute || g.Responders[0] != "slack_user:U1" {
+	if g, ok = one(c.gates("shell.run", nil, "", false)); !ok || g.timeout != 30*time.Minute || g.Responders[0] != "slack_user:U1" {
 		t.Fatalf("second gate: %+v %v", g, ok)
 	}
 	for _, op := range []string{"deploy", "deployer.x", "github.pr.merge", "shell.runs"} {
-		if len(c.gates(op, "", false)) > 0 {
+		if len(c.gates(op, nil, "", false)) > 0 {
 			t.Errorf("%s gated", op)
 		}
 	}

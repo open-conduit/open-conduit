@@ -363,7 +363,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `responders` | `["operator:local"]` | who may answer, each kind:id or a bare kind |
 | `surfaces` | `["tui"]` | where the question is shown |
-| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them) |
+| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them; input: only when the call's input has these top-level field values, such as {"role": "write"}) |
 
 ### Introspection (`introspection`)
 

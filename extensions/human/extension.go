@@ -52,7 +52,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Bindings: gateBindings, Fields: []protocol.FieldDecl{
 		{Name: "responders", Help: "who may answer, each kind:id or a bare kind", Default: `["operator:local"]`},
 		{Name: "surfaces", Help: "where the question is shown", Default: `["tui"]`},
-		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them)`},
+		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them; input: only when the call's input has these top-level field values, such as {"role": "write"})`},
 	}}}
 }
 

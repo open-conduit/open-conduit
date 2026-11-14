@@ -64,6 +64,13 @@ type GateConfig struct {
 	// Each must name a binding of the scope. It needs Operations, and does
 	// not narrow Kinds or Bindings.
 	ForBindings []string `json:"for_bindings,omitempty"`
+	// Input, when set, narrows Operations to calls whose input has each of
+	// these top-level fields with exactly this JSON value ({"role":
+	// "write"}), so one operation can need approval for some inputs and
+	// not others. A call whose input lacks a field, or has another value,
+	// isn't held by the gate. It needs Operations, and does not narrow
+	// Kinds or Bindings.
+	Input map[string]json.RawMessage `json:"input,omitempty"`
 	// Kinds are Work kinds ("github.issue"), or a prefix ending in ".*",
 	// whose Work needs approval before its first attempt starts.
 	Kinds []string `json:"kinds,omitempty"`
@@ -150,6 +157,19 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 				return c, fmt.Errorf("%s: for_bindings: %q is not a binding name", where, b)
 			}
 		}
+		if len(g.Input) > 0 && len(g.Operations) == 0 {
+			return c, fmt.Errorf("%s: input: name the operations whose input it matches", where)
+		}
+		for field, v := range g.Input {
+			if field == "" {
+				return c, fmt.Errorf("%s: input: a field needs a name", where)
+			}
+			canon, err := canonical(v)
+			if err != nil {
+				return c, fmt.Errorf("%s: input: %q is not a JSON value", where, field)
+			}
+			g.Input[field] = canon
+		}
 		for _, op := range g.Operations {
 			name := strings.TrimSuffix(op, ".*")
 			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
@@ -223,7 +243,7 @@ func checkResponders(field string, responders []string) error {
 // gates are the gates that name op, in order; with binding known, only
 // those whose for_bindings, if any, name it (with it unknown, every gate
 // that names op, so a filter never lets a call through unasked).
-func (c Config) gates(op, binding string, known bool) []GateConfig {
+func (c Config) gates(op string, input json.RawMessage, binding string, known bool) []GateConfig {
 	var out []GateConfig
 	for _, g := range c.Gates {
 		if !slices.ContainsFunc(g.Operations, func(pattern string) bool { return matches(pattern, op) }) {
@@ -232,9 +252,51 @@ func (c Config) gates(op, binding string, known bool) []GateConfig {
 		if known && len(g.ForBindings) > 0 && !slices.Contains(g.ForBindings, binding) {
 			continue
 		}
+		if !g.holdsInput(input) {
+			continue
+		}
 		out = append(out, g)
 	}
 	return out
+}
+
+// holdsInput reports whether the gate's input condition, if any, holds for
+// a call's input: each field it names is in the input, a JSON object, with
+// the same value. An input that isn't an object has none of the fields.
+func (g GateConfig) holdsInput(input json.RawMessage) bool {
+	if len(g.Input) == 0 {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(input, &fields) != nil {
+		return false
+	}
+	for field, want := range g.Input {
+		have, ok := fields[field]
+		if !ok {
+			return false
+		}
+		canon, err := canonical(have)
+		if err != nil || !bytes.Equal(canon, want) {
+			return false
+		}
+	}
+	return true
+}
+
+// canonical is a JSON value in one form (objects' keys sorted, no
+// insignificant space), so two spellings of a value compare equal.
+func canonical(v json.RawMessage) (json.RawMessage, error) {
+	var x any
+	d := json.NewDecoder(bytes.NewReader(v))
+	d.UseNumber()
+	if err := d.Decode(&x); err != nil {
+		return nil, err
+	}
+	if d.More() {
+		return nil, errors.New("trailing data")
+	}
+	return json.Marshal(x)
 }
 
 // gate is the rule one call's approval request follows when the gates

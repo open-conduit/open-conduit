@@ -49,7 +49,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 	if !ok {
 		return nil, nil
 	}
-	if len(entry.Config.gates(c.Operation, "", false)) == 0 {
+	if len(entry.Config.gates(c.Operation, c.Input.Data, "", false)) == 0 {
 		return nil, nil
 	}
 	now := t.o.Now()
@@ -75,7 +75,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 		case err != nil && !errors.Is(err, storage.ErrNotFound):
 			return err
 		}
-		matched := entry.Config.gates(c.Operation, binding, known)
+		matched := entry.Config.gates(c.Operation, c.Input.Data, binding, known)
 		if len(matched) == 0 {
 			allowed = true
 			return nil
