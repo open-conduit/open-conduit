@@ -18,7 +18,8 @@ import (
 // TestToolbeltTypeOnlyWait: a Wait subscribes on its Work's keys (B04), so a
 // type-only `os wait` subscribes on every key the Work owns. Previously the
 // declaration was accepted but registration failed at the host handshake.
-// Work without keys cannot wait and is refused at declaration time.
+// Work without keys is given its own key, core.work/<its ID>, and
+// subscribes on that; where it came from doesn't change.
 func TestToolbeltTypeOnlyWait(t *testing.T) {
 	ctx := context.Background()
 	script := `if os wait --type operator.reply --timeout 3600 --request-id wait > /dev/null; then echo declared; else echo refused; exit 3; fi`
@@ -41,10 +42,19 @@ func TestToolbeltTypeOnlyWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := h.runOnce(created.Work.ID)
-	x, err := c.Execution(ctx, string(id))
-	if err != nil || x.State != "failed" || shellData(t, x.Outcome)["exit_code"] != float64(3) {
-		t.Fatalf("keyless wait should be refused at declaration: %+v %v", x, err)
+	h.runOnce(created.Work.ID)
+	own := client.Key{Source: domain.LineageSource, ExternalID: created.Work.ID}
+	w, err = c.Work(ctx, created.Work.ID)
+	if err != nil || w.State != "waiting" || len(w.CorrelationKeys) != 1 || w.CorrelationKeys[0] != own {
+		t.Fatalf("keyless wait not registered on the Work's own key: %+v %v", w, err)
+	}
+	waits, err = c.Waits(ctx, url.Values{"work_id": {w.ID}, "state": {"active"}})
+	if err != nil || len(waits.Items) != 1 || len(waits.Items[0].Match.Keys) != 1 || waits.Items[0].Match.Keys[0] != own {
+		t.Fatalf("keyless wait predicate: %+v %v", waits.Items, err)
+	}
+	page, err := c.Works(ctx, url.Values{"source": {"fixture"}})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != w.ID {
+		t.Fatalf("the keyless Work left its source once it waited: %+v %v", page.Items, err)
 	}
 }
 

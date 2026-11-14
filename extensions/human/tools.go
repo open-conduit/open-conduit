@@ -176,9 +176,6 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 		if err != nil || w.ScopeID != a.ScopeID {
 			return extension.ErrUnauthorized
 		}
-		if len(w.CorrelationKeys) == 0 {
-			return refuse("not_supported", "this Work has no conversation to resume, so it cannot wait for an answer")
-		}
 		entry, ok := t.o.Entry(a.ScopeID)
 		if !ok {
 			return refuse("not_configured", "nobody is set up to answer questions in this project; carry on without asking, or say what you need in your status")

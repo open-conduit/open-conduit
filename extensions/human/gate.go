@@ -23,9 +23,8 @@ const (
 
 // Refusal codes a gated call can receive.
 const (
-	CodeApprovalRefused     = "approval_refused"
-	CodeApprovalTimedOut    = "approval_timed_out"
-	CodeApprovalUnavailable = "approval_unavailable"
+	CodeApprovalRefused  = "approval_refused"
+	CodeApprovalTimedOut = "approval_timed_out"
 )
 
 // Gate is the extension's toolbelt gate (extension.Gate). A call of an
@@ -115,10 +114,6 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			}
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			return err
-		}
-		if len(w.CorrelationKeys) == 0 {
-			decided = refuse(CodeApprovalUnavailable, "%s needs a person's approval, and this Work has no conversation to resume once it is given, so the call was refused", c.Operation)
-			return nil
 		}
 		seq, err := tx.LatestSequence()
 		if err != nil {

@@ -24,12 +24,12 @@ type Renderer func([]domain.Event) string
 var firstNumber = regexp.MustCompile(`\d+`)
 
 // templateVars are the playbook argument/branch template values: {key} is the
-// Work's first correlation key, {number} the first number in it (the key when
+// Work's first correlation key other than its lineage key (domain.SubjectKey), {number} the first number in it (the key when
 // it has none) and {work} the Work ID.
 func expand(template string, w domain.Work) string {
 	key := ""
-	if len(w.CorrelationKeys) > 0 {
-		key = w.CorrelationKeys[0].ExternalID
+	if k, ok := domain.SubjectKey(w.CorrelationKeys); ok {
+		key = k.ExternalID
 	}
 	number := firstNumber.FindString(key)
 	if number == "" {

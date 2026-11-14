@@ -528,11 +528,9 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		// No issue to carry the reason: the Work's own conversation (a Slack
 		// thread) is where people hear it, from the agent, before it waits:
 		// the plan releases its authority at once. Only what it
-		// waits for (or its time) wakes it, never its own posts.
-		if len(b.work.CorrelationKeys) == 0 {
-			return extension.WaitPlan{}, refuse("cannot_wait", "this Work has nothing of its own to be woken on")
-		}
-		// The news of the PRs it opened (their keys are its own) wakes it as
+		// waits for (or its time) wakes it, never its own posts. Work
+		// that owns no key is given its own when the host declares the
+		// wait. The news of the PRs it opened (their keys are its own) wakes it as
 		// an issue's PRs wake the issue's Work.
 		match := []string{TypeDependencyMet}
 		if len(t.ownedPulls(b, "")) > 0 {

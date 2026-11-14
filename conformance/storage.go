@@ -1740,7 +1740,9 @@ func workQueries(s storage.Store) error {
 		// w2 and w3 are created at the same instant, written in two zones.
 		{2 * time.Second, east, func(tx storage.Tx) error {
 			// A writer's LatestExecutor is ignored: storage keeps it.
-			if err := tx.PutWork(domain.Work{ID: "w2", Kind: "test.other", ScopeID: "other", State: domain.WorkReady, LatestExecutor: "forged"}, 0); err != nil {
+			// w2 owns only its lineage key, which names no source: it is
+			// from its kind.
+			if err := tx.PutWork(domain.Work{ID: "w2", Kind: "test.other", ScopeID: "other", State: domain.WorkReady, LatestExecutor: "forged", CorrelationKeys: []domain.CorrelationKey{domain.LineageKey("w2")}}, 0); err != nil {
 				return err
 			}
 			if err := attempt(tx, "w2", 1, "claude"); err != nil {
@@ -1749,7 +1751,9 @@ func workQueries(s storage.Store) error {
 			return finish(tx, "w2", domain.WorkFailed)
 		}},
 		{2 * time.Second, time.UTC, func(tx storage.Tx) error {
-			return tx.PutWork(domain.Work{ID: "w3", Kind: "test.objective", ScopeID: "scope", ParentID: "w1", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{{Source: "github.issue", ExternalID: "3"}}}, 0)
+			// w3 gained its lineage key before its issue's: it is from the
+			// issue.
+			return tx.PutWork(domain.Work{ID: "w3", Kind: "test.objective", ScopeID: "scope", ParentID: "w1", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{domain.LineageKey("w3"), {Source: "github.issue", ExternalID: "3"}}}, 0)
 		}},
 		// Written five hours east, the time reads later than it is.
 		{5*time.Second + 500*time.Millisecond, east, func(tx storage.Tx) error {

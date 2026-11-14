@@ -94,7 +94,7 @@ When a gated call comes in:
 3. An approval lets that exact call (the same operation with the same input, in the same Work) through once, if it is made within the gate's `timeout` of the answer. A different input asks again, and so does the same call made a second time or after that window.
 4. A refusal returns `approval_refused` to the caller, naming who refused; no answer by the timeout returns `approval_timed_out`. Either way the operation never runs, and the caller keeps its toolbelt for anything else.
 
-Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Work that has no conversation to resume (no correlation key) can't wait for an answer, so a gated call there is refused with `approval_unavailable`.
+Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Any Work can wait for an answer: Work that has no correlation key of its own (made with `POST /v1/work` or `create_work` and no keys) is given its own key, `core.work`/`<its ID>`, when it first waits, and the answer arrives on that.
 
 ### Gating one agent
 

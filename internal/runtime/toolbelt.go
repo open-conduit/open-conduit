@@ -1111,11 +1111,16 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 		return nil, extension.ErrInvalid
 	}
 	// A Wait is a subscription on its Work's keys (B04). A type-only request
-	// subscribes on every key the Work owns; Work without keys cannot wait, and
-	// is refused here rather than at the later registration handshake.
+	// subscribes on every key the Work owns. Work that owns none (made by an
+	// operator or another Work without keys) is given its own key here, its
+	// ID under core.work (domain.LineageKey), so any Work can wait and
+	// whatever answers it (an alias, a child's end) has a key to arrive on.
 	if len(request.Match.Keys) == 0 {
 		if len(w.CorrelationKeys) == 0 {
-			return nil, extension.ErrInvalid
+			var err error
+			if w, err = claimLineageInTx(tx, w); err != nil {
+				return nil, err
+			}
 		}
 		request.Match.Keys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
 	}
