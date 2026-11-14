@@ -30,6 +30,9 @@ os call vault.key --request-id r1 --output data > "$OS_OUTPUT_DIR/retry.json"
 os call vault.key --request-id r1 --output data >> "$OS_OUTPUT_DIR/retry.json"
 if os call vault.odd --output data 2> "$OS_OUTPUT_DIR/odd.txt"; then echo "an unscrubbable secret was handed over" >&2; exit 9; fi
 echo "plain line"
+s=$(os call vault.key --output data | sed 's/.*"secret":"\([^"]*\)".*/\1/')
+os emit --type fixture.reported.v1 --delivery-id leak-1 --schema fixture.v1 --data "{\"note\":\"$s\"}" > /dev/null
+os outcome completed --summary "key $s" --schema fixture.v1 --data "{\"key\":\"$s\"}"
 `
 
 func secretShellConfig(t *testing.T, ops ...string) string {
@@ -84,7 +87,7 @@ func TestSecretOutputScrubbed(t *testing.T) {
 					return domain.Payload{}, &extension.OperationError{Code: "secret_output_unscrubbable", Message: "control"}
 				}
 			}
-			state, bin := shellState(t, secretShellConfig(t, "vault.key", "vault.odd"))
+			state, bin := shellState(t, secretShellConfig(t, "vault.key", "vault.odd", "emit", "declare_outcome"))
 			h := newShellHostWith(t, state, bin, conformance.NewClock(), "daemon", false, shellHostOptions{
 				operations: []string{"vault.key", "vault.odd"},
 				register: func(storage.Store) extension.Registration {
@@ -119,28 +122,47 @@ func TestSecretOutputScrubbed(t *testing.T) {
 			if !strings.Contains(published, servedPublic) || !strings.Contains(published, "plain line") {
 				t.Fatalf("published output lost what isn't secret: %q", published)
 			}
-			outputs := shellData(t, x.Outcome)["outputs"].(map[string]any)
-			key := h.artifact(outputs["key.json"].(string))
-			if refused := h.artifact(outputs["odd.txt"].(string)); !strings.Contains(refused, "secret_output_unscrubbable") {
-				t.Fatalf("vault.odd: %q", refused)
+			// The declared outcome replaces the shell's, so the output
+			// files are found by what they hold.
+			key := all.String()
+			if !strings.Contains(key, "secret_output_unscrubbable") {
+				t.Fatalf("vault.odd wasn't refused: %q", key)
+			}
+			// What the run sent through its toolbelt: the Event it emitted
+			// and the outcome it declared.
+			var emitted strings.Builder
+			h.coord.Transact(ctx, storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+				events, err := tx.Events(0, 0)
+				for _, e := range events {
+					if e.Event.Type == "fixture.reported.v1" {
+						emitted.Write(e.Event.Data.Data)
+					}
+				}
+				return err
+			})
+			if !strings.Contains(emitted.String(), "note") {
+				t.Fatalf("no emitted Event: %q", emitted.String())
 			}
 			if !declared {
-				if !strings.Contains(key, servedSecret) {
-					t.Fatalf("control: the undeclared secret was scrubbed: %q", key)
+				if !strings.Contains(key, servedSecret) || !strings.Contains(x.Outcome.Summary, servedSecret) || !strings.Contains(emitted.String(), servedSecret) {
+					t.Fatalf("control: an undeclared secret was scrubbed: %q, %q, %q", key, x.Outcome.Summary, emitted.String())
 				}
 				return
+			}
+			if x.Outcome.Summary != "key "+runtime.Redacted || strings.Contains(string(x.Outcome.Data.Data), servedSecret) || strings.Contains(emitted.String(), servedSecret) {
+				t.Fatalf("the declared outcome or emitted Event kept the secret: %+v, %q", x.Outcome, emitted.String())
 			}
 			if strings.Contains(published, servedSecret) {
 				t.Fatalf("a served secret was published: %q", published)
 			}
-			if !strings.Contains(key, runtime.Redacted) || !strings.Contains(key, servedPublic) {
-				t.Fatalf("key.json = %q", key)
+			if !strings.Contains(key, `{"id":"`+servedPublic+`","secret":"`+runtime.Redacted+`"}`) {
+				t.Fatalf("no scrubbed answer published: %q", key)
 			}
 			mu.Lock()
 			n := runs
 			mu.Unlock()
-			if n != 4 {
-				t.Fatalf("vault.key ran %d times, want 4: a secret output was replayed", n)
+			if n != 5 {
+				t.Fatalf("vault.key ran %d times, want 5: a secret output was replayed", n)
 			}
 			if got := h.served.Values(run.Lease.ExecutionID); len(got) != 1 || got[0] != servedSecret {
 				t.Fatalf("served = %q", got)

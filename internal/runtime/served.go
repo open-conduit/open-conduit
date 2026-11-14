@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -125,15 +126,121 @@ func ScrubString(s string, values []string) string {
 	return s
 }
 
+// scrubBytes replaces each of values in b, both as it is and as it reads
+// inside a JSON string, since transcripts and payloads are often JSON.
 func scrubBytes(b []byte, values []string) ([]byte, bool) {
 	changed := false
 	for _, v := range values {
-		if bytes.Contains(b, []byte(v)) {
-			b = bytes.ReplaceAll(b, []byte(v), []byte(Redacted))
-			changed = true
+		for _, form := range forms(v) {
+			if bytes.Contains(b, form) {
+				b = bytes.ReplaceAll(b, form, []byte(Redacted))
+				changed = true
+			}
 		}
 	}
 	return b, changed
+}
+
+// forms are v and, when it differs, v escaped as JSON string content.
+func forms(v string) [][]byte {
+	out := [][]byte{[]byte(v)}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) == nil {
+		escaped := bytes.TrimSuffix(bytes.TrimSpace(buf.Bytes()), []byte(`"`))
+		escaped = bytes.TrimPrefix(escaped, []byte(`"`))
+		if !bytes.Equal(escaped, out[0]) && len(escaped) > 0 {
+			out = append(out, escaped)
+		}
+	}
+	return out
+}
+
+// ScrubCall returns a copy of c with each of values replaced in every
+// string and payload it carries (an outcome, an Event, a child Work, a
+// wait, an operation's input), so nothing a run sends through its toolbelt
+// stores or passes on a secret it was served. The operation's name and the
+// capability, which select what runs, are kept.
+func ScrubCall(c extension.ToolCall, values []string) extension.ToolCall {
+	if len(values) == 0 {
+		return c
+	}
+	operation, capability := c.Operation, c.Capability
+	v := reflect.ValueOf(&c).Elem()
+	scrubValue(v, values)
+	c.Operation, c.Capability = operation, capability
+	return c
+}
+
+var bytesType = reflect.TypeFor[[]byte]()
+
+// scrubValue scrubs v in place. Pointers, slices and maps are copied
+// first, so nothing the caller still holds changes.
+func scrubValue(v reflect.Value, values []string) {
+	switch v.Kind() {
+	case reflect.String:
+		if v.CanSet() {
+			v.SetString(ScrubString(v.String(), values))
+		}
+	case reflect.Pointer:
+		if v.IsNil() || !v.CanSet() {
+			return
+		}
+		cp := reflect.New(v.Type().Elem())
+		cp.Elem().Set(v.Elem())
+		scrubValue(cp.Elem(), values)
+		v.Set(cp)
+	case reflect.Interface:
+		if v.IsNil() || !v.CanSet() {
+			return
+		}
+		cp := reflect.New(v.Elem().Type()).Elem()
+		cp.Set(v.Elem())
+		scrubValue(cp, values)
+		v.Set(cp)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).IsExported() {
+				scrubValue(v.Field(i), values)
+			}
+		}
+	case reflect.Slice:
+		if v.IsNil() || !v.CanSet() {
+			return
+		}
+		if v.Type().ConvertibleTo(bytesType) && v.Type().Elem().Kind() == reflect.Uint8 {
+			b, _ := scrubBytes(append([]byte(nil), v.Bytes()...), values)
+			v.SetBytes(b)
+			return
+		}
+		cp := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		reflect.Copy(cp, v)
+		for i := 0; i < cp.Len(); i++ {
+			scrubValue(cp.Index(i), values)
+		}
+		v.Set(cp)
+	case reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			scrubValue(v.Index(i), values)
+		}
+	case reflect.Map:
+		if v.IsNil() || !v.CanSet() {
+			return
+		}
+		cp := reflect.MakeMapWithSize(v.Type(), v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			key := reflect.New(v.Type().Key()).Elem()
+			key.Set(iter.Key())
+			scrubValue(key, values)
+			val := reflect.New(v.Type().Elem()).Elem()
+			val.Set(iter.Value())
+			scrubValue(val, values)
+			cp.SetMapIndex(key, val)
+		}
+		v.Set(cp)
+	}
 }
 
 // ScrubLive scrubs values from a running attempt's live output.
@@ -150,18 +257,49 @@ func ScrubLive(out []extension.LiveOutput, values []string) []extension.LiveOutp
 }
 
 // scrubbedHandle scrubs the secrets served to its execution from the
-// result it gives, before anything records it.
+// result it gives, before anything records it. A handle that gives the
+// same result again (an executor that keeps it, for a caller that applies
+// it again) gets the same scrubbed result: its plaintext artifacts are
+// gone by then, so scrubbing it afresh would publish none.
 type scrubbedHandle struct {
 	extension.RunHandle
 	scrub func(context.Context, extension.Result) extension.Result
+
+	mu       sync.Mutex
+	original *extension.Result
+	scrubbed *extension.Result
 }
 
-func (h scrubbedHandle) Wait(ctx context.Context) (extension.Result, error) {
+func (h *scrubbedHandle) Wait(ctx context.Context) (extension.Result, error) {
 	r, err := h.RunHandle.Wait(ctx)
 	if err != nil {
 		return r, err
 	}
-	return h.scrub(ctx, r), nil
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.scrubbed != nil && sameResult(*h.original, r) {
+		return *h.scrubbed, nil
+	}
+	original := r
+	original.Artifacts = append([]domain.ArtifactRef(nil), r.Artifacts...)
+	original.Outcome.Data.Data = append(json.RawMessage(nil), r.Outcome.Data.Data...)
+	out := h.scrub(ctx, r)
+	h.original, h.scrubbed = &original, &out
+	return out, nil
+}
+
+// sameResult reports whether b is the result a was: the same outcome and
+// artifacts.
+func sameResult(a, b extension.Result) bool {
+	if a.Outcome.Kind != b.Outcome.Kind || a.Outcome.Summary != b.Outcome.Summary || a.Outcome.Data.Schema != b.Outcome.Data.Schema || !bytes.Equal(a.Outcome.Data.Data, b.Outcome.Data.Data) || len(a.Artifacts) != len(b.Artifacts) {
+		return false
+	}
+	for i := range a.Artifacts {
+		if a.Artifacts[i].ID != b.Artifacts[i].ID {
+			return false
+		}
+	}
+	return true
 }
 
 // scrubResult replaces each of values in r's outcome and artifacts. An

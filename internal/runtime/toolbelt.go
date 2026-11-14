@@ -956,6 +956,13 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if record.Revoked || !t.now().Before(a.ExpiresAt) {
 		return out, unauthorized(RefusalTokenEnded)
 	}
+	if t.options.Served != nil {
+		// Whatever the run sends back of a secret it was served (in a
+		// declared outcome, an Event, a child Work, a wait or an
+		// operation's input) is scrubbed before anything checks, stores
+		// or passes it on.
+		c = ScrubCall(c, t.options.Served.Values(a.ExecutionID))
+	}
 	if c.ScopeID != "" && c.ScopeID != a.ScopeID || c.WorkID != "" && c.WorkID != a.WorkID || c.ExecutionID != "" && c.ExecutionID != a.ExecutionID {
 		return out, unauthorized(RefusalNotGranted)
 	}

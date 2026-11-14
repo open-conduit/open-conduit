@@ -1572,7 +1572,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	if served := s.options.Served; served != nil {
 		// Outermost, so what the host settles is scrubbed too.
 		id := state.ExecutionID
-		handle = scrubbedHandle{handle, func(ctx context.Context, r extension.Result) extension.Result {
+		handle = &scrubbedHandle{RunHandle: handle, scrub: func(ctx context.Context, r extension.Result) extension.Result {
 			return scrubResult(ctx, s.options.Artifacts, r, served.Values(id))
 		}}
 	}

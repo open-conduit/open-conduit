@@ -161,3 +161,53 @@ func TestScrubResult(t *testing.T) {
 		t.Fatalf("live = %q", live[0].Content)
 	}
 }
+
+// ScrubCall replaces the values everywhere a call carries text, the JSON
+// escaped form inside payloads too, keeps the operation and capability,
+// and changes nothing the caller still holds.
+func TestScrubCall(t *testing.T) {
+	secret := `k/ey"with+quote`
+	escaped := `k/ey\"with+quote`
+	outcome := &domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "got " + secret, Data: domain.Payload{Schema: "x.v1", Data: []byte(`{"v":"` + escaped + `"}`)}}
+	child := &domain.Work{Kind: "x.child", Display: &domain.WorkDisplay{Title: secret}}
+	c := extension.ToolCall{Operation: "declare_outcome", Outcome: outcome, Child: child, Input: domain.Payload{Data: []byte(`["` + escaped + `"]`)}}
+	got := ScrubCall(c, []string{secret})
+	if got.Operation != "declare_outcome" || got.Outcome.Summary != "got "+Redacted || string(got.Outcome.Data.Data) != `{"v":"`+Redacted+`"}` || got.Child.Display.Title != Redacted || string(got.Input.Data) != `["`+Redacted+`"]` {
+		t.Fatalf("scrubbed call = %+v %+v %+v %s", got, got.Outcome, got.Child.Display, got.Input.Data)
+	}
+	if outcome.Summary != "got "+secret || child.Display.Title != secret || !strings.Contains(string(c.Input.Data), escaped) {
+		t.Fatal("ScrubCall changed the caller's call")
+	}
+	if same := ScrubCall(c, nil); same.Outcome != outcome {
+		t.Fatal("no values copied the call")
+	}
+}
+
+type repeatHandle struct {
+	extension.RunHandle
+	r extension.Result
+}
+
+func (h repeatHandle) Wait(context.Context) (extension.Result, error) { return h.r, nil }
+
+// A handle that gives its result again gets the same scrubbed result, not
+// a second scrub of artifacts the first one replaced; a different result
+// is scrubbed afresh.
+func TestScrubbedHandleRepeats(t *testing.T) {
+	ctx := context.Background()
+	a := &memArtifacts{content: map[string][]byte{}}
+	ref := a.put(t, "x secret-1")
+	inner := &repeatHandle{r: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Artifacts: []domain.ArtifactRef{ref}}}
+	h := &scrubbedHandle{RunHandle: inner, scrub: func(ctx context.Context, r extension.Result) extension.Result {
+		return scrubResult(ctx, a, r, []string{"secret-1"})
+	}}
+	first, _ := h.Wait(ctx)
+	again, _ := h.Wait(ctx)
+	if len(first.Artifacts) != 1 || len(again.Artifacts) != 1 || again.Artifacts[0] != first.Artifacts[0] || a.read(first.Artifacts[0].ID) != "x "+Redacted {
+		t.Fatalf("first %+v, again %+v", first.Artifacts, again.Artifacts)
+	}
+	inner.r = extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "secret-1"}}
+	if other, _ := h.Wait(ctx); other.Outcome.Summary != Redacted {
+		t.Fatalf("another result = %+v", other.Outcome)
+	}
+}

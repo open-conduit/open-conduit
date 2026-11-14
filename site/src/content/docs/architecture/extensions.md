@@ -115,7 +115,9 @@ An operation whose answer is a secret the run needs, such as short-lived cloud c
   - its result's outcome summary and data;
   - its workspace record;
   - its live output (`daemon.live`);
-  - each artifact the result names, such as the transcript, activity and output files. The scheduler applies this to the attempt's result before anything records it, in the handle `Launch` returns, so a completed turn, a parked turn and a stopped turn's late result are all covered. An artifact that holds a value is replaced by a scrubbed copy, the plaintext is deleted, and an outcome that names the artifact by ID names the copy. An artifact the host can't read or rewrite is not published, and is deleted.
+  - each artifact the result names, such as the transcript, activity and output files. The scheduler applies this to the attempt's result before anything records it, in the handle `Launch` returns, so a completed turn, a parked turn and a stopped turn's late result are all covered. A handle that gives the same result again gets the same scrubbed result. An artifact that holds a value is replaced by a scrubbed copy, the plaintext is deleted, and an outcome that names the artifact by ID names the copy. An artifact the host can't read or rewrite is not published, and is deleted.
+- **What the run sends back.** Before the toolbelt checks or stores a call, it scrubs every value served to the calling execution from the call (`runtime.ScrubCall`): a declared outcome, an emitted Event, a child Work, a wait and any operation's input. This includes an extension operation that passes its input on, such as a PR comment, so a secret can't leave through the toolbelt either. Only the operation's name and the capability are kept as given.
+- **Matching.** A value matches as it is, and, inside artifacts and payloads, also in its JSON-escaped form.
 - **Telemetry.** The pipeline's `Options.Secrets` is the values of every execution still recorded.
 - **Lifetime.** An execution's values are kept while `Scheduler.Holding` holds it, so they outlive a park and a stop that isn't confirmed yet. Once it no longer holds it, the endpoint reconcile forgets them.
 
