@@ -74,7 +74,7 @@ A fired timer's Event is reported once as `event.accepted`, not once by the acce
 
 ## Export pipeline
 
-`telemetry.Pipeline` implements `observability.Observer`. `Observe` validates, applies `observability.Redact` (known secret values from `Options.Secrets`, sensitive keys) and enqueues in constant time into one bounded queue per exporter (default 4096). When a queue is full, its oldest record is dropped and the drop is counted. Each exporter runs on its own goroutine with:
+`telemetry.Pipeline` implements `observability.Observer`. `Observe` validates, applies `observability.Redact` (known secret values from `Options.Secrets`, which the daemon feeds the values operations with a secret output served ([secret outputs](../extensions/#secret-outputs)), and sensitive keys) and enqueues in constant time into one bounded queue per exporter (default 4096). When a queue is full, its oldest record is dropped and the drop is counted. Each exporter runs on its own goroutine with:
 
 - batching (128 records or 1 s)
 - a bounded call (10 s)

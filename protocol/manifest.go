@@ -618,6 +618,11 @@ type OperationDecl struct {
 	// Serves, on a handler, names a capability the operation answers
 	// (extension.Operation.Serves), such as git.credential.
 	Serves string `json:"serves,omitempty"`
+	// SecretOutput, on a handler, names the top-level fields of its output
+	// whose string values are secrets (extension.Operation.SecretOutput):
+	// the host keeps no replay of its result and scrubs the values from
+	// what the calling execution publishes.
+	SecretOutput []string `json:"secret_output,omitempty"`
 }
 
 // ToolsetDecl declares a toolset (extension.Toolset): its name, in the
@@ -1000,6 +1005,12 @@ func (m Manifest) Validate() error {
 			if o.Kind != OperationHandler {
 				fail("operation %q: only a handler serves a capability", o.Name)
 			}
+		}
+		if len(o.SecretOutput) > 0 && o.Kind != OperationHandler {
+			fail("operation %q: only a handler has a secret output", o.Name)
+		}
+		if err := extension.CheckSecretOutput(o.SecretOutput); err != nil {
+			fail("operation %q: %s", o.Name, strings.TrimPrefix(err.Error(), extension.ErrInvalid.Error()+": "))
 		}
 		if len(o.Input) > 0 {
 			var schema map[string]any

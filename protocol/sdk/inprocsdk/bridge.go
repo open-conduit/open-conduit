@@ -484,7 +484,7 @@ func (b *Bridge) operation(d protocol.OperationDecl) extension.Operation {
 		}
 		return extension.Operation{}, extension.ErrUndeclared
 	}
-	out := extension.Operation{Name: d.Name, Summary: d.Summary, Input: d.Input, Guidance: d.Guidance, Serves: d.Serves}
+	out := extension.Operation{Name: d.Name, Summary: d.Summary, Input: d.Input, Guidance: d.Guidance, Serves: d.Serves, SecretOutput: d.SecretOutput}
 	switch d.Kind {
 	case protocol.OperationWait:
 		out.Wait = func(ctx context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {

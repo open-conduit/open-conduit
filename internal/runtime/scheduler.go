@@ -115,6 +115,11 @@ type SchedulerOptions struct {
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
 	Secrets func(context.Context, AttemptState) (map[string]string, error)
+	// Served is the record of secret values the toolbelt served each
+	// execution (ToolbeltOptions.Served). When set, every attempt's result
+	// is scrubbed of its execution's values (with Artifacts) before it is
+	// recorded.
+	Served *ServedSecrets
 	// Environment gathers the run environment layer the extensions of the
 	// attempt's scope contribute (extension.RunEnvironment) before Run and
 	// Resume, outside coordination transactions; a recovery adopts a
@@ -1563,6 +1568,13 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	}
 	if settle != nil {
 		handle = settledHandle{handle, settle}
+	}
+	if served := s.options.Served; served != nil {
+		// Outermost, so what the host settles is scrubbed too.
+		id := state.ExecutionID
+		handle = &scrubbedHandle{RunHandle: handle, scrub: func(ctx context.Context, r extension.Result) extension.Result {
+			return scrubResult(ctx, s.options.Artifacts, r, served.Values(id))
+		}}
 	}
 	attempt.Handle = handle
 	return attempt, nil

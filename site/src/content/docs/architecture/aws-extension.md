@@ -57,7 +57,7 @@ An entry takes no secrets of its own. The scope's `authorization.connections` mu
 - `unknown_role`: a role the scope doesn't have.
 - `role_not_granted`: a role that doesn't name the run's binding. Both of these refusals name the roles the run may use.
 - `account_not_allowed`: a role outside the entry's accounts.
-- `request_id_refused`: a call with a request ID. The toolbelt would keep that call's result for replay, and the result is a credential.
+- `request_id_refused`: a call with a request ID. The result is a credential, and is never kept for replay: the toolbelt keeps no result of an operation with a secret output, and the extension refuses the request ID as well.
 
 Otherwise the host calls `sts:AssumeRole` with the base identity, signed with Signature Version 4, and never follows a redirect. The role session name is `oc.<binding>.<Work ID>`, in the characters STS accepts and at most 64 of them. A Work ID too long to fit keeps its end, after eight hex characters of its SHA-256, so two runs never share a name. CloudTrail records each call the credentials make under that name. An answer that names another account than the role's is refused (`aws_refused`). STS's own refusals are `aws_refused` with STS's error code, never its message. A base identity that can't be used is `aws_credential`, and STS out of reach is `aws_unavailable`.
 
@@ -96,7 +96,7 @@ When the gate holds a call, the operation doesn't run and the run's Work is park
 
 ## What the extension does not do
 
-- **The credentials are in the run.** The model can read them. This differs from git's transport, where the host signs ([git transport](../toolbelt-management/#git-transport)). A signing proxy for all of AWS isn't practical, because every service has its own endpoint and Signature Version 4 covers the body. The limits are the role's IAM policy, the short life and the audit trail. An agent that runs the profile's command by hand gets the credentials in its own output, and the executor's transcript keeps that output.
+- **The credentials are in the run.** The model can read them. This differs from git's transport, where the host signs ([git transport](../toolbelt-management/#git-transport)). A signing proxy for all of AWS isn't practical, because every service has its own endpoint and Signature Version 4 covers the body. The limits are the role's IAM policy, the short life and the audit trail. An agent that runs the profile's command by hand gets the credentials in its own output, and so does the model. The host doesn't keep them: `aws.credentials` declares `SecretAccessKey` and `SessionToken` as its secret output, so the host scrubs them from everything the run publishes, including the transcript, activity, outcome and live output ([secret outputs](../extensions/#secret-outputs)). The access key ID isn't secret and stays, so it still finds the issue's record.
 - **It doesn't open the network.** In a container, add the AWS endpoints the run needs (such as `s3.eu-west-2.amazonaws.com`) to the container's `network.allow`. The host calls STS itself, so STS doesn't need to be listed.
 - **No fixed operations** such as `aws.s3.get`.
 

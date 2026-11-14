@@ -387,6 +387,9 @@ func TestManifestRejections(t *testing.T) {
 		"target kind":                {`"webhooks": true,`, `"webhooks": true, "targets": ["Job"],`},
 		"target twice":               {`"webhooks": true,`, `"webhooks": true, "targets": ["job", "job"],`},
 		"serves on wait":             {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "wait", "serves": "git.credential"}`},
+		"secret output on wait":      {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "wait", "secret_output": ["token"]}`},
+		"secret output field twice":  {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "secret_output": ["token", "token"]}`},
+		"secret output empty field":  {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "secret_output": [""]}`},
 		"input not an object":        {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "input": ["city"]}`},
 		"filter without wait":        {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},
 		"kinds without routes":       {`"routes": [{"handler": "chat", "config": true}],`, ``},
@@ -408,6 +411,16 @@ func TestManifestRejections(t *testing.T) {
 		if _, err := protocol.ParseManifest([]byte(mutated)); !errors.Is(err, protocol.ErrManifest) {
 			t.Errorf("%s: accepted (%v)", name, err)
 		}
+	}
+	// The secret output cases' positive control: a handler names its
+	// secret fields.
+	secret := strings.Replace(string(base), `{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "secret_output": ["token"]}`, 1)
+	m, err := protocol.ParseManifest([]byte(secret))
+	if err != nil {
+		t.Fatalf("a secret output was refused: %v", err)
+	}
+	if i := slices.IndexFunc(m.Provides.Operations, func(o protocol.OperationDecl) bool { return o.Name == "chat.reply" }); i < 0 || !slices.Equal(m.Provides.Operations[i].SecretOutput, []string{"token"}) {
+		t.Fatalf("the secret output was lost: %+v", m.Provides.Operations)
 	}
 	// The launch-name cases' positive control: an executor with the
 	// interactive_launch control may take another name.
