@@ -169,6 +169,39 @@ func (b textTimesTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
 	return out, err
 }
 
+// forgetfulArtifacts publishes a finished attempt's stopped turn without
+// keeping the artifacts it held, as a store that overwrote the list might.
+type forgetfulArtifacts struct{ storage.Store }
+type forgetfulArtifactsTx struct{ storage.Tx }
+
+func (b forgetfulArtifacts) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(forgetfulArtifactsTx{tx}) })
+}
+func (b forgetfulArtifactsTx) Execution(id domain.ID) (domain.Execution, error) {
+	x, err := b.Tx.Execution(id)
+	x.EarlierArtifacts = nil
+	return x, err
+}
+
+// terminalWorkArtifacts refuses a finished attempt's stopped turn once its
+// Work is finished, as one guarded like PutExecution would.
+type terminalWorkArtifacts struct{ storage.Store }
+type terminalWorkArtifactsTx struct{ storage.Tx }
+
+func (b terminalWorkArtifacts) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(terminalWorkArtifactsTx{tx}) })
+}
+func (b terminalWorkArtifactsTx) PublishFinishedArtifacts(id domain.ID, refs []domain.ArtifactRef) error {
+	x, err := b.Tx.Execution(id)
+	if err != nil {
+		return err
+	}
+	if w, err := b.Tx.Work(x.WorkID); err != nil || w.State.Terminal() {
+		return storage.ErrInvalid
+	}
+	return b.Tx.PublishFinishedArtifacts(id, refs)
+}
+
 // brokenActor stores Events without who caused them, as a store mapping
 // Events to columns might if it missed the field.
 type brokenActor struct{ storage.Store }
@@ -198,6 +231,8 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"work_queries_select_order_page_and_count", "every Work by creation", func() storage.Store { return textTimes{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view waited for a write", func() storage.Store { return serialView{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
+		{"finished_attempt_takes_its_stopped_turns_artifacts", "earlier", func() storage.Store { return forgetfulArtifacts{reference.New()} }},
+		{"finished_attempt_takes_its_stopped_turns_artifacts", "after the Work's cancel", func() storage.Store { return terminalWorkArtifacts{reference.New()} }},
 	}
 	for _, negative := range cases {
 		t.Run(negative.name, func(t *testing.T) {

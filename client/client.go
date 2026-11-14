@@ -1534,6 +1534,11 @@ type RunSegment struct {
 	// Artifacts are the ones the segment's turn published (its transcript,
 	// activity, ...); a run's own Artifacts are its last turn's.
 	Artifacts []Artifact `json:"artifacts,omitempty"`
+	// ArtifactsPending says the segment has ended but its artifacts may
+	// still come: the run ended while the turn ran (an interrupt, a
+	// cancel, a deadline) and its process is not yet confirmed stopped.
+	// An ended segment without it has all the artifacts it ever will.
+	ArtifactsPending bool `json:"artifacts_pending,omitempty"`
 }
 
 // LaunchPhase is one step of a segment's launch: "toolbelt", "secrets",

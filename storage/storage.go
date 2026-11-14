@@ -68,6 +68,9 @@ func (readOnly) SetEventScope(domain.ID, domain.ID) error             { return E
 func (readOnly) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (readOnly) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
 func (readOnly) SetExecutionExecutor(domain.ID, string) error         { return ErrReadOnly }
+func (readOnly) PublishFinishedArtifacts(domain.ID, []domain.ArtifactRef) error {
+	return ErrReadOnly
+}
 func (readOnly) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {
 	return domain.LeaseRef{}, ErrReadOnly
 }
@@ -144,6 +147,20 @@ type Tx interface {
 	// same executor again is nil, another is ErrConflict, an empty one
 	// ErrInvalid, and an unknown attempt ErrNotFound.
 	SetExecutionExecutor(execution domain.ID, executor string) error
+	// PublishFinishedArtifacts records refs as the artifacts of a finished
+	// attempt's last turn, published after it finished: the attempt was
+	// fenced (interrupted, cancelled, timed out) while that turn ran, and
+	// its process wrote them once it stopped. As a turn's result does
+	// through PutExecution, refs become the attempt's Artifacts and the
+	// ones it held move to EarlierArtifacts (unless refs repeats them), so
+	// the record keeps every one (PublishedArtifacts). The attempt's state,
+	// outcome, lease and finish are unchanged; its revision and UpdatedAt
+	// advance. It applies whatever the Work's state, since a cancel ends
+	// the Work with the attempt. Refs the attempt already holds as its
+	// Artifacts are nil and change nothing. An attempt not finished, no
+	// refs or an invalid ref (empty ID, negative size, a duplicate) is
+	// ErrInvalid, and an unknown attempt ErrNotFound.
+	PublishFinishedArtifacts(execution domain.ID, refs []domain.ArtifactRef) error
 	// Claim enters running on both Work and Execution and advances the lease epoch.
 	Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error)
 	// Renew extends the lease to now+ttl, keeping the stored expiry when

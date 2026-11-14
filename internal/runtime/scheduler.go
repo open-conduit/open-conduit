@@ -272,6 +272,10 @@ type AttemptState struct {
 	// Charged is the attempt's usage in named units already staged for the
 	// budget ledgers (stageUsageInTx), so each amount is charged once.
 	Charged map[string]float64 `json:",omitempty"`
+	// StoppedTurnRecorded says the attempt ended while its turn ran and
+	// the stopped turn's result has since been recorded (RecordStopped):
+	// its last segment's artifacts are final.
+	StoppedTurnRecorded bool `json:",omitempty"`
 }
 
 // Usage is the attempt's usage across all its segments.
@@ -379,6 +383,11 @@ type Segment struct {
 	// Launch is the segment's launch, phase by phase, as it went: each
 	// phase is recorded as it begins and again as it ends.
 	Launch []LaunchPhase `json:",omitempty"`
+	// ArtifactsPending is history's, never stored: the segment has ended
+	// but its turn's artifacts may still be recorded, because the run
+	// ended while the turn ran and its stop is not yet confirmed. Without
+	// it, an ended segment's artifacts are final.
+	ArtifactsPending bool `json:"-"`
 }
 
 // A segment's Invoke: its launch hasn't called its executor yet, or has.
@@ -1828,7 +1837,18 @@ type resultHint struct{ hint RetryHint }
 
 func (h resultHint) Error() string        { return "executor retry hint" }
 func (h resultHint) RetryHint() RetryHint { return h.hint }
+
+// Complete applies the attempt's result. One the attempt can no longer
+// take, because it ended while its turn ran (a fence took the lease), still
+// keeps what that turn wrote up to the stop (RecordStopped, #647), and the
+// refusal is returned.
 func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
+	if err := s.complete(ctx, ref, result); err != nil {
+		return s.recordLate(ctx, ref, result, err)
+	}
+	return nil
+}
+func (s *Scheduler) complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
 	if err := extension.ValidateResult(result); err != nil {
 		return err
 	}

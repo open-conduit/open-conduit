@@ -335,6 +335,16 @@ func (d *daemon) launchFailed(c *components, a runtime.Attempt, work domain.ID, 
 // when the lease is lost, and lost is closed then).
 func (d *daemon) observe(ctx context.Context, c *components, a runtime.Attempt, lost <-chan struct{}) {
 	result, err := c.scheduler.Await(ctx, a)
+	// The handle answers once. Whether it has (with a result or an
+	// executor error) decides how a stop collects the stopped turn: with
+	// the result already in hand, or by waiting for it after the stop
+	// when the hold ended before any answer (#647).
+	stopped := &stoppedTurn{attempt: a}
+	if err == nil {
+		stopped.result = &result
+	} else {
+		stopped.answered = ctx.Err() == nil || !errors.Is(err, ctx.Err())
+	}
 	if err == nil {
 		err = c.scheduler.Complete(ctx, a.Lease, result)
 		for i := 0; i < 5 && errors.Is(err, storage.ErrConflict); i++ {
@@ -368,7 +378,7 @@ func (d *daemon) observe(ctx context.Context, c *components, a runtime.Attempt, 
 		return
 	}
 	d.report("observe", a.Lease.ExecutionID, errorCode(err), runtime.FailureCause(err))
-	d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
+	d.stopAttempt(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch, stopped)
 }
 
 // followUpStop stops and confirms a finished attempt whose stop the
@@ -424,6 +434,32 @@ func heldBy(err error) string {
 // superseded epoch is refused by the executor and confirms nothing; the
 // runtime's follow-up (followUpStop) asks again at the current one.
 func (d *daemon) confirmStopped(ctx context.Context, c *components, id domain.ID, epoch uint64) {
+	d.stopAttempt(ctx, c, id, epoch, nil)
+}
+
+// collectStoppedTimeout bounds the wait for a stopped turn's result once
+// its process is verified stopped; the executor has nothing left to wait
+// for by then, so it is only a guard against one that hangs.
+const collectStoppedTimeout = 30 * time.Second
+
+// stoppedTurn is what an observer knows of its attempt's turn when it
+// goes to stop it: the attempt, and the handle's one answer if it gave
+// one (result, or answered with an executor error).
+type stoppedTurn struct {
+	attempt  runtime.Attempt
+	result   *extension.Result
+	answered bool
+}
+
+// stopAttempt is confirmStopped for an attempt this daemon observed.
+// Between the verified stop and the confirmation it records what the
+// stopped turn wrote, so a run ended while its turn ran keeps that turn's
+// transcript (#647): the result the handle already gave, kept again in
+// case Complete's own record failed, or, when the hold ended before the
+// handle answered, the result it gives now the process has stopped
+// (Scheduler.CollectStopped). A handle that answered with an error is not
+// waited on again.
+func (d *daemon) stopAttempt(ctx context.Context, c *components, id domain.ID, epoch uint64, turn *stoppedTurn) {
 	state, err := c.scheduler.InspectAttempt(ctx, id)
 	if err != nil || state.Excluded {
 		return
@@ -449,6 +485,19 @@ func (d *daemon) confirmStopped(ctx context.Context, c *components, id domain.ID
 	if err = d.stopContainer(ctx, state); err != nil {
 		d.report("stop", id, "container_stop_unverified")
 		return
+	}
+	if turn != nil && turn.attempt.Lease.Epoch == epoch {
+		switch {
+		case turn.result != nil:
+			_, err = c.scheduler.RecordStopped(ctx, turn.attempt.Lease, *turn.result)
+		case !turn.answered:
+			collect, cancel := context.WithTimeout(ctx, collectStoppedTimeout)
+			err = c.scheduler.CollectStopped(collect, turn.attempt)
+			cancel()
+		}
+		if err != nil {
+			d.log.Warn("the stopped turn's result was not recorded", "execution", string(id), "epoch", epoch, "error", errorCode(err))
+		}
 	}
 	if err = c.scheduler.ConfirmStopped(ctx, id, epoch); err != nil && !errors.Is(err, storage.ErrConflict) {
 		d.report("stop", id, errorCode(err))
