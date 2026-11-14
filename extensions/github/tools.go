@@ -239,7 +239,7 @@ func (t *Tools) Registration() extension.Registration {
 	}
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeHoldReleased, TypePullOwned},
 		SealedEventTypes: []string{TypePullOwned},
-		DependencyFilter: DependencyFilter,
+		DependencyFilter: extension.PureFilter(DependencyFilter),
 		Operations: []extension.Operation{
 			{Name: OpContext, Handler: pr(t.context)},
 			// Issue operations bind any Work: one without an issue of its

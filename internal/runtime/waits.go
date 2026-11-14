@@ -17,6 +17,14 @@ import (
 const waitNamespace = "core.waits"
 const wakeReadyNamespace = "core.waits.ready"
 const subscriptionNamespace = "core.waits.subscriptions"
+
+// ErrDependencyFilterUnavailable reports a subscription pass in which an
+// extension's dependency filter could not answer about an Event (it timed
+// out, or its process was restarting). Those subscriptions stopped before
+// the Event and ask about it again on the next pass; every other
+// subscription was reconciled as usual.
+var ErrDependencyFilterUnavailable = errors.New("dependency filter unavailable")
+
 const pendingSubscriptionNamespace = "core.waits.pending_subscriptions"
 
 // pendingSubscriptions are a registered Wait's translated dependencies not
@@ -967,7 +975,10 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 		if er = putJSON(tx, subscriptionNamespace, key, sub); er != nil {
 			return er
 		}
-		return s.reconcileSubscriptionInTx(tx, key, &sub)
+		// An unanswered filter leaves the subscription installed, stopped
+		// before that Event: the next pass asks again.
+		_, er = s.reconcileSubscriptionInTx(tx, key, &sub)
+		return er
 	})
 }
 func (s *Scheduler) authorizeAlias(ctx context.Context, sub subscription) error {
@@ -1015,6 +1026,7 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 	}
 	rows = ordered
 	count := 0
+	deferred := false
 	for _, row := range rows {
 		var sub subscription
 		if err := json.Unmarshal(row.Value, &sub); err != nil {
@@ -1058,31 +1070,43 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			if !current.Active {
 				return nil
 			}
-			return s.reconcileSubscriptionInTx(tx, row.Key, &current)
+			unanswered, er := s.reconcileSubscriptionInTx(tx, row.Key, &current)
+			deferred = deferred || unanswered
+			return er
 		}); err != nil {
 			return err
 		}
 	}
+	if deferred {
+		return ErrDependencyFilterUnavailable
+	}
 	return nil
 }
-func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription) error {
+
+// reconcileSubscriptionInTx scans the subscription's source from its
+// checkpoint, aliasing the first matching Event onto the waiting Work. It
+// reports unanswered when the dependency filter could not answer about an
+// Event: the checkpoint then stays before that Event, so a later pass asks
+// about it again rather than passing a one-time occurrence (a merge) by.
+func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription) (unanswered bool, err error) {
 	wait, err := tx.Wait(sub.Request.WaitID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	work, err := tx.Work(sub.WorkID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if wait.State != domain.WaitActive || work.State.Terminal() {
 		sub.Active = false
-		return putJSON(tx, subscriptionNamespace, key, sub)
+		return false, putJSON(tx, subscriptionNamespace, key, sub)
 	}
 	all, err := tx.Events(sub.Checkpoint, 0)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, source := range all {
+		before := sub.Checkpoint
 		sub.Checkpoint = source.Sequence
 		if source.Event.CorrelationKey == nil || *source.Event.CorrelationKey != sub.Request.SourceKey {
 			continue
@@ -1097,16 +1121,24 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 			continue
 		}
 		if sub.Request.Filter != nil {
-			if s.options.AliasFilter == nil || !s.options.AliasFilter(sub.Request.Namespace, *sub.Request.Filter, source.Event) {
+			if s.options.AliasFilter == nil {
+				continue
+			}
+			match, er := s.options.AliasFilter(sub.Request.Namespace, *sub.Request.Filter, source.Event)
+			if er != nil {
+				sub.Checkpoint = before
+				return true, putJSON(tx, subscriptionNamespace, key, sub)
+			}
+			if !match {
 				continue
 			}
 		}
 		scope, er := scopeForEvent(tx, source)
 		if er != nil {
-			return er
+			return false, er
 		}
 		if scope != sub.Request.SourceScopeID {
-			return storage.ErrConflict
+			return false, storage.ErrConflict
 		}
 		data, _ := json.Marshal(struct {
 			Subscription string `json:"subscription"`
@@ -1117,25 +1149,25 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 		event := domain.Event{ID: domain.ID("alias/" + identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID))), Source: "core.subscription", DeliveryID: identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID)), Type: sub.Request.AliasType, WorkID: sub.WorkID, CorrelationKey: &sub.Request.TargetKey, CausationID: source.Event.ID, OccurredAt: source.Event.OccurredAt, ReceivedAt: s.now(), Data: domain.Payload{Schema: "core.subscription.alias.v1", Data: data}}
 		_, _, er = AcceptDerivedInTx(tx, s.now(), s.options.CausalLimits, work.ScopeID, source.Event.ID, event)
 		if er != nil && !errors.Is(er, ErrCausalRejected) {
-			return er
+			return false, er
 		}
 		// A refused branch is diagnosed and checkpointed, never retried in a tight loop.
 		if er = putJSON(tx, subscriptionNamespace, key, sub); er != nil {
-			return er
+			return false, er
 		}
 		if _, er = WakeWaitInTx(tx, s.now(), s.options.CausalLimits, wait.ID); er != nil {
-			return er
+			return false, er
 		}
 		current, er := tx.Wait(wait.ID)
 		if er != nil {
-			return er
+			return false, er
 		}
 		if current.State != domain.WaitActive {
 			sub.Active = false
 			break
 		}
 	}
-	return putJSON(tx, subscriptionNamespace, key, sub)
+	return false, putJSON(tx, subscriptionNamespace, key, sub)
 }
 
 // routeWaitingInTx handles predicates before ordinary route policy. It queues

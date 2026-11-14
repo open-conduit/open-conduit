@@ -76,10 +76,12 @@ type SchedulerOptions struct {
 	Timeout        time.Duration
 	AuthorizeAlias func(context.Context, AliasAuthorization) error
 	// AliasFilter evaluates a subscription's opaque Filter with the filter its
-	// namespace's extension declared (Toolbelt.DependencyFilter). It is pure
-	// and runs inside coordination transactions. A subscription with a filter
-	// and no AliasFilter never matches.
-	AliasFilter func(namespace string, filter domain.Payload, e domain.Event) bool
+	// namespace's extension declared (Toolbelt.DependencyFilter). Its answer
+	// is pure and it runs inside coordination transactions. An error is no
+	// answer: the subscription stops before that Event and asks again on a
+	// later pass (ErrDependencyFilterUnavailable). A subscription with a
+	// filter and no AliasFilter never matches.
+	AliasFilter func(namespace string, filter domain.Payload, e domain.Event) (bool, error)
 	// Toolbelt issues a fresh per-epoch credential after claim/recovery/resume
 	// for executors advertising a toolbelt transport other than none.
 	Toolbelt *Toolbelt

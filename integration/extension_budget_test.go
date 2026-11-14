@@ -188,7 +188,10 @@ func TestInTransactionRPCBudget(t *testing.T) {
 		data := json.RawMessage(`{"pr":42}`)
 		ev := domain.Event{ID: "dep", Type: "fixture.changed.v1", Source: "fixture", Data: domain.Payload{Data: data}}
 		// The fixture's filter matches a payload equal to the filter.
-		budget(t, "dependency.filter", func() bool { return filter(domain.Payload{Data: data}, ev) })
+		budget(t, "dependency.filter", func() bool {
+			ok, err := filter(domain.Payload{Data: data}, ev)
+			return ok && err == nil
+		})
 	})
 
 	t.Run("emit.commit", func(t *testing.T) {

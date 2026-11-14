@@ -9,6 +9,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -153,6 +154,48 @@ func TestTranslatedWaitFilterSelectsTheNamedItem(t *testing.T) {
 	if w, _ := waitState(t, h, out.Wait.ID); w.State != domain.WaitWoken {
 		t.Fatalf("named item did not wake: %v", w.State)
 	}
+}
+
+// TestTranslatedWaitAsksAnUnansweredFilterAgain is the missed merge in
+// #613: the named PR merges once, while the extension's filter can't
+// answer (a remote extension timing out under load). The pass must not
+// read that as "not this PR" and checkpoint past the only merge there will
+// be: it reports the filter unavailable, keeps the wait, and the next pass
+// asks about the same Event again and wakes it.
+func TestTranslatedWaitAsksAnUnansweredFilterAgain(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	h.plan = depPlan(false, `{"number":8}`)
+	acceptSource(t, h, "other-pr", "fixture.merged", `{"number":7}`)
+	out := declareAndFinish(t, h)
+	h.mu.Lock()
+	h.filterDown = true
+	h.mu.Unlock()
+	acceptSource(t, h, "named-pr", "fixture.merged", `{"number":8}`)
+	if err := h.scheduler.ReconcileSubscriptions(context.Background(), 10); !errors.Is(err, runtime.ErrDependencyFilterUnavailable) {
+		t.Fatalf("a pass whose filter couldn't answer reported %v", err)
+	}
+	if w, _ := waitState(t, h, out.Wait.ID); w.State != domain.WaitActive {
+		t.Fatalf("an unanswered filter woke the wait: %v", w.State)
+	}
+	// Later Events on the key don't carry the scan past the unanswered one.
+	acceptSource(t, h, "later-pr", "fixture.merged", `{"number":9}`)
+	h.mu.Lock()
+	h.filterDown = false
+	h.mu.Unlock()
+	if err := h.scheduler.ReconcileSubscriptions(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	w, work := waitState(t, h, out.Wait.ID)
+	if w.State != domain.WaitWoken || work.State != domain.WorkReady {
+		t.Fatalf("the merge the filter missed never woke the wait: %v %v", w.State, work.State)
+	}
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		alias, err := tx.Event(w.WakeEventID)
+		if err == nil && alias.Event.CausationID != "named-pr" {
+			t.Fatalf("woken by %s, want the merge the filter missed", alias.Event.CausationID)
+		}
+		return err
+	})
 }
 
 func TestTranslatedWaitOwnKeyInputStillWakes(t *testing.T) {

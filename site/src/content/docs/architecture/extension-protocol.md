@@ -441,7 +441,7 @@ Provisional, like the rest of the protocol. Code:
 
   Bootstrap composes every package from these (`internal/bootstrap/compose.go`), naming none. The config host behind `config.*` is `extproc.ConfigHost`, which speaks the protocol's own types.
 - **In-transaction calls.** `Process.CallInTx` enforces the 250 ms deadline, does not wait for a restart, and refuses every extension-to-host callback with `reentrant_call` while one is outstanding. Two outcomes cannot fail a transaction:
-  - The `bool` dependency filter counts a failure as "no match". The event is not lost; a later matching event still wakes the wait.
+  - A dependency filter that gets no answer (a timeout, a transport failure, an overloaded or restarting process) returns an error, not "no match". The subscription stops before that Event and asks about it again on the next pass, and the pass reports `dependency_filter_unavailable`; a dependency such as a merge happens once, so passing the Event by would leave the wait parked for good ([#613](https://github.com/open-conduit/open-conduit/issues/613)). The extension's own refusal (`unreadable_schema`, `invalid`, `undeclared`, `method_not_found`), like a payload the manifest can't read, is a definite "no match".
   - Work-kind trigger selection falls back to the runtime's documented first input.
 
   The other two in-transaction methods return errors and abort the transaction, which is retried.
@@ -576,7 +576,7 @@ Runtime, trust model and schema evolution:
 15. A payload change requires new observation and delivery identities (include the schema version). Otherwise core's canonical-identity conflict applies.
 16. `kv_version` with host-recorded migration and no downgrade. There are no rolling upgrades.
 17. Executor re-adoption after an extension crash happens inside the host adapter, through the run's fenced persistence.
-18. Fallbacks for the in-transaction calls that cannot fail a transaction: the dependency filter counts a failure as false, and trigger selection falls back to the first input.
+18. Fallbacks for the in-transaction calls that cannot fail a transaction: a dependency filter with no answer is asked again on a later pass (an extension's own refusal counts as false), and trigger selection falls back to the first input.
 19. Reentrancy is refused for every callback while any in-transaction call to that extension is outstanding. This is coarse: a concurrent background callback in that 250 ms window is refused too.
 
 Packaging, SDK and certification: decisions 21–32 in [extension packaging](../extension-packaging/#provisional-decisions-for-user-review).

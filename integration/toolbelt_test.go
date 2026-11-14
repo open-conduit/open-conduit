@@ -37,6 +37,9 @@ type toolbeltHarness struct {
 	// plan translates the fixture.wait operation (see translated wait cases).
 	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
 	aliasOK bool
+	// filterDown makes the fixture's dependency filter fail to answer, as
+	// a remote extension's does while it times out or restarts.
+	filterDown bool
 	// records are the toolbelt's call records; refusal classifies a
 	// refused call (ToolbeltOptions.Refusal) when set.
 	records *[]observability.Record
@@ -120,8 +123,14 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
 		return h.plan(a, in)
-	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) bool {
-		return string(filter.Data) == string(e.Data.Data)
+	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) (bool, error) {
+		h.mu.Lock()
+		unavailable := h.filterDown
+		h.mu.Unlock()
+		if unavailable {
+			return false, errors.New("filter unavailable")
+		}
+		return string(filter.Data) == string(e.Data.Data), nil
 	}}); err != nil {
 		t.Fatal(err)
 	}

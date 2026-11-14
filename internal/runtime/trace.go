@@ -92,7 +92,7 @@ type traceWait struct {
 // state routing reads and calls the same handlers, winner selection and
 // policy decision; it never writes. filter evaluates a subscription's opaque
 // filter (nil: a filtered subscription never matches, as in the scheduler).
-func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool) (RouteTrace, error) {
+func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) (bool, error)) (RouteTrace, error) {
 	return r.trace(ctx, scopeID, e, filter, nil)
 }
 
@@ -103,7 +103,7 @@ const CandidateGeneration = "candidate"
 // applied, such as a setup session's) in place of the stored ones: the
 // routes and bindings it would have, over the Work and Waits there are now.
 // Like Trace, it writes nothing.
-func (r *Router) TraceCandidate(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool, scopes []domain.Scope) (RouteTrace, error) {
+func (r *Router) TraceCandidate(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) (bool, error), scopes []domain.Scope) (RouteTrace, error) {
 	return r.trace(ctx, scopeID, e, filter, candidateScopes(scopes))
 }
 
@@ -128,7 +128,7 @@ func (t candidateTx) Scope(id domain.ID) (domain.Scope, error) {
 	return domain.Scope{}, storage.ErrNotFound
 }
 
-func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool, candidate map[domain.ID]domain.Scope) (RouteTrace, error) {
+func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) (bool, error), candidate map[domain.ID]domain.Scope) (RouteTrace, error) {
 	out := RouteTrace{Generation: r.options.Generation}
 	if candidate != nil {
 		out.Generation = CandidateGeneration
@@ -434,7 +434,7 @@ func (r *Router) waitOutcomeInTx(tx storage.Tx, w domain.Work, a domain.Accepted
 // subscriptionWakes finds the waiting Work that active dependency
 // subscriptions on a, accepted in scope, would wake: the alias they would
 // publish wins that Work's wait.
-func (r *Router) subscriptionWakes(tx storage.Tx, scope domain.ID, a domain.AcceptedEvent, filter func(string, domain.Payload, domain.Event) bool) ([]traceWait, error) {
+func (r *Router) subscriptionWakes(tx storage.Tx, scope domain.ID, a domain.AcceptedEvent, filter func(string, domain.Payload, domain.Event) (bool, error)) ([]traceWait, error) {
 	if a.Event.CorrelationKey == nil {
 		return nil, nil
 	}
@@ -456,8 +456,14 @@ func (r *Router) subscriptionWakes(tx storage.Tx, scope domain.ID, a domain.Acce
 		if len(sub.Request.Types) > 0 && !contains(sub.Request.Types, a.Event.Type) {
 			continue
 		}
-		if sub.Request.Filter != nil && (filter == nil || !filter(sub.Request.Namespace, *sub.Request.Filter, a.Event)) {
-			continue
+		if sub.Request.Filter != nil {
+			// A filter that can't answer now wakes nothing now.
+			if filter == nil {
+				continue
+			}
+			if match, err := filter(sub.Request.Namespace, *sub.Request.Filter, a.Event); err != nil || !match {
+				continue
+			}
 		}
 		w, err := tx.Work(sub.WorkID)
 		if err != nil {

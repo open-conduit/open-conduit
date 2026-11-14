@@ -56,6 +56,23 @@ func (r *Remote) readable(p domain.Payload) bool {
 
 func schemaError(err error) error { return protocol.Errorf(protocol.CodeSchema, err.Error()) }
 
+// filterRefused reports whether a dependency.filter call failed with the
+// extension's own definite refusal (it can't read the Event, or the call
+// isn't declared), which asking again would repeat, rather than with no
+// answer (a timeout, a transport failure, an overloaded or restarting
+// process).
+func filterRefused(err error) bool {
+	var p *protocol.Error
+	if !errors.As(err, &p) {
+		return false
+	}
+	switch p.Code {
+	case protocol.CodeSchema, protocol.CodeInvalid, protocol.CodeUndeclared, protocol.CodeMethodNotFound:
+		return true
+	}
+	return false
+}
+
 // Ingress.
 
 // Ingress returns the adapter of a source the extension registered at
@@ -308,18 +325,24 @@ func (r *Remote) Registration() extension.Registration {
 		reg.Operations = append(reg.Operations, op)
 	}
 	if r.m.Provides.DependencyFilter {
-		// A bool callback has no error path: an unreadable payload, a
-		// timeout or a crash counts as "does not match" (provisional; the
-		// event is not lost, a later matching event still wakes the wait).
-		reg.DependencyFilter = func(filter domain.Payload, e domain.Event) bool {
+		// A payload the manifest can't read, or a call the extension
+		// refuses as unreadable or undeclared, is a definite "does not
+		// match": asking again would get the same answer. A timeout, a
+		// crash or a restart is no answer at all, so it is an error and
+		// core asks about the Event again later; a dependency such as a
+		// merge happens once, so passing it by would strand the wait.
+		reg.DependencyFilter = func(filter domain.Payload, e domain.Event) (bool, error) {
 			if !r.readable(e.Data) {
-				return false
+				return false, nil
 			}
 			var out protocol.DependencyFilterResult
 			if err := r.p.CallInTx(context.Background(), "dependency.filter", protocol.DependencyFilterParams{Filter: protocol.FromPayload(filter), Event: protocol.FromEvent(e)}, &out); err != nil {
-				return false
+				if filterRefused(err) {
+					return false, nil
+				}
+				return false, err
 			}
-			return out.Match
+			return out.Match, nil
 		}
 	}
 	if r.m.Provides.OperationGate && r.m.Allows(protocol.PermissionOperationGate) {
