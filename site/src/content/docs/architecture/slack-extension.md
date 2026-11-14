@@ -15,16 +15,17 @@ This page records two decisions: the manifest requests `metadata.message:read` f
 | Socket Mode | On (the default receiver needs no public endpoint) |
 | Interactivity | On, over Socket Mode, so it needs no request URL. It carries the button presses of [prompts](#prompts-and-button-answers) |
 | Bot user | Yes, always online |
-| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read` |
-| Bot events | `message.channels`, `message.groups`, `app_mention` |
+| App Home | The messages tab on and writable, so people can send the app a [direct message](#direct-messages) |
+| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read`, `im:history`, `im:read` |
+| Bot events | `message.channels`, `message.groups`, `message.im`, `app_mention` |
 | App-level token | `connections:write` (Socket Mode only) |
 
 The extension's own calls need only part of this:
 
-- `conversations.history` and `conversations.replies` need `channels:history` (public channels) or `groups:history` (private channels).
+- `conversations.history` and `conversations.replies` need `channels:history` (public channels), `groups:history` (private channels) or `im:history` (direct messages).
 - `chat.postMessage` and `chat.postEphemeral` need `chat:write`.
 - `auth.test` needs no scope.
-- `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`.
+- `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`; listing the app's direct messages for reconcile needs `im:read`.
 - `apps.connections.open` uses the app-level token.
 
 `users:read`, `reactions:write` and `app_mentions:read` are granted for future use (names, acknowledgements); nothing uses them yet. `app_mention` duplicates a `message` event, so push ignores it.
@@ -68,7 +69,8 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | --- | --- |
 | `namespace` | Stable source identity (for example `slack/T0123`). Also the correlation-key source. |
 | `team` | The workspace's team ID. Push from another team is ignored. |
-| `channels` | 1–100 channel IDs (`C…` public, `G…`/`C…` private) to observe. |
+| `channels` | 1–100 channel IDs (`C…` public, `G…`/`C…` private) to observe. May be empty when `direct_messages` is set. A DM (`D…`) is never listed here. |
+| `direct_messages` | Turns on [direct messages](#direct-messages) with the app: `{"users": ["U…", …]}` (at most 1000) or `{"anyone": true}`. Exactly one is required, so turning DMs on always says whom they admit. Unset: DMs are not observed. |
 | `receiver` | `socket` (default), `http` or `none` (reconcile only). |
 | `signing_secret` | Names a selected scope secret. Required for `http`. |
 | `start` | `all` (default): every human top-level message starts a conversation. `mention`: a human message mentioning `bot_user_id` in a thread no Work owns starts one. |
@@ -105,6 +107,18 @@ Push and reconcile share one normalizer. The version hashes the whole normalized
 
 The payload deliberately omits reply counts and latest-reply times, so a new reply never changes its parent's observation. Joins, topic changes and other non-content subtypes are ignored by push and reconcile alike. Mentions are parsed from the text. File IDs and names are kept, but file content is never read.
 
+## Direct messages
+
+With `direct_messages` set, a direct message with the app (an `im` conversation, ID `D…`) is a place where Work starts, alongside the watched channels.
+
+- **One conversation is a top-level message and its thread, as in a channel.** The DM's ID is the thread key's channel (`channel/D…/thread/<ts>`), so identity, reply markers, `slack.reply`, `slack.thread`, `slack.context`, the durable wait and the `human.ask` buttons work in a DM exactly as in a channel thread. Each new top-level message in the DM is a new conversation, which keeps Work short; a reply in its thread is that Work's input. Answering in the thread is what keeps a follow-up with its conversation: a person's new top-level message starts another one.
+- **`start` doesn't apply.** Nobody mentions the app in a DM, so every person's top-level message starts a conversation, within `start_window_hours`, whatever `start` says.
+- **Who may start is checked at the host.** The route admits a DM only from a user `direct_messages.users` lists, or from anyone with `anyone`. The limit is on the entry, not on a route, so no route can take a DM another route's limit refused: every `slack` route applies it. A DM it refuses starts nothing, and the route trace records the reason (`user U… is not one direct_messages admits`). Slack's events don't say whether the sender is a guest, so "members only" isn't offered: list the users.
+- **A route can select DMs.** A route config `{"direct_messages": true}` claims DMs (with `channels` as well, both). A route with `channels` and no `direct_messages` claims no DMs, and a route with neither claims everything the entry observes, so a DM can run on its own binding and playbook.
+- **Push** takes `message.im` events for any `D…` conversation. **Reconcile** reads the watched channels, then the DMs that can matter: each DM with a person `direct_messages` admits (from `users.conversations`, `types=im`, listed once per generation), and each DM live Work owns a thread in, whoever it is with. It reads their history and threads as it reads a channel, followed by their owned threads older than the window. A DM with someone the limit refuses can't start Work, so it isn't read, and reconcile costs about one history call per admitted person's DM, not per person who ever wrote to the app. With `anyone`, that is every DM, so prefer `users` in a large workspace. A cursor names a DM by its ID rather than its position in the listing, so a DM opened mid-generation cannot shift it.
+- **The listing is bounded** at 50 pages of 200. A longer one keeps what it read instead of failing the generation (Slack has no snapshot, and the runtime publishes a generation only once it is complete, so an error here would also stop recovery for the watched channels). The channels, the DMs listed and the DMs live Work owns are still reconciled. A DM past the bound is recovered only by push, and messages there that an earlier generation observed are reported absent, as for messages that leave the window.
+- **Doctor** fails an entry that turns DMs on when the token lacks `im:history` or `im:read`, saying DMs would be neither read nor recovered. An entry without DMs doesn't need them. Replies in a DM use `chat.postMessage` (`chat:write`), so the manifest asks for no `im:write`: the app answers DMs people open, and never opens one.
+
 ## Push: Socket Mode (default) and the Events API
 
 **Socket Mode.** [`socket.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/slack/socket.go) uses `apps.connections.open` with the app token, then a minimal standard-library RFC 6455 client ([`websocket.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/slack/websocket.go)). This adds no new module. The receiver:
@@ -129,7 +143,7 @@ The listener never serves `/v1`. Socket Mode is the practical default.
 
 - A new message or `message_changed` is normalized as above.
 - A `message_deleted` becomes the direct `slack.message.removed` Event (delivery `removed/<C>/<ts>`).
-- Events from other teams or unwatched channels are ignored.
+- Events from other teams, unwatched channels, or DMs when `direct_messages` is unset are ignored.
 
 Retries of one callback share its `event_id`, and the message identity is its observed state, so redelivery deduplicates.
 
@@ -141,7 +155,7 @@ Slack has no snapshot token. A generation reads a fixed window `[start − histo
 2. For each thread parent, the thread's replies up to `start` (`conversations.replies`, followed to its end, at most 50 pages of 200).
 3. Then the threads that **live Work owns** whose parent is older than the window. The host supplies these from durable state (`IngressOptions.ActiveThreads`). A multi-day wait therefore still recovers missed replies after its parent leaves the window.
 
-The cursor is `<channel>:h:<offset>:<slack cursor>` or `<channel>:a:<after ts>`. A page re-reads its Slack page deterministically (it is cached in memory within the generation) and resumes at the offset. A call stops after 20 API calls or 10 seconds. `Complete` certifies that every listing was read to its end in this generation's window. Rate limits (HTTP 429 with `Retry-After`, which pauses that method for this client) and failed reads return errors, so no absence is inferred.
+The cursor is `<channel>:h:<offset>:<slack cursor>` or `<channel>:a:<after ts>`, where `<channel>` is a watched channel's index or a DM's ID. A page re-reads its Slack page deterministically (it is cached in memory within the generation) and resumes at the offset. A call stops after 20 API calls or 10 seconds. `Complete` certifies that every listing was read to its end in this generation's window. Rate limits (HTTP 429 with `Retry-After`, which pauses that method for this client) and failed reads return errors, so no absence is inferred.
 
 A thread whose reply count and latest reply are unchanged is taken from memory for `refresh_minutes`, so a quiet channel costs about one history call per page. Memory is lost on restart (one full read follows). The same safety nets as GitHub restart a generation: one older than six hours, or a page re-requested after a successful answer.
 
@@ -161,7 +175,7 @@ Messages that disappear become generic `core.ingress.absent`, which the route ig
 
 Handler `slack` reads only the detached Event, Scope and Work, and its own route config. It finds its entry in the scope metadata by namespace. A route's config may list `channels`: the route then claims only threads in those channels, so one entry can serve several routes, each with its own binding and playbook ([example](../../workflows/slack/#start-a-different-playbook-per-channel)). Config validation rejects anything but distinct Slack channel IDs.
 
-- **Unowned threads.** A human, non-deleted message creates `slack.conversation` Work. The kind is namespaced because B02 requires every Work kind to be. It must also pass the start policy: it is a top-level message (`all`), or it mentions the bot (`mention`), and it was received within `start_window_hours` of being written. A parent first seen in its edited form still starts the conversation, because its push may have been missed.
+- **Unowned threads.** A human, non-deleted message creates `slack.conversation` Work. The kind is namespaced because B02 requires every Work kind to be. It must also pass the start policy: it is a top-level message (`all`), or it mentions the bot (`mention`), and it was received within `start_window_hours` of being written. In a [direct message](#direct-messages) it is a top-level message from a person `direct_messages` admits. A parent first seen in its edited form still starts the conversation, because its push may have been missed.
 - **Existing conversations receive:** human messages (including edits) and replies marked by *another* Work.
 - **Never delivered:**
   - The Work's own replies.

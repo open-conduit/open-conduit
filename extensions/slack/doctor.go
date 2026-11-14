@@ -23,7 +23,9 @@ type AuthReport struct {
 // auth.test with the bot token must belong to the entry's team and bot user,
 // and the token's granted scopes are compared with the manifest. Missing
 // history or chat:write scopes fail (reconcile or replies cannot work);
-// any other missing manifest scope warns, naming what it costs.
+// any other missing manifest scope warns, naming what it costs. An entry
+// that turns direct messages on fails without DirectScopes, since DMs could
+// then be neither read nor recovered.
 func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	id, err := c.AuthTest(ctx)
 	switch {
@@ -47,14 +49,19 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 		return r
 	}
 	missing := MissingScopes(id.Scopes)
-	if len(missing) == 0 {
+	var direct []string
+	if s.DirectMessages {
+		direct = MissingDirectScopes(id.Scopes)
+	}
+	if len(missing) == 0 && len(direct) == 0 {
 		return r
 	}
+	missing = append(missing, direct...)
 	have := map[string]bool{}
 	for _, g := range id.Scopes {
 		have[g] = true
 	}
-	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"]
+	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"] || len(direct) > 0
 	if essential {
 		raise(DoctorFail, "scopes_missing")
 	} else {
@@ -65,6 +72,9 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 		if m == MarkerScope {
 			r.Item += " (reply markers are found by the text fallback only)"
 		}
+	}
+	if len(direct) > 0 {
+		r.Item += " (direct_messages is on, so direct messages are neither read nor recovered)"
 	}
 	r.Item += ": reinstall the app from the manifest (open-conduit init slack prints its create-app URL)"
 	return r

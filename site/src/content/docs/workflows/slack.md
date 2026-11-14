@@ -194,6 +194,25 @@ Threads in `C0REVIEWS01` start on `review`; threads in `C0123456789` fall throug
 
 Other handlers narrow a route the same way. Linear and Jira routes already take `{"match": {"labels": ["review"]}}` (or status, team, project and the other issue attributes) in their config, so one tracker entry can start different playbooks by label. The GitHub route's config chooses only what it claims (`claim`, with `drafts` and `authors` for pull requests) and takes no `match` yet; it would gain one when there is a need.
 
+## Answer direct messages
+
+People can ask the agent in a direct message with the app, for a private question or to keep a channel quiet. Turn it on in the entry and say who may start Work that way:
+
+```json
+"config": {"namespace": "slack/T0123456789", "scope": "support", "team": "T0123456789",
+           "channels": ["C0123456789"], "direct_messages": {"users": ["U0ALICE", "U0BOB"]}}
+```
+
+Use `{"anyone": true}` instead of `users` to admit everyone who can message the app. A DM from anyone else starts nothing, and its route trace says why. Each top-level message in the DM is its own conversation and the agent answers in its thread, as in a channel; a reply in that thread continues it. `start` doesn't apply to DMs: every message starts one, without a mention.
+
+To run DMs on their own binding, put a route with `{"direct_messages": true}` before the catch-all:
+
+```json
+{"name": "private", "handler": "slack", "binding": "private", "active_policy": "inject", "config": {"direct_messages": true}}
+```
+
+An app created before this needs reinstalling from the manifest (`open-conduit init slack` prints its create-app URL): DMs need the `im:history` and `im:read` scopes, the `message.im` event and the App Home messages tab. `open-conduit doctor --check-secrets` fails the entry until the token has the scopes.
+
 To turn a request in a thread into an issue and a PR, and tell the thread when it merges, see [Slack to PR](../slack-to-pr/).
 
 See [Slack ingress, conversations and marked replies](../../architecture/slack-extension/) for the details.

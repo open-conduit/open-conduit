@@ -179,7 +179,7 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 	if json.Unmarshal(payload, &in) != nil || in.Type != "block_actions" || p.o.Act == nil {
 		return nil
 	}
-	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !p.o.Settings.Watches(in.Container.ChannelID) {
+	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !p.o.Settings.Observes(in.Container.ChannelID) {
 		return nil
 	}
 	for _, a := range in.Actions {

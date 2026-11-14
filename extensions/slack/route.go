@@ -62,6 +62,8 @@ func settingsFor(scope domain.Scope, source string) (Settings, bool) {
 // message that is not deleted, was first received within start_window of
 // when it was written (so a first reconcile does not turn history into Work),
 // and is a top-level message (start all) or mentions the bot (start mention).
+// In a direct message nobody mentions the app, so every top-level message
+// starts one, whatever start says, when direct_messages admits its sender.
 func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 	if e.Type != TypeMessageHuman || p.Deleted {
 		return false
@@ -69,6 +71,9 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 	written, ok := TSTime(p.TS)
 	if !ok || e.ReceivedAt.Sub(written) > s.StartWindow {
 		return false
+	}
+	if IsDirect(p.Channel) {
+		return p.Root && s.AdmitsDirect(p.User)
 	}
 	switch s.Start {
 	case StartMention:
@@ -138,6 +143,9 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 			return extension.Skip("the route config is unreadable"), nil
 		}
 		if !rc.Selects(channel) {
+			if IsDirect(channel) {
+				return extension.Skip("a direct message, which this route does not select (direct_messages)"), nil
+			}
 			return extension.Skip("channel " + channel + " is not one this route selects"), nil
 		}
 	}
@@ -155,7 +163,7 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if !s.Starts(e, p) {
 			return extension.Skip(s.startRefusal(e, p)), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(), Display: Display(p)}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(channel), Display: Display(p)}, nil
 	}
 	switch e.Type {
 	case TypeMessageHuman:
@@ -288,7 +296,10 @@ func opened(in extension.RouteInput) (extension.RouteDecision, error) {
 }
 
 // startReason says what let a message start a conversation.
-func (s Settings) startReason() string {
+func (s Settings) startReason(channel string) string {
+	if IsDirect(channel) {
+		return "a direct message to the app"
+	}
 	if s.Start == StartMention {
 		return "a mention in a watched channel"
 	}
@@ -309,6 +320,17 @@ func (s Settings) startRefusal(e domain.Event, p MessagePayload) string {
 	}
 	if e.ReceivedAt.Sub(written) > s.StartWindow {
 		return "the message is older than the start window"
+	}
+	if IsDirect(p.Channel) {
+		switch {
+		case !p.Root:
+			return "a reply, not a top-level message"
+		case !s.DirectMessages:
+			return "the entry does not turn direct messages on"
+		case !s.AdmitsDirect(p.User):
+			return "user " + p.User + " is not one direct_messages admits"
+		}
+		return ""
 	}
 	if s.Start == StartMention {
 		return "the message does not mention the bot"

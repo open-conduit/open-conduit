@@ -480,3 +480,38 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 	}
 	return all, nil
 }
+
+// DirectMessage is one of the app's direct messages and the person it is
+// with.
+type DirectMessage struct {
+	ID   string `json:"id"`
+	User string `json:"user"`
+}
+
+// DirectMessages lists the app's open direct messages (users.conversations
+// of type im; im:read), following cursors for at most maxPages pages of
+// 200, and the number of API calls made. truncated says the listing went
+// on past maxPages: what was read is returned, not an error.
+func (c *Client) DirectMessages(ctx context.Context, maxPages int) (out []DirectMessage, calls int, truncated bool, err error) {
+	cursor := ""
+	for calls = 1; calls <= maxPages; calls++ {
+		form := url.Values{"types": {"im"}, "exclude_archived": {"true"}, "limit": {"200"}}
+		if cursor != "" {
+			form.Set("cursor", cursor)
+		}
+		var page struct {
+			Channels []DirectMessage `json:"channels"`
+			Meta     struct {
+				Next string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := c.call(ctx, "users.conversations", form, nil, &page); err != nil {
+			return nil, calls, false, err
+		}
+		out = append(out, page.Channels...)
+		if cursor = page.Meta.Next; cursor == "" {
+			return out, calls, false, nil
+		}
+	}
+	return out, maxPages, true, nil
+}

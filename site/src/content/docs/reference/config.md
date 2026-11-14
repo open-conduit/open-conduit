@@ -581,7 +581,8 @@ Extension entry `config`:
 | `namespace` |  | Required. stable source identity and correlation-key source |
 | `scope` |  | Required. the containing scope's id |
 | `team` |  | Required. |
-| `channels` |  | Required. |
+| `channels` |  | 1-100 channel IDs to observe; none needs direct_messages |
+| `direct_messages` |  | {"users": ["U…"]} or {"anyone": true}: a direct message with the app starts Work, from those people only |
 | `start` |  |  |
 | `bot_user_id` |  |  |
 | `start_window_hours` |  |  |

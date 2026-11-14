@@ -31,7 +31,9 @@ func scopeSettings(scope domain.Scope) []Settings {
 
 func sampleMessage(s Settings, typ, thread string, p MessagePayload) domain.Event {
 	p.Team, p.Thread = s.Team, thread
-	p.Channel = s.Channels[0]
+	if p.Channel == "" {
+		p.Channel = s.Channels[0]
+	}
 	data, _ := json.Marshal(p)
 	return domain.Event{Type: typ, Source: s.Namespace,
 		CorrelationKey: &domain.CorrelationKey{Source: s.Namespace, ExternalID: ThreadKey(p.Channel, thread)},
@@ -53,10 +55,18 @@ func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.Ro
 	all := scopeSettings(in.Scope)
 	now := in.Now
 	for _, s := range all {
+		ts := TS(now)
+		if s.DirectMessages {
+			user := "U0EXAMPLE"
+			if len(s.DMUsers) > 0 {
+				user = s.DMUsers[0]
+			}
+			out = append(out, extension.RouteSample{ID: sampleID(all, s, "direct-message"), Title: "Someone writes to the app in a direct message",
+				Event: sampleMessage(s, TypeMessageHuman, ts, MessagePayload{Channel: "D0EXAMPLE", TS: ts, Root: true, User: user, Text: "Can you help me with something?"})})
+		}
 		if len(s.Channels) == 0 {
 			continue
 		}
-		ts := TS(now)
 		reply := TS(now.Add(time.Second))
 		mention := []string{s.BotUser}
 		out = append(out,
