@@ -115,7 +115,7 @@ func (t *Toolbelt) declarePlan(ctx context.Context, record tokenRecord, digest, 
 // registration-name order, whether the call may proceed. It returns the
 // first gate's plan to park the caller, with the gate's name, or its
 // refusal wrapped in extension.GateRefusal. A gate that panics refuses.
-func (t *Toolbelt) gate(ctx context.Context, owner, operation string, a extension.Authority, input domain.Payload) (*extension.WaitPlan, string, error) {
+func (t *Toolbelt) gate(ctx context.Context, owner string, call extension.GateCall, a extension.Authority) (*extension.WaitPlan, string, error) {
 	t.mu.RLock()
 	names := make([]string, 0, len(t.gates))
 	gates := make(map[string]extension.Gate, len(t.gates))
@@ -128,7 +128,7 @@ func (t *Toolbelt) gate(ctx context.Context, owner, operation string, a extensio
 	t.mu.RUnlock()
 	sort.Strings(names)
 	for _, name := range names {
-		plan, err := callGate(ctx, gates[name], a, extension.GateCall{Operation: operation, Owner: owner, Input: input})
+		plan, err := callGate(ctx, gates[name], a, call)
 		if err != nil {
 			return nil, name, &extension.GateRefusal{Gate: name, Err: err}
 		}

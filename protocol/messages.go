@@ -211,12 +211,15 @@ type OperationResult struct {
 
 // OperationGateParams is operation.gate's request: the call another
 // extension's operation is about to serve (Operation, Owner and Input),
-// with the caller's authority.
+// with the caller's authority. Capability is the capability the call was
+// made for when a client made it for the agent (extension.GateCall.
+// Capability), absent for the agent's own call.
 type OperationGateParams struct {
-	Operation string    `json:"operation"`
-	Owner     string    `json:"owner"`
-	Authority Authority `json:"authority"`
-	Input     Payload   `json:"input"`
+	Operation  string    `json:"operation"`
+	Owner      string    `json:"owner"`
+	Authority  Authority `json:"authority"`
+	Input      Payload   `json:"input"`
+	Capability string    `json:"capability,omitempty"`
 }
 
 // OperationGateResult is operation.gate's answer: no Wait lets the call

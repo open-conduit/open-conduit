@@ -53,6 +53,12 @@ type Ask struct {
 	// requestHash).
 	Gate    string `json:"gate,omitempty"`
 	Request string `json:"request,omitempty"`
+	// Capability is the capability the gated call was made for, when a
+	// client made it for the agent (extension.GateCall.Capability), and
+	// Subject names that call in the agent's terms
+	// (extension.CapabilityCall.Subject).
+	Capability string `json:"capability,omitempty"`
+	Subject    string `json:"subject,omitempty"`
 	// Start marks an approval request for a Work's first start (see
 	// StartGate): no execution waits on it, and its answer settles the
 	// Work's hold. SettledAt is when it was settled.
@@ -108,6 +114,11 @@ type AnswerPayload struct {
 	// Operation is the gated operation when the ask is an approval
 	// request.
 	Operation string `json:"operation,omitempty"`
+	// Capability and Subject are the approval request's (Ask.Capability,
+	// Ask.Subject): a client made the call for the agent, so the agent is
+	// told what to do in its own terms.
+	Capability string `json:"capability,omitempty"`
+	Subject    string `json:"subject,omitempty"`
 }
 
 // filter is a dependency's opaque filter: the ask, and the provider whose

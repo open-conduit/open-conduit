@@ -379,7 +379,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		if s.ext.Gate == nil {
 			return nil, notFound(method)
 		}
-		plan, err := s.ext.Gate(ctx, p.Authority.Extension(), extension.GateCall{Operation: p.Operation, Owner: p.Owner, Input: p.Input.Domain()})
+		plan, err := s.ext.Gate(ctx, p.Authority.Extension(), extension.GateCall{Operation: p.Operation, Owner: p.Owner, Input: p.Input.Domain(), Capability: p.Capability})
 		if err != nil {
 			return nil, err
 		}

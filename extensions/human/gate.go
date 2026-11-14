@@ -53,6 +53,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 		return nil, nil
 	}
 	now := t.o.Now()
+	words := gateWords(c)
 	request := requestHash(c.Operation, c.Input)
 	pointer := "gate/" + string(a.WorkID) + "/" + request
 	var rec Ask
@@ -98,11 +99,11 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 				if prior.Answer.Answer == OptionApprove {
 					allowed = true
 				} else {
-					decided = refuse(CodeApprovalRefused, "%s refused this call to %s; don't make it again unless someone asks you to", prior.Answer.Responder, c.Operation)
+					decided = refuse(CodeApprovalRefused, "%s refused %s; %s", prior.Answer.Responder, words.subject, words.dont)
 				}
 				return tx.Delete(Namespace, pointer)
 			case err == nil && prior.State == StateExpired:
-				decided = refuse(CodeApprovalTimedOut, "nobody approved this call to %s in time, so it was refused; say in your status what it was for", c.Operation)
+				decided = refuse(CodeApprovalTimedOut, "nobody approved %s in time, so it was refused; say in your status what it was for", words.subject)
 				return tx.Delete(Namespace, pointer)
 			case err == nil && prior.State == StateOpen:
 				// Still open, though its caller is running again: it no
@@ -120,7 +121,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			return err
 		}
 		rec = Ask{ID: gateAskID(a, request, now), Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Provider: entry.Name,
-			Gate: c.Operation, Request: request, Question: "Allow " + c.Operation + "?", Options: []string{OptionApprove, OptionRefuse},
+			Gate: c.Operation, Request: request, Capability: c.Capability, Subject: words.capabilitySubject, Question: "Allow " + c.Operation + "?", Options: []string{OptionApprove, OptionRefuse},
 			Context: gateContext(c.Input), Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces,
 			AskedAt: now, Sequence: seq, State: StateOpen}
 		if e := rule.Escalate; e != nil {
@@ -146,7 +147,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 	}
 	d := rec.Deadline
 	out, _ := json.Marshal(map[string]any{"approval_required": true, "operation": c.Operation, "deadline": d.Format(time.RFC3339),
-		"next": "this call needs a person's approval and did not run. End your turn now; any other call is refused until you are resumed. Once resumed with the answer, make the same call again with the same input: an approval lets exactly that call through once"})
+		"next": words.subject + " needs a person's approval and did not go ahead. End your turn now; any other call is refused until you are resumed. Once resumed with the answer, " + words.again + ": an approval lets exactly that through once"})
 	return &extension.WaitPlan{
 		Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeAnswered}}, Timeout: &d, Description: "a person's approval of " + c.Operation},
 		Dependencies: []extension.Dependency{{ID: "answer", SourceKey: rec.Key(), Types: []string{TypeAnswer},
@@ -202,10 +203,62 @@ func gateContext(in domain.Payload) string {
 	return text
 }
 
-// renderApproval tells the caller how its approval request was answered.
-func renderApproval(p AnswerPayload) string {
-	if p.Answer == OptionApprove {
-		return "### A person approved your call to " + p.Operation + "\nMake the same call again with the same input: it goes through once."
+// words is what a gate tells the agent about a call, in the agent's terms:
+// its own call of an operation, or one a client (git's credential helper)
+// made for it, which it makes again by doing again what made it.
+type words struct {
+	// subject names the call; capabilitySubject is it for a client's
+	// call ("" for the agent's own); again says how to make it again and
+	// dont not to.
+	subject, capabilitySubject, again, dont string
+}
+
+func gateWords(c extension.GateCall) words {
+	return describe(c.Operation, c.Capability, func() string {
+		return extension.DescribeCapabilityCall(c.Capability, c.Input).Subject
+	})
+}
+
+// describe is words for a call of operation, made for capability ("" for
+// the agent's own call); subject gives a client's call's subject, read only
+// then.
+func describe(operation, capability string, subject func() string) words {
+	if capability == "" {
+		return words{subject: "your call to " + operation, again: "make the same call again with the same input", dont: "don't make it again unless someone asks you to"}
 	}
-	return "### A person refused your call to " + p.Operation + "\nDon't make it again unless someone asks you to."
+	s := subject()
+	again := extension.DescribeCapabilityCall(capability, domain.Payload{}).Again
+	return words{subject: s, capabilitySubject: s, again: lowerFirst(again), dont: "don't try it again unless someone asks you to"}
+}
+
+// lowerFirst lower-cases s's first letter, to run on from a clause.
+func lowerFirst(s string) string {
+	if s == "" || s[0] < 'A' || s[0] > 'Z' {
+		return s
+	}
+	return string(s[0]+'a'-'A') + s[1:]
+}
+
+// renderApproval tells the caller how its approval request was answered.
+// A call a client made for the agent is told in the agent's terms: what to
+// run again, not an operation to call.
+func renderApproval(p AnswerPayload) string {
+	w := describe(p.Operation, p.Capability, func() string {
+		if p.Subject != "" {
+			return clean(p.Subject)
+		}
+		return extension.DescribeCapabilityCall(p.Capability, domain.Payload{}).Subject
+	})
+	if p.Answer == OptionApprove {
+		return "### A person approved " + w.subject + "\n" + upperFirst(w.again) + ": it goes through once."
+	}
+	return "### A person refused " + w.subject + "\n" + upperFirst(w.dont) + "."
+}
+
+// upperFirst upper-cases s's first letter, to start a sentence.
+func upperFirst(s string) string {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return s
+	}
+	return string(s[0]-'a'+'A') + s[1:]
 }

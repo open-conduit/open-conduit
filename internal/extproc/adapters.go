@@ -376,7 +376,7 @@ func (r *Remote) Registration() extension.Registration {
 				return nil, nil
 			}
 			var out protocol.OperationGateResult
-			if err := r.p.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: c.Operation, Owner: c.Owner, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input)}, &out); err != nil {
+			if err := r.p.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: c.Operation, Owner: c.Owner, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input), Capability: c.Capability}, &out); err != nil {
 				var oe *extension.OperationError
 				if errors.As(err, &oe) {
 					return nil, oe

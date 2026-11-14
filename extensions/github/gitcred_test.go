@@ -175,6 +175,19 @@ func credentialOf(t *testing.T, p domain.Payload) credential {
 	return c
 }
 
+// TestGitCredentialServesOnlyGit: github.git.credential declares that it
+// serves git.credential, so the host answers only git's credential helper's
+// call of it and refuses the agent's own (MCP call, os call) with
+// capability_only before any gate: without the declaration, a direct call
+// would be gated as any other and, once approved, hand the token to the
+// model.
+func TestGitCredentialServesOnlyGit(t *testing.T) {
+	_, _, call := gitCredLab(t, `{"auth":"app","app_id":"42"}`)
+	if call.op.Name != gh.OpGitCredential || call.op.Serves != extension.CapabilityGitCredential {
+		t.Fatalf("%s serves %q, want %q", call.op.Name, call.op.Serves, extension.CapabilityGitCredential)
+	}
+}
+
 // TestGitCredential: git's credential for the Work's repository is an App
 // installation token minted for that one repository with contents: write,
 // handed out again while it lasts, and only for https on github.com. The
