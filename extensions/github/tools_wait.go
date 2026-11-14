@@ -41,6 +41,9 @@ type dependencyFilter struct {
 	Head string `json:"head,omitempty"`
 	// Label is the scheduled label an unscheduled filter waits to see gone.
 	Label string `json:"label,omitempty"`
+	// Since bounds a turn wait that counts history: only turns ending at or
+	// after it meet it (when a work_active refusal saw the agent busy).
+	Since *time.Time `json:"since,omitempty"`
 }
 
 // unscheduledLabel labels the dependency that releases a held issue when
@@ -113,7 +116,7 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 		// turns never meet it (a merge bot keyed to the PR it waits on).
 		var p domain.TurnEnded
 		return e.Type == domain.TypeTurnEnded && e.Data.Schema == domain.SchemaTurnEnded && json.Unmarshal(e.Data.Data, &p) == nil && p.Status == f.State &&
-			(f.Work == "" || p.Work != f.Work)
+			(f.Work == "" || p.Work != f.Work) && (f.Since == nil || !e.OccurredAt.Before(*f.Since))
 	case "peer":
 		var p CommentPayload
 		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && f.peer(p)
@@ -380,13 +383,18 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			}
 		default:
 			// The next turn of the PR's own agent ending in that state, not
-			// an earlier one: the host publishes it on each of that Work's
+			// an earlier one (or since a work_active refusal this turn saw it
+			// busy): the host publishes it on each of that Work's
 			// keys, `pull_request/N` for the PR's own Work (a reviewer) and
 			// `pr/N` for Work that opened it without an issue. The issue's
 			// agent is issue:<n>:<state>.
-			filter := filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID)})
+			since, err := t.busySince(ctx, b, busyItem(CondPR, scope, c.Number()))
+			if err != nil {
+				return r, err
+			}
+			filter := filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID), Since: since})
 			r.dep.SourceKey = domain.CorrelationKey{Source: codeSrc.Settings.Namespace, ExternalID: PullRequestKey(c.Number())}
-			r.dep.Types, r.dep.FromNow, r.dep.Filter = []string{domain.TypeTurnEnded}, true, filter
+			r.dep.Types, r.dep.FromNow, r.dep.Filter = []string{domain.TypeTurnEnded}, since == nil, filter
 			opener := r.dep
 			opener.ID = c.String() + "/opener"
 			opener.SourceKey = domain.CorrelationKey{Source: codeSrc.Settings.Namespace, ExternalID: PullKey(c.Number())}
@@ -417,9 +425,14 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			r.dep.Types = []string{TypeIssueClosed}
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "issue", Repo: repo, Number: c.Number()})
 		} else {
-			// The next turn ending in that state, not an earlier one.
-			r.dep.Types, r.dep.FromNow = []string{domain.TypeTurnEnded}, true
-			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID)})
+			// The next turn ending in that state, not an earlier one, or
+			// since a work_active refusal this turn saw the agent busy.
+			since, err := t.busySince(ctx, b, busyItem(CondIssue, scope, c.Number()))
+			if err != nil {
+				return r, err
+			}
+			r.dep.Types, r.dep.FromNow = []string{domain.TypeTurnEnded}, since == nil
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID), Since: since})
 		}
 	}
 	return r, nil

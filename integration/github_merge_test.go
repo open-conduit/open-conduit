@@ -412,3 +412,50 @@ func TestGitHubMergeCountsAParkedReviewerAsHandedBack(t *testing.T) {
 		t.Fatalf("merge with the reviewer parked after done: %v %v", out, err)
 	}
 }
+
+// The agent can hand back between a work_active refusal and the wait the
+// refusal names. A wait the refused caller registers in the same turn
+// counts that hand-back, so it wakes at once (#648); a Work that wasn't
+// refused still waits for the agent's next turn, not its earlier one.
+func TestGitHubMergeWaitCountsAHandBackBeforeTheWait(t *testing.T) {
+	e := newToolsEnv(t)
+	n, builder := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	e.fake.SetCheck("h1", "ci", "completed", "success")
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	e.sync()
+	b := e.start(builder.ID)
+
+	merger := e.request("merge-bot")
+	m := e.start(merger.ID)
+	review, done := "issue:"+string(ghScope)+"/"+itoa(n)+":review", "issue:"+string(ghScope)+"/"+itoa(n)+":done"
+	_, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+	refusedSaying(t, err, "work_active", "working on a turn", `"`+review+`"`, `"`+done+`"`)
+
+	// The builder hands back before the merge bot waits.
+	e.finish(b, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	e.publishTurns()
+
+	// Another Work, never refused, waits on the same hand-back: the turn
+	// that has already ended isn't the one it waits for.
+	watcher := e.request("watcher")
+	w := e.start(watcher.ID)
+	e.must(w, gh.OpWait, "park", map[string]any{"conditions": []string{review, done}, "reason": "waiting for the builder's next report"})
+	e.finish(w, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+
+	e.must(m, gh.OpWait, "park", map[string]any{"conditions": []string{review, done}, "reason": "the builder is mid-turn"})
+	e.finish(m, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.publishTurns()
+	if got := e.work(merger.ID); got.State != domain.WorkReady {
+		t.Fatalf("the hand-back before the wait did not wake the merge bot: %v", got.State)
+	}
+	if got := e.work(watcher.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("an earlier hand-back woke a wait that was never refused: %v", got.State)
+	}
+	m = e.start(merger.ID)
+	out, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+	if err != nil || decodeMap(t, out)["state"] != "merged" {
+		t.Fatalf("merge after the builder handed back: %v %v", out, err)
+	}
+}

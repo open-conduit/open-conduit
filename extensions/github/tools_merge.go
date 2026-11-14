@@ -297,7 +297,7 @@ func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPu
 	if err != nil {
 		return err
 	}
-	var busy, conds []string
+	var busy, conds, items []string
 	for _, a := range agents {
 		who := fmt.Sprintf("the agent on PR #%d (Work %s)", p.Number, a.work.ID)
 		if a.issue > 0 {
@@ -318,10 +318,11 @@ func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPu
 		// Every busy Work comes with the conditions its handing back meets:
 		// its next turn ending in review or done, which the host publishes on
 		// its keys whether or not it posts anything on GitHub.
-		item := fmt.Sprintf("pr:%s/%d", a.work.ScopeID, p.Number)
+		item := busyItem(CondPR, a.work.ScopeID, p.Number)
 		if a.issue > 0 {
-			item = fmt.Sprintf("issue:%s/%d", a.work.ScopeID, a.issue)
+			item = busyItem(CondIssue, a.work.ScopeID, a.issue)
 		}
+		items = append(items, item)
 		for _, s := range handedBack {
 			if c := item + ":" + s; !slices.Contains(conds, c) {
 				conds = append(conds, c)
@@ -330,6 +331,12 @@ func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPu
 	}
 	if len(busy) == 0 {
 		return nil
+	}
+	// The caller is told now that these agents haven't handed back, so a
+	// wait it registers this turn on their handing back counts one that
+	// lands before the wait does.
+	if err := t.sawBusy(ctx, b, items); err != nil {
+		return err
 	}
 	q := make([]string, len(conds))
 	for i, c := range conds {
