@@ -40,3 +40,24 @@ func TestGitTransportLayer(t *testing.T) {
 		t.Errorf("env %v, want %v", vars, want)
 	}
 }
+
+// TestCheckRunFiles: a run layer's files are a few plain file names, never
+// a path, an oversized file or one with a NUL.
+func TestCheckRunFiles(t *testing.T) {
+	if err := extension.CheckRunFiles(map[string]string{"config": "[profile read]\n", "a.b-c_d": ""}); err != nil {
+		t.Fatal(err)
+	}
+	many := map[string]string{}
+	for i := 0; i <= extension.MaxRunFiles; i++ {
+		many[string(rune('a'+i))] = ""
+	}
+	big := string(make([]byte, extension.MaxRunFileBytes+1))
+	for name, files := range map[string]map[string]string{
+		"a path": {"../config": ""}, "nested": {"a/b": ""}, "hidden": {".config": ""}, "empty name": {"": ""},
+		"too many": many, "too big": {"config": big}, "a NUL": {"config": "a\x00b"},
+	} {
+		if extension.CheckRunFiles(files) == nil {
+			t.Errorf("accepted %s", name)
+		}
+	}
+}

@@ -530,9 +530,17 @@ type RunEnvironmentParams struct {
 	Owner ResourceOwner `json:"owner"`
 	// Connection is the connection the run's binding names, or empty.
 	Connection string `json:"connection,omitempty"`
+	// Binding is the run's executor binding.
+	Binding string `json:"binding,omitempty"`
+	// FilesDir is where the host writes the result's files, or empty when
+	// the run has no directory for them (extension.RunEnvironmentRequest).
+	FilesDir string `json:"files_dir,omitempty"`
 }
 type RunEnvironmentResult struct {
 	Env map[string]string `json:"env,omitempty"`
+	// Files are files for the host to write into FilesDir, by name
+	// (extension.RunLayer).
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // Annotations.

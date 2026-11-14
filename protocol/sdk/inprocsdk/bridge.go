@@ -428,6 +428,11 @@ func (b *Bridge) wire() {
 			return extension.ActionPlan{}, &extension.OperationError{Code: "unknown_action", Message: "no such action here"}
 		}
 	}
+	if r, ok := b.x.(extension.RunLayerProvider); ok {
+		e.RunLayer = func(ctx context.Context, _ *sdk.Host, req extension.RunEnvironmentRequest) (extension.RunLayer, error) {
+			return r.RunLayer(ctx, req)
+		}
+	}
 	if r, ok := b.x.(extension.RunEnvironment); ok {
 		e.RunEnvironment = func(ctx context.Context, _ *sdk.Host, req extension.RunEnvironmentRequest) (map[string]string, error) {
 			return r.RunEnvironment(ctx, req)

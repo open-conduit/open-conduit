@@ -666,16 +666,31 @@ func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotat
 // (manifest run_environment); an extension that doesn't declare one has
 // none. A failed call fails the run, as the contract says.
 func (r *Remote) RunEnvironment(ctx context.Context, req extension.RunEnvironmentRequest) (map[string]string, error) {
+	layer, err := r.RunLayer(ctx, req)
+	return layer.Env, err
+}
+
+// RunLayer is RunEnvironment with the files the layer carries, checked
+// (extension.CheckRunFiles); a layer with files the host can't write
+// fails the run as a failed call does. Files for a run with no FilesDir
+// are dropped.
+func (r *Remote) RunLayer(ctx context.Context, req extension.RunEnvironmentRequest) (extension.RunLayer, error) {
 	if !r.m.Provides.RunEnvironment {
-		return nil, nil
+		return extension.RunLayer{}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	var out protocol.RunEnvironmentResult
-	if err := r.p.Call(ctx, "run.environment", protocol.RunEnvironmentParams{Owner: protocol.FromOwner(req.Owner), Connection: req.Connection}, &out); err != nil {
-		return nil, err
+	if err := r.p.Call(ctx, "run.environment", protocol.RunEnvironmentParams{Owner: protocol.FromOwner(req.Owner), Connection: req.Connection, Binding: req.Binding, FilesDir: req.FilesDir}, &out); err != nil {
+		return extension.RunLayer{}, err
 	}
-	return out.Env, nil
+	if req.FilesDir == "" {
+		out.Files = nil
+	}
+	if err := extension.CheckRunFiles(out.Files); err != nil {
+		return extension.RunLayer{}, err
+	}
+	return extension.RunLayer{Env: out.Env, Files: out.Files}, nil
 }
 
 // Actions returns the extension's action provider (manifest actions), which

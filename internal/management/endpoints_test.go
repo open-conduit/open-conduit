@@ -156,3 +156,46 @@ func TestEndpointsServeTCP(t *testing.T) {
 		t.Fatal("the port still serves after Close")
 	}
 }
+
+// FilesDir is in the token directory the run already reads, one directory
+// per extension, only once the execution is served; WriteFiles replaces
+// what was there, owner-only.
+func TestEndpointsRunFiles(t *testing.T) {
+	e := openEndpoints(t, shortTemp(t), "")
+	if dir := e.FilesDir("execution/one", "aws"); dir != "" {
+		t.Fatalf("files dir before the execution is served: %s", dir)
+	}
+	_, file, err := e.Serve(context.Background(), "execution/one", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := e.FilesDir("execution/one", "aws")
+	if dir != filepath.Join(filepath.Dir(file), endpointFiles, "aws") {
+		t.Fatalf("files dir %s, token file %s", dir, file)
+	}
+	for _, bad := range []string{"", "..", "a/b"} {
+		if got := e.FilesDir("execution/one", bad); got != "" {
+			t.Errorf("files dir for extension %q: %s", bad, got)
+		}
+	}
+	if err = WriteFiles(dir, map[string]string{"config": "[profile read]\n", "stale": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = WriteFiles(dir, map[string]string{"config": "[profile write]\n"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "config"))
+	st, _ := os.Stat(filepath.Join(dir, "config"))
+	if err != nil || string(b) != "[profile write]\n" || st.Mode().Perm() != 0o600 {
+		t.Fatalf("config %q %v %v", b, st.Mode(), err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, "stale")); !os.IsNotExist(err) {
+		t.Fatal("a file the layer no longer carries was kept")
+	}
+	if err = WriteFiles(dir, map[string]string{"../escape": "x"}); err == nil {
+		t.Fatal("wrote a file outside the directory")
+	}
+	if b, _ = os.ReadFile(file); string(b) != "first\n" {
+		t.Fatalf("token after writing files: %q", b)
+	}
+}

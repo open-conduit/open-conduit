@@ -139,6 +139,10 @@ type Extension struct {
 	// RunEnvironment contributes an environment layer to a run of a Work in
 	// a scope that uses the extension (manifest run_environment).
 	RunEnvironment func(ctx context.Context, h *Host, r extension.RunEnvironmentRequest) (map[string]string, error)
+	// RunLayer, when set, is asked instead of RunEnvironment, and its
+	// layer can carry files for the host to write into the run
+	// (extension.RunLayer) as well as environment variables.
+	RunLayer func(ctx context.Context, h *Host, r extension.RunEnvironmentRequest) (extension.RunLayer, error)
 	// Annotate contributes Work annotations (manifest annotate).
 	Annotate func(ctx context.Context, h *Host, w domain.Work) ([]protocol.Annotation, error)
 	// Actions lists the actions available on a target now and Act

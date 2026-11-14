@@ -161,7 +161,7 @@ var Methods = []Method{
 	{Name: "config.candidate", Direction: HostToExtension, Provides: "config_candidate", Permission: PermissionConfigRead, Contract: []string{"extension.ConfigCandidate.ConfigCandidate", "extension.Candidate", "extension.CandidateChange"}},
 	{Name: "config.trace", Direction: ExtensionToHost, Permission: PermissionConfigRead, Contract: []string{"inproc.ConfigHost.Trace", "inproc.CandidateTrace"}},
 	{Name: "check.run", Direction: HostToExtension, Provides: "checks", Contract: []string{"host:runtime.Check (Checks, DeepChecks)"}},
-	{Name: "run.environment", Direction: HostToExtension, Provides: "run_environment", Contract: []string{"extension.RunEnvironment.RunEnvironment", "extension.RunEnvironmentRequest", "extension.ExecutionContext.Env"}},
+	{Name: "run.environment", Direction: HostToExtension, Provides: "run_environment", Contract: []string{"extension.RunEnvironment.RunEnvironment", "extension.RunLayerProvider.RunLayer", "extension.RunEnvironmentRequest", "extension.RunLayer", "extension.ExecutionContext.Env"}},
 	{Name: "work.annotate", Direction: HostToExtension, Provides: "annotate", Contract: []string{"host:management Annotate"}},
 	{Name: "work.actions", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Actions", "extension.ActionTarget", "extension.Action"}},
 	{Name: "work.act", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Invoke", "extension.ActionCall", "extension.Caller", "extension.ActionPlan", "extension.OperationError"}},

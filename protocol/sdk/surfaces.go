@@ -302,10 +302,18 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
+		req := extension.RunEnvironmentRequest{Owner: p.Owner.Extension(), Connection: p.Connection, Binding: p.Binding, FilesDir: p.FilesDir}
+		if s.ext.RunLayer != nil {
+			layer, err := s.ext.RunLayer(ctx, s.host, req)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.RunEnvironmentResult{Env: layer.Env, Files: layer.Files}, nil
+		}
 		if s.ext.RunEnvironment == nil {
 			return nil, notFound(method)
 		}
-		env, err := s.ext.RunEnvironment(ctx, s.host, extension.RunEnvironmentRequest{Owner: p.Owner.Extension(), Connection: p.Connection})
+		env, err := s.ext.RunEnvironment(ctx, s.host, req)
 		if err != nil {
 			return nil, err
 		}
