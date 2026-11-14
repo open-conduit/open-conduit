@@ -37,6 +37,8 @@ var (
 	repoPattern  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	idPattern    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 	digitPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
+	// workflowPattern is a workflow file's name in .github/workflows.
+	workflowPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}\.ya?ml$`)
 )
 
 // ConnectionConfig is the nonsecret config of a `github` connection. Token
@@ -245,6 +247,9 @@ type ExtensionConfig struct {
 	// Admit is who may start Work by opening an issue or a PR (default:
 	// the repository's owner, members and collaborators, never a fork).
 	Admit *Admit `json:"admit,omitempty"`
+	// Workflows are the workflow files (`release.yml`) github.workflow.run
+	// may start in the repository; none by default.
+	Workflows []string `json:"workflows,omitempty"`
 }
 
 // Admit widens or narrows who may start Work. Authors are GitHub author
@@ -289,6 +294,8 @@ type Settings struct {
 	// AnyAuthor); Forks admits PRs from forks.
 	Authors []string
 	Forks   bool
+	// Workflows are the workflow files github.workflow.run may start.
+	Workflows []string
 }
 
 func validNamespace(ns string) bool {
@@ -402,6 +409,14 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	case c.NoChecksMinutes > 0:
 		s.NoChecks = time.Duration(c.NoChecksMinutes) * time.Minute
 	}
+	for _, w := range c.Workflows {
+		if !workflowPattern.MatchString(w) {
+			return s, fmt.Errorf("github extension: workflows: %q must be a workflow file name in .github/workflows, such as release.yml", w)
+		}
+		if !slices.Contains(s.Workflows, w) {
+			s.Workflows = append(s.Workflows, w)
+		}
+	}
 	if s.AckIssues && !s.TrackIssues {
 		return s, errors.New("github extension: acknowledge_issues needs track_issues")
 	}
@@ -437,7 +452,7 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 	if s.SharedTracker {
 		out = append(out, extension.Setting{Name: "tracker", Value: s.TrackerRepo})
 	}
-	return append(out,
+	out = append(out,
 		extension.Setting{Name: "base_branch", Value: s.BaseBranch},
 		extension.Setting{Name: "manage_webhook", Value: s.ManageWebhook},
 		extension.Setting{Name: "track_pull_requests", Value: s.TrackPulls},
@@ -445,4 +460,8 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 		extension.Setting{Name: "admit_authors", Value: strings.Join(s.Authors, ", ")},
 		extension.Setting{Name: "admit_forks", Value: s.Forks},
 		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})
+	if len(s.Workflows) > 0 {
+		out = append(out, extension.Setting{Name: "workflows", Value: strings.Join(s.Workflows, ", ")})
+	}
+	return out
 }

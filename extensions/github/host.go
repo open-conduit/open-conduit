@@ -159,7 +159,7 @@ func (x *Extension) startTools(h inproc.Host) error {
 			return err
 		})
 	}
-	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file"), Own: own})
+	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Pending: h.Pending, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file"), Own: own})
 	if err != nil {
 		return err
 	}

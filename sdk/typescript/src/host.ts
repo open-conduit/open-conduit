@@ -16,6 +16,7 @@ import {
   type KVDelete,
   KVGetResult,
   KVListResult,
+  PendingInput,
   SecretResolveResult,
   Work,
 } from "./wire.ts";
@@ -229,6 +230,22 @@ export class Host {
         "state.works",
         scopeId === "" ? {} : { scope_id: scopeId },
         t.nullable(t.array(Work)),
+        signal,
+      )) ?? []
+    );
+  }
+
+  /**
+   * The input routed to a Work that no attempt of it has read yet, oldest
+   * first. Ready Work with none has read everything routed to it; ready
+   * Work with some is about to start on it.
+   */
+  async pending(workId: string, signal?: AbortSignal): Promise<PendingInput[]> {
+    return (
+      (await this.call(
+        "state.pending",
+        { id: workId },
+        t.nullable(t.array(PendingInput)),
         signal,
       )) ?? []
     );

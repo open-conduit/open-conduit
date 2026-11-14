@@ -16,6 +16,76 @@ func PendingInputsInTx(tx storage.Tx, work domain.ID) ([]QueuedInput, error) {
 	return pendingInputs(tx, work)
 }
 
+// UnreadInput is input for a Work that no attempt of it has read: queued
+// for it, or accepted and not yet routed but bound for it (Unrouted).
+type UnreadInput struct {
+	QueuedInput
+	Type     string
+	Unrouted bool
+}
+
+// UnreadInputsInTx is everything for work that no attempt has read, oldest
+// first: its queued input, then accepted Events the router hasn't routed
+// yet that would go to it (as Complete counts them). It reads only.
+func UnreadInputsInTx(tx storage.Tx, work domain.ID) ([]UnreadInput, error) {
+	w, err := tx.Work(work)
+	if err != nil {
+		return nil, err
+	}
+	queued, err := pendingInputs(tx, work)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UnreadInput, 0, len(queued))
+	for _, q := range queued {
+		in := UnreadInput{QueuedInput: q}
+		if a, err := tx.Event(q.EventID); err == nil {
+			in.Type = a.Event.Type
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	unrouted, err := unroutedFor(tx, w)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range unrouted {
+		out = append(out, UnreadInput{QueuedInput: QueuedInput{EventID: a.Event.ID, Sequence: a.Sequence}, Type: a.Event.Type, Unrouted: true})
+	}
+	return out, nil
+}
+
+// unroutedFor is the accepted Events not yet routed that would go to w: an
+// Event that targets it and whose route owner is w.
+func unroutedFor(tx storage.Tx, w domain.Work) ([]domain.AcceptedEvent, error) {
+	events, err := tx.UnroutedEvents(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.AcceptedEvent
+	for _, a := range events {
+		if a.Routed {
+			continue
+		}
+		target, e := potentiallyTargets(tx, a.Event, w)
+		if e != nil {
+			return nil, e
+		}
+		if !target {
+			continue
+		}
+		owner, e := routeOwner(tx, a.Event)
+		if e != nil && !errors.Is(e, storage.ErrNotFound) {
+			return nil, e
+		}
+		if owner.ID == w.ID {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // Complete settles a successful attempt under its current lease. Unrouted
 // accepted input forces a retry; queued or unconfirmed injected input keeps Work
 // ready. No execution transport acknowledgement is inferred from an intent.
@@ -29,28 +99,10 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 		if err != nil {
 			return err
 		}
-		events, err := tx.UnroutedEvents(0, 0)
-		if err != nil {
+		if unrouted, err := unroutedFor(tx, w); err != nil {
 			return err
-		}
-		for _, a := range events {
-			if a.Routed {
-				continue
-			}
-			target, e := potentiallyTargets(tx, a.Event, w)
-			if e != nil {
-				return e
-			}
-			if !target {
-				continue
-			}
-			owner, e := routeOwner(tx, a.Event)
-			if e != nil && !errors.Is(e, storage.ErrNotFound) {
-				return e
-			}
-			if owner.ID == w.ID {
-				return storage.ErrConflict
-			}
+		} else if len(unrouted) > 0 {
+			return storage.ErrConflict
 		}
 		x.State = domain.ExecutionCompleted
 		x.Outcome = &domain.Outcome{Kind: domain.OutcomeCompleted}

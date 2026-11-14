@@ -217,7 +217,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.pending": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -252,7 +252,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.kvCommit(ctx, p)
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -774,6 +774,27 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			list := []protocol.Wait{}
 			for _, x := range waits {
 				list = append(list, protocol.FromWait(x))
+			}
+			out = list
+		case "state.pending":
+			// The input for the Work that no attempt has read, queued or
+			// accepted and not yet routed: the read that tells Work that
+			// has read everything from Work about to start on something
+			// new, both of which are ready.
+			w, err := tx.Work(domain.ID(p.ID))
+			if err != nil {
+				return err
+			}
+			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
+				return notFound
+			}
+			unread, err := runtime.UnreadInputsInTx(tx, w.ID)
+			if err != nil {
+				return err
+			}
+			list := []protocol.PendingInput{}
+			for _, q := range unread {
+				list = append(list, protocol.PendingInput{EventID: string(q.EventID), Sequence: q.Sequence, Type: q.Type, Binding: q.Binding, Unrouted: q.Unrouted})
 			}
 			out = list
 		case "state.timers":

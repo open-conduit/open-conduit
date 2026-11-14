@@ -233,6 +233,13 @@ type Host struct {
 	// extension.ErrUnauthorized, and Work with no active Wait
 	// storage.ErrNotFound.
 	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
+	// Pending is the input for work that no attempt of it has read yet:
+	// what is queued for it, oldest first, then accepted Events the router
+	// hasn't routed yet that would go to it (Unrouted). Work that is ready
+	// with nothing pending has read everything; Work that is ready with
+	// input pending is about to start. A Work outside the
+	// extension's scopes, and not of its own kinds, is storage.ErrNotFound.
+	Pending func(ctx context.Context, work domain.ID) ([]PendingInput, error)
 	// SettleHold settles a hold the extension's start gate placed on work
 	// (extension.StartGate): admit lets its next start through once without
 	// asking the start gates again; otherwise the Work is cancelled. reason
@@ -258,6 +265,19 @@ type Host struct {
 	// (extension.SetupProbes), by full name ("claude-code.status"), and the
 	// host's own (open-conduit.init, open-conduit.doctor).
 	Probes func() map[string]extension.SetupProbe
+}
+
+// PendingInput is one Event for a Work that no attempt has read yet
+// (Host.Pending): the Event, its sequence and type, and the binding the
+// route queued it for, or Unrouted while the router has yet to route it.
+type PendingInput struct {
+	EventID  domain.ID
+	Sequence uint64
+	Type     string
+	Binding  string
+	// Unrouted marks an accepted Event the router hasn't routed yet that
+	// would go to the Work.
+	Unrouted bool
 }
 
 // ConfigBase is the configuration a proposal starts from: the committed

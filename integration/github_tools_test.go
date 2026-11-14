@@ -208,7 +208,18 @@ func (e *toolsEnv) compose() {
 			return err
 		})
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, MayFile: mayFile, Own: own, Sources: func() []gh.Source {
+	// As the host serves state.pending (inproc.Host.Pending).
+	pending := func(ctx context.Context, work domain.ID) (out []inproc.PendingInput, err error) {
+		err = e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			unread, err := runtime.UnreadInputsInTx(tx, work)
+			for _, q := range unread {
+				out = append(out, inproc.PendingInput{EventID: q.EventID, Sequence: q.Sequence, Type: q.Type, Binding: q.Binding, Unrouted: q.Unrouted})
+			}
+			return err
+		})
+		return out, err
+	}
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Pending: pending, Writers: e.writers, MayRead: mayRead, MayFile: mayFile, Own: own, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Connection: "github", Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)

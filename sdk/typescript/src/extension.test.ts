@@ -423,6 +423,41 @@ test("a Work's events are read with state.work_events, not a scan of the log", a
   end();
 });
 
+test("a Work's unread input is read with state.pending", async () => {
+  const asked: StateParams[] = [];
+  const hostHandler: Handler = async (method, params) => {
+    if (method !== "state.pending")
+      throw new ProtocolError(Code.MethodNotFound, method);
+    const p = decode(StateParams, params);
+    asked.push(p);
+    return p.id === "busy"
+      ? [{ event_id: "e7", sequence: 7, type: "acme.comment", binding: "b" }]
+      : null;
+  };
+  const ext = extension("acme", { version: "1.0.0" }).operation("acme.unread", {
+    input: t.object({}),
+    handler: async (_, { host }) => {
+      const busy = await host.pending("busy");
+      const idle = await host.pending("idle");
+      return { busy: busy.map((p) => p.type), idle: idle.length };
+    },
+  });
+  const { host, end } = await ready(ext, hostHandler);
+  const out = await host.call("operation.call", {
+    operation: "acme.unread",
+    authority,
+    input: { data: {} },
+  });
+  assert.deepEqual(out, {
+    output: {
+      schema: "acme.unread.v1",
+      data: { busy: ["acme.comment"], idle: 0 },
+    },
+  });
+  assert.deepEqual(asked, [{ id: "busy" }, { id: "idle" }]);
+  end();
+});
+
 test("configure migrates the KV layout, then hands each entry type its decoded entries", async () => {
   const seen: string[] = [];
   const ext = extension("weather", { version: "0.1.0", kvVersion: 2 })

@@ -80,6 +80,7 @@ var parity = map[string][]string{
 	"Host.Timers":            {"method:timer.arm", "method:timer.cancel"},
 	"Host.CancelWork":        {"method:work.cancel"},
 	"Host.WaitProgress":      {"method:wait.progress"},
+	"Host.Pending":           {"method:state.pending"},
 	"Host.SettleHold":        {"manifest:permissions", "method:work.settle_hold"},
 	"Host.Capture":           {"manifest:permissions", "method:telemetry.capture"},
 	"Host.Act":               {"manifest:permissions", "method:action.submit"},

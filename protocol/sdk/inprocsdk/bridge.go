@@ -17,7 +17,7 @@
 // whose services are the host's methods: the store is sdk.Store (the
 // extension's own KV and scoped state reads), secrets go through
 // secret.resolve, deliveries through ingress.deliver, and Authorize,
-// WaitTarget, WaitProgress, Render, Act, Actions, SettleHold and Capture
+// WaitTarget, WaitProgress, Pending, Render, Act, Actions, SettleHold and Capture
 // through their methods. In-transaction acceptance returns the Event from
 // the transaction as a kv.commit Emission, which the host accepts with the
 // transaction's writes (services.go); timers go through timer.arm and
@@ -660,9 +660,20 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 			return key, types, ok && err == nil
 		},
 		WaitProgress: h.WaitProgress,
-		SettleHold:   h.SettleHold,
-		Act:          h.Act,
-		Actions:      h.Actions,
+		Pending: func(ctx context.Context, work domain.ID) ([]inproc.PendingInput, error) {
+			in, err := h.Pending(ctx, work)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]inproc.PendingInput, 0, len(in))
+			for _, p := range in {
+				out = append(out, inproc.PendingInput{EventID: domain.ID(p.EventID), Sequence: p.Sequence, Type: p.Type, Binding: p.Binding, Unrouted: p.Unrouted})
+			}
+			return out, nil
+		},
+		SettleHold: h.SettleHold,
+		Act:        h.Act,
+		Actions:    h.Actions,
 		Capture: func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
 			return h.Capture(ctx, domain.ID(scope), name, at, props)
 		},
