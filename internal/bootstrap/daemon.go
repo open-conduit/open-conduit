@@ -197,7 +197,7 @@ func toolbeltBeside(self string) string {
 // <state>/toolbelt, the toolbelt directory executions are given. A package
 // manager installs each version in a directory of its own and removes the
 // old one on upgrade (Homebrew's Caskroom/open-conduit/<version>), so a run
-// whose PATH, git credential helper or MCP server named that directory
+// whose PATH, git transport or MCP server named that directory
 // would lose its toolbelt mid-turn. The link outlives the install; each
 // daemon start re-points it, atomically, at the install it runs from. With
 // no toolbelt (dir is "") it returns "".

@@ -607,7 +607,7 @@ func (x *Extension) sweepGitTokens(ctx context.Context) error {
 }
 
 // SegmentEnded revokes the git tokens the tools minted for an execution
-// (github.git.credential, behind `os git-credential`) once its segment has
+// (github.git.credential, for the toolbelt's git transport) once its segment has
 // ended. One GitHub couldn't be told about is left for the sweep.
 func (x *Extension) SegmentEnded(ctx context.Context, execution domain.ID) {
 	x.mu.Lock()
@@ -622,7 +622,7 @@ func (x *Extension) SegmentEnded(ctx context.Context, execution domain.ID) {
 }
 
 // RunEnvironment is the git environment of a run whose Work a GitHub entry
-// owns (the tools' credential helper or bot identity).
+// owns (the tools' git transport or credential helper, and bot identity).
 func (x *Extension) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRequest) (map[string]string, error) {
 	x.mu.Lock()
 	t := x.tools

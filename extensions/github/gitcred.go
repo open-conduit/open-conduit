@@ -15,9 +15,10 @@ import (
 )
 
 // OpGitCredential is git's credential for the Work's repository, minted
-// for the execution that asks: the operation behind `os git-credential`,
-// the git credential helper a container launch sets. It is not an agent's
-// tool; agents run git and never call it themselves.
+// for the execution: the host asks for it when the execution's git reaches
+// the repository through the toolbelt's git transport, and signs git's
+// requests in with it. It is not an agent's tool, and it answers only the
+// host: agents run git and never see the token.
 const OpGitCredential = "github.git.credential"
 
 // gitOpPermissions are the permissions beyond contents: write a git token
@@ -97,7 +98,7 @@ type gitCredentialOutput struct {
 // doesn't meet a token GitHub is still propagating.
 func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	// A call with a request ID would keep its result, the token, for
-	// replay: `os git-credential` never sends one.
+	// replay: the host's git transport never sends one.
 	if extension.CallRequestID(ctx) != "" {
 		return nil, refuse("request_id_refused", "%s takes no request_id: its result is a credential and is never kept", OpGitCredential)
 	}
@@ -162,10 +163,12 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 // connection is the binding's own `github` connection (r.Connection) when
 // it names one, else the entry's, so its git setting and its App decide.
 //
-// With git "bot": the toolbelt's `os git-credential` as git's only
-// credential helper (the operator's keychain or gh helper, which git would
-// otherwise ask first, cleared), signing off, and the App's bot user as
-// author and committer.
+// With git "bot": git's https remotes on the GitHub web host go through
+// the toolbelt's git transport (extension.GitTransportLayer), which signs
+// git's requests in with the token gitCredential mints, on the host, so the
+// token never enters the run; git's credential helpers (the operator's
+// keychain or gh helper) are cleared, signing is off, and the App's bot
+// user is author and committer.
 //
 // Otherwise: a credential helper for the GitHub web host that hands git a
 // static token the run has in GH_TOKEN or GITHUB_TOKEN (a binding's
@@ -199,15 +202,16 @@ func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRe
 	if err != nil {
 		return nil, fmt.Errorf("github git bot identity: %w", err)
 	}
-	return map[string]string{
-		"GIT_CONFIG_COUNT": "4",
+	out := map[string]string{
+		"GIT_CONFIG_COUNT": "3",
 		"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
-		"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential",
-		"GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
-		"GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+		"GIT_CONFIG_KEY_1": "commit.gpgsign", "GIT_CONFIG_VALUE_1": "false",
+		"GIT_CONFIG_KEY_2": "tag.gpgsign", "GIT_CONFIG_VALUE_2": "false",
 		"GIT_AUTHOR_NAME": id.Name, "GIT_AUTHOR_EMAIL": id.Email,
 		"GIT_COMMITTER_NAME": id.Name, "GIT_COMMITTER_EMAIL": id.Email,
-	}, nil
+	}
+	extension.ApplyEnv(out, extension.GitTransportLayer(client.Host()))
+	return out, nil
 }
 
 // TokenHelper is the git credential helper RunEnvironment sets for the

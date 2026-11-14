@@ -112,7 +112,7 @@ func capabilityCheck(_ context.Context, cfg protocol.CheckConfig) inproc.CheckRe
 var scpRemote = regexp.MustCompile(`^(?:[^@/:]+@)?[^/:]+:`)
 
 // sshRemote reports whether a remote URL is fetched and pushed over SSH,
-// with the operator's own key rather than a credential helper.
+// with the operator's own key rather than through the toolbelt.
 func sshRemote(url string) bool {
 	url = strings.TrimSpace(url)
 	switch {
@@ -150,10 +150,10 @@ type gitWorkspace struct {
 
 // gitBotCheck warns about every git workspace binding in a scope whose
 // GitHub connection sets git "bot" when the binding isn't granted
-// github.git.credential, the only credential helper git is left with, so
-// every push is refused; or when the workspace's push remote is SSH: only
-// HTTPS goes through the toolbelt's credential helper, so its pushes would
-// still use the operator's own SSH key. Relative checkouts resolve
+// github.git.credential, the only sign-in git is left with, so every push
+// is refused; or when the workspace's push remote is SSH: only HTTPS goes
+// through the toolbelt's git transport, so its pushes would still use the
+// operator's own SSH key. Relative checkouts resolve
 // against cfg.Dir, the config file's directory.
 func gitBotCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "git_bot", Status: inproc.CheckOK, Code: "ok"}

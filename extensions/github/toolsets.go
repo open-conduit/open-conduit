@@ -48,7 +48,7 @@ func Toolsets() []extension.Toolset {
 			Operations: since(1, extension.ReadContext, extension.Wait, extension.DeclareOutcome,
 				"github.context", "github.issue.view", "github.pr.list", "github.pr.view", "github.pr.comment", "github.pr.reply",
 				"github.pr.resolve", "github.pr.review", "github.checks", "github.attachment.upload", "github.attachment.get", "github.wait")},
-		{Name: ToolsetWorkspace, Summary: "Push from a git workspace: git's credential helper asks for a short-lived token.", Operations: since(1, OpGitCredential)},
+		{Name: ToolsetWorkspace, Summary: "Push from a git workspace: git signs in through Open Conduit with a short-lived token it never sees.", Operations: since(1, OpGitCredential)},
 		{Name: ToolsetHold, Summary: "Run held issues: read and settle holds.", Operations: since(1, extension.Emit, "github.hold.status", "github.hold")},
 	}
 }

@@ -325,7 +325,8 @@ func TestProductionToolbeltServing(t *testing.T) {
 }
 
 // TestProductionToolbeltServesCapabilityOnlyToItsClient: an operation
-// serving a capability answers a call made for it (git's credential helper),
+// serving a capability answers a call the host makes for it (its git
+// transport's),
 // and refuses the agent's own call of it with capability_only and what to do
 // instead, before any gate and without running, so its result (a secret)
 // never reaches the agent. Naming a capability an operation doesn't serve is
@@ -375,8 +376,8 @@ func TestProductionToolbeltServesCapabilityOnlyToItsClient(t *testing.T) {
 // TestProductionToolbeltServingWhileRecovering: the toolbelt's reads (the
 // operations serving a capability, the guidance) refuse a token recovery
 // superseded as ErrAuthorityRecovering while the execution is still
-// running, as a call with it is, so git's credential helper and the MCP
-// server retry with the recovered token. Once the execution has finished,
+// running, as a call with it is, so the MCP server retries with the
+// recovered token. Once the execution has finished,
 // the same token gets the bare ErrUnauthorized.
 func TestProductionToolbeltServingWhileRecovering(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")

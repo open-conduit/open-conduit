@@ -91,8 +91,8 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 	}
 	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", Operations: []extension.Operation{
 		{Name: "fixture.deploy", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)},
-		// fixture.git.credential serves git.credential, so only git's
-		// credential helper calls it; its runs count as deploys.
+		// fixture.git.credential serves git.credential, so only the host's
+		// git transport calls it; its runs count as deploys.
 		{Name: "fixture.git.credential", Handler: ran(h.deploys), Serves: extension.CapabilityGitCredential}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ func TestHumanGateApprovesTheSameCallOnce(t *testing.T) {
 	}
 }
 
-// A gated call git's credential helper made for the agent is told to the
+// A gated call the host's git transport made for the agent is told to the
 // agent in its own terms: held, git's sign-in waits for approval; approved,
 // the agent is told to run the same git command again, not to call the
 // operation, whose direct call is refused gated or not, so its token never

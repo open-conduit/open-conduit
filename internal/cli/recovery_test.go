@@ -53,12 +53,12 @@ func TestToolbeltRetriesWhileAuthorityRecovers(t *testing.T) {
 			fmt.Fprint(w, refusal)
 			return
 		}
-		if r.URL.Path == "/v1/toolbelt/serving" {
-			fmt.Fprint(w, `{"data":{"operations":["github.git.credential"]}}`)
+		if r.URL.Path == "/v1/toolbelt/git" {
+			fmt.Fprint(w, `{"data":{"session":"gs_1","expires_at":"2026-10-31T10:00:00Z"}}`)
 			return
 		}
-		if call["operation"] == "github.git.credential" {
-			fmt.Fprint(w, `{"data":{"output":{"schema":"github.tool.v1","data":{"username":"x-access-token","password":"ghs_minted"}}}}`)
+		if strings.HasPrefix(r.URL.Path, "/v1/toolbelt/git/") {
+			fmt.Fprint(w, `{"data":{}}`)
 			return
 		}
 		fmt.Fprint(w, `{"data":{"output":{"schema":"fixture.v1","data":{"opened":true}}}}`)
@@ -121,17 +121,19 @@ func TestToolbeltRetriesWhileAuthorityRecovers(t *testing.T) {
 		}
 	})
 
-	t.Run("git credential", func(t *testing.T) {
-		// The helper's first request, which operations serve git's
-		// credential, is the one a push makes during recovery.
+	t.Run("git remote", func(t *testing.T) {
+		// git's first request through the transport, the session for the
+		// repository, is the one a push makes during recovery.
 		reset("stale")
 		onSleep = func() { _ = os.WriteFile(tokenFile, []byte("fresh\n"), 0o600) }
 		var out, errOut bytes.Buffer
-		code := RunToolbelt("t", "c", []string{"git-credential", "get"}, env, strings.NewReader("protocol=https\nhost=github.com\n\n"), &out, &errOut)
-		if code != 0 || out.String() != "username=x-access-token\npassword=ghs_minted\n" {
+		code := RunToolbelt("t", "c", []string{"git-remote", "origin", "https://github.com/octo/widgets.git"}, env, strings.NewReader(""), &out, &errOut)
+		if code != 0 {
 			t.Fatalf("exit %d: %q %s", code, out.String(), errOut.String())
 		}
-		if len(seen) != 3 || !strings.HasPrefix(seen[0], "Bearer stale") || len(slept) != 1 {
+		// stale, then fresh once recovery replaced the token, then the
+		// session's end.
+		if len(seen) != 3 || !strings.HasPrefix(seen[0], "Bearer stale") || !strings.HasPrefix(seen[1], "Bearer fresh") || len(slept) != 1 {
 			t.Fatalf("calls %v, slept %v", seen, slept)
 		}
 	})

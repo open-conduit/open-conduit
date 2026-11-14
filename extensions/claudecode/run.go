@@ -344,7 +344,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	}
 	belt := r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.toolbeltDir(r) != ""
 	// A run environment layer (the extensions') may call the toolbelt
-	// through `os`, as git's `!os git-credential` does: a host process
+	// through `os`, as git's transport (`os git-remote`) does: a host process
 	// that has one gets the toolbelt client too. A container's comes below.
 	if len(r.Context.Env) > 0 && belt && !contained {
 		env = withToolbelt(env, e.toolbeltDir(r), r.Context.ToolbeltEndpoint, tokenFile(r, dir))
@@ -355,7 +355,6 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 			// The MCP server inherits the endpoint, which the provider
 			// moves to its forward, and the token file's path.
 			env = append(env, "OS_ENDPOINT="+r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE="+tokenFile(r, dir))
-			env = toolbeltGitHelper(env)
 		}
 		if plan, err = r.Context.Container.Launch(ctx, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir, Secrets: secrets}); err != nil {
 			return e.preset(ctx, rn, cfg.StatusSchema, extension.ContainerReason(err), err.Error(), nil)

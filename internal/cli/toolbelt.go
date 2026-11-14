@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
-	"github.com/open-conduit/open-conduit/extension"
 )
 
 const toolbeltHelp = `os — Open Conduit execution toolbelt (CLI transport)
@@ -38,7 +36,8 @@ Commands:
   inbox                                     print input injected into this running execution since the last
                                             read (JSON lines) and acknowledge it as taken in (OS_INBOX)
   mcp                                       serve these operations as an MCP server on stdio
-  git-credential get|store|erase            git's credential helper: a token for the Work's repository
+  git-remote REMOTE URL                     git's remote helper for open-conduit:: URLs: fetch and push the
+                                            Work's repository through Open Conduit, which signs git in
   version
 
 Every command accepts --request-id ID to retry safely. Results print as JSON.
@@ -101,6 +100,8 @@ func RunToolbelt(version, commit string, args []string, env Env, stdin io.Reader
 		return t.inbox(args[1:])
 	case "git-credential":
 		return t.gitCredential(args[1:])
+	case "git-remote":
+		return t.gitRemote(args[1:])
 	}
 	return t.usage("unknown command")
 }
@@ -479,111 +480,17 @@ func (t *toolbelt) call(args []string) int {
 	})
 }
 
-// gitCredential is git's credential helper protocol over the git.credential
-// capability: for `get` it reads git's attributes from stdin, asks each
-// granted operation serving the capability in turn (GitHub's, Bitbucket's,
-// an installed code host's), and prints the first username and password one
-// answers for that URL, or nothing when none does. `store` and `erase` do
-// nothing: the host owns the token and revokes it. It sends no request ID,
-// so the credential is never kept for replay.
+// gitCredential is what `os git-credential` was: git's credential helper
+// over the toolbelt. The toolbelt hands git no credential any more (git
+// signs in through `os git-remote`, the git transport, with a credential
+// that stays with the host), so it answers nothing and git asks its next
+// helper; a run config that still names it keeps working.
 func (t *toolbelt) gitCredential(args []string) int {
 	if len(args) != 1 {
 		return t.usage("git-credential takes get, store or erase")
 	}
-	if args[0] != "get" {
-		_, _ = io.Copy(io.Discard, t.stdin)
-		return 0
-	}
-	in := map[string]string{}
-	sc := bufio.NewScanner(t.stdin)
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" {
-			break
-		}
-		if k, v, ok := strings.Cut(line, "="); ok && (k == "protocol" || k == "host" || k == "path") {
-			in[k] = v
-		}
-	}
-	if _, err := t.client(); err != nil {
-		fmt.Fprintf(t.errOut, "os: %s\n", err)
-		return 1
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	defer cancel()
-	var ops []string
-	err := t.withRecovery(ctx, func(c *client.Client) (e error) {
-		ops, e = c.ToolbeltServing(ctx, extension.CapabilityGitCredential)
-		return e
-	})
-	if err != nil {
-		t.noCredential(err)
-		return 1
-	}
-	if len(ops) == 0 {
-		// Say why, but exit 0 so git still asks any later helper.
-		fmt.Fprintf(t.errOut, "os: no git credential: no granted operation serves %s\n", extension.CapabilityGitCredential)
-		return 0
-	}
-	// An extension operation's input is a payload envelope; git's
-	// attributes are its data.
-	attrs, _ := json.Marshal(in)
-	data, _ := json.Marshal(client.Payload{Data: attrs})
-	var refused error
-	for _, op := range ops {
-		result, err := t.toolbeltCall(ctx, client.ToolCall{Operation: op, Input: data, Capability: extension.CapabilityGitCredential})
-		if err != nil {
-			// Another operation may still own the URL; report the
-			// refusal only if none does.
-			refused = err
-			continue
-		}
-		if result.Wait != nil {
-			// A gate parked the run on the sign-in (a person's approval):
-			// git gets nothing, and the agent is told what the gate said.
-			t.heldCredential(result)
-			return 1
-		}
-		var cred struct{ Username, Password string }
-		if result.Output != nil {
-			_ = json.Unmarshal(result.Output.Data, &cred)
-		}
-		if cred.Username == "" || cred.Password == "" || strings.ContainsAny(cred.Username+cred.Password, "\n\x00") {
-			continue
-		}
-		fmt.Fprintf(t.out, "username=%s\npassword=%s\n", cred.Username, cred.Password)
-		return 0
-	}
-	if refused != nil {
-		t.noCredential(refused)
-		return 1
-	}
+	_, _ = io.Copy(io.Discard, t.stdin)
 	return 0
-}
-
-// heldCredential reports that git's sign-in parked the run: the gate's own
-// instruction (its output's next), else what the Wait is for. Git prints
-// it among its own errors, so the agent reads it.
-func (t *toolbelt) heldCredential(result client.ToolResult) {
-	var out struct{ Next string }
-	if result.Output != nil {
-		_ = json.Unmarshal(result.Output.Data, &out)
-	}
-	why := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, out.Next)
-	if why == "" {
-		why = "it waits for " + result.Wait.Description + "; end your turn now, and once resumed run the same git command again"
-	}
-	fmt.Fprintf(t.errOut, "os: no git credential yet: %s\n", why)
-}
-
-// noCredential reports why git gets no credential.
-func (t *toolbelt) noCredential(err error) {
-	fmt.Fprintf(t.errOut, "os: no git credential: %s\n", callError(err))
 }
 
 // callTimeout bounds one toolbelt call. An operation can make several

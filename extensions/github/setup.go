@@ -25,8 +25,8 @@ import (
 // the author toolset, so the scope gets every operation a later release
 // adds to the role. HoldOperations are the github-hold binding's.
 // WorkspaceOperations are added for a binding with a git workspace: git
-// itself calls them, through the credential helper a connection with git
-// "bot" installs, so the owner never has to know to grant them.
+// itself needs them, through the git transport a connection with git "bot"
+// installs, so the owner never has to know to grant them.
 var (
 	AgentOperations     = []string{"@" + ToolsetAuthor}
 	HoldOperations      = []string{"@" + ToolsetHold}

@@ -173,9 +173,20 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 		}
 	}
 	// Each execution's toolbelt, as the daemon serves it, with the git
-	// operation a binding in a git "bot" scope is granted.
+	// operation a binding in a git "bot" scope is granted, and the host's
+	// git transport, which signs git in with what it answers.
+	transport := management.NewGitTransport(srv.Client().Transport, l.fake.Now)
 	l.endpoints, err = management.NewEndpoints(nil, filepath.Join(root, "state"), filepath.Join(root, "s"), func(exec domain.ID) http.Handler {
+		git := transport.Handler(exec, testGitBelt{exec: exec, ops: ops, valid: func(token string) bool { return token == "belt-"+string(exec) }, connection: func() string {
+			conn, _ := l.connections.Load(exec)
+			connection, _ := conn.(string)
+			return connection
+		}})
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/v1/toolbelt/git") {
+				git.ServeHTTP(w, r)
+				return
+			}
 			// The input is a payload, as the management handler decodes it.
 			var call struct {
 				Operation string
@@ -185,18 +196,6 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 				}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if r.URL.Path == "/v1/toolbelt/serving" && r.Header.Get("Authorization") == "Bearer belt-"+string(exec) {
-				// os git-credential asks which granted operations serve
-				// git credentials; GitHub's declares it does.
-				serving := []string{}
-				for name, op := range ops {
-					if op.Serves == r.URL.Query().Get("capability") {
-						serving = append(serving, name)
-					}
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"operations": serving}})
-				return
-			}
 			_ = json.NewDecoder(r.Body).Decode(&call)
 			op, ok := ops[call.Operation]
 			if !ok || r.Header.Get("Authorization") != "Bearer belt-"+string(exec) {
@@ -225,6 +224,43 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 	}
 	t.Cleanup(func() { l.endpoints.Shutdown(context.Background()) })
 	return l
+}
+
+// testGitBelt is an execution's toolbelt as the git transport asks it:
+// the operations serving git.credential, granted to the execution's token
+// while valid says it is live, called as the host calls them, with the
+// connection the execution's binding names.
+type testGitBelt struct {
+	exec       domain.ID
+	ops        map[string]extension.Operation
+	valid      func(token string) bool
+	connection func() string
+}
+
+func (b testGitBelt) Serving(_ context.Context, token string, exec domain.ID, capability string) ([]string, error) {
+	if !b.valid(token) || exec != b.exec {
+		return nil, extension.ErrUnauthorized
+	}
+	var out []string
+	for name, op := range b.ops {
+		if op.Serves == capability {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+func (b testGitBelt) CallRequest(ctx context.Context, token, _ string, c extension.ToolCall) (extension.ToolResult, error) {
+	op, ok := b.ops[c.Operation]
+	if !ok || !b.valid(token) || c.Capability != op.Serves {
+		return extension.ToolResult{}, extension.ErrUnauthorized
+	}
+	connection := ""
+	if b.connection != nil {
+		connection = b.connection()
+	}
+	out, err := op.Handler(ctx, extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: b.exec, Connection: connection}, c.Input)
+	return extension.ToolResult{Output: out}, err
 }
 
 // workspace is a fresh clone-like repository with one commit.

@@ -22,11 +22,42 @@ type RunEnvironmentRequest struct {
 // the scopes that use the extension (protocol run.environment). The host
 // merges every extension's layer into ExecutionContext.Env before the
 // executor starts; an error fails the run before anything starts. A layer
-// that needs the toolbelt reaches it through `os` (git's `!os
-// git-credential`, say): executors give a process that applies the layer
+// that needs the toolbelt reaches it through `os` (git's transport,
+// GitTransportLayer, say): executors give a process that applies the layer
 // the toolbelt client, OS_ENDPOINT and OS_TOKEN_FILE.
 type RunEnvironment interface {
 	RunEnvironment(ctx context.Context, r RunEnvironmentRequest) (map[string]string, error)
+}
+
+// GitTransport is the name git knows the toolbelt's git transport by: a
+// remote URL "open-conduit::https://host/owner/repo" runs `os git-remote`
+// (through the git alias remote-open-conduit), which carries git's smart
+// HTTP to the repository through the host. The host signs each request in
+// with what an operation serving CapabilityGitCredential answers for the
+// repository, so git reaches it without the credential ever entering the
+// run.
+const GitTransport = "open-conduit"
+
+// GitTransportLayer is the git config, as an environment layer, that sends
+// git's https remotes on each of hosts through the toolbelt's git
+// transport: a URL rewrite per host, the alias that makes `os git-remote`
+// the transport's remote helper, and leave for submodules on those hosts
+// to use it. An extension that serves CapabilityGitCredential for a host
+// returns it from RunEnvironment. A remote the extension gives no
+// credential for is fetched directly, as git would without the layer.
+func GitTransportLayer(hosts ...string) map[string]string {
+	pairs := [][2]string{
+		{"alias.remote-" + GitTransport, "!os git-remote"},
+		{"protocol." + GitTransport + ".allow", "always"},
+	}
+	for _, h := range hosts {
+		pairs = append(pairs, [2]string{"url." + GitTransport + "::https://" + h + "/.insteadOf", "https://" + h + "/"})
+	}
+	out := map[string]string{"GIT_CONFIG_COUNT": strconv.Itoa(len(pairs))}
+	for i, p := range pairs {
+		out[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)], out[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)] = p[0], p[1]
+	}
+	return out
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

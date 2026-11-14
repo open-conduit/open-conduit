@@ -102,15 +102,14 @@ type ToolCall struct {
 	Wait                         *WaitRequest
 	Outcome                      *domain.Outcome
 	Input                        domain.Payload
-	// Capability says the call is made for a capability's client (git's
-	// credential helper asks with CapabilityGitCredential), not by the
-	// agent. An operation that serves a capability (Operation.Serves) is
-	// served only to a call made for that capability, so the agent's own
-	// toolbelt calls (the MCP call tool, os call) don't get its result; a
-	// call naming a capability its operation doesn't serve is refused too.
-	// The client declares Capability itself, and runs in the agent's
-	// sandbox with the agent's token, so this is not an authority
-	// boundary: whatever runs there can make the client's call.
+	// Capability says the host itself makes the call, for a capability it
+	// serves the execution (the toolbelt's git transport asks with
+	// CapabilityGitCredential), not the agent. Only the host sets it: a
+	// toolbelt request that names a capability is refused, so nothing in
+	// the agent's sandbox can make such a call. An operation that serves a
+	// capability (Operation.Serves) is served only to a call made for that
+	// capability, and a call naming a capability its operation doesn't
+	// serve is refused too.
 	Capability string
 }
 
@@ -194,14 +193,15 @@ type Operation struct {
 	// a playbook need not describe another extension's operations.
 	Guidance string
 	// Serves, on a Handler, names a capability the operation answers, such
-	// as CapabilityGitCredential. A client that needs the capability asks
-	// the toolbelt which of the operations its grant includes serve it
-	// (Serving) and calls each in turn until one answers, so the host routes
-	// a capability without knowing which extension's domain it belongs to.
-	// Such an operation is served only to a call made for the capability
-	// (ToolCall.Capability), not to an agent's own toolbelt call, and the toolbelt
-	// neither describes it to agents nor keeps its result for replay: what
-	// it answers is for the client, and is often a secret.
+	// as CapabilityGitCredential. When the host needs the capability for
+	// an execution, it calls each operation the execution's grant includes
+	// that serves it (Serving) in turn until one answers, so it routes the
+	// capability without knowing which extension's domain it belongs to.
+	// Such an operation answers the host only (ToolCall.Capability), never
+	// a toolbelt request, and the toolbelt neither describes it to agents
+	// nor keeps its result for replay: what it answers is often a secret,
+	// and the host uses it on the execution's behalf without handing it
+	// over.
 	Serves string
 }
 
@@ -214,20 +214,24 @@ func OperationNames(ops []Operation) []string {
 	return out
 }
 
-// CapabilityGitCredential is git's credential helper as a capability: input
-// {protocol, host, path?}, git's credential request; output {username,
-// password, expires_at?} for a remote the operation's extension owns, or {}
-// for any other, so the caller can ask the next operation serving it.
+// CapabilityGitCredential is git's sign-in to a remote as a capability:
+// input {protocol, host, path}, as git's credential request names the
+// remote; output {username, password, expires_at?} for a remote the
+// operation's extension owns, or {} for any other, so the host can ask the
+// next operation serving it. The host answers it for the toolbelt's git
+// transport (GitTransportLayer): it signs git's requests to the remote in
+// with the credential itself, so the credential never reaches the
+// execution.
 const CapabilityGitCredential = "git.credential"
 
 // CodeCapabilityOnly is the OperationError code of a call refused because
-// it was not made for the capability its operation serves, or named one
-// its operation doesn't serve.
+// it was not made by the host for the capability its operation serves, or
+// named a capability: an operation serving one answers only the host.
 const CodeCapabilityOnly = "capability_only"
 
-// CapabilityCall says, in an agent's own terms, what a call made for a
-// capability's client is, so that whatever holds, refuses or approves one
-// can tell the agent what to do: the agent didn't make the call, its client
+// CapabilityCall says, in an agent's own terms, what a call the host made
+// for a capability is, so that whatever holds, refuses or approves one can
+// tell the agent what to do: the agent didn't make the call, what it ran
 // (git, for CapabilityGitCredential) did.
 type CapabilityCall struct {
 	// Subject names the call ("git's sign-in to github.com/acme/app"), at
@@ -260,10 +264,10 @@ func DescribeCapabilityCall(capability string, input domain.Payload) CapabilityC
 			subject += " to " + where
 		}
 		return CapabilityCall{Subject: clip(subject, MaxCapabilitySubject), Again: "Run the same git command again",
-			Direct: "git signs in by itself: run the git command, and its credential helper asks for the token. Don't call this operation; its token is never handed to you"}
+			Direct: "git signs in by itself: run the git command, and Open Conduit signs its requests to the repository in. Don't call this operation; its token is never handed to you"}
 	}
 	return CapabilityCall{Subject: clip("a call your toolbelt made for you ("+oneLine(capability)+")", MaxCapabilitySubject), Again: "Do again what made it",
-		Direct: "this operation answers the " + oneLine(capability) + " capability for your toolbelt's client, which calls it for you. Don't call it yourself"}
+		Direct: "this operation answers the " + oneLine(capability) + " capability to Open Conduit, which uses it for you. Don't call it yourself"}
 }
 
 // oneLine drops control characters, so a call's input can't break the line
@@ -515,7 +519,7 @@ type GateCall struct {
 	// serves it.
 	Operation, Owner string
 	Input            domain.Payload
-	// Capability is the capability the call was made for (ToolCall.
+	// Capability is the capability the host made the call for (ToolCall.
 	// Capability), "" for an agent's own call; DescribeCapabilityCall says
 	// what to tell the agent about it.
 	Capability string
