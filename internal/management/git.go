@@ -282,8 +282,10 @@ func (g *GitTransport) Reconcile(live func([]domain.ID) (map[domain.ID]bool, err
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Only the executions live was asked about: one whose first session
+	// opened during the query isn't known to have ended.
 	for k, v := range g.sessions {
-		if !running[v.execution] {
+		if seen[v.execution] && !running[v.execution] {
 			delete(g.sessions, k)
 		}
 	}

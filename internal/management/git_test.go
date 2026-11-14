@@ -44,7 +44,13 @@ func TestGitSessionsPerExecution(t *testing.T) {
 	if _, ok := g.session(other, "exec/b"); !ok {
 		t.Fatal("another execution's session was evicted")
 	}
-	if err := g.Reconcile(func([]domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{"exec/b": true}, nil }); err != nil {
+	// A session opened while the sweep asks who is running belongs to an
+	// execution it didn't ask about, and stays.
+	var late string
+	if err := g.Reconcile(func([]domain.ID) (map[domain.ID]bool, error) {
+		late, _, _ = g.open(gitSession{execution: "exec/c"}, "")
+		return map[domain.ID]bool{"exec/b": true}, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := g.session(ids[len(ids)-1], "exec/a"); ok {
@@ -52,5 +58,8 @@ func TestGitSessionsPerExecution(t *testing.T) {
 	}
 	if _, ok := g.session(other, "exec/b"); !ok {
 		t.Fatal("reconcile dropped a running execution's session")
+	}
+	if _, ok := g.session(late, "exec/c"); !ok {
+		t.Fatal("reconcile dropped a session opened while it asked")
 	}
 }
