@@ -154,6 +154,8 @@ type Server struct {
 	// protection and rulesets are the checks each branch requires;
 	// refuseProtection and refuseRulesets make those reads an ordinary 403.
 	protection, rulesets map[string][]string
+	// mergeRules are what each base branch demands of a merge.
+	mergeRules map[string]MergeRules
 	// public makes the repository read as public.
 	public                           bool
 	refuseProtection, refuseRulesets bool
@@ -666,6 +668,86 @@ func (s *Server) SetBehind(n, by int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pulls[n].Behind = by
+}
+
+// MergeRules are what a base branch's protection or rulesets demand of a
+// merge, as GitHub enforces them: the merge call refuses a PR that breaks
+// one, and a single PR's read says so in mergeable_state. The zero value
+// demands nothing beyond an open PR, not a draft, without conflicts.
+type MergeRules struct {
+	// Approvals is how many approving reviews are required; with any, a
+	// reviewer still requesting changes blocks the merge too.
+	Approvals int
+	// Checks are the check runs that must have succeeded on the head.
+	Checks []string
+	// UpToDate requires the head to hold every commit of its base
+	// (strict_required_status_checks_policy).
+	UpToDate bool
+	// Methods are the merge methods allowed; empty allows all.
+	Methods []string
+	// Bypass makes the caller an identity the rules don't bind (an admin
+	// where protection doesn't enforce admins, a ruleset's bypass actor):
+	// its merge call succeeds whatever they say, while mergeable_state
+	// still reports them, as GitHub's does.
+	Bypass bool
+}
+
+// SetMergeRules sets what branch demands of a merge into it.
+func (s *Server) SetMergeRules(branch string, r MergeRules) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mergeRules == nil {
+		s.mergeRules = map[string]MergeRules{}
+	}
+	s.mergeRules[branch] = r
+}
+
+// mergeState is GitHub's mergeable_state for PR p under its base's rules,
+// with the message its merge call refuses with when it isn't clean.
+func (s *Server) mergeState(p *Pull) (state, message string) {
+	r := s.mergeRules[p.BaseRef]
+	switch {
+	case p.Mergeable != nil && !*p.Mergeable:
+		return "dirty", "Pull Request is not mergeable"
+	case p.Draft:
+		return "draft", "Pull Request is still a draft"
+	}
+	if r.Approvals > 0 {
+		standing := map[string]string{}
+		for _, rv := range p.Reviews {
+			switch strings.ToUpper(rv.State) {
+			case "APPROVED", "CHANGES_REQUESTED":
+				standing[rv.User.Login] = strings.ToUpper(rv.State)
+			case "DISMISSED":
+				delete(standing, rv.User.Login)
+			}
+		}
+		approved := 0
+		for _, st := range standing {
+			if st == "CHANGES_REQUESTED" {
+				return "blocked", "Changes must be made through a pull request. Review changes requested."
+			}
+			approved++
+		}
+		if approved < r.Approvals {
+			return "blocked", fmt.Sprintf("At least %d approving review is required by reviewers with write access.", r.Approvals)
+		}
+	}
+	for _, name := range r.Checks {
+		ok := false
+		for _, c := range s.checks[p.HeadSHA] {
+			if c.Name == name {
+				ok = c.Status == "completed" && c.Conclusion == "success"
+			}
+		}
+		if !ok {
+			return "blocked", fmt.Sprintf("Required status check %q is expected.", name)
+		}
+	}
+	if r.UpToDate && p.Behind > 0 {
+		return "behind", "Head branch is out of date. Review and try the merge again."
+	}
+	return "clean", ""
 }
 
 // AddWorkflow lets a workflow file be dispatched.
@@ -1798,8 +1880,12 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			return http.StatusMethodNotAllowed, map[string]any{"message": "Pull Request is not mergeable"}
 		case req.SHA != "" && req.SHA != p.HeadSHA:
 			return http.StatusConflict, map[string]any{"message": "Head branch was modified. Review and try the merge again."}
-		case p.Mergeable != nil && !*p.Mergeable:
-			return http.StatusMethodNotAllowed, map[string]any{"message": "Pull Request is not mergeable"}
+		}
+		if methods := s.mergeRules[p.BaseRef].Methods; req.MergeMethod != "" && len(methods) > 0 && !slices.Contains(methods, req.MergeMethod) {
+			return http.StatusMethodNotAllowed, map[string]any{"message": map[string]string{"merge": "Merge commits", "squash": "Squash merges", "rebase": "Rebase merges"}[req.MergeMethod] + " are not allowed on this repository."}
+		}
+		if state, msg := s.mergeState(p); state != "clean" && !s.mergeRules[p.BaseRef].Bypass {
+			return http.StatusMethodNotAllowed, map[string]any{"message": msg}
 		}
 		t := s.tick()
 		i := s.issue(n)
@@ -1971,6 +2057,10 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			pr := s.pullJSON(atoi(x[1]))
 			pr["merged"] = s.pulls[atoi(x[1])].MergedAt != nil
 			pr["mergeable"] = s.pulls[atoi(x[1])].Mergeable
+			pr["mergeable_state"], _ = s.mergeState(s.pulls[atoi(x[1])])
+			if s.pulls[atoi(x[1])].Mergeable == nil && pr["mergeable_state"] == "clean" {
+				pr["mergeable_state"] = "unknown"
+			}
 			return http.StatusOK, pr
 		}
 		return 0, nil

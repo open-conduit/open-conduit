@@ -421,7 +421,7 @@ List the PRs of this Work's issue, or the PRs this Work opened when it has no is
 
 #### `github.pr.merge`
 
-Merge a PR at the head you read, once it is approved, green on that head, up to date with its base and nobody on it is still working; otherwise refused, saying what is missing.
+Merge a PR at the head you read, once nobody on it is still working and GitHub will merge it under the repository's own rules; otherwise refused with GitHub's reason.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |

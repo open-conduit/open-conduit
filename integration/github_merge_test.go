@@ -13,18 +13,21 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// github.pr.merge merges only when every rule holds, checked where the call
-// is served (#608): approved with no change request outstanding, green on
-// the head the caller read, holding every commit of its base, and no agent
-// on the PR's issue still working: mid-turn, with input it hasn't read, or
-// with its last turn not handed back. github.pr.update-branch brings a PR
-// that is behind up to date from the head read, never under a working agent.
-func TestGitHubMergeWaitsForEveryRule(t *testing.T) {
+// github.pr.merge asks GitHub whether a PR can merge under the
+// repository's own rules and relays its answer (#631), adding only what
+// GitHub can't know: the merge is at the head the caller read, and no agent
+// on the PR's issue is still working: mid-turn, with input it hasn't read,
+// or with its last turn not handed back. A repository that doesn't require
+// branches to be up to date merges a PR that is behind its base as it is.
+func TestGitHubMergeAsksGitHubAndWaitsForAgents(t *testing.T) {
 	e := newToolsEnv(t)
+	e.fake.SetMergeRules("main", githubtest.MergeRules{Approvals: 1, Checks: []string{"ci"}})
 	bob := githubtest.User{Login: "bob", Type: "User"}
 	n, builder := e.claim("Header wobbles", "", "bug")
 	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
 	e.fake.SetCheck("h1", "ci", "completed", "success")
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
 	e.sync()
 	merger := e.request("merge-bot")
 	m := e.start(merger.ID)
@@ -43,19 +46,20 @@ func TestGitHubMergeWaitsForEveryRule(t *testing.T) {
 		a := e.start(builder.ID)
 		e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData(status)}})
 	}
+	turn("review")
 
+	// GitHub's rules, relayed: a required review missing, then a change
+	// request standing.
 	_, err := merge("h1")
-	refused(t, err, "not_approved")
+	refusedSaying(t, err, "blocked", "reports the PR as blocked", "review or check")
 	e.fake.AddReview(pr, bob, "CHANGES_REQUESTED", "The offset is wrong.")
 	_, err = merge("h1")
-	refusedSaying(t, err, "changes_requested", "bob")
-	e.fake.AddReview(pr, bob, "COMMENTED", "Still looking.")
-	_, err = merge("h1")
-	refused(t, err, "changes_requested")
+	refused(t, err, "blocked")
 	e.fake.AddReview(pr, bob, "APPROVED", "")
 	e.sync()
 
-	// The builder has news it hasn't read (the reviews), so it may yet act.
+	// GitHub would merge it now, but the builder has news it hasn't read
+	// (the reviews), so it may yet act.
 	_, err = merge("h1")
 	refusedSaying(t, err, "work_active", "issue #"+itoa(n), "unread", `"issue:`+ghScope+`/`+itoa(n)+`:review"`, `"issue:`+ghScope+`/`+itoa(n)+`:done"`)
 	// Mid-turn it is working.
@@ -72,59 +76,80 @@ func TestGitHubMergeWaitsForEveryRule(t *testing.T) {
 	refusedSaying(t, err, "work_active", "unread")
 	turn("review")
 
-	// Green and handed back, but behind main: its checks ran on an older main.
+	_, err = merge("stale")
+	refused(t, err, "head_moved")
+	// Behind main, but main doesn't require branches to be up to date: it
+	// merges as it is, without an update.
 	e.fake.SetBehind(pr, 2)
-	_, err = merge("h1")
-	refusedSaying(t, err, "behind_base", "lacks 2", gh.OpPRUpdateBranch)
+	if e.fake.Pull(pr).MergedAt != nil {
+		t.Fatal("merged before it was asked")
+	}
+	got, err := merge("h1")
+	if err != nil || got["state"] != "merged" || got["method"] != "squash" {
+		t.Fatalf("merge: %v %v", got, err)
+	}
+	if p := e.fake.Pull(pr); p.MergedAt == nil || p.HeadSHA != "h1" {
+		t.Fatalf("the PR did not merge at h1: %+v", p)
+	}
+	// A retry answers merged and merges nothing again.
+	if again, err := merge("h1"); err != nil || again["state"] != "merged" {
+		t.Fatalf("retried merge: %v %v", again, err)
+	}
+}
+
+// Where the repository requires branches to be up to date, GitHub refuses
+// a PR that is behind, and the refusal says to call
+// github.pr.update-branch, which brings it up to date from the head read.
+func TestGitHubMergeOutOfDateWhereRequired(t *testing.T) {
+	e := newToolsEnv(t)
+	e.fake.SetMergeRules("main", githubtest.MergeRules{Checks: []string{"ci"}, UpToDate: true})
+	pr := e.fake.OpenPull("feat: a thing", "", "feature", "f1", ghAlice)
+	e.fake.SetCheck("f1", "ci", "completed", "success")
+	e.fake.SetBehind(pr, 2)
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	m := e.start(e.request("merge-bot").ID)
+	merge := func(head string) (map[string]any, error) {
+		out, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": head})
+		if err != nil {
+			return nil, err
+		}
+		return decodeMap(t, out), nil
+	}
+
+	_, err := merge("f1")
+	refusedSaying(t, err, "out_of_date", "up to date with main", gh.OpPRUpdateBranch)
 	_, err = e.call(m, gh.OpPRUpdateBranch, "", map[string]any{"number": pr, "head": "stale"})
 	refused(t, err, "head_moved")
-	out, err := e.call(m, gh.OpPRUpdateBranch, "", map[string]any{"number": pr, "head": "h1"})
+	out, err := e.call(m, gh.OpPRUpdateBranch, "", map[string]any{"number": pr, "head": "f1"})
 	if err != nil || decodeMap(t, out)["state"] != "updating" {
 		t.Fatalf("update-branch: %v %v", out, err)
 	}
 	head := e.fake.Pull(pr).HeadSHA
-	if head == "h1" {
+	if head == "f1" {
 		t.Fatal("the branch was not updated")
 	}
 	if out, err := e.call(m, gh.OpPRUpdateBranch, "", map[string]any{"number": pr, "head": head}); err != nil || decodeMap(t, out)["state"] != "up_to_date" {
 		t.Fatalf("update of an up-to-date branch: %v %v", out, err)
 	}
-	_, err = merge("h1")
+	_, err = merge("f1")
 	refused(t, err, "head_moved")
-	e.sync()
-	turn("review")
+	// The new head's required check hasn't reported: GitHub's reason.
 	_, err = merge(head)
-	refused(t, err, "checks_pending")
-	e.fake.SetCheck(head, "ci", "completed", "failure")
-	_, err = merge(head)
-	refusedSaying(t, err, "checks_failed", "ci")
+	refused(t, err, "blocked")
 	e.fake.SetCheck(head, "ci", "completed", "success")
-	e.sync()
-	turn("review")
-	if e.fake.Pull(pr).MergedAt != nil {
-		t.Fatal("merged before it was asked")
-	}
-	got, err := merge(head)
-	if err != nil || got["state"] != "merged" || got["method"] != "squash" {
+	if got, err := merge(head); err != nil || got["state"] != "merged" {
 		t.Fatalf("merge: %v %v", got, err)
-	}
-	if e.fake.Pull(pr).MergedAt == nil {
-		t.Fatal("the PR did not merge")
-	}
-	// A retry answers merged and merges nothing again.
-	if again, err := merge(head); err != nil || again["state"] != "merged" {
-		t.Fatalf("retried merge: %v %v", again, err)
 	}
 }
 
-// A draft, a conflict or an agent's PR that is still waiting on its owner
-// never merges, whatever else holds.
-func TestGitHubMergeRefusesDraftsAndConflicts(t *testing.T) {
+// GitHub's refusal of a draft, a conflict or a merge method the repository
+// doesn't allow is relayed as one the caller can act on; with no rules of
+// its own, a PR nobody is working on merges as GitHub allows.
+func TestGitHubMergeRelaysDraftsConflictsAndMethods(t *testing.T) {
 	e := newToolsEnv(t)
-	bob := githubtest.User{Login: "bob", Type: "User"}
+	e.fake.SetMergeRules("main", githubtest.MergeRules{Methods: []string{"squash"}})
 	pr := e.fake.OpenPull("feat: a thing", "", "feature", "f1", ghAlice)
-	e.fake.SetCheck("f1", "ci", "completed", "success")
-	e.fake.AddReview(pr, bob, "APPROVED", "")
 	m := e.start(e.request("merge-bot").ID)
 	e.fake.SetDraft(pr, true)
 	_, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1"})
@@ -138,9 +163,47 @@ func TestGitHubMergeRefusesDraftsAndConflicts(t *testing.T) {
 	refused(t, err, "missing_field")
 	_, err = e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1", "method": "octopus"})
 	refused(t, err, "invalid_input")
+	// Not yet worked out: it doesn't merge blind.
 	e.fake.SetMergeable(pr, nil)
-	// Nobody works on a PR without an issue, so it merges.
-	if _, err = e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1", "method": "merge"}); err != nil {
+	_, err = e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1"})
+	refusedSaying(t, err, "mergeability_unknown", "try again")
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	_, err = e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1", "method": "merge"})
+	refusedSaying(t, err, "method_not_allowed", "Merge commits are not allowed")
+	// Nobody works on a PR without an issue, and main asks for no review
+	// or check, so it merges.
+	if _, err = e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A connection the rules don't bind (an admin, a ruleset's bypass actor)
+// would merge straight through them, so github.pr.merge reads GitHub's
+// mergeable_state first and refuses what GitHub reports blocked or behind
+// rather than leaning on the merge call's refusal.
+func TestGitHubMergeHoldsTheRulesForABypassingConnection(t *testing.T) {
+	e := newToolsEnv(t)
+	e.fake.SetMergeRules("main", githubtest.MergeRules{Approvals: 1, Checks: []string{"ci"}, UpToDate: true, Bypass: true})
+	pr := e.fake.OpenPull("feat: a thing", "", "feature", "f1", ghAlice)
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	e.fake.SetCheck("f1", "ci", "completed", "failure")
+	m := e.start(e.request("merge-bot").ID)
+	merge := func() error {
+		_, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "f1"})
+		return err
+	}
+	refusedSaying(t, merge(), "blocked", "blocked", gh.OpChecks)
+	e.fake.AddReview(pr, githubtest.User{Login: "bob", Type: "User"}, "APPROVED", "")
+	e.fake.SetCheck("f1", "ci", "completed", "success")
+	e.fake.SetBehind(pr, 1)
+	refusedSaying(t, merge(), "out_of_date", gh.OpPRUpdateBranch)
+	if e.fake.Pull(pr).MergedAt != nil {
+		t.Fatal("a bypassing connection merged past the rules")
+	}
+	e.fake.SetBehind(pr, 0)
+	if err := merge(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -270,6 +333,8 @@ func TestGitHubMergeWakesWhenThePullsReviewerHandsBack(t *testing.T) {
 	n, builder := e.claim("Header wobbles", "", "bug")
 	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
 	e.fake.SetCheck("h1", "ci", "completed", "success")
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
 	e.fake.AddReview(pr, bob, "APPROVED", "")
 	e.sync()
 	b := e.start(builder.ID)
