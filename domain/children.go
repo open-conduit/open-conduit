@@ -17,9 +17,11 @@ const (
 	LineageSource = "core.work"
 )
 
-// LineageKey is the correlation key the host gives a Work when it first asks
-// for child Work: its own ID under LineageSource. Its children's
-// TypeChildEnded Events carry it, so a Wait on the parent's keys sees them.
+// LineageKey is the Work's own correlation key: its ID under LineageSource.
+// The host gives it to a Work when it first asks for child Work, so its
+// children's TypeChildEnded Events carry it and a Wait on the parent's keys
+// sees them, and to Work that owns no key when it first waits, so it has a
+// key for what wakes it to arrive on.
 func LineageKey(work ID) CorrelationKey {
 	return CorrelationKey{Source: LineageSource, ExternalID: string(work)}
 }

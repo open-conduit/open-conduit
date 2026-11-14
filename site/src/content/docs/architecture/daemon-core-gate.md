@@ -68,7 +68,7 @@ Shutdown is handled in two ways:
 
 Two rules keep toolbelt waits and declarations correct across a crash. Regressions are in [`integration/restart_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/restart_test.go):
 
-- **Type-only waits (B03/B04).** A Wait is a subscription on its Work's keys. A toolbelt `wait` with types but no keys subscribes on every key the Work owns. Work without keys is refused at declaration with `invalid`.
+- **Type-only waits (B03/B04).** A Wait is a subscription on its Work's keys. A toolbelt `wait` with types but no keys subscribes on every key the Work owns. Work that owns no key is given its own, `core.work`/`<its ID>`, in the declaring transaction, so it subscribes on that.
 - **Declarations survive recovery.** An unapplied toolbelt declaration belongs to the segment being adopted: `Recover` relaunches only a launch that started nothing, which can have declared nothing, and wait registration clears the declaration before any resume. `Recover` moves it to the new epoch, so a crash between the declaration and the host's `Complete` does not lose it.
 
 ## Kill drills

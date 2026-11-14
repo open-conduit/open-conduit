@@ -13,8 +13,9 @@ import (
 
 // claimLineageInTx gives parent its lineage key (domain.LineageKey) when it
 // does not own it yet, so its children's domain.TypeChildEnded Events are
-// correlated to it and a Wait on its keys sees them. It returns the Work as
-// stored.
+// correlated to it and a Wait on its keys sees them. Work that owns no key
+// claims it too when it first waits (declareWaitInTx). It returns the Work
+// as stored.
 func claimLineageInTx(tx storage.Tx, parent domain.Work) (domain.Work, error) {
 	key := domain.LineageKey(parent.ID)
 	if slices.Contains(parent.CorrelationKeys, key) {
