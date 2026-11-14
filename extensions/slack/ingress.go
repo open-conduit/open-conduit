@@ -27,6 +27,9 @@ type IngressOptions struct {
 	MaxRepeats int
 	// PageSize is the history page size (default 200).
 	PageSize int
+	// DirectPages bounds one listing of the app's direct messages, in
+	// pages of 200 (default 50).
+	DirectPages int
 	// ActiveThreads lists, per channel, the threads live Work owns. Their
 	// replies are reconciled even when the parent is older than
 	// history_hours, so a multi-day wait still recovers missed replies. It is
@@ -91,6 +94,9 @@ func NewIngress(s Settings, c *Client, now func() time.Time, o IngressOptions) *
 	}
 	if o.PageSize <= 0 || o.PageSize > 999 {
 		o.PageSize = 200
+	}
+	if o.DirectPages <= 0 {
+		o.DirectPages = 50
 	}
 	return &Ingress{s: s, c: c, now: now, o: o, threads: map[string]*threadMemo{}, answered: map[string]int{}}
 }
@@ -399,7 +405,7 @@ func (g *Ingress) next(ctx context.Context, scanID string, c cursor, b *budget) 
 
 // nextDirect is the history cursor of the first direct message after
 // after (the first of all when empty), or done when there is none. The
-// listing is read once per generation.
+// DMs read are computed once per generation (directsFor).
 func (g *Ingress) nextDirect(ctx context.Context, scanID, after string, b *budget) (cursor, bool, error) {
 	if !g.s.DirectMessages {
 		return cursor{}, true, nil
@@ -411,14 +417,10 @@ func (g *Ingress) nextDirect(ctx context.Context, scanID, after string, b *budge
 	if memo != nil && memo.scanID == scanID {
 		list = memo.channels
 	} else {
-		var calls int
 		var err error
-		list, calls, err = g.c.DirectMessages(ctx)
-		b.units += calls
-		if err != nil {
+		if list, err = g.directsFor(ctx, b); err != nil {
 			return cursor{}, false, err
 		}
-		sort.Strings(list)
 		g.mu.Lock()
 		g.directs = &directMemo{scanID: scanID, channels: list}
 		g.mu.Unlock()
@@ -429,6 +431,46 @@ func (g *Ingress) nextDirect(ctx context.Context, scanID, after string, b *budge
 		}
 	}
 	return cursor{}, true, nil
+}
+
+// directsFor is the sorted DMs a generation reads: those with a person
+// direct_messages admits, since only they can start Work or be its input,
+// and every DM live Work owns a thread in, whoever it is with. Reconcile
+// therefore costs one history read per admitted person's DM, not per
+// person who ever wrote to the app. A listing longer than DirectPages
+// keeps what it read rather than failing the generation, so the watched
+// channels are still reconciled and live conversations still recovered;
+// DMs past the bound go unread and are recovered only by push.
+func (g *Ingress) directsFor(ctx context.Context, b *budget) ([]string, error) {
+	listed, calls, _, err := g.c.DirectMessages(ctx, g.o.DirectPages)
+	b.units += calls
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(ch string) {
+		if IsDirect(ch) && !seen[ch] {
+			seen[ch] = true
+			out = append(out, ch)
+		}
+	}
+	for _, d := range listed {
+		if g.s.AdmitsDirect(d.User) {
+			add(d.ID)
+		}
+	}
+	if g.o.ActiveThreads != nil {
+		active, err := g.o.ActiveThreads(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for ch := range active {
+			add(ch)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Time, c cursor, b *budget) (extension.Snapshot, error) {

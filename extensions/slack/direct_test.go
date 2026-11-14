@@ -152,6 +152,55 @@ func TestDirectMessagesPushAndReconcile(t *testing.T) {
 	}
 }
 
+// TestReconcileReadsOnlyDMsThatCanMatter: reconcile reads the DMs of the
+// people direct_messages admits and the DMs live Work owns, not every
+// person's who ever wrote to the app; a listing past its bound keeps what
+// it read, so the channels and live conversations are still reconciled.
+func TestReconcileReadsOnlyDMsThatCanMatter(t *testing.T) {
+	f := newFixture(t, `,"direct_messages":{"users":["`+alice+`"]}`, slack.IngressOptions{})
+	f.fake.AddMember(dmAlice, alice)
+	f.fake.AddMember(dmBob, bob)
+	mine := f.fake.Post(dmAlice, alice, "admitted")
+	other := f.fake.Post(dmBob, bob, "not admitted")
+	f.sync()
+	got := byItem(f.scan())
+	if _, ok := got[item(dmAlice, mine, mine)]; !ok {
+		t.Fatal("an admitted person's DM was not reconciled")
+	}
+	if _, ok := got[item(dmBob, other, other)]; ok {
+		t.Fatal("a DM with someone direct_messages does not admit was read")
+	}
+	// A DM live Work owns is read whoever it is with.
+	f.active[dmBob] = []string{other}
+	if _, ok := byItem(f.scan())[item(dmBob, other, other)]; !ok {
+		t.Fatal("a DM live Work owns was not reconciled")
+	}
+
+	// Past the listing's bound: the channels, the DMs listed and the DMs
+	// live Work owns are still read, and the generation completes.
+	g := newFixture(t, `,"direct_messages":{"anyone":true}`, slack.IngressOptions{DirectPages: 1})
+	g.fake.SetListLimit(1)
+	const dmCarol = "D0CAROL"
+	for ch, user := range map[string]string{dmAlice: alice, dmBob: bob, dmCarol: "UCAROL"} {
+		g.fake.AddMember(ch, user)
+	}
+	inChannel := g.fake.Post(chanA, alice, "a channel message push missed")
+	first := g.fake.Post(dmAlice, alice, "listed")
+	unlisted := g.fake.Post(dmBob, bob, "past the bound")
+	owned := g.fake.Post(dmCarol, "UCAROL", "past the bound, but live")
+	g.active[dmCarol] = []string{owned}
+	g.sync()
+	got = byItem(g.scan())
+	for _, it := range []string{item(chanA, inChannel, inChannel), item(dmAlice, first, first), item(dmCarol, owned, owned)} {
+		if _, ok := got[it]; !ok {
+			t.Fatalf("a truncated DM listing lost %s: %v", it, keys(got))
+		}
+	}
+	if _, ok := got[item(dmBob, unlisted, unlisted)]; ok {
+		t.Fatal("a DM past the listing's bound was read")
+	}
+}
+
 func TestDirectMessagesOnlyEntryReconciles(t *testing.T) {
 	f := newFixture(t, "", slack.IngressOptions{})
 	cfg := `{"namespace":"` + ns + `","scope":"` + scope + `","team":"` + team + `","direct_messages":{"anyone":true}}`

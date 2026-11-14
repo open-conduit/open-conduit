@@ -47,7 +47,12 @@ type Server struct {
 	envelopes int
 	acks      map[string]bool
 	ephemeral []slack.Ephemeral
+	listLimit int // users.conversations page size override (0: the request's)
 }
+
+// SetListLimit makes users.conversations answer at most n conversations a
+// page, whatever the request's limit (0: the request's).
+func (s *Server) SetListLimit(n int) { s.mu.Lock(); s.listLimit = n; s.mu.Unlock() }
 
 // Ephemerals are the messages shown to one person (chat.postEphemeral).
 func (s *Server) Ephemerals() []slack.Ephemeral {
@@ -85,7 +90,8 @@ func New(team string, tokens ...string) *Server {
 // manifest's).
 func (s *Server) SetScopes(scopes []string) { s.mu.Lock(); s.scopes = scopes; s.mu.Unlock() }
 
-// AddMember makes the bot a member of a channel (users.conversations).
+// AddMember makes the bot a member of a channel (users.conversations). For
+// a DM (D…), name is the user the DM is with.
 func (s *Server) AddMember(channel, name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,11 +378,30 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sort.Strings(ids)
-		list := []map[string]any{}
-		for _, id := range ids {
-			list = append(list, map[string]any{"id": id, "name": s.members[id], "is_private": strings.HasPrefix(id, "G")})
+		// Paged as Slack pages it (limit, then next_cursor).
+		start, limit := offset(r.Form.Get("cursor")), len(ids)
+		if n, err := strconv.Atoi(r.Form.Get("limit")); err == nil && n > 0 {
+			limit = n
 		}
-		answer = apiAnswer{"ok": true, "channels": list, "response_metadata": map[string]any{"next_cursor": ""}}
+		if s.listLimit > 0 {
+			limit = s.listLimit
+		}
+		start = min(start, len(ids))
+		end := min(start+limit, len(ids))
+		next := ""
+		if end < len(ids) {
+			next = base64.StdEncoding.EncodeToString([]byte("offset:" + strconv.Itoa(end)))
+		}
+		list := []map[string]any{}
+		for _, id := range ids[start:end] {
+			if ims {
+				// A DM's member name is the person it is with.
+				list = append(list, map[string]any{"id": id, "user": s.members[id], "is_im": true})
+			} else {
+				list = append(list, map[string]any{"id": id, "name": s.members[id], "is_private": strings.HasPrefix(id, "G")})
+			}
+		}
+		answer = apiAnswer{"ok": true, "channels": list, "response_metadata": map[string]any{"next_cursor": next}}
 	case "conversations.history":
 		_ = r.ParseForm()
 		answer = s.history(r)

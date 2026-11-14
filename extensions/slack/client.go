@@ -481,41 +481,37 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 	return all, nil
 }
 
-// maxDirectPages bounds one listing of the app's direct messages (200 a
-// page).
-const maxDirectPages = 50
+// DirectMessage is one of the app's direct messages and the person it is
+// with.
+type DirectMessage struct {
+	ID   string `json:"id"`
+	User string `json:"user"`
+}
 
-// ErrTooManyDirects means the app has more direct messages than one
-// bounded listing reads.
-var ErrTooManyDirects = errors.New("slack direct messages exceed the bounded listing")
-
-// DirectMessages lists the IDs of the app's open direct messages
-// (users.conversations of type im; im:read), following cursors, and the
-// number of API calls made. An unfinished listing is an error, never a
-// short success, so reconcile infers no absence from it.
-func (c *Client) DirectMessages(ctx context.Context) ([]string, int, error) {
-	var all []string
+// DirectMessages lists the app's open direct messages (users.conversations
+// of type im; im:read), following cursors for at most maxPages pages of
+// 200, and the number of API calls made. truncated says the listing went
+// on past maxPages: what was read is returned, not an error.
+func (c *Client) DirectMessages(ctx context.Context, maxPages int) (out []DirectMessage, calls int, truncated bool, err error) {
 	cursor := ""
-	for calls := 1; calls <= maxDirectPages; calls++ {
+	for calls = 1; calls <= maxPages; calls++ {
 		form := url.Values{"types": {"im"}, "exclude_archived": {"true"}, "limit": {"200"}}
 		if cursor != "" {
 			form.Set("cursor", cursor)
 		}
-		var out struct {
-			Channels []Channel `json:"channels"`
+		var page struct {
+			Channels []DirectMessage `json:"channels"`
 			Meta     struct {
 				Next string `json:"next_cursor"`
 			} `json:"response_metadata"`
 		}
-		if err := c.call(ctx, "users.conversations", form, nil, &out); err != nil {
-			return nil, calls, err
+		if err := c.call(ctx, "users.conversations", form, nil, &page); err != nil {
+			return nil, calls, false, err
 		}
-		for _, ch := range out.Channels {
-			all = append(all, ch.ID)
-		}
-		if cursor = out.Meta.Next; cursor == "" {
-			return all, calls, nil
+		out = append(out, page.Channels...)
+		if cursor = page.Meta.Next; cursor == "" {
+			return out, calls, false, nil
 		}
 	}
-	return nil, maxDirectPages, ErrTooManyDirects
+	return out, maxPages, true, nil
 }
