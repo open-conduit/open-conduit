@@ -571,6 +571,10 @@ type rawPull struct {
 	// Mergeable is only on a single PR's read (and webhook bodies), never
 	// on the list; nil while GitHub is still working it out.
 	Mergeable *bool `json:"mergeable"`
+	// MergeableState is GitHub's account of whether the PR merges under
+	// the repository's rules (clean, blocked, behind, dirty, draft,
+	// unstable, unknown), on a single PR's read only.
+	MergeableState string `json:"mergeable_state"`
 }
 
 type rawCheckRun struct {

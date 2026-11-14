@@ -12,17 +12,16 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Landing work (#608): merging a PR, bringing its branch up to date and
-// starting a workflow. Every rule is checked here, where the call is
-// served, never left to a playbook: a merge happens only at the head the
-// caller read, with an approval and no outstanding change request, every
-// check (the base branch's required ones included) passed on that head,
-// every commit of the base in it, and no agent on the PR or its issue still
-// working. A refusal names what is missing and what to wait on.
+// starting a workflow. Whether a PR may merge is the repository's policy,
+// which GitHub owns and enforces through branch protection and rulesets
+// (#631), so github.pr.merge asks GitHub rather than copying its rules. It
+// adds, checked here where the call is served, only what GitHub can't know:
+// the merge happens at the head the caller read, and no agent on the PR or
+// its issue is still working. GitHub's refusal is relayed with its reason.
 
 // Operation names.
 const (
@@ -95,24 +94,13 @@ func (t *Tools) prMerge(ctx context.Context, b *bound, data json.RawMessage) (an
 	if p.MergedAt != nil {
 		return map[string]any{"state": "merged", "number": p.Number, "url": p.HTMLURL, "note": "the PR is already merged"}, nil
 	}
-	if err := t.landable(ctx, b, src, p, in.Head); err != nil {
-		return nil, err
-	}
-	if err := reviewed(ctx, c, repo, p); err != nil {
-		return nil, err
+	switch {
+	case p.State != "open":
+		return nil, refuse("pull_request_closed", "PR #%d is closed", p.Number)
+	case p.Head.SHA != in.Head:
+		return nil, headMoved(p, in.Head)
 	}
 	if err := t.nobodyWorking(ctx, b, src, p); err != nil {
-		return nil, err
-	}
-	behind, err := c.BehindBase(ctx, repo, p.Base.Ref, p.Head.SHA)
-	if err != nil {
-		return nil, err
-	}
-	if behind > 0 {
-		return nil, refuse("behind_base", "PR #%d's head %s lacks %d commit(s) of %s, so its checks ran against an older %s: call %s with {\"number\": %d, \"head\": %q}, then wait for the new head's checks",
-			p.Number, short(p.Head.SHA), behind, p.Base.Ref, p.Base.Ref, OpPRUpdateBranch, p.Number, p.Head.SHA)
-	}
-	if err := t.checksPassed(ctx, src, p); err != nil {
 		return nil, err
 	}
 	sha, err := c.MergePull(ctx, repo, p.Number, p.Head.SHA, method)
@@ -120,7 +108,15 @@ func (t *Tools) prMerge(ctx context.Context, b *bound, data json.RawMessage) (an
 	case IsStatus(err, http.StatusConflict):
 		return nil, refuse("head_moved", "PR #%d's head moved while it was being merged: read the PR again with %s", p.Number, OpPRView)
 	case IsStatus(err, http.StatusMethodNotAllowed), IsStatus(err, http.StatusUnprocessableEntity):
-		return nil, refuse("not_mergeable", "GitHub won't merge PR #%d: %s; wait for the PR to change", p.Number, statusMessage(err))
+		// A fresh read says why more clearly than the refusal alone: what
+		// GitHub reported before the merge may still have been unknown.
+		if now, rerr := c.Pull(ctx, repo, p.Number); rerr == nil {
+			if now.Head.SHA != in.Head {
+				return nil, headMoved(now, in.Head)
+			}
+			p = now
+		}
+		return nil, mergeRefused(p, method, statusMessage(err))
 	case err != nil:
 		return nil, err
 	}
@@ -175,6 +171,28 @@ func statusMessage(err error) string {
 	return "it gave no reason"
 }
 
+// mergeRefused relays GitHub's refusal to merge PR p as one the caller can
+// act on, telling the reason apart by the PR's mergeable_state: behind is
+// the repository requiring branches to be up to date, the one rule the
+// caller can satisfy itself, with github.pr.update-branch.
+func mergeRefused(p rawPull, method, reason string) error {
+	if r := strings.ToLower(reason); strings.Contains(r, "not allowed") && strings.Contains(r, "merge") {
+		return refuse("method_not_allowed", "GitHub won't merge PR #%d by %s: %s; merge it with a method the repository allows", p.Number, method, reason)
+	}
+	switch p.MergeableState {
+	case "behind":
+		return refuse("out_of_date", "GitHub won't merge PR #%d: %s; the repository requires branches to be up to date with %s, so call %s with {\"number\": %d, \"head\": %q}, then wait for the new head's checks",
+			p.Number, reason, p.Base.Ref, OpPRUpdateBranch, p.Number, p.Head.SHA)
+	case "dirty":
+		return refuse("conflicts", "GitHub won't merge PR #%d: %s; it conflicts with %s and its author resolves that, so wait for the push that does", p.Number, reason, p.Base.Ref)
+	case "draft":
+		return refuse("draft", "GitHub won't merge PR #%d: %s; it is a draft, so wait until it is marked ready for review", p.Number, reason)
+	case "blocked":
+		return refuse("blocked", "GitHub won't merge PR #%d yet: %s; the repository's rules for %s still want something (a required review or check), so wait for the PR to change", p.Number, reason, p.Base.Ref)
+	}
+	return refuse("not_mergeable", "GitHub won't merge PR #%d: %s; wait for the PR to change", p.Number, reason)
+}
+
 // landable refuses a PR that isn't open at the head the caller read, is a
 // draft or conflicts with its base.
 func (t *Tools) landable(_ context.Context, _ *bound, _ Source, p rawPull, head string) error {
@@ -189,90 +207,6 @@ func (t *Tools) landable(_ context.Context, _ *bound, _ Source, p rawPull, head 
 		return refuse("conflicts", "PR #%d conflicts with %s; its author resolves that, so wait for the push that does", p.Number, p.Base.Ref)
 	}
 	return nil
-}
-
-// reviewed refuses a PR without an approval, or with a reviewer whose
-// latest review still requests changes. A comment-only review leaves a
-// reviewer's standing as it was; a dismissed one clears it.
-func reviewed(ctx context.Context, c *Client, repo string, p rawPull) error {
-	reviews, err := c.Reviews(ctx, repo, p.Number)
-	if err != nil {
-		return err
-	}
-	sort.SliceStable(reviews, func(i, j int) bool {
-		a, b := reviews[i].SubmittedAt, reviews[j].SubmittedAt
-		return a != nil && b != nil && a.Before(*b)
-	})
-	standing := map[string]string{}
-	for _, r := range reviews {
-		login := strings.ToLower(r.User.Login)
-		switch strings.ToUpper(r.State) {
-		case "APPROVED", "CHANGES_REQUESTED":
-			standing[login] = strings.ToUpper(r.State)
-		case "DISMISSED":
-			delete(standing, login)
-		}
-	}
-	var approved, changes []string
-	for login, s := range standing {
-		if s == "APPROVED" {
-			approved = append(approved, login)
-		} else {
-			changes = append(changes, login)
-		}
-	}
-	sort.Strings(changes)
-	switch {
-	case len(changes) > 0:
-		return refuse("changes_requested", "%s still request(s) changes on PR #%d; wait for the PR to change and for a new review", strings.Join(changes, ", "), p.Number)
-	case len(approved) == 0:
-		return refuse("not_approved", "PR #%d has no approving review; wait for one", p.Number)
-	}
-	return nil
-}
-
-// checksPassed refuses a head whose checks haven't all passed, the base
-// branch's required checks included. A head whose check runs this
-// connection can't read is refused too: required checks can't be verified.
-func (t *Tools) checksPassed(ctx context.Context, src Source, p rawPull) error {
-	runs, statuses, from, err := src.Client.CheckState(ctx, src.Settings.Repo, p.Head.SHA)
-	if err != nil {
-		return err
-	}
-	if from == RunsUnreadable {
-		return refuse("checks_unreadable", "this connection can't read check runs or workflow runs, so PR #%d's checks can't be verified; grant it Checks: read (or Actions: read) and report it as a problem", p.Number)
-	}
-	n := &normalizer{s: src.Settings, c: src.Client, m: newMemo(), received: t.o.Now()}
-	n.remember(p)
-	var o extension.Observation
-	var ok bool
-	if len(runs)+len(statuses) == 0 {
-		o, ok, err = n.noChecksObservation(ctx, p, from)
-	} else {
-		o, ok, err = n.checksObservation(ctx, p, runs, statuses, from)
-	}
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return refuse("checks_pending", "no checks have reported on PR #%d's head %s yet; wait for them", p.Number, short(p.Head.SHA))
-	}
-	var cp ChecksPayload
-	_ = json.Unmarshal(o.Event.Data.Data, &cp)
-	switch o.Event.Type {
-	case TypeChecksPassed:
-		return nil
-	case TypeChecksFailed:
-		return refuse("checks_failed", "checks failed on PR #%d's head %s (%s); wait for a push that fixes them", p.Number, short(p.Head.SHA), strings.Join(cp.Failed, ", "))
-	case TypeChecksMissing:
-		return refuse("checks_missing", "checks %s branch requires never reported on PR #%d's head %s; wait for a push that starts them", strings.Join(cp.Missing, ", "), p.Number, short(p.Head.SHA))
-	case TypeChecksNone:
-		return refuse("no_checks", "no checks ran on PR #%d's head %s, so nothing shows it works; it merges only once checks pass", p.Number, short(p.Head.SHA))
-	}
-	if len(cp.Missing) > 0 {
-		return refuse("checks_pending", "PR #%d's head %s is waiting on checks %s's protection requires (%s); wait for them", p.Number, short(p.Head.SHA), p.Base.Ref, strings.Join(cp.Missing, ", "))
-	}
-	return refuse("checks_pending", "checks are still running on PR #%d's head %s; wait for them", p.Number, short(p.Head.SHA))
 }
 
 // agentOn is live Work on a PR: the Work that owns its issue, the PR's own

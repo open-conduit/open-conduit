@@ -121,7 +121,7 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[prEditInput]()},
 		{Name: OpPRReview, Summary: "Submit one review of a PR: approve, request changes or comment, with optional inline comments.",
 			Input: extension.InputSchema[prReviewInput]()},
-		{Name: OpPRMerge, Summary: "Merge a PR at the head you read, once it is approved, green on that head, up to date with its base and nobody on it is still working; otherwise refused, saying what is missing.",
+		{Name: OpPRMerge, Summary: "Merge a PR at the head you read, once nobody on it is still working and GitHub will merge it under the repository's own rules; otherwise refused with GitHub's reason.",
 			Input: extension.InputSchema[prMergeInput]()},
 		{Name: OpPRUpdateBranch, Summary: "Bring a PR's branch up to date with its base, from the head you read, while no agent on it is working.",
 			Input: extension.InputSchema[prUpdateBranchInput]()},
