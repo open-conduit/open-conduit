@@ -215,6 +215,20 @@ func (e manifestExecutor) Playbook(raw json.RawMessage) string {
 	return r.ExecutorPlaybook(e.decl.Name)(raw)
 }
 
+// VersionProbe asks the package for the command that shows its executor
+// is installed where a binding config runs it, when the manifest declares
+// version_probe (extension.VersionProber); none otherwise.
+func (e manifestExecutor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	if !e.decl.VersionProbe || e.x == nil {
+		return nil, nil
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return nil, nil
+	}
+	return r.ExecutorVersionProbe(e.decl.Name)(raw)
+}
+
 // FolderConfig asks the package to adapt a binding config from an included
 // folder, when the manifest declares folder_config
 // (extension.FolderConfigurer); the config unchanged otherwise. A package

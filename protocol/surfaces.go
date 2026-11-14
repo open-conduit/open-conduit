@@ -64,6 +64,12 @@ const (
 	// executor, Config the binding's executor config; the answer is a
 	// ValidateResult whose Playbook is the playbook's name, "" for none.
 	ValidateExecutorPlaybook = "executor_playbook"
+	// ValidateExecutorProbe asks an executor declared with version_probe
+	// for the command that shows it is installed where a binding config
+	// runs it (extension.VersionProber). Type is the executor, Config the
+	// binding's executor config; the answer is a ValidateResult whose
+	// Probe is the command, nil for none.
+	ValidateExecutorProbe = "executor_probe"
 	// ValidateExecutorFolder adapts a binding from an included folder's
 	// config, for an executor declared with folder_config. Type is the
 	// executor, Config the binding's executor config, Folder the included
@@ -107,7 +113,7 @@ type ValidateParams struct {
 
 // ValidateResult is the answer to validate: empty for a check, the mode
 // for kinds resource_mode and executor_mode, the playbook for kind
-// executor_playbook, the adapted config for kind executor_folder, and for
+// executor_playbook, the probe for kind executor_probe, the adapted config for kind executor_folder, and for
 // kind executor the
 // warnings config check shows about a valid binding config
 // (extension.ConfigWarner): fixed sentences that never echo config values.
@@ -132,6 +138,7 @@ type ValidateParams struct {
 type ValidateResult struct {
 	Mode      string          `json:"mode,omitempty"`
 	Playbook  string          `json:"playbook,omitempty"`
+	Probe     *Probe          `json:"probe,omitempty"`
 	Config    json.RawMessage `json:"config,omitempty"`
 	Warnings  []string        `json:"warnings,omitempty"`
 	Describe  []DescribeLine  `json:"describe,omitempty"`

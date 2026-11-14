@@ -185,6 +185,21 @@ func (r *Remote) ExecutorPlaybook(name string) func(json.RawMessage) string {
 	}
 }
 
+// ExecutorVersionProbe returns the version probe of an executor declared
+// with version_probe for a binding config: validate with kind
+// executor_probe, no argv for none or a failed call.
+func (r *Remote) ExecutorVersionProbe(name string) func(json.RawMessage) ([]string, []string) {
+	return func(config json.RawMessage) ([]string, []string) {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		var out protocol.ValidateResult
+		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutorProbe, Type: name, Config: config}, &out); err != nil || out.Probe == nil || len(out.Probe.Argv) == 0 {
+			return nil, nil
+		}
+		return out.Probe.Argv, out.Probe.Env
+	}
+}
+
 // ExecutorFolderConfig returns the folder hook of an executor declared with
 // folder_config: validate with kind executor_folder, whose answer is the
 // binding config adapted to the included folder it comes from. A refusal

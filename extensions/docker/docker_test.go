@@ -277,3 +277,26 @@ func TestDockerQueriesHaveADeadline(t *testing.T) {
 		}
 	}
 }
+
+// TestProbe: a version probe runs in a container from the image with no
+// network and a read-only root, as the operator, the probe's command as
+// the entrypoint and its variables set, and answers its first line; an
+// image without the command fails.
+func TestProbe(t *testing.T) {
+	args := filepath.Join(t.TempDir(), "args")
+	p := stubDocker(t, `echo "$@" > `+args+`
+case "$*" in *"--entrypoint claude good@"*) printf '2.1.0 (Claude Code)\nmore\n';; *) echo 'exec: "claude": executable file not found in $PATH' >&2; exit 127;; esac`, time.Second)
+	v, err := p.Probe(context.Background(), "default", "good@sha256:0", []string{"claude", "--version"}, []string{"PATH=/usr/bin"})
+	if err != nil || v != "2.1.0 (Claude Code)" {
+		t.Fatalf("probe %q %v", v, err)
+	}
+	b, _ := os.ReadFile(args)
+	for _, want := range []string{"--context default run --rm --network none", "--read-only", "--env PATH=/usr/bin", "--entrypoint claude good@sha256:0 --version"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("docker %s has no %q", b, want)
+		}
+	}
+	if _, err := p.Probe(context.Background(), "default", "bare@sha256:0", []string{"claude", "--version"}, nil); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("an image without claude probed: %v", err)
+	}
+}

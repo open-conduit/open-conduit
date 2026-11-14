@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -46,7 +47,7 @@ func Manifest() protocol.Manifest {
 		Summary: "Runs a container binding's launches in Docker containers, behind a gateway that holds the operator's network policy.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{
-			Containers: []protocol.ContainerDecl{{Type: docker.Type, Forward: true}},
+			Containers: []protocol.ContainerDecl{{Type: docker.Type, Forward: true, Probe: true}},
 			Checks:     []protocol.CheckDecl{{Name: Name}},
 		}}
 }
@@ -204,9 +205,12 @@ func Build() *sdk.Extension {
 // later; a file written under --user into a host directory (the
 // provider's own, under the state directory the workspaces share) owned by
 // the operator on the host; the gateway image there by digest; and the
-// internal-network preflight. Any failure blocks the provider.
+// internal-network preflight. Any failure blocks the provider. Then, for
+// each binding whose executor gave a version probe, it runs the probe in a
+// container from the binding's image, so an executor's program is checked
+// where the binding runs it; one that fails fails the check, naming the
+// image.
 func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol.CheckRunResult {
-	type use struct{ name, context, image string }
 	var uses []use
 	for _, s := range cfg.Scopes {
 		for _, b := range s.Bindings {
@@ -214,7 +218,7 @@ func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol
 				continue
 			}
 			if c, st, err := docker.ParseConfig(b.Container.Config); err == nil {
-				uses = append(uses, use{s.ID + "/" + b.Name, st.Context, c.Image})
+				uses = append(uses, use{s.ID + "/" + b.Name, st.Context, c.Image, b.Probe})
 			}
 		}
 	}
@@ -244,9 +248,52 @@ func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol
 	out.Detail = strings.Join(details, "; ")
 	if !out.OK {
 		out.Detail += "; docker container bindings run nothing until this is fixed"
+	} else {
+		x.probe(ctx, p, uses, &out)
 	}
 	out.Items = append(out.Items, "in docker containers: "+strings.Join(names, ", "))
 	return out
+}
+
+// use is one docker binding in a check: its name, Docker context and
+// image, and its executor's version probe (nil for none).
+type use struct {
+	name, context, image string
+	probe                *protocol.Probe
+}
+
+// probe runs each binding's version probe in its image, once for each
+// context, image and probe, and reports the first line of its output, or
+// fails naming the image and the bindings that run it.
+func (x *provider) probe(ctx context.Context, p *docker.Provider, uses []use, out *protocol.CheckRunResult) {
+	type key struct{ context, image, probe string }
+	var order []key
+	names := map[key][]string{}
+	probes := map[key]*protocol.Probe{}
+	for _, u := range uses {
+		if u.probe == nil || len(u.probe.Argv) == 0 {
+			continue
+		}
+		k := key{u.context, u.image, strings.Join(u.probe.Argv, "\x00") + "\x01" + strings.Join(u.probe.Env, "\x00")}
+		if _, ok := names[k]; !ok {
+			order = append(order, k)
+			probes[k] = u.probe
+		}
+		names[k] = append(names[k], u.name)
+	}
+	for _, k := range order {
+		pr := probes[k]
+		command := path.Base(pr.Argv[0])
+		v, err := p.Probe(ctx, k.context, k.image, pr.Argv, pr.Env)
+		if err != nil {
+			if out.OK {
+				out.OK, out.Status, out.Code = false, "fail", "probe_failed"
+			}
+			out.Items = append(out.Items, fmt.Sprintf("%s (bindings %s): not runnable in image %s: %v", command, strings.Join(names[k], ", "), k.image, err))
+			continue
+		}
+		out.Items = append(out.Items, fmt.Sprintf("%s in image %s: %s", command, k.image, v))
+	}
 }
 
 // Certification is the package's certification.json: a static fixture of

@@ -69,3 +69,70 @@ func TestCheck(t *testing.T) {
 		t.Errorf("no bindings: %+v", got)
 	}
 }
+
+// TestCheckContainerBindings: a binding whose container provider runs its
+// version probe (Probed) is not looked for on the host, so with no host
+// claude and only such bindings the check is info, not claude_missing; a
+// host binding beside it is still run. The controls: the same binding on
+// the host, or in a container whose provider runs no probe (as ssh), fails
+// as missing.
+func TestCheckContainerBindings(t *testing.T) {
+	x := claudecode.NewExtension()
+	var ran []string
+	x.StubChecks(nil, func(_ context.Context, bin string) (string, error) {
+		ran = append(ran, bin)
+		if bin == "/opt/missing" {
+			return "", errors.New("not runnable")
+		}
+		return "2.1.0 (Claude Code)", nil
+	})
+	check := x.Checks()[0]
+	binding := func(name, isolation string, cfg map[string]any) protocol.CheckBinding {
+		raw, _ := json.Marshal(cfg)
+		return protocol.CheckBinding{Name: name, Executor: claudecode.Name, Config: raw, Isolation: isolation, Probed: isolation == protocol.IsolationContainer}
+	}
+	cfg := func(bs ...protocol.CheckBinding) protocol.CheckConfig {
+		return protocol.CheckConfig{Scopes: []protocol.CheckScope{{ID: "eng", Bindings: bs}}}
+	}
+
+	got := check.Run(context.Background(), cfg(binding("boxed", protocol.IsolationContainer, map[string]any{"binary": "/opt/missing"})))
+	if got.Status != inproc.CheckInfo || got.Code != "in_container" || len(ran) != 0 {
+		t.Fatalf("container binding only: %+v, ran %q", got, ran)
+	}
+	if !slices.Equal(got.Items, []string{"in their container images, not on the host: eng/boxed"}) {
+		t.Errorf("items %q", got.Items)
+	}
+
+	got = check.Run(context.Background(), cfg(binding("boxed", protocol.IsolationContainer, map[string]any{"binary": "/opt/missing"}), binding("agent", "", map[string]any{})))
+	if got.Status != inproc.CheckOK || !slices.Equal(ran, []string{"claude"}) {
+		t.Errorf("mixed: %+v, ran %q", got, ran)
+	}
+
+	got = check.Run(context.Background(), cfg(binding("boxed", "", map[string]any{"binary": "/opt/missing"})))
+	if got.Status != inproc.CheckFail || got.Code != "claude_missing" {
+		t.Errorf("control: the binding on the host is %+v, want claude_missing", got)
+	}
+	unprobed := binding("remote", protocol.IsolationContainer, map[string]any{"binary": "/opt/missing"})
+	unprobed.Probed = false
+	got = check.Run(context.Background(), cfg(unprobed))
+	if got.Status != inproc.CheckFail || got.Code != "claude_missing" {
+		t.Errorf("control: a container binding no provider probes is %+v, want claude_missing", got)
+	}
+}
+
+// TestVersionProbe: the probe is the binding's binary with --version and
+// the PATH a container launch gives it, the binding's own when it sets one.
+func TestVersionProbe(t *testing.T) {
+	e := claudecode.Offline()
+	argv, env := e.VersionProbe(json.RawMessage(`{}`))
+	if !slices.Equal(argv, []string{"claude", "--version"}) || len(env) != 1 || !strings.HasPrefix(env[0], "PATH=/usr/local/sbin:") {
+		t.Errorf("default probe %q %q", argv, env)
+	}
+	argv, env = e.VersionProbe(json.RawMessage(`{"binary":"/opt/claude/bin/claude","env":{"PATH":"/opt/claude/bin"}}`))
+	if !slices.Equal(argv, []string{"/opt/claude/bin/claude", "--version"}) || !slices.Equal(env, []string{"PATH=/opt/claude/bin"}) {
+		t.Errorf("configured probe %q %q", argv, env)
+	}
+	if argv, _ := e.VersionProbe(json.RawMessage(`{"model":`)); argv != nil {
+		t.Errorf("a refused config probes %q", argv)
+	}
+}

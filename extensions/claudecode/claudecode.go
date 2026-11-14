@@ -490,5 +490,6 @@ var _ interface {
 	extension.ForgetExecutor
 	extension.LiveExecutor
 	extension.PlaybookNamer
+	extension.VersionProber
 	extension.FolderConfigurer
 } = (*Executor)(nil)

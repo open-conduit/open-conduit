@@ -651,6 +651,11 @@ type ExecutorDecl struct {
 	// config check can tell when a binding doesn't grant the operations
 	// the playbook declares (extension.PlaybookNamer).
 	Playbook bool `json:"playbook,omitempty"`
+	// VersionProbe marks an executor that names, through validate with
+	// kind executor_probe, the command that shows it is installed where a
+	// binding config runs it, so a container provider's doctor check can
+	// run it in the binding's image (extension.VersionProber).
+	VersionProbe bool `json:"version_probe,omitempty"`
 	// FolderConfig marks an executor whose binding config names folders,
 	// so a binding from an included folder is adapted to that folder
 	// through validate with kind executor_folder before it is validated
@@ -735,6 +740,11 @@ type SandboxDecl struct {
 type ContainerDecl struct {
 	Type    string `json:"type"`
 	Forward bool   `json:"forward,omitempty"`
+	// Probe marks a provider whose doctor check runs each of its bindings'
+	// version probes (CheckBinding.Probe) in the binding's container, so
+	// the executor's own check can leave those bindings to it
+	// (CheckBinding.Probed).
+	Probe bool `json:"probe,omitempty"`
 }
 
 // TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).
