@@ -3,6 +3,7 @@ package github
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ import (
 type CondKind string
 
 const (
-	CondPR    CondKind = "pr"    // a PR merging, closing, being commented on or pushed to
+	CondPR    CondKind = "pr"    // a PR merging, closing, being commented on or pushed to, or the agent on it ending a turn in a state
 	CondIssue CondKind = "issue" // an issue closing, or the agent on it ending a turn in a state
 	CondJob   CondKind = "job"   // the next run of one of a scope's jobs ending (05-02)
 )
@@ -33,8 +34,9 @@ type Cond struct {
 	// name); empty is the waiting Work's own.
 	Project string `json:"project,omitempty"`
 	Ref     string `json:"ref"`
-	// On is merged, closed, commented or pushed for a PR; closed or any turn
-	// status (domain.ValidTurnStatus) for an issue; empty for a job.
+	// On is merged, closed, commented, pushed, checks or any other turn
+	// status (domain.ValidTurnStatus) for a PR; closed or any turn status for
+	// an issue; empty for a job.
 	On string `json:"on,omitempty"`
 }
 
@@ -42,15 +44,33 @@ type Cond struct {
 // comment, review or review-thread reply) and pushed (the next new head
 // commit) are about what happens from the wait on; checks is the checks
 // on its head as the wait begins finishing, passed or not (a new push,
-// a merge or a close ends that wait too).
+// a merge or a close ends that wait too). Any other turn status
+// (domain.ValidTurnStatus) waits for the PR's own agent (its reviewer, or
+// Work that opened it without an issue) to end a turn in that state.
 var prOns = []string{"merged", "closed", "commented", "pushed", "checks"}
+
+// condSyntax is the conditions as an agent writes them.
+const condSyntax = "pr:<n>[:merged|closed|commented|pushed|checks|<state>], issue:<n>[:closed|<state>] or job:<name>"
+
+// TurnState reports whether the condition waits for an agent's turn to end
+// in a state (`issue:12:review`, `pr:9:done`) rather than for the item's
+// own news.
+func (c Cond) TurnState() bool {
+	switch c.Kind {
+	case CondPR:
+		return !slices.Contains(prOns, c.On)
+	case CondIssue:
+		return c.On != "closed"
+	}
+	return false
+}
 
 // ParseCond reads a condition as an agent writes it. A PR's defaults to
 // merged, an issue's to closed.
 func ParseCond(s string) (Cond, error) {
 	parts := strings.Split(strings.TrimSpace(s), ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[1] == "" {
-		return Cond{}, fmt.Errorf("%q isn't a condition: write pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>", s)
+		return Cond{}, fmt.Errorf("%q isn't a condition: write %s", s, condSyntax)
 	}
 	c := Cond{Kind: CondKind(strings.ToLower(parts[0])), Ref: parts[1]}
 	if len(parts) == 3 {
@@ -71,12 +91,10 @@ func ParseCond(s string) (Cond, error) {
 		if c.On == "" {
 			c.On = "merged"
 		}
-		ok := false
-		for _, o := range prOns {
-			ok = ok || c.On == o
-		}
-		if !ok {
-			return Cond{}, fmt.Errorf("%q: a PR can be waited on to be %s", s, strings.Join(prOns, ", "))
+		// Any other turn status the PR's own agent may declare, as for an
+		// issue's.
+		if !slices.Contains(prOns, c.On) && !domain.ValidTurnStatus(c.On) {
+			return Cond{}, fmt.Errorf("%q: a PR can be waited on to be %s, or for its own agent's turn to end in a state (a word such as review)", s, strings.Join(prOns, ", "))
 		}
 	case CondIssue:
 		c.Ref = strings.TrimPrefix(c.Ref, "#")
@@ -134,8 +152,10 @@ func (c Cond) Describe() string {
 			return fmt.Sprintf("checks on PR #%s%s", c.Ref, where)
 		case "closed":
 			return fmt.Sprintf("PR #%s%s to close", c.Ref, where)
+		case "merged":
+			return fmt.Sprintf("PR #%s%s to merge", c.Ref, where)
 		}
-		return fmt.Sprintf("PR #%s%s to merge", c.Ref, where)
+		return fmt.Sprintf("the agent on PR #%s%s to end a turn in %s", c.Ref, where, c.On)
 	case CondIssue:
 		if c.On == "closed" {
 			return fmt.Sprintf("#%s%s to close", c.Ref, where)
@@ -171,6 +191,9 @@ func (c Cond) Happened(sourceType string) string {
 				return fmt.Sprintf("PR #%s%s got a new push before its checks finished; wait on %s again for the new head's", c.Ref, where, c)
 			}
 			return fmt.Sprintf("checks on PR #%s%s finished: %s", c.Ref, where, checksResult(sourceType))
+		}
+		if c.TurnState() {
+			return fmt.Sprintf("the agent on PR #%s%s ended a turn in %s", c.Ref, where, c.On)
 		}
 		if sourceType == TypePullClosed && c.On == "merged" {
 			return fmt.Sprintf("PR #%s%s was closed without merging, so it won't merge", c.Ref, where)

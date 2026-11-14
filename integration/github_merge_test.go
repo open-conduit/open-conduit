@@ -259,3 +259,48 @@ func TestGitHubMergeWaitsOnACancelledTurnAndUnroutedInput(t *testing.T) {
 	e.route()
 	refusedSaying(t, merge(), "work_active", "unread")
 }
+
+// A merge refused because the PR's own Work (its reviewer) is mid-turn
+// names conditions on that Work's handing back, and they wake the merge
+// bot when the reviewer ends its turn done without posting anything, with
+// no further GitHub event (#627).
+func TestGitHubMergeWakesWhenThePullsReviewerHandsBack(t *testing.T) {
+	e := newPullEnv(t)
+	bob := githubtest.User{Login: "bob", Type: "User"}
+	n, builder := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("fix(web): steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	e.fake.SetCheck("h1", "ci", "completed", "success")
+	e.fake.AddReview(pr, bob, "APPROVED", "")
+	e.sync()
+	b := e.start(builder.ID)
+	e.finish(b, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	reviewer, ok := e.workFor(gh.PullRequestKey(pr))
+	if !ok {
+		t.Fatal("no Work for the PR")
+	}
+	r := e.start(reviewer.ID)
+
+	merger := e.request("merge-bot")
+	m := e.start(merger.ID)
+	_, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+	review, done := "pr:"+string(ghScope)+"/"+itoa(pr)+":review", "pr:"+string(ghScope)+"/"+itoa(pr)+":done"
+	refusedSaying(t, err, "work_active", "PR #"+itoa(pr), "working on a turn", `"`+review+`"`, `"`+done+`"`)
+	e.must(m, gh.OpWait, "park", map[string]any{"conditions": []string{review, done}, "reason": "the reviewer is mid-turn"})
+	e.finish(m, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.publishTurns()
+	if got := e.work(merger.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("the merge bot's own turn woke it: %v", got.State)
+	}
+
+	// The reviewer approves without posting and hands back.
+	e.finish(r, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.publishTurns()
+	if got := e.work(merger.ID); got.State != domain.WorkReady {
+		t.Fatalf("the reviewer's handing back did not wake the merge bot: %v", got.State)
+	}
+	m = e.start(merger.ID)
+	out, err := e.call(m, gh.OpPRMerge, "", map[string]any{"number": pr, "head": "h1"})
+	if err != nil || decodeMap(t, out)["state"] != "merged" {
+		t.Fatalf("merge after the reviewer handed back: %v %v", out, err)
+	}
+}
