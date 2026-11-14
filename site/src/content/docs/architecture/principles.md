@@ -115,6 +115,16 @@ Introspection and self-improvement emerge from observing this system, not from g
 
 Agents can identify problems, propose changes and repair their own tooling, while humans keep control over consequential decisions.
 
+### 11. Open Conduit is a platform, never an arbiter of standards
+
+Open Conduit is agnostic to how any agent, team, company or business wants to work. It is something to build on, not an opinion about how work should be done.
+
+It owns orchestration: whether Work is running, waiting, has unread input or has handed back, and what each participant is authorised to do. Every other system owns its own share. GitHub owns whether a pull request may merge, through its branch protection and rulesets. CI owns what green means. A team owns its review bar, and expresses it in the config and playbooks it writes.
+
+An operation or extension asks the system that owns a rule and passes on its answer. It never re-implements that rule, second-guesses it, overrides it or imposes a best practice of its own, however sensible that practice seems. A copy of someone else's policy can only drift from the original, and it takes a decision that was theirs.
+
+So before a rule enters the core or an extension, ask whether it is orchestration or someone else's policy.
+
 ## The architectural litmus test
 
 If a new capability requires the core to understand a particular domain, integration or executor, first ask whether the abstraction is wrong.
