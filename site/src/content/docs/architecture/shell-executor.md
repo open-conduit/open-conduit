@@ -59,7 +59,7 @@ The environment follows the B05 order:
 | `os outcome completed\|failed\|handoff` | `declare_outcome` |
 | `os call OP` | registered extension operations |
 
-`os call` refuses a builtin operation and names the command that serves it (`os call read_context` says to use `os context`), as its flags are a payload's, not the builtin's.
+`os call` refuses a builtin operation and names the command that serves it (`os call read_context` says to use `os context`), as its flags are a payload's, not the builtin's. `os call OP --output data` prints only the output's data, compact on one line, for a program that runs `os` for an answer and reads it (the `aws` extension's profiles name it as their `credential_process`). A call a gate holds has no such answer: the gate's answer goes to stderr, which that program shows the agent, and `os` exits 3.
 
 Every command accepts `--request-id`. Results print as JSON. Exit status is 0 on success, 1 for a rejected or failed call (safe error code only) and 2 for usage or missing environment. Arguments and credentials are never echoed. A declared wait or outcome takes effect only when the host observes the process finish: `Scheduler.Observe` applies the declaration through `Complete`, as the [toolbelt](../toolbelt-management/#toolbelt-authority) requires.
 

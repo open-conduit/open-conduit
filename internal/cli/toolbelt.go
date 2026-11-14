@@ -32,7 +32,10 @@ Commands:
   work cancel --id ID [--reason TEXT]       cancel child Work this Work asked for
   wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N] [--description TEXT]
   outcome completed|failed|handoff [--summary TEXT] [--schema S --data JSON]
-  call OPERATION [--schema S] [--data JSON | --data-file PATH|-]
+  call OPERATION [--schema S] [--data JSON | --data-file PATH|-] [--output data]
+                                            --output data prints only the output's data, on one line, for
+                                            a program that reads it (an AWS credential_process); a call a
+                                            gate holds prints its answer on stderr and exits 3
   inbox                                     print input injected into this running execution since the last
                                             read (JSON lines) and acknowledge it as taken in (OS_INBOX)
   mcp                                       serve these operations as an MCP server on stdio
@@ -447,10 +450,13 @@ var builtinCommands = map[string]string{
 }
 
 func (t *toolbelt) call(args []string) int {
-	f := newToolFlags("schema", "data", "data-file")
+	f := newToolFlags("schema", "data", "data-file", "output")
 	pos, err := f.parse(args)
 	if err != nil || len(pos) != 1 || pos[0] == "" {
 		return t.usage("call requires one operation")
+	}
+	if o := f.get("output"); o != "" && o != "data" {
+		return t.usage("--output takes data")
 	}
 	if command, ok := builtinCommands[pos[0]]; ok {
 		// call shows an extension operation's output, which a builtin has
@@ -468,6 +474,9 @@ func (t *toolbelt) call(args []string) int {
 		}
 		in = data
 	}
+	if f.get("output") == "data" {
+		return t.callData(f, pos[0], in)
+	}
 	return t.do(f, pos[0], in, func(r client.ToolResult) any {
 		if r.Output == nil {
 			return client.Payload{}
@@ -478,6 +487,55 @@ func (t *toolbelt) call(args []string) int {
 		}
 		return shown
 	})
+}
+
+// heldExit is `os call --output data`'s status for a call a gate held: the
+// operation did not run, and the run's Work is parked on the gate.
+const heldExit = 3
+
+// callData is `os call --output data`: the output's data alone, compact on
+// one line, as a program that runs os for an answer reads it (an AWS SDK's
+// credential_process). A call a gate held has no answer for that program,
+// so the gate's answer goes to stderr, which such a program shows the
+// agent, and os exits heldExit.
+func (t *toolbelt) callData(f *toolFlags, operation string, input any) int {
+	if _, err := t.client(); err != nil {
+		fmt.Fprintf(t.errOut, "os: %s\n", err)
+		return 2
+	}
+	call := client.ToolCall{Operation: operation, RequestID: f.get("request-id")}
+	if input != nil {
+		var err error
+		if call.Input, err = json.Marshal(input); err != nil {
+			return t.usage("invalid input")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	result, err := t.toolbeltCall(ctx, call)
+	if err != nil {
+		fmt.Fprintf(t.errOut, "os: %s\n", callError(err))
+		return 1
+	}
+	var data json.RawMessage
+	if result.Output != nil {
+		data = result.Output.Data
+	}
+	if len(data) == 0 {
+		data = json.RawMessage("null")
+	}
+	var line bytes.Buffer
+	if err := json.Compact(&line, data); err != nil {
+		line.Reset()
+		line.Write(data)
+	}
+	if result.Wait != nil {
+		fmt.Fprintf(t.errOut, "os: %s is held, and this run is parked until it is decided: %s\n", operation, line.String())
+		return heldExit
+	}
+	line.WriteByte('\n')
+	_, _ = t.out.Write(line.Bytes())
+	return 0
 }
 
 // gitCredential is what `os git-credential` was: git's credential helper
