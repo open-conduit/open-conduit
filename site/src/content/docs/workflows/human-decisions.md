@@ -122,7 +122,7 @@ One operation can do both a harmless and a risky thing, depending on its input. 
 {"operations": ["aws.credentials"], "input": {"role": "write"}, "responders": ["operator:local"]}
 ```
 
-Here a run asks for approval before it gets credentials for the `write` role, and gets the `read` role's without asking. The gate compares each field's JSON value exactly (`"write"` doesn't match `["write"]`), and a call whose input lacks the field isn't held. To hold several values, add a gate for each. `input` can be combined with `for_bindings`, and both must hold for the gate to hold a call.
+Here a run asks for approval before it gets credentials for the `write` role, and gets the `read` role's without asking. The gate compares each field's JSON value exactly (`"write"` doesn't match `["write"]`), and a call whose input lacks the field isn't held. It fails closed on how an operation might read its input: a key that names the field in another case (`Role`), or a repeated key, is held when any of them has the value, and an input that isn't a JSON object is held. Operations written on `protocol/sdk` refuse such keys anyway. To hold several values, add a gate for each. `input` can be combined with `for_bindings`, and both must hold for the gate to hold a call.
 
 ## Answering from GitHub
 

@@ -78,7 +78,12 @@ func TestParseConfig(t *testing.T) {
 	for _, tc := range []struct {
 		input string
 		held  bool
-	}{{`{"role":"write"}`, true}, {`{ "role" : "write", "other": 1 }`, true}, {`{"role":"read"}`, false}, {`{}`, false}, {`null`, false}, {`{"role":["write"]}`, false}} {
+	}{{`{"role":"write"}`, true}, {`{ "role" : "write", "other": 1 }`, true}, {`{"role":"read"}`, false}, {`{}`, false}, {`null`, false}, {`{"role":["write"]}`, false},
+		// The operation may read a key under another case, or the last
+		// of a repeated key: any spelling with the gated value is held.
+		{`{"role":"read","Role":"write"}`, true}, {`{"ROLE":"write"}`, true}, {`{"role":"write","role":"read"}`, true},
+		// An input that isn't an object is held: it can't be read.
+		{`["write"]`, true}, {`{"role":`, true}} {
 		if got := len(c.gates("aws.credentials", json.RawMessage(tc.input), "", false)) == 1; got != tc.held {
 			t.Errorf("input %s: held %v, want %v", tc.input, got, tc.held)
 		}

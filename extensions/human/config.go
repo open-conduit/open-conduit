@@ -261,27 +261,66 @@ func (c Config) gates(op string, input json.RawMessage, binding string, known bo
 }
 
 // holdsInput reports whether the gate's input condition, if any, holds for
-// a call's input: each field it names is in the input, a JSON object, with
-// the same value. An input that isn't an object has none of the fields.
+// a call's input, failing closed: the gate can't know how the operation
+// reads its input, so every top-level key of the input that names a
+// gated field under case folding counts, repeats included ({"role":
+// "read", "Role": "write"}), and a field is matched when any of them has
+// the gate's value. An input that isn't a JSON object is held, since what
+// it says can't be read.
 func (g GateConfig) holdsInput(input json.RawMessage) bool {
 	if len(g.Input) == 0 {
 		return true
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(input, &fields) != nil {
+	if len(bytes.TrimSpace(input)) == 0 || bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
 		return false
 	}
+	pairs, ok := topLevel(input)
+	if !ok {
+		return true
+	}
 	for field, want := range g.Input {
-		have, ok := fields[field]
-		if !ok {
-			return false
+		matched := false
+		for _, p := range pairs {
+			if !strings.EqualFold(p.key, field) {
+				continue
+			}
+			if canon, err := canonical(p.value); err == nil && bytes.Equal(canon, want) {
+				matched = true
+				break
+			}
 		}
-		canon, err := canonical(have)
-		if err != nil || !bytes.Equal(canon, want) {
+		if !matched {
 			return false
 		}
 	}
 	return true
+}
+
+type pair struct {
+	key   string
+	value json.RawMessage
+}
+
+// topLevel is a JSON object's members, in order, repeats included.
+func topLevel(data json.RawMessage) ([]pair, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, false
+	}
+	var out []pair
+	for dec.More() {
+		t, err := dec.Token()
+		k, ok := t.(string)
+		if err != nil || !ok {
+			return nil, false
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false
+		}
+		out = append(out, pair{k, v})
+	}
+	return out, true
 }
 
 // canonical is a JSON value in one form (objects' keys sorted, no
