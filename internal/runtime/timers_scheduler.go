@@ -376,6 +376,11 @@ type SchedulerPoll struct {
 	// claimed but not yet launched by PollClaims.
 	Recovered   []Attempt
 	Diagnostics []PollDiagnostic
+	// Stops are the finished attempts whose stop is unconfirmed and whose
+	// follow-up is due: the host stops each at its epoch and confirms it
+	// (ConfirmStopped), and the runtime hands it over again, with backoff,
+	// until it is confirmed.
+	Stops []StopDue
 }
 
 // RecoveryDiagnostic is the poll diagnostic code for a recovery's error
@@ -424,7 +429,8 @@ func pollDiagnostic(err error) string {
 }
 
 // Poll performs bounded host-driven passes for due timers, accepted retry/timeout
-// Events, active Waits, and expired leases. Each pass uses a durable fair cursor.
+// Events, active Waits, expired leases and the stop follow-ups of finished,
+// unconfirmed attempts. Each pass uses a durable fair cursor.
 // Recovered handles are returned for host observation; Poll never blocks in Wait.
 func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (SchedulerPoll, error) {
 	return s.poll(ctx, timers, limit, true)
@@ -531,5 +537,6 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 			}
 		}
 	}
-	return result, nil
+	result.Stops, err = s.dueStops(ctx, limit)
+	return result, err
 }

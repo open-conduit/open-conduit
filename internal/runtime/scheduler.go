@@ -44,6 +44,16 @@ func (e *CapacityError) Error() string {
 func (e *CapacityError) Is(target error) bool { return target == ErrCapacity }
 
 var ErrResourceHeld = errors.New("previous attempt resource exclusion unresolved")
+
+// ResourceHeldError is ErrResourceHeld naming the finished attempt whose
+// unconfirmed stop holds the Work.
+type ResourceHeldError struct{ ExecutionID domain.ID }
+
+func (e *ResourceHeldError) Error() string {
+	return fmt.Sprintf("%s: held by %s", ErrResourceHeld, e.ExecutionID)
+}
+func (e *ResourceHeldError) Is(target error) bool { return target == ErrResourceHeld }
+
 var ErrExecutorCall = errors.New("executor operation failed")
 var ErrSecretUnavailable = errors.New("execution secrets unavailable")
 
@@ -489,6 +499,9 @@ func putAttemptState(tx storage.Tx, state AttemptState) error {
 	// Keep the index of attempts whose resource exclusion is unconfirmed,
 	// which held reads instead of every attempt ever made.
 	if state.Excluded {
+		if err := dropStopFollowupInTx(tx, key); err != nil {
+			return err
+		}
 		return tx.Delete(unexcludedNamespace, key)
 	}
 	return putJSON(tx, unexcludedNamespace, key, state.ExecutionID)
@@ -889,7 +902,7 @@ func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, executor stri
 			return nil
 		}
 		if x.WorkID == work.ID {
-			return ErrResourceHeld
+			return &ResourceHeldError{ExecutionID: x.ID}
 		}
 		w, e := tx.Work(x.WorkID)
 		if e != nil {
