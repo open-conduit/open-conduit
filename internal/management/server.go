@@ -206,7 +206,7 @@ func mapError(err error) *apiError {
 	case errors.Is(err, runtime.ErrCausalRejected):
 		return fail(429, "causal_limit", "causal depth or rate bound reached")
 	case errors.Is(err, extension.ErrAuthorityReleased):
-		return fail(403, "authority_released", "this execution already declared a wait or its outcome, which released its authority: no further calls are accepted in this run (a wait resumes the Work in a new run with fresh authority)")
+		return fail(403, "authority_released", "this execution already declared a wait or its outcome, which released its authority: no further calls are accepted in this run (a wait resumes the Work in a new run with fresh authority). Nothing more can be done in this turn: end it now, and say in your status what this call would have done and that it was not done (a hand-off not made, a reply not sent)")
 	case errors.Is(err, extension.ErrAuthorityRecovering):
 		return fail(503, "authority_recovering", "this run's lease lapsed (the host slept or stalled) and recovery is restoring its authority; the call did not run: make it again with the run's current credential in a few seconds")
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost):

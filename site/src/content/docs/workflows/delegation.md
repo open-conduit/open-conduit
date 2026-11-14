@@ -41,7 +41,7 @@ A front agent in a Slack thread answers simple questions itself. For the rest it
 
 ## What the agents do
 
-The asking agent calls `create_work` with a kind it was given and the task as its context, `{"kind": "agent.task.engineer", "context": {"schema": "agent.task.engineer.v1", "data": {"task": "…"}}}`, then `wait`s and ends its turn. The answering agent's first turn starts with the task. It answers with the `result` of its status (or of `core.turn.v1` data it declares) and ends its Work.
+The asking agent calls `create_work` with a kind it was given and the task as its context, `{"kind": "agent.task.engineer", "context": {"schema": "agent.task.engineer.v1", "data": {"task": "…"}}}`, then `wait`s and ends its turn. The order matters: `wait` is the last call of a turn, and every call after it is refused, so the toolbelt's guidance says to call `create_work` first. A `wait` only for `core.work.child.ended` with no child in progress is refused (`no_child_in_progress`) rather than parking the Work on an answer that can never come, and the agent can still ask and then wait. The answering agent's first turn starts with the task. It answers with the `result` of its status (or of `core.turn.v1` data it declares) and ends its Work.
 
 The asking agent is resumed with a `core.work.child.ended` Event: which Work ended, its kind, its state (`completed`, `failed` or `cancelled`), its summary and its `result`. A failed or cancelled agent has no result.
 

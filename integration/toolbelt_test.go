@@ -353,7 +353,7 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	got, err := h.belt.Guidance(ctx, h.token, "")
 	// The host's own guidance follows: the kinds of child Work the grant
 	// lets the execution ask for.
-	if err != nil || len(got) != 2 || got[0] != "Echo with fixture.echo." || !strings.Contains(got[1], "- `fixture.child`") || !strings.Contains(got[1], "`cancel_work`") {
+	if err != nil || len(got) != 2 || got[0] != "Echo with fixture.echo." || !strings.Contains(got[1], "- `fixture.child`") || !strings.Contains(got[1], "`cancel_work`") || !strings.Contains(got[1], "`wait` is the last call of a turn: after it, every other call is refused. To hand a task over, call `create_work` first, then `wait`.") {
 		t.Fatalf("guidance = %q, %v", got, err)
 	}
 	if _, err = h.belt.Guidance(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
@@ -592,6 +592,93 @@ func TestProductionToolbeltCancelsChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestProductionToolbeltRefusesAWaitNoChildCanEnd: a wait only for a
+// child's end, declared before the create_work it was for, could never end,
+// so the host refuses it without declaring it, and the caller keeps its
+// authority to ask for the child and then wait. A wait that names another
+// type too, or one declared after create_work or after a child has ended,
+// is accepted as before.
+func TestProductionToolbeltRefusesAWaitNoChildCanEnd(t *testing.T) {
+	ctx := context.Background()
+	childEnd := func(types ...string) extension.ToolCall {
+		return extension.ToolCall{Operation: extension.Wait, Wait: &extension.WaitRequest{Match: domain.EventMatch{Types: types}}}
+	}
+	refused := func(t *testing.T, err error) {
+		t.Helper()
+		var oe *extension.OperationError
+		if !errors.As(err, &oe) || oe.Code != runtime.CodeNoChildInProgress || !strings.Contains(oe.Message, "call create_work first, then wait") {
+			t.Fatalf("a wait no child can end was not refused: %v", err)
+		}
+	}
+	t.Run("before create_work", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		_, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded))
+		refused(t, err)
+		// Nothing was declared: the turn can still ask for the child, and
+		// then wait for it.
+		child := domain.Work{Kind: "fixture.child"}
+		asked, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CreateWork, Child: &child})
+		if err != nil {
+			t.Fatalf("create_work after the refused wait: %v", err)
+		}
+		out, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded))
+		if err != nil || out.Wait == nil {
+			t.Fatalf("wait after create_work: %v", err)
+		}
+		if err = h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+			t.Fatal(err)
+		}
+		routingRead(t, h.f, func(tx storage.Tx) error {
+			w, e := tx.Work("work/item")
+			if e != nil {
+				return e
+			}
+			c, e := tx.Work(asked.Work.ID)
+			if e != nil {
+				return e
+			}
+			if w.State != domain.WorkWaiting || c.ParentID != w.ID || c.State.Terminal() {
+				t.Fatalf("the parent did not park with its child in progress: parent %s, child %+v", w.State, c)
+			}
+			return nil
+		})
+	})
+	t.Run("keys leaving out the lineage key", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		child := domain.Work{Kind: "fixture.child"}
+		if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CreateWork, Child: &child}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.Wait, Wait: &extension.WaitRequest{Match: domain.EventMatch{Keys: []domain.CorrelationKey{toolbeltKey}, Types: []string{domain.TypeChildEnded}}}})
+		var oe *extension.OperationError
+		if !errors.As(err, &oe) || oe.Code != runtime.CodeNoChildInProgress || !strings.Contains(oe.Message, "core.work/work/item") {
+			t.Fatalf("a wait for a child's end off the lineage key was not refused: %v", err)
+		}
+	})
+	t.Run("another type too", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		if out, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded, "fixture.changed")); err != nil || out.Wait == nil {
+			t.Fatalf("a wait that a message can still end was refused: %v", err)
+		}
+	})
+	t.Run("after the child ended", func(t *testing.T) {
+		h := newToolbeltHarness(t, "persistent")
+		child := domain.Work{Kind: "fixture.child"}
+		asked, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CreateWork, Child: &child})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: asked.Work.ID}}); err != nil {
+			t.Fatal(err)
+		}
+		// No child is in progress, but its end has arrived for the wait
+		// to wake on.
+		if out, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded)); err != nil || out.Wait == nil {
+			t.Fatalf("a wait on a child's end that has arrived was refused: %v", err)
+		}
+	})
 }
 
 func TestProductionToolbeltDeclaredWaitRegistersAfterSegmentFinishes(t *testing.T) {
