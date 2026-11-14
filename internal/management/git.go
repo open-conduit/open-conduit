@@ -34,8 +34,12 @@ const (
 	// gitSessionLife bounds a session when the credential gives no expiry
 	// (and when it gives a later one). A session serves one git command.
 	gitSessionLife = time.Hour
-	// maxGitSessions bounds the sessions the host keeps at once.
-	maxGitSessions = 1024
+	// maxGitSessions bounds the sessions the host keeps at once, and
+	// maxExecutionGitSessions those of one execution: a git command and its
+	// submodules need a few, and a run that opens more evicts its own
+	// oldest rather than filling the host's table for its neighbours.
+	maxGitSessions          = 1024
+	maxExecutionGitSessions = 8
 	// gitUserAgent is the agent the host's requests carry: git's hosts
 	// serve their smart protocol to git.
 	gitUserAgent = "git/open-conduit"
@@ -110,7 +114,7 @@ type gitSession struct {
 	execution          domain.ID
 	repo               *url.URL
 	username, password string
-	expires            time.Time
+	opened, expires    time.Time
 }
 
 // NewGitTransport makes the git transport. rt reaches the repositories
@@ -220,7 +224,7 @@ func (g *GitTransport) openSession(c *call, belt GitCredentials) (int, any, erro
 // none) or gitSessionLife, whichever comes first.
 func (g *GitTransport) open(sess gitSession, expiresAt string) (string, time.Time, error) {
 	now := g.now()
-	sess.expires = now.Add(gitSessionLife)
+	sess.opened, sess.expires = now, now.Add(gitSessionLife)
 	// An expiry already past (a clock that differs from the host's) says
 	// nothing the repository won't: it refuses a token that has expired.
 	if t, err := time.Parse(time.RFC3339, expiresAt); err == nil && t.After(now) && t.Before(sess.expires) {
@@ -233,16 +237,57 @@ func (g *GitTransport) open(sess gitSession, expiresAt string) (string, time.Tim
 	id := "gs_" + hex.EncodeToString(b)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	oldest, held := "", 0
 	for k, v := range g.sessions {
 		if !now.Before(v.expires) {
 			delete(g.sessions, k)
+			continue
 		}
+		if v.execution == sess.execution {
+			held++
+			if oldest == "" || v.opened.Before(g.sessions[oldest].opened) {
+				oldest = k
+			}
+		}
+	}
+	if held >= maxExecutionGitSessions {
+		delete(g.sessions, oldest)
 	}
 	if len(g.sessions) >= maxGitSessions {
 		return "", time.Time{}, fail(503, "git_sessions_exhausted", "the host has too many git commands open; run the git command again shortly")
 	}
 	g.sessions[id] = &sess
 	return id, sess.expires, nil
+}
+
+// Reconcile drops the sessions of every execution live doesn't report
+// running, so an ended run's sessions don't wait out their expiry.
+func (g *GitTransport) Reconcile(live func([]domain.ID) (map[domain.ID]bool, error)) error {
+	g.mu.Lock()
+	seen := map[domain.ID]bool{}
+	var ids []domain.ID
+	for _, v := range g.sessions {
+		if !seen[v.execution] {
+			seen[v.execution] = true
+			ids = append(ids, v.execution)
+		}
+	}
+	g.mu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	running, err := live(ids)
+	if err != nil {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for k, v := range g.sessions {
+		if !running[v.execution] {
+			delete(g.sessions, k)
+		}
+	}
+	return nil
 }
 
 // session is the execution's open session id.
