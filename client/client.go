@@ -107,6 +107,10 @@ type Artifact struct {
 	MediaType   string `json:"media_type,omitempty"`
 	WorkID      string `json:"work_id,omitempty"`
 	ExecutionID string `json:"execution_id,omitempty"`
+	// Segment is the number (from 1) of the run's segment whose turn
+	// published the artifact, in a listing; 0 when the run no longer keeps
+	// that segment.
+	Segment int `json:"segment,omitempty"`
 }
 type Lease struct {
 	Owner     string `json:"owner,omitempty"`
@@ -1460,6 +1464,9 @@ type RunSegment struct {
 	// Launch is the segment's launch, phase by phase, in the order the
 	// phases began.
 	Launch []LaunchPhase `json:"launch,omitempty"`
+	// Artifacts are the ones the segment's turn published (its transcript,
+	// activity, ...); a run's own Artifacts are its last turn's.
+	Artifacts []Artifact `json:"artifacts,omitempty"`
 }
 
 // LaunchPhase is one step of a segment's launch: "toolbelt", "secrets",

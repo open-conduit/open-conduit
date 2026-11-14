@@ -271,7 +271,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 				} else if retention.Expired {
 					continue
 				}
-				for _, ref := range x.Artifacts {
+				for _, ref := range x.AllArtifacts() {
 					refs++
 					rc, err := files.Open(ctx, ref)
 					if err != nil {

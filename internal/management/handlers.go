@@ -544,18 +544,30 @@ func waitDue(tx storage.Tx, w domain.Wait) time.Time {
 
 // ---- artifacts (logs/outputs) ----
 
-func (s *Server) artifacts(c *call) ([]wireArtifact, []domain.Execution, error) {
+// artifacts lists every artifact of the executions keep accepts, each
+// attempt's earlier turns' first.
+func (s *Server) artifacts(c *call, keep func(domain.Execution) bool) ([]wireArtifact, []domain.Execution, error) {
 	var out []wireArtifact
 	var xs []domain.Execution
 	err := s.read(c.ctx, func(tx storage.Tx) error {
 		var e error
 		xs, e = tx.ListExecutions("")
+		if e != nil {
+			return e
+		}
 		for _, x := range xs {
-			for _, a := range x.Artifacts {
-				out = append(out, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, WorkID: string(x.WorkID), ExecutionID: string(x.ID)})
+			if len(x.AllArtifacts()) == 0 || !keep(x) {
+				continue
+			}
+			refs, e := runtime.ArtifactsInTx(tx, x)
+			if e != nil {
+				return e
+			}
+			for _, a := range refs {
+				out = append(out, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, WorkID: string(x.WorkID), ExecutionID: string(x.ID), Segment: a.Segment})
 			}
 		}
-		return e
+		return nil
 	})
 	return out, xs, err
 }
@@ -564,7 +576,10 @@ func (s *Server) listArtifacts(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	all, _, err := s.artifacts(c)
+	// Only the runs the filters keep have their attempt state read.
+	all, _, err := s.artifacts(c, func(x domain.Execution) bool {
+		return match(q, "work_id", string(x.WorkID)) && match(q, "execution_id", string(x.ID))
+	})
 	if err != nil {
 		return 0, nil, err
 	}
@@ -587,7 +602,14 @@ func (s *Server) artifactContent(c *call) (int, any, error) {
 	if s.o.Artifacts == nil {
 		return 0, nil, storage.ErrNotFound
 	}
-	all, _, err := s.artifacts(c)
+	all, _, err := s.artifacts(c, func(x domain.Execution) bool {
+		for _, a := range x.AllArtifacts() {
+			if a.ID == c.params[0] {
+				return true
+			}
+		}
+		return false
+	})
 	if err != nil {
 		return 0, nil, err
 	}

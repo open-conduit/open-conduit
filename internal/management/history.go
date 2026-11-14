@@ -68,6 +68,10 @@ type wireSegment struct {
 	// Launch is the segment's launch, phase by phase; a phase still
 	// running has no ended_at (and a duration_ms of 0).
 	Launch []wireLaunchPhase `json:"launch,omitempty"`
+	// Artifacts are the ones the segment's turn published (its transcript,
+	// its activity, ...), readable at /v1/artifacts/{id}/content for as long
+	// as the run's own.
+	Artifacts []wireArtifact `json:"artifacts,omitempty"`
 }
 
 type wireLaunchPhase struct {
@@ -158,6 +162,9 @@ func toRun(r runtime.Run) wireRun {
 		}
 		if c := g.Container; c != nil {
 			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}
+		}
+		for _, a := range g.Artifacts {
+			seg.Artifacts = append(seg.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType})
 		}
 		out.Segments = append(out.Segments, seg)
 	}

@@ -159,7 +159,12 @@ type LeaseRef struct {
 	Epoch       uint64
 }
 type Execution struct {
+	// Artifacts are the ones the attempt's outcome published: its latest
+	// turn's. EarlierArtifacts are those its earlier turns published, which
+	// a later turn's result replaced; they belong to the attempt as much as
+	// the latest do, and are kept, backed up and released with them.
 	Artifacts             []ArtifactRef
+	EarlierArtifacts      []ArtifactRef `json:",omitempty"`
 	StartedAt, FinishedAt *time.Time
 	ID, WorkID            ID
 	ExecutorBinding       string
@@ -175,6 +180,16 @@ type Execution struct {
 	TraceID              string
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
+}
+
+// AllArtifacts is every artifact the attempt published: its earlier turns',
+// oldest first, then its outcome's.
+func (x Execution) AllArtifacts() []ArtifactRef {
+	if len(x.EarlierArtifacts) == 0 {
+		return x.Artifacts
+	}
+	out := make([]ArtifactRef, 0, len(x.EarlierArtifacts)+len(x.Artifacts))
+	return append(append(out, x.EarlierArtifacts...), x.Artifacts...)
 }
 
 // ArtifactRef points to separately published immutable content; it is not a primitive.

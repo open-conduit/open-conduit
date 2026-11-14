@@ -247,7 +247,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					allExpired, countSettled = false, false
 					continue // Uncertain resource hold: never release private state.
 				}
-				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, Reason: reason, ExpiredAt: now}
+				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.AllArtifacts()...), Kept: kept, Reason: reason, ExpiredAt: now}
 				if e = putJSON(tx, retentionNamespace, retentionKey(x.ID), record); e != nil {
 					return e
 				}
