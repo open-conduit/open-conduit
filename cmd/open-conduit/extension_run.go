@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/open-conduit/open-conduit/extensions/aws"
 	bitbucketext "github.com/open-conduit/open-conduit/extensions/bitbucket/pkg"
 	claudecodeext "github.com/open-conduit/open-conduit/extensions/claudecode/pkg"
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
@@ -53,6 +54,7 @@ var runnable = map[string]struct {
 	Playbooks func() map[string]string
 	Bundled   bool
 }{
+	"aws":           {aws.Main, aws.Manifest, nil, true},
 	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
 	"claude-code":   {claudecodeext.Main, claudecodeext.Manifest, nil, true},
 	"cloudflared":   {tunnelext.Main(tunnel.Cloudflared), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Cloudflared) }, nil, true},

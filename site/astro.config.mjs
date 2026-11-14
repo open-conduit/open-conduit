@@ -127,6 +127,7 @@ export default defineConfig({
 								{ label: 'Claude Code executor', slug: 'architecture/claude-code-executor' },
 								{ label: 'Codex executor', slug: 'architecture/codex-executor' },
 								{ label: 'Engineering tools', slug: 'architecture/engineering-tools' },
+								{ label: 'AWS', slug: 'architecture/aws-extension' },
 								{ label: 'Slack', slug: 'architecture/slack-extension' },
 								{ label: 'Scheduled jobs', slug: 'architecture/schedule-extension' },
 								{ label: 'Introspection', slug: 'architecture/issue-reporting' },

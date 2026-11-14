@@ -175,6 +175,18 @@ Push from a git workspace: git signs in through Open Conduit with a short-lived 
 
 The extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.
 
+### AWS (`aws`)
+
+Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail.
+
+#### `aws.credentials`
+
+Short-lived AWS credentials for one of the roles this run may use, in credential_process format.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `role` | string | yes | the AWS role to use: a profile name from aws configure list-profiles, such as read |
+
 ### Bitbucket Cloud (`bitbucket`)
 
 Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket.
