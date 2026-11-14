@@ -496,6 +496,9 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 			notes = append(notes, "replies "+code)
 		}
 		notes = append(notes, fmt.Sprintf("%d channels, start %s, receiver %s", len(set.Channels), set.Start, set.Receiver))
+		if set.DirectMessages {
+			notes = append(notes, "direct messages on")
+		}
 		switch set.Receiver {
 		case ReceiverHTTP:
 			notes = append(notes, "POST /"+s.name+" (set it as the app's Events API Request URL)")

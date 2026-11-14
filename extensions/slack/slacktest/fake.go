@@ -359,13 +359,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer = apiAnswer{"ok": true, "team_id": s.Team, "team": "Fake", "user_id": s.botUser, "bot_id": s.botID}
 		scopes := s.scopes
 		if scopes == nil {
-			scopes = slack.BotScopes
+			scopes = append(append([]string{}, slack.BotScopes...), slack.DirectScopes...)
 		}
 		w.Header().Set("X-OAuth-Scopes", strings.Join(scopes, ","))
 	case "users.conversations":
+		_ = r.ParseForm()
+		ims := r.Form.Get("types") == "im"
 		ids := make([]string, 0, len(s.members))
 		for id := range s.members {
-			ids = append(ids, id)
+			if slack.IsDirect(id) == ims {
+				ids = append(ids, id)
+			}
 		}
 		sort.Strings(ids)
 		list := []map[string]any{}
@@ -518,8 +522,15 @@ func (s *Server) MessageEvent(channel, ts string) []byte {
 	e := map[string]any{}
 	raw, _ := json.Marshal(*m)
 	_ = json.Unmarshal(raw, &e)
-	e["type"], e["channel"], e["channel_type"] = "message", channel, "channel"
+	e["type"], e["channel"], e["channel_type"] = "message", channel, channelType(channel)
 	return s.callback(e)
+}
+
+func channelType(channel string) string {
+	if slack.IsDirect(channel) {
+		return "im"
+	}
+	return "channel"
 }
 
 // ChangedEvent is the message_changed callback for a message's current state.

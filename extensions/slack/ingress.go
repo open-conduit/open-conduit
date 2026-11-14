@@ -44,6 +44,7 @@ type Ingress struct {
 	mu       sync.Mutex
 	threads  map[string]*threadMemo // by thread key, across generations
 	page     *pageMemo
+	directs  *directMemo
 	answered map[string]int
 	memoID   string
 	lastID   string
@@ -55,6 +56,12 @@ type threadMemo struct {
 	readAt time.Time
 	seen   string // generation that last used it
 	obs    []extension.Observation
+}
+
+// directMemo is a generation's listing of the app's direct messages.
+type directMemo struct {
+	scanID   string
+	channels []string
 }
 
 type pageMemo struct {
@@ -135,7 +142,7 @@ func (g *Ingress) Push(_ context.Context, src extension.Source, d extension.Deli
 		return out, extension.ErrInvalid
 	}
 	e := cb.Event
-	if cb.TeamID != g.s.Team || e.Type != "message" || !g.s.Watches(e.Channel) {
+	if cb.TeamID != g.s.Team || e.Type != "message" || !g.s.Observes(e.Channel) {
 		return out, nil
 	}
 	received := d.ReceivedAt.UTC()
@@ -191,39 +198,54 @@ const (
 	phaseActive  = "a"
 )
 
-// cursor is "<channel index>:h:<offset>:<slack cursor>" for a history page
+// cursor is "<channel>:h:<offset>:<slack cursor>" for a history page
 // (re-read deterministically from its Slack cursor, resumed at offset) or
-// "<channel index>:a:<after ts>" for owned threads older than the window.
+// "<channel>:a:<after ts>" for owned threads older than the window.
+// <channel> is a watched channel's index, or a direct message's own ID: the
+// app's direct messages are listed afresh, so a cursor names one by ID and
+// a DM opened since cannot shift it.
 type cursor struct {
 	channel int
+	direct  string
 	phase   string
 	offset  int
 	slack   string
 	after   string
 }
 
-func (c cursor) String() string {
-	if c.phase == phaseActive {
-		return strconv.Itoa(c.channel) + ":a:" + c.after
+func (c cursor) at() string {
+	if c.direct != "" {
+		return c.direct
 	}
-	return strconv.Itoa(c.channel) + ":h:" + strconv.Itoa(c.offset) + ":" + c.slack
+	return strconv.Itoa(c.channel)
 }
 
-func parseCursor(s string, channels int) (cursor, bool) {
+func (c cursor) String() string {
+	if c.phase == phaseActive {
+		return c.at() + ":a:" + c.after
+	}
+	return c.at() + ":h:" + strconv.Itoa(c.offset) + ":" + c.slack
+}
+
+func parseCursor(s string, channels int, directs bool) (cursor, bool) {
 	parts := strings.SplitN(s, ":", 4)
 	if len(parts) < 3 || len(s) > 4096 {
 		return cursor{}, false
 	}
-	ci, err := strconv.Atoi(parts[0])
-	if err != nil || ci < 0 || ci >= channels {
+	ci, direct := 0, ""
+	if IsDirect(parts[0]) && directs {
+		direct = parts[0]
+	} else if n, err := strconv.Atoi(parts[0]); err != nil || n < 0 || n >= channels {
 		return cursor{}, false
+	} else {
+		ci = n
 	}
 	switch parts[1] {
 	case phaseActive:
 		if len(parts) != 3 || (parts[2] != "" && !tsPattern.MatchString(parts[2])) {
 			return cursor{}, false
 		}
-		return cursor{channel: ci, phase: phaseActive, after: parts[2]}, true
+		return cursor{channel: ci, direct: direct, phase: phaseActive, after: parts[2]}, true
 	case phaseHistory:
 		if len(parts) != 4 {
 			return cursor{}, false
@@ -232,7 +254,7 @@ func parseCursor(s string, channels int) (cursor, bool) {
 		if err != nil || off < 0 || off > 1000 {
 			return cursor{}, false
 		}
-		return cursor{channel: ci, phase: phaseHistory, offset: off, slack: parts[3]}, true
+		return cursor{channel: ci, direct: direct, phase: phaseHistory, offset: off, slack: parts[3]}, true
 	}
 	return cursor{}, false
 }
@@ -282,7 +304,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	}
 	c := cursor{phase: phaseHistory}
 	if scan.Cursor != "" {
-		if c, ok = parseCursor(scan.Cursor, len(g.s.Channels)); !ok {
+		if c, ok = parseCursor(scan.Cursor, len(g.s.Channels), g.s.DirectMessages); !ok {
 			return extension.Snapshot{ScanID: scanID}, nil
 		}
 	}
@@ -308,9 +330,22 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	b := &budget{started: time.Now(), limit: g.o.PageBudget, max: g.o.BatchUnits}
 	var snap extension.Snapshot
 	var err error
-	if c.phase == phaseActive {
+	if len(g.s.Channels) == 0 && c.direct == "" {
+		// An entry of direct messages only starts at the first of them.
+		var done bool
+		if c, done, err = g.nextDirect(ctx, scanID, "", b); err != nil {
+			return extension.Snapshot{}, err
+		}
+		if done {
+			c.phase = ""
+		}
+	}
+	switch {
+	case c.phase == "":
+		snap.Complete = true
+	case c.phase == phaseActive:
 		snap, err = g.activePage(ctx, scanID, start, c, b)
-	} else {
+	default:
 		snap, err = g.historyPage(ctx, scanID, start, c, b)
 	}
 	if err != nil {
@@ -337,21 +372,69 @@ func (g *Ingress) window(start time.Time) (oldest, latest time.Time) {
 	return start.Add(-g.s.History), start
 }
 
-// next advances past a finished phase of channel ci.
-func (g *Ingress) next(ci int, phase string) (string, bool) {
-	if phase == phaseHistory {
-		return cursor{channel: ci, phase: phaseActive}.String(), false
+// channelOf is the channel a cursor reads.
+func (g *Ingress) channelOf(c cursor) string {
+	if c.direct != "" {
+		return c.direct
 	}
-	if ci+1 < len(g.s.Channels) {
-		return cursor{channel: ci + 1, phase: phaseHistory}.String(), false
+	return g.s.Channels[c.channel]
+}
+
+// next advances past a finished phase of c's channel: its owned threads
+// after its history, then the next watched channel, then the app's direct
+// messages in ID order.
+func (g *Ingress) next(ctx context.Context, scanID string, c cursor, b *budget) (string, bool, error) {
+	if c.phase == phaseHistory {
+		return cursor{channel: c.channel, direct: c.direct, phase: phaseActive}.String(), false, nil
 	}
-	return "", true
+	if c.direct == "" && c.channel+1 < len(g.s.Channels) {
+		return cursor{channel: c.channel + 1, phase: phaseHistory}.String(), false, nil
+	}
+	n, done, err := g.nextDirect(ctx, scanID, c.direct, b)
+	if err != nil || done {
+		return "", done, err
+	}
+	return n.String(), false, nil
+}
+
+// nextDirect is the history cursor of the first direct message after
+// after (the first of all when empty), or done when there is none. The
+// listing is read once per generation.
+func (g *Ingress) nextDirect(ctx context.Context, scanID, after string, b *budget) (cursor, bool, error) {
+	if !g.s.DirectMessages {
+		return cursor{}, true, nil
+	}
+	g.mu.Lock()
+	memo := g.directs
+	g.mu.Unlock()
+	var list []string
+	if memo != nil && memo.scanID == scanID {
+		list = memo.channels
+	} else {
+		var calls int
+		var err error
+		list, calls, err = g.c.DirectMessages(ctx)
+		b.units += calls
+		if err != nil {
+			return cursor{}, false, err
+		}
+		sort.Strings(list)
+		g.mu.Lock()
+		g.directs = &directMemo{scanID: scanID, channels: list}
+		g.mu.Unlock()
+	}
+	for _, ch := range list {
+		if IsDirect(ch) && ch > after {
+			return cursor{direct: ch, phase: phaseHistory}, false, nil
+		}
+	}
+	return cursor{}, true, nil
 }
 
 func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Time, c cursor, b *budget) (extension.Snapshot, error) {
-	channel := g.s.Channels[c.channel]
+	channel := g.channelOf(c)
 	oldest, latest := g.window(start)
-	key := scanID + "|" + strconv.Itoa(c.channel) + "|" + c.slack
+	key := scanID + "|" + c.at() + "|" + c.slack
 	g.mu.Lock()
 	memo := g.page
 	g.mu.Unlock()
@@ -400,17 +483,20 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 	snap := extension.Snapshot{Observations: out}
 	switch {
 	case i < len(messages):
-		snap.NextCursor = cursor{channel: c.channel, phase: phaseHistory, offset: i, slack: c.slack}.String()
+		snap.NextCursor = cursor{channel: c.channel, direct: c.direct, phase: phaseHistory, offset: i, slack: c.slack}.String()
 	case next != "":
-		snap.NextCursor = cursor{channel: c.channel, phase: phaseHistory, slack: next}.String()
+		snap.NextCursor = cursor{channel: c.channel, direct: c.direct, phase: phaseHistory, slack: next}.String()
 	default:
-		snap.NextCursor, snap.Complete = g.next(c.channel, phaseHistory)
+		var err error
+		if snap.NextCursor, snap.Complete, err = g.next(ctx, scanID, c, b); err != nil {
+			return extension.Snapshot{}, err
+		}
 	}
 	return snap, nil
 }
 
 func (g *Ingress) activePage(ctx context.Context, scanID string, start time.Time, c cursor, b *budget) (extension.Snapshot, error) {
-	channel := g.s.Channels[c.channel]
+	channel := g.channelOf(c)
 	oldest, latest := g.window(start)
 	var threads []string
 	if g.o.ActiveThreads != nil {
@@ -447,9 +533,12 @@ func (g *Ingress) activePage(ctx context.Context, scanID string, start time.Time
 	}
 	snap := extension.Snapshot{Observations: out}
 	if done < len(threads) {
-		snap.NextCursor = cursor{channel: c.channel, phase: phaseActive, after: threads[done-1]}.String()
+		snap.NextCursor = cursor{channel: c.channel, direct: c.direct, phase: phaseActive, after: threads[done-1]}.String()
 	} else {
-		snap.NextCursor, snap.Complete = g.next(c.channel, phaseActive)
+		var err error
+		if snap.NextCursor, snap.Complete, err = g.next(ctx, scanID, c, b); err != nil {
+			return extension.Snapshot{}, err
+		}
 	}
 	return snap, nil
 }

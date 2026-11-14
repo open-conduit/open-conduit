@@ -141,6 +141,21 @@ type ExtensionConfig struct {
 	// (slack.post) and the channels each may post in. A channel must be one
 	// the entry watches, so replies in the new thread are observed.
 	Post []PostGrant `json:"post,omitempty"`
+	// DirectMessages, when set, makes a direct message with the app a
+	// place where Work starts: every person's top-level message there
+	// starts a conversation, whatever start says, if the limit admits its
+	// sender.
+	DirectMessages *DirectMessages `json:"direct_messages,omitempty"`
+}
+
+// DirectMessages is who may start Work by direct message. Exactly one of
+// Users and Anyone is set, so turning DMs on always says who they admit.
+type DirectMessages struct {
+	// Users lists the Slack user IDs (U… or W…) whose direct messages
+	// start Work.
+	Users []string `json:"users,omitempty"`
+	// Anyone admits every person who can message the app.
+	Anyone bool `json:"anyone,omitempty"`
 }
 
 // PostGrant lets Work running on Binding post to Channels (slack.post).
@@ -176,6 +191,34 @@ type Settings struct {
 	// FollowUp maps each binding whose posts' replies open a successor
 	// once its Work has finished to the grants that successor gets.
 	FollowUp map[string][]string
+	// DirectMessages turns on direct messages with the app. DMUsers (sorted)
+	// is who may start Work by one; DMAnyone admits everyone instead.
+	DirectMessages bool
+	DMUsers        []string
+	DMAnyone       bool
+}
+
+// IsDirect reports whether channel is a direct message conversation (D…).
+func IsDirect(channel string) bool {
+	return strings.HasPrefix(channel, "D") && slackIDPattern.MatchString(channel)
+}
+
+// Observes reports whether messages in channel are observed: a watched
+// channel, or a direct message with the app when the entry turns them on.
+func (s Settings) Observes(channel string) bool {
+	return s.Watches(channel) || s.DirectMessages && IsDirect(channel)
+}
+
+// AdmitsDirect reports whether user may start Work by direct message.
+func (s Settings) AdmitsDirect(user string) bool {
+	if !s.DirectMessages || user == "" {
+		return false
+	}
+	if s.DMAnyone {
+		return true
+	}
+	i := sort.SearchStrings(s.DMUsers, user)
+	return i < len(s.DMUsers) && s.DMUsers[i] == user
 }
 
 // FollowsUp reports whether a reply to binding's post in channel, once
@@ -233,12 +276,28 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	if !slackIDPattern.MatchString(c.Team) {
 		return s, errors.New("slack extension: team must be a Slack team ID (T…)")
 	}
-	if len(c.Channels) == 0 || len(c.Channels) > 100 {
-		return s, errors.New("slack extension: channels must list 1-100 channel IDs")
+	if dm := c.DirectMessages; dm != nil {
+		if dm.Anyone == (len(dm.Users) > 0) {
+			return s, errors.New("slack extension: direct_messages must list users or set anyone, not both")
+		}
+		if len(dm.Users) > 1000 {
+			return s, errors.New("slack extension: direct_messages users must list at most 1000 user IDs")
+		}
+		users := slices.Clone(dm.Users)
+		sort.Strings(users)
+		for i, u := range users {
+			if !slackIDPattern.MatchString(u) || !strings.HasPrefix(u, "U") && !strings.HasPrefix(u, "W") || i > 0 && users[i-1] == u {
+				return s, errors.New("slack extension: direct_messages users must be distinct Slack user IDs (U… or W…)")
+			}
+		}
+		s.DirectMessages, s.DMUsers, s.DMAnyone = true, users, dm.Anyone
+	}
+	if len(c.Channels) > 100 || len(c.Channels) == 0 && !s.DirectMessages {
+		return s, errors.New("slack extension: channels must list 1-100 channel IDs (or none, with direct_messages)")
 	}
 	seen := map[string]bool{}
 	for _, ch := range c.Channels {
-		if !slackIDPattern.MatchString(ch) || seen[ch] {
+		if !slackIDPattern.MatchString(ch) || IsDirect(ch) || seen[ch] {
 			return s, errors.New("slack extension: channels must be distinct Slack channel IDs (C… or G…)")
 		}
 		seen[ch] = true
@@ -360,11 +419,13 @@ func ValidateExtension(data json.RawMessage, secretNames []string) error {
 }
 
 // RouteConfig is the opaque config of a `slack` route. Channels narrows the
-// threads the route claims to those in the listed channels (every channel
-// the entry watches when empty), so one entry can serve several routes, each
-// with its own binding and playbook; first match wins as usual.
+// threads the route claims to those in the listed channels, and
+// DirectMessages to direct messages with the app; with neither, the route
+// claims every thread the entry observes. One entry can so serve several
+// routes, each with its own binding and playbook; first match wins as usual.
 type RouteConfig struct {
-	Channels []string `json:"channels,omitempty"`
+	Channels       []string `json:"channels,omitempty"`
+	DirectMessages bool     `json:"direct_messages,omitempty"`
 }
 
 // ParseRoute decodes and validates a route config.
@@ -378,7 +439,7 @@ func ParseRoute(data []byte) (RouteConfig, error) {
 	}
 	seen := map[string]bool{}
 	for _, ch := range r.Channels {
-		if !slackIDPattern.MatchString(ch) || seen[ch] {
+		if !slackIDPattern.MatchString(ch) || IsDirect(ch) || seen[ch] {
 			return r, errors.New("slack route: channels must be distinct Slack channel IDs (C… or G…)")
 		}
 		seen[ch] = true
@@ -394,5 +455,11 @@ func ValidateRoute(data json.RawMessage) error {
 
 // Selects reports whether the route claims a thread in channel.
 func (r RouteConfig) Selects(channel string) bool {
-	return len(r.Channels) == 0 || slices.Contains(r.Channels, channel)
+	if len(r.Channels) == 0 && !r.DirectMessages {
+		return true
+	}
+	if IsDirect(channel) {
+		return r.DirectMessages
+	}
+	return slices.Contains(r.Channels, channel)
 }
