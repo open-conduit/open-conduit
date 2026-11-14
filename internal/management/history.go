@@ -72,6 +72,12 @@ type wireSegment struct {
 	// its activity, ...), readable at /v1/artifacts/{id}/content for as long
 	// as the run's own.
 	Artifacts []wireArtifact `json:"artifacts,omitempty"`
+	// ArtifactsPending says the segment has ended but its artifacts may
+	// still come: the run ended while the turn ran (an interrupt, a
+	// cancel, a deadline) and the turn's process is not yet confirmed
+	// stopped. An ended segment without it has all the artifacts it
+	// will ever have.
+	ArtifactsPending bool `json:"artifacts_pending,omitempty"`
 }
 
 type wireLaunchPhase struct {
@@ -153,7 +159,7 @@ func toRun(r runtime.Run) wireRun {
 		out.DurationMS = x.FinishedAt.Sub(*x.StartedAt).Milliseconds()
 	}
 	for _, g := range r.Segments {
-		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered, Relaunched: g.Relaunched}
+		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered, Relaunched: g.Relaunched, ArtifactsPending: g.ArtifactsPending}
 		for _, p := range g.Launch {
 			seg.Launch = append(seg.Launch, wireLaunchPhase{Name: p.Name, StartedAt: ts(p.StartedAt), EndedAt: tsPtr(p.EndedAt), DurationMS: p.Duration(p.StartedAt).Milliseconds(), Outcome: p.Outcome})
 		}

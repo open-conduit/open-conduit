@@ -797,6 +797,23 @@ func (t *transaction) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error
 	_, f := storage.SelectWorks(sortedValues(t.data.Works), q)
 	return f, nil
 }
+func (t *transaction) PublishFinishedArtifacts(id domain.ID, refs []domain.ArtifactRef) error {
+	x, ok := t.data.Executions[id]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	if !x.State.Terminal() {
+		return storage.ErrInvalid
+	}
+	x, changed, err := storage.PublishedArtifacts(copyOf(x), refs)
+	if err != nil || !changed {
+		return err
+	}
+	x.Revision++
+	x.UpdatedAt = t.now
+	t.data.Executions[id] = x
+	return nil
+}
 func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error {
 	x, ok := t.data.Executions[id]
 	if !ok {

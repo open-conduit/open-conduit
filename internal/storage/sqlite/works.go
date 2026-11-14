@@ -230,6 +230,23 @@ func (t *transaction) strings(query string, args ...any) ([]string, error) {
 	return out, rows.Err()
 }
 
+func (t *transaction) PublishFinishedArtifacts(id domain.ID, refs []domain.ArtifactRef) error {
+	x, err := t.Execution(id)
+	if err != nil {
+		return err
+	}
+	if !x.State.Terminal() {
+		return storage.ErrInvalid
+	}
+	x, changed, err := storage.PublishedArtifacts(x, refs)
+	if err != nil || !changed {
+		return err
+	}
+	x.Revision++
+	x.UpdatedAt = t.now
+	return t.writeExecution(x, true)
+}
+
 func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error {
 	x, err := t.Execution(id)
 	if err != nil {

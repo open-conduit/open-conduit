@@ -90,6 +90,12 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		run.WaitID, run.WakeEventID = state.WaitID, state.WakeEventID
 		run.InterruptEventID, run.Interrupt = state.InterruptEventID, envelope(tx, state.InterruptEventID)
 		run.Segments, run.ActiveTime = segments(state.Segments, x)
+		if n := len(run.Segments); n > 0 && x.State.Terminal() && !state.Excluded && !state.StoppedTurnRecorded {
+			// The run ended while its last turn ran, and that turn's
+			// process has not been seen to stop: what it wrote up to the
+			// stop may still be recorded (RecordStopped).
+			run.Segments[n-1].ArtifactsPending = true
+		}
 		run.DroppedSegments, run.ActiveTime = state.DroppedSegments, run.ActiveTime+state.DroppedActive
 		run.Attaches = state.Attaches
 		if state.CurrentTriggerID != "" && state.CurrentTriggerID != x.TriggerID {

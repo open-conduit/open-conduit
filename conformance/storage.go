@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -100,7 +101,103 @@ func StorageCases() []StorageCase {
 		{"event_scope_recorded_once_and_indexed", scopeEvents},
 		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
+		{"finished_attempt_takes_its_stopped_turns_artifacts", finishedArtifacts},
 	}
+}
+
+// finishedArtifacts: an attempt fenced while its turn ran takes the
+// artifacts that turn wrote once its process stopped
+// (PublishFinishedArtifacts), even after its Work is cancelled. They become
+// its latest, those it held move to its earlier ones, and nothing else of
+// the record changes. A running attempt, no refs, a duplicate ref and an
+// unknown attempt are refused; the same refs again change nothing.
+func finishedArtifacts(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if _, err := claim(s, c); err != nil {
+		return err
+	}
+	first := []domain.ArtifactRef{{ID: "transcript-1", Size: 10, MediaType: "application/x-ndjson"}}
+	second := []domain.ArtifactRef{{ID: "transcript-2", Size: 20, MediaType: "application/x-ndjson"}, {ID: "activity-2", Size: 5, MediaType: "text/plain"}}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := wantError(tx.PublishFinishedArtifacts("execution", first), storage.ErrInvalid); err != nil {
+			return fmt.Errorf("finished artifacts: a running attempt: %w", err)
+		}
+		x, err := tx.Execution("execution")
+		if err != nil {
+			return err
+		}
+		x.State = domain.ExecutionCancelled
+		return tx.PutExecution(x, x.Revision)
+	}); err != nil {
+		return err
+	}
+	var fenced domain.Execution
+	c.Advance(time.Second)
+	if err := transact(s, c, func(tx storage.Tx) error {
+		var err error
+		if fenced, err = tx.Execution("execution"); err != nil {
+			return err
+		}
+		for _, q := range []struct {
+			id    domain.ID
+			refs  []domain.ArtifactRef
+			want  error
+			label string
+		}{
+			{"execution", nil, storage.ErrInvalid, "no refs"},
+			{"execution", []domain.ArtifactRef{first[0], first[0]}, storage.ErrInvalid, "a duplicate ref"},
+			{"execution", []domain.ArtifactRef{{Size: 1}}, storage.ErrInvalid, "a ref without an ID"},
+			{"missing", first, storage.ErrNotFound, "an unknown attempt"},
+		} {
+			if err := wantError(tx.PublishFinishedArtifacts(q.id, q.refs), q.want); err != nil {
+				return fmt.Errorf("finished artifacts: %s: %w", q.label, err)
+			}
+		}
+		return tx.PublishFinishedArtifacts("execution", first)
+	}); err != nil {
+		return err
+	}
+	check := func(label string, revision domain.Revision, latest, earlier []domain.ArtifactRef) error {
+		return transact(s, c, func(tx storage.Tx) error {
+			x, err := tx.Execution("execution")
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(x.Artifacts, latest) || !slices.Equal(x.EarlierArtifacts, earlier) {
+				return fmt.Errorf("finished artifacts: %s: artifacts %+v, earlier %+v; want %+v, %+v", label, x.Artifacts, x.EarlierArtifacts, latest, earlier)
+			}
+			if x.Revision != revision || x.State != fenced.State || x.Outcome != nil || x.Lease != fenced.Lease || x.FinishedAt == nil || !x.FinishedAt.Equal(*fenced.FinishedAt) {
+				return fmt.Errorf("finished artifacts: %s changed the record: %+v, was %+v", label, x, fenced)
+			}
+			return nil
+		})
+	}
+	if err := check("the stopped turn's transcript", fenced.Revision+1, first, nil); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error { return tx.PublishFinishedArtifacts("execution", first) }); err != nil {
+		return err
+	}
+	if err := check("the same refs again", fenced.Revision+1, first, nil); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		w, err := tx.Work("work")
+		if err != nil {
+			return err
+		}
+		w.State = domain.WorkCancelled
+		if err = tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		return tx.PublishFinishedArtifacts("execution", second)
+	}); err != nil {
+		return fmt.Errorf("finished artifacts: after the Work's cancel: %w", err)
+	}
+	return check("a later turn's after the Work's cancel", fenced.Revision+2, second, first)
 }
 
 // eventActor checks that an Event's Actor, part of its immutable envelope,
