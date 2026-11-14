@@ -105,9 +105,12 @@ type ToolCall struct {
 	// Capability says the call is made for a capability's client (git's
 	// credential helper asks with CapabilityGitCredential), not by the
 	// agent. An operation that serves a capability (Operation.Serves) is
-	// served only to a call made for that capability, so its result, a
-	// secret such as a git token, never reaches an agent's transcript; a
+	// served only to a call made for that capability, so the agent's own
+	// toolbelt calls (the MCP call tool, os call) don't get its result; a
 	// call naming a capability its operation doesn't serve is refused too.
+	// The client declares Capability itself, and runs in the agent's
+	// sandbox with the agent's token, so this is not an authority
+	// boundary: whatever runs there can make the client's call.
 	Capability string
 }
 
@@ -196,7 +199,7 @@ type Operation struct {
 	// (Serving) and calls each in turn until one answers, so the host routes
 	// a capability without knowing which extension's domain it belongs to.
 	// Such an operation is served only to a call made for the capability
-	// (ToolCall.Capability), never to an agent's own call, and the toolbelt
+	// (ToolCall.Capability), not to an agent's own toolbelt call, and the toolbelt
 	// neither describes it to agents nor keeps its result for replay: what
 	// it answers is for the client, and is often a secret.
 	Serves string

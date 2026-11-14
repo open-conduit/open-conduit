@@ -947,11 +947,13 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if !contains(a.Operations, c.Operation) {
 		return out, unauthorized(RefusalNotGranted)
 	}
-	// An operation that serves a capability answers only its client (git's
-	// credential helper for git.credential), never the agent's own call:
-	// its result is for the client and is often a secret, which must not
-	// reach the agent's transcript. With or without a gate, the agent is
-	// told what to do instead.
+	// An operation that serves a capability answers only a call made for
+	// it (git's credential helper's, for git.credential), not the agent's
+	// own toolbelt call: its result is for the client and is often a
+	// secret, so it is kept out of the agent's tool results. With or
+	// without a gate, the agent is told what to do instead. The client
+	// declares the capability itself, so this keeps an agent from being
+	// handed the secret by its tools; it is not an authority boundary.
 	t.mu.RLock()
 	serves := t.operations[c.Operation].Serves
 	t.mu.RUnlock()
