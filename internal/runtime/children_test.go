@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/conformance"
@@ -46,6 +47,12 @@ func askChild(t *testing.T, f conformance.RuntimeFixture, name string) (domain.I
 
 func askChildResuming(t *testing.T, f conformance.RuntimeFixture, name string, resume bool) (domain.ID, domain.ID) {
 	t.Helper()
+	return askChildFor(t, f, name, resume, domain.TypeChildEnded)
+}
+
+// askChildFor is askChild with the parent's wait naming types.
+func askChildFor(t *testing.T, f conformance.RuntimeFixture, name string, resume bool, types ...string) (domain.ID, domain.ID) {
+	t.Helper()
 	ctx := context.Background()
 	parent, ref, _ := waitForWork(t, f, name, false)
 	driver := f.Driver.(*waitDriver)
@@ -82,7 +89,7 @@ func askChildResuming(t *testing.T, f conformance.RuntimeFixture, name string, r
 		return e
 	})
 	requireRoute(t, f.Driver, created.Event.ID)
-	wait := domain.Wait{ID: domain.ID("wait/" + name), AfterSequence: after, Match: domain.EventMatch{Keys: []domain.CorrelationKey{domain.LineageKey(parent)}, Types: []string{domain.TypeChildEnded}}}
+	wait := domain.Wait{ID: domain.ID("wait/" + name), AfterSequence: after, Match: domain.EventMatch{Keys: []domain.CorrelationKey{domain.LineageKey(parent)}, Types: types}}
 	if err = f.Driver.Wait(ref, wait, resume); err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +146,110 @@ func TestChildResultWakesItsParent(t *testing.T) {
 		}
 		if w.State != domain.WorkReady || wait.State != domain.WaitWoken || wait.WakeEventID != ended.Event.ID {
 			t.Fatalf("the parent was not woken by its child's end: work %s, wait %+v", w.State, wait)
+		}
+		return nil
+	})
+}
+
+// Child Work that hands back with a result and stays open (a pull request
+// it still answers for) reports it: the parent, waiting on its child's
+// news, is woken with the result while the child stays open; the child's
+// later end is told as before. A hand-back without a result reports
+// nothing (negative control).
+func TestChildReportWakesItsParentAndLeavesTheChildOpen(t *testing.T) {
+	f := waitFixture(t, "reopen", childOptions())
+	ctx := context.Background()
+	parent, child := askChildFor(t, f, "reporter", false, domain.TypeChildEnded, domain.TypeChildReported)
+	driver := f.Driver.(*waitDriver)
+	cref, err := f.Driver.Start(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	silent := domain.Payload{Schema: domain.TurnSchema, Data: []byte(`{"status":"building"}`)}
+	if err = driver.Scheduler.Complete(ctx, cref, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "pushed", Data: silent}}); err != nil {
+		t.Fatal(err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		if _, e := tx.EventByDelivery(domain.LineageSource, "child-reported/"+string(cref.ExecutionID)+"/1"); e == nil {
+			t.Fatal("a hand-back without a result reported to the parent")
+		}
+		wait, e := tx.Wait("wait/reporter")
+		if e == nil && wait.State == domain.WaitWoken {
+			t.Fatal("a hand-back without a result woke the parent")
+		}
+		return e
+	})
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, driver.Router, driver.Scheduler, runtime.CausalLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nudge := func(id string) {
+		t.Helper()
+		e, _, er := control.SubmitEvent(ctx, runtime.ManualEvent{ScopeID: "routing-scope", WorkID: child, Type: "operator.reply", DeliveryID: id})
+		if er != nil {
+			t.Fatal(er)
+		}
+		requireRoute(t, f.Driver, e.Event.ID)
+		if cref, er = f.Driver.Start(child); er != nil {
+			t.Fatalf("the handed-back child did not start again: %v", er)
+		}
+	}
+	nudge("checks-passed")
+	turn := domain.Payload{Schema: domain.TurnSchema, Data: []byte(`{"status":"review","result":"PR opened"}`)}
+	if err = driver.Scheduler.Complete(ctx, cref, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "awaiting review", Data: turn}}); err != nil {
+		t.Fatal(err)
+	}
+	var reported domain.AcceptedEvent
+	routingRead(t, f, func(tx storage.Tx) error {
+		var e error
+		if reported, e = tx.EventByDelivery(domain.LineageSource, fmt.Sprintf("child-reported/%s/%d", cref.ExecutionID, cref.Epoch)); e != nil {
+			return e
+		}
+		var c domain.ChildReported
+		if e = json.Unmarshal(reported.Event.Data.Data, &c); e != nil {
+			return e
+		}
+		if reported.Event.Type != domain.TypeChildReported || reported.Event.WorkID != parent || reported.Event.CorrelationKey == nil || *reported.Event.CorrelationKey != domain.LineageKey(parent) || reported.Event.CausationID == "" {
+			t.Fatalf("the child's report is not addressed to its parent: %+v", reported.Event)
+		}
+		if c.Work != string(child) || c.Kind != "fixture.child" || c.State.Terminal() || c.Status != "review" || c.Summary != "awaiting review" || string(c.Result) != `"PR opened"` {
+			t.Fatalf("the child's report = %+v", c)
+		}
+		w, e := tx.Work(child)
+		if e != nil {
+			return e
+		}
+		if w.State.Terminal() {
+			t.Fatalf("the reporting child ended: %s", w.State)
+		}
+		if _, e = tx.EventByDelivery(domain.LineageSource, "child-ended/"+string(child)); e == nil {
+			t.Fatal("the parent heard an open child end")
+		}
+		return nil
+	})
+	requireRoute(t, f.Driver, reported.Event.ID)
+	routingRead(t, f, func(tx storage.Tx) error {
+		wait, e := tx.Wait("wait/reporter")
+		if e != nil {
+			return e
+		}
+		if wait.State != domain.WaitWoken || wait.WakeEventID != reported.Event.ID {
+			t.Fatalf("the parent was not woken by its child's report: %+v", wait)
+		}
+		return nil
+	})
+	nudge("merged")
+	done := domain.Payload{Schema: domain.TurnSchema, Data: []byte(`{"status":"finished","result":"merged"}`)}
+	if err = driver.Scheduler.Complete(ctx, cref, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "merged", Data: done}}); err != nil {
+		t.Fatal(err)
+	}
+	_, c := childEnded(t, f, child)
+	if c.State != domain.WorkCompleted || string(c.Result) != `"merged"` {
+		t.Fatalf("the child's end = %+v", c)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		if _, e := tx.EventByDelivery(domain.LineageSource, fmt.Sprintf("child-reported/%s/%d", cref.ExecutionID, cref.Epoch)); e == nil {
+			t.Fatal("the turn that ended the child reported as well as ending")
 		}
 		return nil
 	})

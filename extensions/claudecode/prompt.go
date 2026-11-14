@@ -110,6 +110,8 @@ func renderEvent(e domain.Event) string {
 		return renderTurnLimit(e)
 	case domain.TypeChildEnded:
 		return renderChildEnded(e)
+	case domain.TypeChildReported:
+		return renderChildReported(e)
 	case "core.work.created":
 		if out, ok := renderAsked(e); ok {
 			return out
@@ -227,6 +229,27 @@ func renderChildEnded(e domain.Event) string {
 	}
 	if len(c.Result) == 0 {
 		return out + "\n\nIt returned no result."
+	}
+	var text string
+	if json.Unmarshal(c.Result, &text) != nil {
+		text = string(c.Result)
+	}
+	return out + "\n\nIts result:\n\n" + strings.TrimSpace(text)
+}
+
+// renderChildReported gives the agent the answer a child Work it asked
+// for reported while staying open: which one, the status its turn ended
+// in, and its result in full.
+func renderChildReported(e domain.Event) string {
+	var c domain.ChildReported
+	_ = json.Unmarshal(e.Data.Data, &c)
+	out := "### The " + c.Kind + " Work you asked for (" + c.Work + ") reported"
+	if c.Status != "" {
+		out += " (" + c.Status + ")"
+	}
+	out += " and is still open: it can report again or end later"
+	if c.Summary != "" {
+		out += "\nSummary: " + strings.TrimSpace(c.Summary)
 	}
 	var text string
 	if json.Unmarshal(c.Result, &text) != nil {

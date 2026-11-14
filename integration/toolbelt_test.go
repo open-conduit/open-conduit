@@ -671,6 +671,8 @@ func TestProductionToolbeltRefusesAWaitNoChildCanEnd(t *testing.T) {
 		h := newToolbeltHarness(t, "persistent")
 		_, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded))
 		refused(t, err)
+		_, err = h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded, domain.TypeChildReported))
+		refused(t, err)
 		// Nothing was declared: the turn can still ask for the child, and
 		// then wait for it.
 		child := domain.Work{Kind: "fixture.child"}
@@ -728,8 +730,12 @@ func TestProductionToolbeltRefusesAWaitNoChildCanEnd(t *testing.T) {
 		if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.CancelWork, Cancel: &extension.CancelRequest{Work: asked.Work.ID}}); err != nil {
 			t.Fatal(err)
 		}
-		// No child is in progress, but its end has arrived for the wait
-		// to wake on.
+		// No child is in progress, and its end can't wake a wait only
+		// for reports: that wait is refused, and the refusal leaves the
+		// turn its authority.
+		_, err = h.belt.Call(ctx, h.token, childEnd(domain.TypeChildReported))
+		refused(t, err)
+		// Its end has arrived for a wait on ends to wake on.
 		if out, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded)); err != nil || out.Wait == nil {
 			t.Fatalf("a wait on a child's end that has arrived was refused: %v", err)
 		}

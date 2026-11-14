@@ -23,7 +23,8 @@ type TurnDeclaration struct {
 	Status  string `json:"status,omitempty"`
 	Comment string `json:"comment,omitempty"`
 	// Result is what the turn hands back to whoever asked for the Work:
-	// for child Work, the parent receives it in its TypeChildEnded Event.
+	// for child Work, the parent receives it in its TypeChildEnded Event
+	// when the turn ends the Work, else in a TypeChildReported Event.
 	// Any JSON value (a string answer, an object of the caller's shape).
 	Result json.RawMessage `json:"result,omitempty"`
 }

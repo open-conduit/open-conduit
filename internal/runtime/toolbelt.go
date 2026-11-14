@@ -378,7 +378,7 @@ func askGuidance(kinds []extension.WorkKind, cancel bool) string {
 		}
 	}
 	b.WriteString("\n\nTo ask, call `create_work` with the `kind` and the task as its `context`, for example `{\"kind\": \"" + kinds[0].Kind + "\", \"context\": {\"schema\": \"" + kinds[0].Kind + ".v1\", \"data\": {\"task\": \"…\"}}}`. Put everything the other agent needs in the task: it sees nothing else of your Work.\n\n")
-	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\"]}}` and end your turn; you are resumed when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer.\n\n")
+	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\", \"" + domain.TypeChildReported + "\"]}}` and end your turn. You are resumed with `" + domain.TypeChildEnded + "` when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer. An agent that answers but keeps its Work open, because it still has follow-up to handle, sends `" + domain.TypeChildReported + "` instead, with its `result`: it is still working, and can report again or end later, so wait again if you need to hear more, or `cancel_work` it if you don't.\n\n")
 	b.WriteString(waitOrderingRule + " Ask every agent you need, and make every reply, before you wait.")
 	if cancel {
 		b.WriteString("\n\nIf you no longer need an answer (you were resumed by something else and the task is moot), call `cancel_work` with the `work_id` `create_work` returned and a short `reason`. The other agent stops, and you still receive its end, in state `cancelled`. You can cancel only Work you asked for that hasn't ended.")
@@ -394,7 +394,7 @@ const waitOrderingRule = "`wait` is the last call of a turn: after it, every oth
 
 // childGuidance tells the agent of child Work how its answer reaches the
 // Work that asked for it.
-const childGuidance = "## You are answering another agent\n\nAnother agent asked for this Work, and is waiting for your answer. Give it as your turn's `result` (the `result` field of your status, or of `core.turn.v1` data when you declare the outcome): that, not your summary or your final text, is what the agent that asked receives. Put the whole answer in it. If you complete without a result, your attempt fails and is tried again."
+const childGuidance = "## You are answering another agent\n\nAnother agent asked for this Work, and is waiting for your answer. Give it as your turn's `result` (the `result` field of your status, or of `core.turn.v1` data when you declare the outcome): that, not your summary or your final text, is what the agent that asked receives. Put the whole answer in it. It receives the result of every turn that has one: a turn that ends your Work gives it your answer and your end, and a turn that keeps your Work open (any status that hands back without ending, while you still have follow-up to handle) reports the result to it and you carry on. If you complete without a result, your attempt fails and is tried again."
 
 // Described is each operation the token's pinned grant includes and current
 // config still enables that declares a Summary or Input, in grant order,

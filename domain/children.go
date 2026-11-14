@@ -9,6 +9,11 @@ import "encoding/json"
 const (
 	TypeChildEnded   = "core.work.child.ended"
 	SchemaChildEnded = "core.work.child.ended.v1"
+	// TypeChildReported tells the parent that a turn of its child handed
+	// back a result while the child stays open (follow-up it still
+	// answers for): an answer now, with more news or its end to come.
+	TypeChildReported   = "core.work.child.reported"
+	SchemaChildReported = "core.work.child.reported.v1"
 	// TypeChildCancel records, on the child, that the Work that asked for
 	// it cancelled it (cancel_work), and why.
 	TypeChildCancel   = "core.work.child.cancel"
@@ -54,6 +59,22 @@ type ChildEnded struct {
 	Summary string          `json:"summary,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 }
+
+// ChildReported is a TypeChildReported Event's payload: which child
+// reported, the state it is in (never terminal: it is still open), the
+// status and summary its turn ended with, and the turn's result.
+type ChildReported struct {
+	Work    string          `json:"work"`
+	Kind    string          `json:"kind"`
+	State   WorkState       `json:"state"`
+	Status  string          `json:"status,omitempty"`
+	Summary string          `json:"summary,omitempty"`
+	Result  json.RawMessage `json:"result"`
+}
+
+// IsChildNews reports whether an Event type is one the host sends a parent
+// about its child: its end or a report.
+func IsChildNews(t string) bool { return t == TypeChildEnded || t == TypeChildReported }
 
 // ChildCancel is a TypeChildCancel Event's payload: the parent that
 // cancelled the child, the execution of it that did, and the reason it

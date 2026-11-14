@@ -315,12 +315,13 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 }
 
 // addressedEvent reports whether e is input for the Work it names without
-// a route: an operator's Event (not a core type), or a child's end.
+// a route: an operator's Event (not a core type), or a child's end or
+// report.
 func addressedEvent(e domain.Event) bool {
 	if e.Source == ManualSource {
 		return !strings.HasPrefix(e.Type, "core.")
 	}
-	return e.Source == domain.LineageSource && e.Type == domain.TypeChildEnded
+	return e.Source == domain.LineageSource && domain.IsChildNews(e.Type)
 }
 
 // rebindNamespace holds each Work's last operator rebind (Control.Rebind),
@@ -357,8 +358,9 @@ func latestAttemptInTx(tx storage.Tx, work domain.ID) (*domain.Execution, error)
 // the Work, so the input needs no route to find it,
 // and it continues on the binding the Work already runs on. Work created
 // without a route (Control.CreateWork) has no route to take follow-up input
-// at all. A child's domain.TypeChildEnded Event is addressed to its parent
-// the same way: the parent asked for the child, so its result needs no
+// at all. A child's domain.TypeChildEnded and domain.TypeChildReported
+// Events are addressed to its parent the same way: the parent asked for
+// the child, so its result needs no
 // route. Any other Event, Work that has ended, and Work with no binding to
 // continue on get "", and routing is as usual.
 func addressedBindingInTx(tx storage.Tx, e domain.Event, w *domain.Work) (string, error) {

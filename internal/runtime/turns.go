@@ -20,7 +20,12 @@ import (
 // parked attempt's acknowledgement) is a no-op while a resumed attempt's
 // next turn is a new Event. The Event is input to no Work: it is recorded as
 // unmatched and reaches waiters only through their dependency subscriptions.
+// A turn of child Work that hands back a result and leaves the Work open
+// also reports it to the parent (childReportedInTx).
 func (s *Scheduler) turnEndedInTx(tx storage.Tx, x domain.Execution, now time.Time) error {
+	if err := childReportedInTx(tx, now, x); err != nil {
+		return err
+	}
 	d, ok := domain.TurnOf(x.Outcome)
 	if !ok || !domain.ValidTurnStatus(d.Status) {
 		return nil
