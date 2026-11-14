@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 )
 
@@ -30,6 +31,9 @@ while IFS= read -r line; do
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Let me run the skill."},{"type":"tool_use","name":"Skill"}]}}'
     echo '{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"a subagent aside"}]}}'
     [ -e "$f/first_text" ] && echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Here it is."}]}}'
+  elif [ -e "$f/follow_limit" ]; then
+    echo '{"type":"result","subtype":"success","is_error":true,"api_error":"usage_limit_reached","num_turns":1,"total_cost_usd":0,"session_id":"'"$session"'","result":"You have hit the limit"}'
+    exit 1
   else
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"The release note line."}]}}'
   fi
@@ -39,9 +43,10 @@ done
 `
 
 type replyData struct {
-	Text       string `json:"text"`
-	ReplyAsked bool   `json:"reply_asked"`
-	Status     string `json:"status"`
+	Text        string `json:"text"`
+	ReplyAsked  bool   `json:"reply_asked"`
+	ReplyFailed string `json:"reply_failed"`
+	Status      string `json:"status"`
 }
 
 // A turn that ends with only its status, on a binding whose reply is its
@@ -111,5 +116,37 @@ func TestReplyConfigIsChecked(t *testing.T) {
 	}
 	if c, err := claudecode.ParseConfig([]byte(`{"reply":"text"}`)); err != nil || c.Reply != claudecode.ReplyText {
 		t.Fatalf("reply text: %+v %v", c, err)
+	}
+}
+
+// A follow-up to the ask that fails (here, on the usage limit) does not undo
+// the turn: it ends on the status it gave before the ask, and reply_failed
+// says why. A turn that was never asked and fails the same way (the negative
+// control) is failed.
+func TestFailedReplyAskKeepsTheStatus(t *testing.T) {
+	h := newHarness(t)
+	if err := os.WriteFile(h.binary, []byte(replyClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.fake+"/follow_limit", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := h.request("work/limit", "exec-limit", 1, map[string]any{"reply": "text"})
+	res := h.run(h.executor(), r)
+	var d replyData
+	_ = json.Unmarshal(res.Outcome.Data.Data, &d)
+	if res.Outcome.Kind != domain.OutcomeHandoff || res.RetryHint != nil || d.Status != "done" || !d.ReplyAsked || !strings.Contains(d.ReplyFailed, "limit") {
+		t.Fatalf("outcome %+v hint %v data %+v", res.Outcome, res.RetryHint, d)
+	}
+	turns := h.reports.named("agent_turn")
+	if len(turns) != 1 || turns[0]["reply_failed"] == nil {
+		t.Fatalf("telemetry: %v", turns)
+	}
+
+	h = newHarness(t)
+	h.mode("limit")
+	r, _ = h.request("work/limit2", "exec-limit2", 1, map[string]any{"reply": "text"})
+	if res = h.run(h.executor(), r); res.Outcome.Kind != domain.OutcomeFailed {
+		t.Fatalf("an unasked limit: %+v", res.Outcome)
 	}
 }
