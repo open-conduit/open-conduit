@@ -73,6 +73,7 @@ type signIn struct {
 	read, write tokenSource
 	gitBot      bool
 	writer      string // Writer
+	reader      string // Reader
 }
 
 // NewClient builds a client from validated connection config. No secret is
@@ -122,6 +123,7 @@ func (c *Client) signIn(cfg ConnectionConfig, secrets SecretFunc) (*signIn, erro
 	if cfg.Auth == "app" {
 		who.writer = "App " + cfg.AppID
 	}
+	who.reader = who.writer
 	if cfg.BotAppID != "" {
 		who.write, who.writer = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c), "bot App "+cfg.BotAppID
 	}
@@ -133,6 +135,10 @@ func (c *Client) signIn(cfg ConnectionConfig, secrets SecretFunc) (*signIn, erro
 // "the connection's token". Doctor compares a running entry's client with
 // one built from the current config, to catch the two drifting apart.
 func (c *Client) Writer() string { return c.who.Load().writer }
+
+// Reader names who the client signs in and reads as: "App <id>" or "the
+// connection's token".
+func (c *Client) Reader() string { return c.who.Load().reader }
 
 // ErrReconfigure is Reconfigure's refusal of a connection on another GitHub
 // (api_url) than the client's: the client's host can't change in place.

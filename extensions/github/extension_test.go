@@ -336,3 +336,83 @@ func TestExtensionDoctorBindingPermissions(t *testing.T) {
 		t.Fatalf("without %s: %+v", gh.OpGitCredential, c)
 	}
 }
+
+// TestExtensionDoctorAppInstallation: for a connection signing in as a
+// GitHub App, the connection test reads the installation's own
+// permissions, not the user-role permissions GET /repos/<repo> answers an
+// installation token with (all false), and names only what a configured
+// feature lacks (#597).
+func TestExtensionDoctorAppInstallation(t *testing.T) {
+	fake := githubtest.New("octo/widgets")
+	t.Cleanup(fake.Close)
+	// What GitHub answers an installation token with: a role it has none of.
+	fake.SetPermissions(map[string]bool{"admin": false, "maintain": false, "push": false, "triage": false, "pull": false})
+	fake.RequireRulesetChecks("main", "ci")
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.AddApp("12", &key.PublicKey)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	settings, err := gh.ParseExtension([]byte(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets","manage_webhook":true,"webhook_secret":"hook"}`), []string{"hook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := gh.View{Entries: []gh.ViewEntry{{Name: "github/eng/main", Scope: "eng", Connection: "owner", Settings: settings}}}
+	x := gh.NewExtension(func(context.Context) gh.View { return view })
+	if err := x.Start(context.Background(), inproc.Host{Now: fake.Now, Secrets: func(_ context.Context, _ domain.ID, _ string, names []string) (map[string]string, error) {
+		out := map[string]string{}
+		for _, n := range names {
+			out[n] = pemText
+		}
+		return out, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	owner := protocol.ConnectionEntry{ID: "owner", Type: gh.Type, Config: json.RawMessage(`{"api_url":"` + fake.URL + `","auth":"app","app_id":"12"}`), Secrets: []string{gh.SecretAppPrivateKey}}
+	x.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: gh.Type, Name: "main", Connection: &owner}}})
+	_, deep := doctorChecks(t, x)
+
+	all := map[string]string{"contents": "write", "issues": "write", "pull_requests": "write", "checks": "write", "statuses": "write", "repository_hooks": "write", "metadata": "read"}
+	fake.SetInstallationPermissions(all)
+	c := deep(context.Background())
+	items := strings.Join(c.Items, "\n")
+	if c.Status != inproc.CheckOK || c.Code != "verified" ||
+		!strings.Contains(items, "github/w: App 12 holds Contents write, Issues write, Pull requests write, Checks write, Commit statuses write, Webhooks write") ||
+		strings.Contains(items, "pull=") || strings.Contains(items, "needs") {
+		t.Fatalf("installation with every permission: %+v", c)
+	}
+
+	noHooks := map[string]string{}
+	for k, v := range all {
+		if k != "repository_hooks" {
+			noHooks[k] = v
+		}
+	}
+	fake.SetInstallationPermissions(noHooks)
+	c = deep(context.Background())
+	items = strings.Join(c.Items, "\n")
+	want := "manage_webhook needs Webhooks write, but App 12 has Webhooks none on octo/widgets; grant Webhooks write in the App's settings"
+	if c.Status != inproc.CheckWarn || c.Code != "hook_admin_missing" || !strings.Contains(items, want) || strings.Count(items, " needs ") != 1 {
+		t.Fatalf("installation without Webhooks: %+v", c)
+	}
+
+	// Without manage_webhook, the same installation lacks nothing.
+	view.Entries[0].Settings.ManageWebhook = false
+	if c := deep(context.Background()); c.Status != inproc.CheckOK || strings.Contains(strings.Join(c.Items, "\n"), "needs") {
+		t.Fatalf("without manage_webhook: %+v", c)
+	}
+
+	// Projection writes as the App: Issues read alone is named.
+	limited := map[string]string{}
+	for k, v := range noHooks {
+		limited[k] = v
+	}
+	limited["issues"] = "read"
+	fake.SetInstallationPermissions(limited)
+	c = deep(context.Background())
+	items = strings.Join(c.Items, "\n")
+	if c.Code != "permission_missing" || !strings.Contains(items, "projection needs Issues write, but App 12 has Issues read on octo/widgets") || strings.Count(items, " needs ") != 1 {
+		t.Fatalf("installation with Issues read: %+v", c)
+	}
+}

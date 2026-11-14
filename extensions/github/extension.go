@@ -357,9 +357,11 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 			continue
 		}
 		var notes []string
-		if a.Known {
+		live := !dry && !s.Projection.DryRun
+		switch {
+		case a.Known:
 			notes = append(notes, fmt.Sprintf("pull=%t push=%t admin=%t", a.Pull, a.Push, a.Admin))
-			if !a.Push && !a.Writer && !dry && !s.Projection.DryRun {
+			if !a.Push && !a.Writer && live {
 				warn("read_only")
 				notes = append(notes, "labels, comments and PRs need write access")
 			}
@@ -367,8 +369,14 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 				warn("hook_admin_missing")
 				notes = append(notes, "manage_webhook needs admin (hooks) permission")
 			}
-		} else {
-			notes = append(notes, "authenticated (installation permissions are not reported)")
+		case !a.App:
+			notes = append(notes, "authenticated (the token's permissions are not reported)")
+		}
+		for _, n := range installationNotes(s, a, client, live) {
+			if n.code != "" {
+				warn(n.code)
+			}
+			notes = append(notes, n.note)
 		}
 		if a.Writer {
 			notes = append(notes, "bot writer authenticated")
@@ -405,6 +413,115 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+// reportedPermissions are the App installation permissions doctor lists,
+// in the order GitHub's settings show them: what the minimum permissions
+// in the operator docs name.
+var reportedPermissions = []string{"contents", "issues", "pull_requests", "checks", "statuses", "repository_hooks"}
+
+type installNote struct{ code, note string }
+
+// installationNotes reports, for an entry whose sign-in or writer is a
+// GitHub App, what each App's installation holds on the repository
+// (reportedPermissions) and each permission a configured feature needs
+// that it lacks: reads by the sign-in App for reconcile, Webhooks write
+// by it for manage_webhook (hook_admin_missing), and by the App writes go
+// out as, Issues, Pull requests and Contents write for live projection
+// (labels, comments, PRs) and Contents write for git as the bot (permission_missing). An
+// installation GitHub doesn't answer for warns installation_unreadable.
+// A token sign-in with no bot App adds nothing: GitHub reports a token's
+// role on the repository instead (Access.Known).
+func installationNotes(s Settings, a Access, c *Client, live bool) []installNote {
+	type app struct {
+		who   string
+		perms map[string]string
+		needs map[string]map[string][]string // permission → level → features
+	}
+	need := func(x *app, name, level, feature string) {
+		if x.needs[name] == nil {
+			x.needs[name] = map[string][]string{}
+		}
+		x.needs[name][level] = append(x.needs[name][level], feature)
+	}
+	var apps []*app
+	var reader, writer *app
+	if a.App {
+		reader = &app{who: c.Reader(), perms: a.Installation, needs: map[string]map[string][]string{}}
+		apps = append(apps, reader)
+		for _, p := range []string{"contents", "issues", "pull_requests", "checks", "statuses"} {
+			need(reader, p, "read", "reconcile")
+		}
+		if s.ManageWebhook {
+			need(reader, "repository_hooks", "write", "manage_webhook")
+		}
+	}
+	writer = reader
+	if a.Writer {
+		writer = &app{who: c.Writer(), perms: a.BotInstallation, needs: map[string]map[string][]string{}}
+		apps = append(apps, writer)
+	}
+	if writer != nil {
+		if live {
+			for _, p := range []string{"contents", "issues", "pull_requests"} {
+				need(writer, p, "write", "projection")
+			}
+		}
+		if c.GitBot() {
+			need(writer, "contents", "write", "git as the bot")
+		}
+	}
+	var out []installNote
+	for _, x := range apps {
+		if x.perms == nil {
+			out = append(out, installNote{"installation_unreadable", fmt.Sprintf("%s's installation permissions on %s could not be read", x.who, s.Repo)})
+			continue
+		}
+		held := make([]string, len(reportedPermissions))
+		for i, p := range reportedPermissions {
+			level := x.perms[p]
+			if level == "" {
+				level = "none"
+			}
+			held[i] = permissionLabel(p) + " " + level
+		}
+		out = append(out, installNote{"", fmt.Sprintf("%s holds %s", x.who, strings.Join(held, ", "))})
+		for _, p := range reportedPermissions {
+			var top string
+			var features []string
+			for _, level := range []string{"read", "write"} {
+				if fs := x.needs[p][level]; len(fs) > 0 && !covers(x.perms[p], level) {
+					top, features = level, append(features, fs...)
+				}
+			}
+			if top == "" {
+				continue
+			}
+			code := "permission_missing"
+			if p == "repository_hooks" {
+				code = "hook_admin_missing"
+			}
+			has := x.perms[p]
+			if has == "" {
+				has = "none"
+			}
+			verb := "needs"
+			if len(features) > 1 {
+				verb = "need"
+			}
+			want := Permission{p, top}
+			out = append(out, installNote{code, fmt.Sprintf("%s %s %s, but %s has %s %s on %s; grant %s in the App's settings", joinWords(features), verb, want, x.who, permissionLabel(p), has, s.Repo, want)})
+		}
+	}
+	return out
+}
+
+// joinWords joins words as a list: "a", "a and b", "a, b and c".
+func joinWords(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // driftNotes says where the client an entry runs with differs from one

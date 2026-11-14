@@ -42,15 +42,16 @@ func permissionLabel(name string) string {
 // permissionLabels are GitHub's names for the permissions as its settings
 // pages show them.
 var permissionLabels = map[string]string{
-	"actions":        "Actions",
-	"administration": "Administration",
-	"checks":         "Checks",
-	"contents":       "Contents",
-	"issues":         "Issues",
-	"metadata":       "Metadata",
-	"pull_requests":  "Pull requests",
-	"statuses":       "Commit statuses",
-	"workflows":      "Workflows",
+	"actions":          "Actions",
+	"administration":   "Administration",
+	"checks":           "Checks",
+	"contents":         "Contents",
+	"issues":           "Issues",
+	"metadata":         "Metadata",
+	"pull_requests":    "Pull requests",
+	"repository_hooks": "Webhooks",
+	"statuses":         "Commit statuses",
+	"workflows":        "Workflows",
 }
 
 // levels orders permission levels: write includes read, admin both.
