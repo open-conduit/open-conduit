@@ -376,12 +376,19 @@ func askGuidance(kinds []extension.WorkKind, cancel bool) string {
 		}
 	}
 	b.WriteString("\n\nTo ask, call `create_work` with the `kind` and the task as its `context`, for example `{\"kind\": \"" + kinds[0].Kind + "\", \"context\": {\"schema\": \"" + kinds[0].Kind + ".v1\", \"data\": {\"task\": \"…\"}}}`. Put everything the other agent needs in the task: it sees nothing else of your Work.\n\n")
-	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\"]}}` and end your turn; you are resumed when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer.")
+	b.WriteString("Don't wait in your turn for the answer. Call `wait` with `{\"match\": {\"types\": [\"" + domain.TypeChildEnded + "\"]}}` and end your turn; you are resumed when the other agent ends, with its `state` (`completed`, `failed` or `cancelled`), its `summary` and its `result`, which is its answer. A failed or cancelled agent has no result: say so rather than guess the answer.\n\n")
+	b.WriteString(waitOrderingRule + " Ask every agent you need, and make every reply, before you wait.")
 	if cancel {
 		b.WriteString("\n\nIf you no longer need an answer (you were resumed by something else and the task is moot), call `cancel_work` with the `work_id` `create_work` returned and a short `reason`. The other agent stops, and you still receive its end, in state `cancelled`. You can cancel only Work you asked for that hasn't ended.")
 	}
 	return b.String()
 }
+
+// waitOrderingRule is what an agent must know before it calls `wait`: the
+// call releases the execution's authority, so it is the turn's last. The
+// toolbelt says it in the `wait` tool's description and in the hand-off
+// guidance, where the agent reads it before it acts.
+const waitOrderingRule = "`wait` is the last call of a turn: after it, every other call is refused. To hand a task over, call `create_work` first, then `wait`."
 
 // childGuidance tells the agent of child Work how its answer reaches the
 // Work that asked for it.
@@ -1232,6 +1239,9 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 	}
 	if after > max || after < state.ObservedSequence {
 		return nil, extension.ErrInvalid
+	}
+	if err = childEndReachableInTx(tx, w, request.Match, after); err != nil {
+		return nil, err
 	}
 	suffix := identity(string(x.ID), fmt.Sprint(state.Epoch))
 	wait := domain.Wait{ID: domain.ID("wait/" + suffix), WorkID: w.ID, ExecutionID: x.ID, State: domain.WaitActive, Match: domain.EventMatch{Keys: append([]domain.CorrelationKey(nil), request.Match.Keys...), Types: append([]string(nil), request.Match.Types...)}, AfterSequence: after, Description: request.Description}

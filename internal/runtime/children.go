@@ -191,3 +191,54 @@ func (s *Scheduler) resultMissingInTx(tx storage.Tx, ref domain.LeaseRef, outcom
 	pending, err := PendingInputsInTx(tx, w.ID)
 	return len(pending) == 0, err
 }
+
+// CodeNoChildInProgress is the refusal code of a wait that only a child's
+// end could satisfy, declared by Work with no child that can still end.
+const CodeNoChildInProgress = "no_child_in_progress"
+
+// childEndReachableInTx refuses a wait that can never be satisfied because
+// it waits only for a child's end (every type it names is
+// domain.TypeChildEnded) and no such Event can come: the Work has no child
+// that hasn't ended, and no child's end has arrived after the wait's
+// watermark for it to wake on; or the wait's keys leave out the Work's
+// lineage key, the only key a child's end arrives on. Declaring such a wait
+// would release the execution's authority and park the Work for good (a
+// wait declared before the create_work it was for), so it is refused
+// before it is declared, and the caller keeps its authority to ask for the
+// child first. A wait that names any other type (a person's message) or no
+// type at all may still be satisfied, and is left alone.
+func childEndReachableInTx(tx storage.Tx, w domain.Work, match domain.EventMatch, after uint64) error {
+	if len(match.Types) == 0 {
+		return nil
+	}
+	for _, name := range match.Types {
+		if name != domain.TypeChildEnded {
+			return nil
+		}
+	}
+	lineage := domain.LineageKey(w.ID)
+	if !slices.Contains(match.Keys, lineage) {
+		if !slices.Contains(w.CorrelationKeys, lineage) {
+			return noChildInProgress()
+		}
+		return &extension.OperationError{Code: CodeNoChildInProgress, Message: "a child Work's end arrives only on this Work's own key, " + lineage.Source + "/" + lineage.ExternalID + ", which this wait leaves out: give no keys, or include it"}
+	}
+	live, err := tx.CountWorks(storage.WorkQuery{ParentID: w.ID, States: []domain.WorkState{domain.WorkReady, domain.WorkRunning, domain.WorkWaiting}})
+	if err != nil || live > 0 {
+		return err
+	}
+	arrived, err := tx.WorkEvents(w.ID, after, 0)
+	if err != nil {
+		return err
+	}
+	for _, a := range arrived {
+		if a.Event.Type == domain.TypeChildEnded && a.Event.Source == domain.LineageSource {
+			return nil
+		}
+	}
+	return noChildInProgress()
+}
+
+func noChildInProgress() error {
+	return &extension.OperationError{Code: CodeNoChildInProgress, Message: "you have no child Work in progress, so this wait could never end: call create_work first, then wait. Nothing was declared, so you can still make calls"}
+}
