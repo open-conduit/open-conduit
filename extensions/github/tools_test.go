@@ -71,8 +71,15 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 	if c, _ := gh.ParseCond("pr:9:commented"); c.Describe() != "a reply or review on PR #9" || c.Happened(gh.TypeCommentHuman) != "someone replied on PR #9" {
 		t.Fatal(c.Describe(), c.Happened(gh.TypeCommentHuman))
 	}
-	if _, err := gh.ParseCond("pr:9:reviewed"); err == nil || !strings.Contains(err.Error(), "merged, closed, commented, pushed, checks") {
+	if _, err := gh.ParseCond("pr:9:2nd"); err == nil || !strings.Contains(err.Error(), "merged, closed, commented, pushed, checks, or for its own agent's turn") {
 		t.Fatal(err)
+	}
+	// Any other turn status waits on the PR's own agent (#627).
+	if c, err := gh.ParseCond("pr:eng/9:Done"); err != nil || c.String() != "pr:eng/9:done" || !c.TurnState() || c.Describe() != "the agent on PR #9 in eng to end a turn in done" || c.Happened(domain.TypeTurnEnded) != "the agent on PR #9 in eng ended a turn in done" {
+		t.Fatal(c, err, c.Describe(), c.Happened(domain.TypeTurnEnded))
+	}
+	if c, _ := gh.ParseCond("pr:9:checks"); c.TurnState() {
+		t.Fatal("pr:9:checks read as a turn state")
 	}
 	if c, _ := gh.ParseCond("pr:9:merged"); c.Happened(gh.TypePullClosed) != "PR #9 was closed without merging, so it won't merge" {
 		t.Fatal(c.Happened(gh.TypePullClosed))
@@ -122,6 +129,13 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 	}
 	if !gh.DependencyFilter(turn, ended("review")) || gh.DependencyFilter(turn, ended("building")) {
 		t.Fatal("turn state filter")
+	}
+	// The waiting Work's own turn never meets its turn wait (a merge bot
+	// keyed to the PR whose agent it waits on).
+	self := filter(map[string]any{"kind": "turn", "repo": repo, "number": 21, "state": "review", "work": "work/21"})
+	other := filter(map[string]any{"kind": "turn", "repo": repo, "number": 21, "state": "review", "work": "work/9"})
+	if gh.DependencyFilter(self, ended("review")) || !gh.DependencyFilter(other, ended("review")) {
+		t.Fatal("turn filter and the waiting Work's own turn")
 	}
 	peer := filter(map[string]any{"kind": "peer", "number": 5, "work": "work/1"})
 	for _, c := range []struct {

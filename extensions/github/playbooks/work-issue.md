@@ -51,6 +51,7 @@ When the work can't go on until something happens, park the issue and let Open C
 - `"conditions": ["pr:1257:checks"]`: until the checks on another PR's current head finish, passed or not. A new push to it, or it merging or closing, wakes you first.
 - `"conditions": ["issue:1267:closed"]`: until another issue closes.
 - `"conditions": ["issue:1267:review"]`: until the agent on another issue ends a turn in that state (`building`, `review`, `help`, `done`, `finished`), e.g. once it has reported.
+- `"conditions": ["pr:1257:review"]`: until the PR's own agent (its reviewer) ends a turn in that state, as for an issue's.
 - `{"until": "2026-10-25T09:00Z", "reason": "…"}`: until a time (a match being played, a date the issue names). Use an ISO time with `Z` or an offset.
 
 Write `<project>/` before the number for another project under the same Open Conduit (`pr:club/88:merged`); that project must allow yours to read it. Give several conditions and any one of them wakes you. Add `until` to any wait as the latest it should last; use it whenever what you're waiting for might never happen. The `reason` says what you're waiting for and why; it goes on the issue. If it has already happened, the call says so: carry on instead. Waits on a job's next run (`job:<name>`) arrive with scheduled jobs; until then wait until a time.

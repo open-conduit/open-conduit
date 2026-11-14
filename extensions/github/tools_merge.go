@@ -332,7 +332,8 @@ func (t *Tools) agentsOn(ctx context.Context, b *bound, src Source, p rawPull) (
 // nobodyWorking refuses while any agent on the PR or its issue hasn't
 // handed back: it is mid-turn, has input routed to it that no turn has read
 // (a comment that has just arrived), or ended its last turn in a state
-// other than review or done. The refusal names the conditions to wait on.
+// other than review or done. The refusal names the conditions to wait on,
+// for every Work it names: an issue's agent's turn, or the PR's own.
 func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPull) error {
 	agents, err := t.agentsOn(ctx, b, src, p)
 	if err != nil {
@@ -356,24 +357,27 @@ func (t *Tools) nobodyWorking(ctx context.Context, b *bound, src Source, p rawPu
 			continue
 		}
 		busy = append(busy, who+" "+why)
+		// Every busy Work comes with the conditions its handing back meets:
+		// its next turn ending in review or done, which the host publishes on
+		// its keys whether or not it posts anything on GitHub.
+		item := fmt.Sprintf("pr:%s/%d", a.work.ScopeID, p.Number)
 		if a.issue > 0 {
-			for _, s := range handedBack {
-				conds = append(conds, fmt.Sprintf("issue:%s/%d:%s", a.work.ScopeID, a.issue, s))
+			item = fmt.Sprintf("issue:%s/%d", a.work.ScopeID, a.issue)
+		}
+		for _, s := range handedBack {
+			if c := item + ":" + s; !slices.Contains(conds, c) {
+				conds = append(conds, c)
 			}
 		}
 	}
 	if len(busy) == 0 {
 		return nil
 	}
-	next := "wait for news of the PR"
-	if len(conds) > 0 {
-		q := make([]string, len(conds))
-		for i, c := range conds {
-			q[i] = fmt.Sprintf("%q", c)
-		}
-		next = "wait with conditions [" + strings.Join(q, ", ") + "]"
+	q := make([]string, len(conds))
+	for i, c := range conds {
+		q[i] = fmt.Sprintf("%q", c)
 	}
-	return refuse("work_active", "%s; it merges once every agent on the PR has handed back: %s", strings.Join(busy, "; "), next)
+	return refuse("work_active", "%s; it merges once every agent on the PR has handed back: wait with conditions [%s]", strings.Join(busy, "; "), strings.Join(q, ", "))
 }
 
 // stillWorking says why live Work hasn't handed back, or "" when it has:

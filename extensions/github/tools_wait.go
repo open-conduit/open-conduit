@@ -15,7 +15,7 @@ import (
 )
 
 // Wait translation. `pr:N:merged`, `pr:N:commented`, `pr:N:pushed`,
-// `issue:N:closed`, `issue:N:<state>` and
+// `pr:N:<state>`, `issue:N:closed`, `issue:N:<state>` and
 // `--until` become a generic plan: a Wait on the Work's own keys (types plus
 // a timeout) and B04 dependency subscriptions on the named item's
 // correlation key, with an opaque filter selecting the item. Already-met
@@ -35,7 +35,8 @@ type dependencyFilter struct {
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
 	// Work is the waiting Work: a peer or pr_comment wait never meets its
-	// own comments. Head is the PR's head commit when a pr_push wait began.
+	// own comments, nor a turn wait its own turns. Head is the PR's head
+	// commit when a pr_push wait began.
 	Work string `json:"work,omitempty"`
 	Head string `json:"head,omitempty"`
 	// Label is the scheduled label an unscheduled filter waits to see gone.
@@ -107,10 +108,12 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 		var p IssuePayload
 		return e.Data.Schema == SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
 	case "turn":
-		// The host's turn-ended Event on the issue's key (the dependency's
-		// source key) names the state.
+		// The host's turn-ended Event on the issue's or the PR's key (the
+		// dependency's source key) names the state; the waiting Work's own
+		// turns never meet it (a merge bot keyed to the PR it waits on).
 		var p domain.TurnEnded
-		return e.Type == domain.TypeTurnEnded && e.Data.Schema == domain.SchemaTurnEnded && json.Unmarshal(e.Data.Data, &p) == nil && p.Status == f.State
+		return e.Type == domain.TypeTurnEnded && e.Data.Schema == domain.SchemaTurnEnded && json.Unmarshal(e.Data.Data, &p) == nil && p.Status == f.State &&
+			(f.Work == "" || p.Work != f.Work)
 	case "peer":
 		var p CommentPayload
 		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && f.peer(p)
@@ -128,12 +131,19 @@ func filterPayload(f dependencyFilter) domain.Payload {
 	return domain.Payload{Schema: SchemaFilter, Data: data}
 }
 
-// resolvedCond is a condition with its translated dependency. met is set
-// when the condition has already happened (the reason, in words).
+// resolvedCond is a condition with its translated dependency, and any more
+// it takes (a PR's own agent may hold either of two keys). met is set when
+// the condition has already happened (the reason, in words).
 type resolvedCond struct {
 	cond Cond
 	dep  extension.Dependency
+	more []extension.Dependency
 	met  string
+}
+
+// deps are every dependency the condition registers.
+func (r resolvedCond) deps() []extension.Dependency {
+	return append([]extension.Dependency{r.dep}, r.more...)
 }
 
 // target finds the sources of the scope a condition names: its own when
@@ -154,11 +164,38 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 		return
 	}
 	var found bool
-	if issue, code, found = t.trackerIn(scope); !found {
-		err = refuse("no_project", "%s: project %s has no GitHub repository registered", c, c.Project)
-		return
+	if issue, code, found = t.trackerIn(scope); found {
+		return issue, code, scope, nil
 	}
-	return issue, code, scope, nil
+	// A project that tracks no issues (one that reviews or merges PRs) is
+	// still waited on for its PRs: in the waiting Work's repository when it
+	// registers that, else in its only one.
+	if c.Kind == CondPR {
+		if code, found = t.pullsIn(scope, b.code.Settings.Repo); found {
+			return t.trackerOf(code), code, scope, nil
+		}
+	}
+	err = refuse("no_project", "%s: project %s has no GitHub repository registered", c, c.Project)
+	return
+}
+
+// pullsIn is the source of a scope registering repo, else the scope's only
+// source.
+func (t *Tools) pullsIn(scope domain.ID, repo string) (Source, bool) {
+	var in []Source
+	for _, s := range t.o.Sources() {
+		if s.Settings.Scope != string(scope) {
+			continue
+		}
+		if repo != "" && strings.EqualFold(s.Settings.Repo, repo) {
+			return s, true
+		}
+		in = append(in, s)
+	}
+	if len(in) == 1 {
+		return in[0], true
+	}
+	return Source{}, false
 }
 
 // scopeNamed is the scope a project names by ID or name, or "" when none
@@ -301,6 +338,12 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 		}
 		r.dep.SourceKey = key
 		switch c.On {
+		case "merged", "closed":
+			if p.State != "open" {
+				r.met = "PR #" + c.Ref + " is already " + pullState(p)
+			}
+			r.dep.Types = []string{TypePullMerged, TypePullClosed}
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
 		case "commented":
 			// The next comment from now on, not an earlier one.
 			r.dep.Types, r.dep.FromNow = []string{TypeCommentHuman, TypeCommentAgent}, true
@@ -336,11 +379,18 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 				r.dep.FromNow = true
 			}
 		default:
-			if p.State != "open" {
-				r.met = "PR #" + c.Ref + " is already " + pullState(p)
-			}
-			r.dep.Types = []string{TypePullMerged, TypePullClosed}
-			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
+			// The next turn of the PR's own agent ending in that state, not
+			// an earlier one: the host publishes it on each of that Work's
+			// keys, `pull_request/N` for the PR's own Work (a reviewer) and
+			// `pr/N` for Work that opened it without an issue. The issue's
+			// agent is issue:<n>:<state>.
+			filter := filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID)})
+			r.dep.SourceKey = domain.CorrelationKey{Source: codeSrc.Settings.Namespace, ExternalID: PullRequestKey(c.Number())}
+			r.dep.Types, r.dep.FromNow, r.dep.Filter = []string{domain.TypeTurnEnded}, true, filter
+			opener := r.dep
+			opener.ID = c.String() + "/opener"
+			opener.SourceKey = domain.CorrelationKey{Source: codeSrc.Settings.Namespace, ExternalID: PullKey(c.Number())}
+			r.more = append(r.more, opener)
 		}
 	case CondIssue:
 		repo := issueSrc.Settings.TrackerRepo
@@ -369,7 +419,7 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 		} else {
 			// The next turn ending in that state, not an earlier one.
 			r.dep.Types, r.dep.FromNow = []string{domain.TypeTurnEnded}, true
-			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On})
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On, Work: string(b.work.ID)})
 		}
 	}
 	return r, nil
@@ -439,7 +489,7 @@ func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, unti
 	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: types}, Timeout: h.Until,
 		Description: extension.Clip(waiting, extension.MaxWaitDescription)}}
 	for _, r := range resolved {
-		plan.Dependencies = append(plan.Dependencies, r.dep)
+		plan.Dependencies = append(plan.Dependencies, r.deps()...)
 	}
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
 	out, _ := json.Marshal(map[string]any{"waiting_for": waiting, "reason": strings.TrimSpace(reason),
@@ -449,7 +499,7 @@ func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, unti
 }
 
 type waitInput struct {
-	Conditions []string `json:"conditions,omitempty" doc:"what to wait for, any one of which wakes you: pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither)"`
+	Conditions []string `json:"conditions,omitempty" doc:"what to wait for, any one of which wakes you: pr:<n>[:merged|closed|commented|pushed|checks|<state>], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither)"`
 	Until      string   `json:"until,omitempty" doc:"a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has"`
 	Reason     string   `json:"reason" doc:"what you're waiting for and why; posted on this Work's issue when it has one"`
 	Repo       string   `json:"repo,omitempty" doc:"the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one"`
@@ -538,7 +588,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		}
 		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: match}, Timeout: h.Until, Description: h.WaitDescription()}}
 		for _, r := range resolved {
-			plan.Dependencies = append(plan.Dependencies, r.dep)
+			plan.Dependencies = append(plan.Dependencies, r.deps()...)
 		}
 		out, _ := json.Marshal(map[string]any{"waiting_for": h.Describe(), "reason": strings.TrimSpace(in.Reason),
 			"next": "end your turn now; any other call is refused until you are resumed with what happened"})
@@ -557,7 +607,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	}
 	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: types}, Timeout: h.Until, Description: h.WaitDescription()}}
 	for _, r := range resolved {
-		plan.Dependencies = append(plan.Dependencies, r.dep)
+		plan.Dependencies = append(plan.Dependencies, r.deps()...)
 	}
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
 	also := "comments and check results also resume you"
@@ -731,7 +781,7 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 			}
 			continue
 		}
-		plan.Dependencies = append(plan.Dependencies, r.dep)
+		plan.Dependencies = append(plan.Dependencies, r.deps()...)
 	}
 	if len(plan.Dependencies) == 0 && plan.Wait.Timeout == nil {
 		why := strings.Join(s.Unmatched, ", ")

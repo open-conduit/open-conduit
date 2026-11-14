@@ -355,7 +355,7 @@ Open a new issue, optionally held until conditions are met or a time comes, or p
 | `project` | string |  | another project (its ID or name) to open the issue in; this project must be allowed to file there, and the issue can't then be held |
 | `title` | string | yes | the issue's title; must not be empty |
 | `until` | string |  | a future ISO time (e.g. 2026-10-25T09:00Z) to hold the issue until; with wait, whichever comes first |
-| `wait` | array of string |  | conditions to hold the issue for before it is worked, any one of which starts it: pr:<n>[:merged\|closed\|commented\|pushed\|checks], issue:<n>[:closed\|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's |
+| `wait` | array of string |  | conditions to hold the issue for before it is worked, any one of which starts it: pr:<n>[:merged\|closed\|commented\|pushed\|checks\|<state>], issue:<n>[:closed\|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's |
 
 #### `github.issue.list`
 
@@ -502,7 +502,7 @@ Park this Work until a PR, issue or job condition is met or a time comes; end th
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `conditions` | array of string |  | what to wait for, any one of which wakes you: pr:<n>[:merged\|closed\|commented\|pushed\|checks], issue:<n>[:closed\|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither) |
+| `conditions` | array of string |  | what to wait for, any one of which wakes you: pr:<n>[:merged\|closed\|commented\|pushed\|checks\|<state>], issue:<n>[:closed\|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither) |
 | `ignore` | array of string |  | news of this Work's own issue or PR that shouldn't wake you, for news your role doesn't act on: conflicts (the PR no longer merges with its base) or checks (check results); it is handed to you with whatever does wake you |
 | `reason` | string | yes | what you're waiting for and why; posted on this Work's issue when it has one |
 | `repo` | string |  | the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one |

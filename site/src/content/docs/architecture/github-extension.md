@@ -257,7 +257,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 - **Holds, waits and tools.** [Engineering tools, waits and playbooks](../engineering-tools/) covers:
   - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
   - translated waits with dependency filters;
-  - `issue:N:<state>` waits on the host's `core.execution.turn` Event;
+  - `issue:N:<state>` and `pr:N:<state>` waits on the host's `core.execution.turn` Event;
   - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
   - `github.checks.none` and `github.checks.missing`.
 

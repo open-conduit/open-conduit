@@ -17,8 +17,9 @@ import (
 )
 
 // newPullEnv is the tools environment with an entry that claims pull
-// requests and a scope that routes issues to a builder binding and each
-// open PR to a second binding (here a reviewer, the recipe's use).
+// requests and a scope that routes issues to a builder binding, each open
+// PR to a second binding (here a reviewer, the recipe's use), and fixture
+// requests (Work without an issue, such as a merge bot) to the first.
 func newPullEnv(t *testing.T) *toolsEnv {
 	t.Helper()
 	fake := githubtest.New(ghRepo, "tok")
@@ -34,7 +35,8 @@ func newPullEnv(t *testing.T) *toolsEnv {
 		return tx.PutScope(domain.Scope{ID: ghScope, Name: ghScope,
 			Bindings: []domain.Binding{{Name: "agent", Executor: "fixture", Requires: agent}, {Name: "reviewer", Executor: "fixture", Requires: agent}},
 			Routes: []domain.Route{{Name: "issues", Handler: "github", Binding: "agent", ActivePolicy: "queue"},
-				{Name: "pulls", Handler: "github", Binding: "reviewer", ActivePolicy: "queue", Config: domain.Payload{Data: json.RawMessage(`{"claim":"pull_requests"}`)}}},
+				{Name: "pulls", Handler: "github", Binding: "reviewer", ActivePolicy: "queue", Config: domain.Payload{Data: json.RawMessage(`{"claim":"pull_requests"}`)}},
+				{Name: "requests", Handler: "request", Binding: "agent", ActivePolicy: "queue"}},
 			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
 	}); err != nil {
 		t.Fatal(err)

@@ -2360,3 +2360,57 @@ func TestGitHubHeldIssueSurvivesALostLease(t *testing.T) {
 		})
 	}
 }
+
+// A PR condition can name a project that tracks no issues (one that reviews
+// or merges PRs), as a work_active refusal does for the PR's own Work in
+// such a project (#627): it resolves to that project's entry for the
+// waiting Work's repository, else its only entry. With several entries and
+// none for that repository, which PR it means is unknown, so it is refused.
+func TestGitHubPRConditionNamesAProjectWithoutATracker(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := githubtest.New("octo/ops", "tok")
+	t.Cleanup(ops.Close)
+	opsPR := ops.OpenPull("Deploy", "", "deploy", "d1", ghAlice)
+	// PR numbers the ops repository doesn't have, so a condition resolved
+	// there instead of in the waiter's repository is refused not_found.
+	e.fake.OpenPull("Tidy", "", "tidy", "t1", ghAlice)
+	pr := e.fake.OpenPull("Fix the header", "", "fix", "h1", ghAlice)
+	if pr == opsPR {
+		t.Fatalf("PR #%d is in both repositories", pr)
+	}
+	source := func(scope, repo string, fake *githubtest.Server) gh.Source {
+		t.Helper()
+		s, err := gh.ParseExtension([]byte(`{"namespace":"github/`+scope+`/`+repo+`","scope":"`+scope+`","repo":"`+repo+`","track_issues":false,"track_pull_requests":true}`), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, _ := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"}`))
+		c, _ := gh.NewClient(cfg, func(context.Context, string) (string, error) { return "tok", nil }, gh.ClientOptions{Now: e.clock.Now})
+		return gh.Source{Settings: s, Client: c, Projector: e.projector}
+	}
+	for _, id := range []domain.ID{"review", "solo", "pair"} {
+		e.putScope(id, `{"namespace":"github/`+string(id)+`/x","scope":"`+string(id)+`","repo":"octo/x","track_issues":false}`)
+	}
+	e.mu.Lock()
+	e.aliasOK = true
+	e.extra = []gh.Source{
+		source("review", "octo/ops", ops), source("review", ghRepo, e.fake), // the waiter's repository, among others
+		source("solo", "octo/ops", ops),                                      // its only one
+		source("pair", "octo/ops", ops), source("pair", "octo/gadgets", ops), // several, none the waiter's
+	}
+	e.mu.Unlock()
+	wait := func(cond string) error {
+		_, w := e.claim("Needs "+cond, "", "bug")
+		a := e.start(w.ID)
+		defer e.finish(a, nil)
+		_, err := e.call(a, gh.OpWait, "", map[string]any{"conditions": []string{cond}, "reason": "after the review"})
+		return err
+	}
+	if err := wait("pr:review/" + itoa(pr) + ":review"); err != nil {
+		t.Fatalf("the waiter's repository in a project without a tracker: %v", err)
+	}
+	if err := wait("pr:solo/" + itoa(opsPR) + ":done"); err != nil {
+		t.Fatalf("the only repository of a project without a tracker: %v", err)
+	}
+	refusedSaying(t, wait("pr:pair/"+itoa(opsPR)+":done"), "no_project", "has no GitHub repository registered")
+}

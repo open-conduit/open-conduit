@@ -914,7 +914,7 @@ func (t *Tools) holdFor(ctx context.Context, b *bound, conds []string, until str
 type issueCreateInput struct {
 	Title   string   `json:"title" doc:"the issue's title; must not be empty"`
 	Body    string   `json:"body" doc:"the issue's description, in Markdown; must not be empty"`
-	Wait    []string `json:"wait,omitempty" doc:"conditions to hold the issue for before it is worked, any one of which starts it: pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's"`
+	Wait    []string `json:"wait,omitempty" doc:"conditions to hold the issue for before it is worked, any one of which starts it: pr:<n>[:merged|closed|commented|pushed|checks|<state>], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's"`
 	Until   string   `json:"until,omitempty" doc:"a future ISO time (e.g. 2026-10-25T09:00Z) to hold the issue until; with wait, whichever comes first"`
 	Project string   `json:"project,omitempty" doc:"another project (its ID or name) to open the issue in; this project must be allowed to file there, and the issue can't then be held"`
 	Backlog bool     `json:"backlog,omitempty" doc:"put the issue on the backlog, so it isn't worked until a person takes it off; not with wait or until"`
