@@ -534,6 +534,15 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 		if err != nil || env["NOTES_WORK"] != "work-e" || env["NOTES_CONNECTION"] != "notes-service" {
 			t.Fatalf("run environment: %v %v", env, err)
 		}
+		// A layer's files cross the protocol with the binding and the
+		// directory they go in; with no directory they are dropped.
+		layer, err := r.RunLayer(ctx, extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-e", ExecutionID: "work-e/1"}, Binding: "writer", FilesDir: "/run/files/notes"})
+		if err != nil || layer.Env["NOTES_BINDING"] != "writer" || layer.Env["NOTES_CONFIG"] != "/run/files/notes/notes.conf" || layer.Files["notes.conf"] != "work = work-e\n" {
+			t.Fatalf("run layer: %+v %v", layer, err)
+		}
+		if layer, err = r.RunLayer(ctx, extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-e", ExecutionID: "work-e/1"}}); err != nil || layer.Files != nil {
+			t.Fatalf("run layer without a files dir: %+v %v", layer, err)
+		}
 	})
 	t.Run("setup", func(t *testing.T) {
 		s, ok := r.Setup()

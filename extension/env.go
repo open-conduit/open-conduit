@@ -16,6 +16,59 @@ import (
 type RunEnvironmentRequest struct {
 	Owner      ResourceOwner
 	Connection string
+	// Binding is the name of the executor binding the run is on, as the
+	// host stored it.
+	Binding string
+	// FilesDir is the directory the host writes the layer's files to
+	// (RunLayer.Files), so an environment variable can name one: a
+	// host-kept directory of the run's own that the run reads at the
+	// same path, on the host, in a process sandbox and in a container.
+	// It is empty when the run has none (a binding with no toolbelt),
+	// and then files are not written.
+	FilesDir string
+}
+
+// RunLayer is an extension's contribution to a run: environment
+// variables, as RunEnvironment returns them, and files the host writes,
+// before the run starts, into the request's FilesDir, each under its name
+// (CheckRunFiles). A file is the run's to read, never to change: the host
+// writes it owner-only and removes it with the run's directory.
+type RunLayer struct {
+	Env   map[string]string
+	Files map[string]string
+}
+
+// RunLayerProvider is an extension whose run layer can carry files as well
+// as environment variables (protocol run.environment's files). The host
+// asks it instead of RunEnvironment.
+type RunLayerProvider interface {
+	RunLayer(ctx context.Context, r RunEnvironmentRequest) (RunLayer, error)
+}
+
+// Run file limits: a few small config files, not a channel for data.
+const (
+	MaxRunFiles     = 16
+	MaxRunFileBytes = 64 << 10
+)
+
+var runFileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// CheckRunFiles reports whether files may be written into a run: at most
+// MaxRunFiles, each a plain file name (letters, digits, '.', '_' and '-',
+// never a path) of at most MaxRunFileBytes with no NUL.
+func CheckRunFiles(files map[string]string) error {
+	if len(files) > MaxRunFiles {
+		return fmt.Errorf("a run layer may carry at most %d files", MaxRunFiles)
+	}
+	for name, content := range files {
+		if !runFileName.MatchString(name) || name == "." || name == ".." {
+			return fmt.Errorf("run file %q is not a plain file name", name)
+		}
+		if len(content) > MaxRunFileBytes || strings.ContainsRune(content, 0) {
+			return fmt.Errorf("run file %q is over %d bytes or has a NUL", name, MaxRunFileBytes)
+		}
+	}
+	return nil
 }
 
 // RunEnvironment contributes an environment layer to the runs of Work in

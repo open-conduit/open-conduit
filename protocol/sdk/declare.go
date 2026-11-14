@@ -108,10 +108,10 @@ var payloadType = reflect.TypeFor[domain.Payload]()
 // output's data. An In or Out of type domain.Payload passes the payload
 // as it is.
 func Handler[In, Out any](fn func(context.Context, extension.Authority, In) (Out, error)) Op {
-	schema, required := inputSchema[In]()
+	schema, required, fields := inputSchema[In]()
 	return Op{kind: protocol.OperationHandler, input: schema, bind: func(name, output string) extension.Operation {
 		return extension.Operation{Name: name, Handler: func(ctx context.Context, a extension.Authority, p domain.Payload) (domain.Payload, error) {
-			in, err := decodeInput[In](name, required, p)
+			in, err := decodeInput[In](name, required, fields, p)
 			if err != nil {
 				return domain.Payload{}, err
 			}
@@ -127,10 +127,10 @@ func Handler[In, Out any](fn func(context.Context, extension.Authority, In) (Out
 // Wait makes an operation that suspends the Work (see extension.Operation).
 // In is decoded as for Handler.
 func Wait[In any](fn func(context.Context, extension.Authority, In) (extension.WaitPlan, error)) Op {
-	schema, required := inputSchema[In]()
+	schema, required, fields := inputSchema[In]()
 	return Op{kind: protocol.OperationWait, input: schema, bind: func(name, _ string) extension.Operation {
 		return extension.Operation{Name: name, Wait: func(ctx context.Context, a extension.Authority, p domain.Payload) (extension.WaitPlan, error) {
-			in, err := decodeInput[In](name, required, p)
+			in, err := decodeInput[In](name, required, fields, p)
 			if err != nil {
 				return extension.WaitPlan{}, err
 			}
@@ -143,10 +143,10 @@ func Wait[In any](fn func(context.Context, extension.Authority, In) (extension.W
 // the Commit option its plan may write records (see extension.Operation).
 // In is decoded as for Handler.
 func Emit[In any](fn func(context.Context, extension.Authority, In) (extension.EmitPlan, error)) Op {
-	schema, required := inputSchema[In]()
+	schema, required, fields := inputSchema[In]()
 	return Op{kind: protocol.OperationEmit, input: schema, bind: func(name, _ string) extension.Operation {
 		return extension.Operation{Name: name, Emit: func(ctx context.Context, a extension.Authority, p domain.Payload) (extension.EmitPlan, error) {
-			in, err := decodeInput[In](name, required, p)
+			in, err := decodeInput[In](name, required, fields, p)
 			if err != nil {
 				return extension.EmitPlan{}, err
 			}
@@ -155,11 +155,12 @@ func Emit[In any](fn func(context.Context, extension.Authority, In) (extension.E
 	}}
 }
 
-// inputSchema is In's JSON Schema and its required top-level fields.
-func inputSchema[In any]() (json.RawMessage, []string) {
+// inputSchema is In's JSON Schema, its required top-level fields and
+// every top-level field's name.
+func inputSchema[In any]() (json.RawMessage, []string, map[string]bool) {
 	t := reflect.TypeFor[In]()
 	if t == payloadType {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if t.Kind() != reflect.Struct && !(t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct) {
 		panic(fmt.Sprintf("sdk: an operation's input must be a struct or domain.Payload, not %s", t))
@@ -170,10 +171,16 @@ func inputSchema[In any]() (json.RawMessage, []string) {
 		panic(err)
 	}
 	required, _ := schema["required"].([]string)
-	return raw, required
+	fields := map[string]bool{}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for name := range props {
+			fields[name] = true
+		}
+	}
+	return raw, required, fields
 }
 
-func decodeInput[In any](name string, required []string, p domain.Payload) (In, error) {
+func decodeInput[In any](name string, required []string, fields map[string]bool, p domain.Payload) (In, error) {
 	var in In
 	if v, ok := any(&in).(*domain.Payload); ok {
 		*v = p
@@ -186,6 +193,26 @@ func decodeInput[In any](name string, required []string, p domain.Payload) (In, 
 	var present map[string]json.RawMessage
 	if json.Unmarshal(data, &present) != nil {
 		return in, &extension.OperationError{Code: "bad_request", Message: name + ": the input must be a JSON object"}
+	}
+	// encoding/json matches a struct's fields case-insensitively, the
+	// last of several matching keys winning, so {"role":"read","Role":
+	// "write"} would reach the handler as "write" while a gate that reads
+	// the input as JSON sees "read". Every top-level key must be exactly
+	// one of In's field names, once, so the handler reads only what the
+	// input plainly says.
+	keys, err := topLevelKeys(data)
+	if err != nil {
+		return in, &extension.OperationError{Code: "bad_request", Message: name + ": the input must be a JSON object"}
+	}
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if seen[k] {
+			return in, &extension.OperationError{Code: "bad_request", Message: fmt.Sprintf("%s: field %q is given twice", name, k)}
+		}
+		seen[k] = true
+		if !fields[k] {
+			return in, &extension.OperationError{Code: "bad_request", Message: fmt.Sprintf("%s: unknown field %q", name, k)}
+		}
 	}
 	for _, f := range required {
 		if _, ok := present[f]; !ok {
@@ -201,6 +228,31 @@ func decodeInput[In any](name string, required []string, p domain.Payload) (In, 
 		return in, &extension.OperationError{Code: "bad_request", Message: name + ": trailing data after the input"}
 	}
 	return in, nil
+}
+
+// topLevelKeys are a JSON object's keys, in order, repeats included.
+func topLevelKeys(data []byte) ([]string, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, errors.New("not an object")
+	}
+	var keys []string
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		k, ok := t.(string)
+		if !ok {
+			return nil, errors.New("not an object")
+		}
+		keys = append(keys, k)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
 }
 
 // inputError says what is wrong with an input without Go type names.

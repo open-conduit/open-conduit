@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -212,8 +213,13 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Tunnels = map[string]extension.TunnelProvider{Relay: relay{}}
 	ext.Exporter = exporter{stateDir: o.StateDir}
 	ext.Annotate = annotate
-	ext.RunEnvironment = func(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (map[string]string, error) {
-		return map[string]string{"NOTES_WORK": string(r.Owner.WorkID), "NOTES_CONNECTION": r.Connection}, nil
+	ext.RunLayer = func(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (extension.RunLayer, error) {
+		layer := extension.RunLayer{Env: map[string]string{"NOTES_WORK": string(r.Owner.WorkID), "NOTES_CONNECTION": r.Connection, "NOTES_BINDING": r.Binding}}
+		if r.FilesDir != "" {
+			layer.Files = map[string]string{"notes.conf": "work = " + string(r.Owner.WorkID) + "\n"}
+			layer.Env["NOTES_CONFIG"] = filepath.Join(r.FilesDir, "notes.conf")
+		}
+		return layer, nil
 	}
 	ext.Actions = func(ctx context.Context, _ *sdk.Host, t extension.ActionTarget) ([]extension.Action, error) {
 		return Actions{}.Actions(ctx, t)

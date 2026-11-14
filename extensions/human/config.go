@@ -64,6 +64,13 @@ type GateConfig struct {
 	// Each must name a binding of the scope. It needs Operations, and does
 	// not narrow Kinds or Bindings.
 	ForBindings []string `json:"for_bindings,omitempty"`
+	// Input, when set, narrows Operations to calls whose input has each of
+	// these top-level fields with exactly this JSON value ({"role":
+	// "write"}), so one operation can need approval for some inputs and
+	// not others. A call whose input lacks a field, or has another value,
+	// isn't held by the gate. It needs Operations, and does not narrow
+	// Kinds or Bindings.
+	Input map[string]json.RawMessage `json:"input,omitempty"`
 	// Kinds are Work kinds ("github.issue"), or a prefix ending in ".*",
 	// whose Work needs approval before its first attempt starts.
 	Kinds []string `json:"kinds,omitempty"`
@@ -77,12 +84,19 @@ type GateConfig struct {
 	// duration ("24h", at most a year). With no answer by then, the call
 	// is refused, or with Escalate set, escalated. Default "24h".
 	Timeout string `json:"timeout,omitempty"`
+	// ValidFor, when set, makes an approval a grant with a life: once the
+	// approved call goes through, the same call (the same operation and
+	// input) from the same Work passes the gate without asking until
+	// ValidFor has passed, a Go duration from 1m to 24h. What a person
+	// approves is then "this run may do this now", not "this one process
+	// may". Unset, an approval lets the call through once.
+	ValidFor string `json:"valid_for,omitempty"`
 	// Escalate, when set, widens an unanswered request to more responders
 	// once Timeout passes, rather than refusing it; the call is refused
 	// only if nobody answers by the escalation's own timeout as well.
 	Escalate *EscalateConfig `json:"escalate,omitempty"`
-	// timeout is Timeout parsed.
-	timeout time.Duration
+	// timeout is Timeout parsed, and validFor ValidFor.
+	timeout, validFor time.Duration
 }
 
 // EscalateConfig is who an unanswered approval request goes to next.
@@ -98,6 +112,9 @@ type EscalateConfig struct {
 
 // DefaultGateTimeout is how long an approval request waits by default.
 const DefaultGateTimeout = 24 * time.Hour
+
+// maxGrant is the longest an approval's grant may last (valid_for).
+const maxGrant = 24 * time.Hour
 
 // maxGateTimeout is the longest an approval request may wait: the
 // longest a wait's timeout may be.
@@ -150,6 +167,19 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 				return c, fmt.Errorf("%s: for_bindings: %q is not a binding name", where, b)
 			}
 		}
+		if len(g.Input) > 0 && len(g.Operations) == 0 {
+			return c, fmt.Errorf("%s: input: name the operations whose input it matches", where)
+		}
+		for field, v := range g.Input {
+			if field == "" {
+				return c, fmt.Errorf("%s: input: a field needs a name", where)
+			}
+			canon, err := canonical(v)
+			if err != nil {
+				return c, fmt.Errorf("%s: input: %q is not a JSON value", where, field)
+			}
+			g.Input[field] = canon
+		}
 		for _, op := range g.Operations {
 			name := strings.TrimSuffix(op, ".*")
 			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
@@ -171,6 +201,16 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 		var err error
 		if g.timeout, err = gateTimeout(where+": timeout", g.Timeout); err != nil {
 			return c, err
+		}
+		if g.ValidFor != "" {
+			if len(g.Operations) == 0 {
+				return c, fmt.Errorf("%s: valid_for: name the operations whose approval it lengthens", where)
+			}
+			d, err := time.ParseDuration(g.ValidFor)
+			if err != nil || d < time.Minute || d > maxGrant {
+				return c, fmt.Errorf("%s: valid_for: %q must be a duration from 1m to 24h, such as 15m", where, g.ValidFor)
+			}
+			g.validFor = d
 		}
 		if e := g.Escalate; e != nil {
 			if len(e.Responders) == 0 {
@@ -223,7 +263,7 @@ func checkResponders(field string, responders []string) error {
 // gates are the gates that name op, in order; with binding known, only
 // those whose for_bindings, if any, name it (with it unknown, every gate
 // that names op, so a filter never lets a call through unasked).
-func (c Config) gates(op, binding string, known bool) []GateConfig {
+func (c Config) gates(op string, input json.RawMessage, binding string, known bool) []GateConfig {
 	var out []GateConfig
 	for _, g := range c.Gates {
 		if !slices.ContainsFunc(g.Operations, func(pattern string) bool { return matches(pattern, op) }) {
@@ -232,9 +272,90 @@ func (c Config) gates(op, binding string, known bool) []GateConfig {
 		if known && len(g.ForBindings) > 0 && !slices.Contains(g.ForBindings, binding) {
 			continue
 		}
+		if !g.holdsInput(input) {
+			continue
+		}
 		out = append(out, g)
 	}
 	return out
+}
+
+// holdsInput reports whether the gate's input condition, if any, holds for
+// a call's input, failing closed: the gate can't know how the operation
+// reads its input, so every top-level key of the input that names a
+// gated field under case folding counts, repeats included ({"role":
+// "read", "Role": "write"}), and a field is matched when any of them has
+// the gate's value. An input that isn't a JSON object is held, since what
+// it says can't be read.
+func (g GateConfig) holdsInput(input json.RawMessage) bool {
+	if len(g.Input) == 0 {
+		return true
+	}
+	if len(bytes.TrimSpace(input)) == 0 || bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
+		return false
+	}
+	pairs, ok := topLevel(input)
+	if !ok {
+		return true
+	}
+	for field, want := range g.Input {
+		matched := false
+		for _, p := range pairs {
+			if !strings.EqualFold(p.key, field) {
+				continue
+			}
+			if canon, err := canonical(p.value); err == nil && bytes.Equal(canon, want) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+type pair struct {
+	key   string
+	value json.RawMessage
+}
+
+// topLevel is a JSON object's members, in order, repeats included.
+func topLevel(data json.RawMessage) ([]pair, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, false
+	}
+	var out []pair
+	for dec.More() {
+		t, err := dec.Token()
+		k, ok := t.(string)
+		if err != nil || !ok {
+			return nil, false
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false
+		}
+		out = append(out, pair{k, v})
+	}
+	return out, true
+}
+
+// canonical is a JSON value in one form (objects' keys sorted, no
+// insignificant space), so two spellings of a value compare equal.
+func canonical(v json.RawMessage) (json.RawMessage, error) {
+	var x any
+	d := json.NewDecoder(bytes.NewReader(v))
+	d.UseNumber()
+	if err := d.Decode(&x); err != nil {
+		return nil, err
+	}
+	if d.More() {
+		return nil, errors.New("trailing data")
+	}
+	return json.Marshal(x)
 }
 
 // gate is the rule one call's approval request follows when the gates
@@ -245,6 +366,11 @@ func gate(matched []GateConfig) GateConfig {
 	rule := matched[0]
 	rule.Responders = slices.Clone(rule.Responders)
 	for _, g := range matched[1:] {
+		// A grant lasts only as long as every gate holding the call
+		// allows: the shortest valid_for, and none if any gate has none.
+		if g.validFor < rule.validFor {
+			rule.validFor = g.validFor
+		}
 		for _, r := range g.Responders {
 			if !slices.Contains(rule.Responders, r) {
 				rule.Responders = append(rule.Responders, r)

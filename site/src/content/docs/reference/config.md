@@ -182,6 +182,33 @@ Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of t
 
 The `config` objects of connections, extension entries, routes, bindings, binding resources and the webhook tunnel belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.
 
+### AWS (`aws`)
+
+Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail. Registers: connection, extension.
+
+Connection `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `region` |  | Required. the AWS region STS is called in, which every profile the run gets uses too, such as eu-west-2 |
+| `endpoint` |  | an endpoint the host calls instead of STS's regional one (an STS VPC endpoint, an emulator); the run never calls it |
+| `run_endpoint` |  | an endpoint the run's profiles send every AWS call to (endpoint_url), for an emulator such as LocalStack that serves every service at one address; leave it unset for real AWS |
+| `profile` |  | the AWS CLI profile that gives the daemon's own identity when the connection has no key pair (default: the AWS CLI's default chain) |
+
+Connection `secret_refs`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `access_key_id` |  | the base identity's access key ID (with secret_access_key); without both, the daemon's own AWS identity |
+| `secret_access_key` |  | the base identity's secret access key |
+
+Extension entry `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `accounts` |  | Required. the 12-digit AWS account IDs a role may be in; a role in any other account is refused, at validation and at the call |
+| `roles` |  | Required. [{"name": "read", "arn": "arn:aws:iam::111122223333:role/agent-read", "for_bindings": ["helper"], "duration": "15m", "tag_session": false, "external_id": ""}]: the roles a run may get credentials for, each only for the bindings it names; duration from 15m (the default) to 12h; tag_session sends the scope, binding and Work as session tags, which the role's trust policy must allow (sts:TagSession) |
+
 ### Bitbucket Cloud (`bitbucket`)
 
 Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket. Registers: connection, extension, route.
@@ -363,7 +390,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `responders` | `["operator:local"]` | who may answer, each kind:id or a bare kind |
 | `surfaces` | `["tui"]` | where the question is shown |
-| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them) |
+| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it |
 
 ### Introspection (`introspection`)
 

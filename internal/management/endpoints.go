@@ -137,6 +137,46 @@ func (e *Endpoints) Serve(_ context.Context, id domain.ID, token string) (string
 	return "unix://" + socket, file, nil
 }
 
+// endpointFiles, in the token directory, holds the files extensions'
+// run layers carry (extension.RunLayer), one directory per extension.
+const endpointFiles = "files"
+
+// FilesDir is the directory of the files an extension's run layer carries
+// for the execution: a directory under the execution's token directory,
+// which every executor already lets the run read at the same path (it
+// holds the token file the run reads). It is "" when the execution has no
+// token directory, as a run without a toolbelt has none.
+func (e *Endpoints) FilesDir(id domain.ID, extension string) string {
+	tokens := filepath.Join(e.Dir(id), endpointTokens)
+	if st, err := os.Stat(tokens); err != nil || !st.IsDir() || extension == "" || strings.ContainsAny(extension, "/\\") || extension == "." || extension == ".." {
+		return ""
+	}
+	return filepath.Join(tokens, endpointFiles, extension)
+}
+
+// WriteFiles replaces the files in dir (a FilesDir) with files, each
+// owner-only and written whole.
+func WriteFiles(dir string, files map[string]string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for name, content := range files {
+		if name != filepath.Base(name) || name == "." || name == ".." {
+			return fmt.Errorf("run file %q is not a file name", name)
+		}
+		if err := writePrivate(filepath.Join(dir, name), []byte(content)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ServeTCP also serves the execution's served socket's handler on a port
 // of its own at host (loopback on macOS), for a container whose gateway
 // can't reach a host socket, and writes the port in toolbelt.port beside

@@ -52,7 +52,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Bindings: gateBindings, Fields: []protocol.FieldDecl{
 		{Name: "responders", Help: "who may answer, each kind:id or a bare kind", Default: `["operator:local"]`},
 		{Name: "surfaces", Help: "where the question is shown", Default: `["tui"]`},
-		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run (for_bindings: only when a run on one of these bindings calls them)`},
+		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it`},
 	}}}
 }
 
@@ -61,7 +61,7 @@ func (*Extension) Operations() []string { return Operations() }
 func (*Extension) Declarations() []extension.Operation { return Declared() }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
-	tools, err := NewTools(Options{Store: h.Store, Entry: x.entry, Now: h.Now})
+	tools, err := NewTools(Options{Store: h.Store, Entry: x.entry, Now: h.Now, Granted: x.granted})
 	if err != nil {
 		return err
 	}
@@ -156,6 +156,23 @@ func (x *Extension) Tasks() []inproc.Task {
 // EventGateEscalated is the telemetry event an approval request records
 // when nobody answered by its gate's timeout and it escalated.
 const EventGateEscalated = "human_gate_escalated"
+
+// EventGrantUsed is the telemetry event a call records when an approval's
+// grant (a gate's valid_for) let it through without asking.
+const EventGrantUsed = "human_gate_grant_used"
+
+// granted leaves a trail of a call an approval's grant let through: which
+// approval covered it, linked to its Work, and a log line.
+func (x *Extension) granted(ctx context.Context, a extension.Authority, g Grant) {
+	if x.host.Log != nil {
+		x.host.Log.Info("approval grant let a call through", "work", a.WorkID, "operation", g.Operation, "ask", g.Ask, "until", g.Until.UTC().Format(time.RFC3339))
+	}
+	if x.host.Capture != nil {
+		_ = x.host.Capture(ctx, string(a.ScopeID), EventGrantUsed, x.host.Now(), map[string]any{
+			"work_id": string(a.WorkID), "execution_id": string(a.ExecutionID), "ask_id": g.Ask, "operation": g.Operation,
+			"responder": g.Responder, "until": g.Until.UTC().Format(time.RFC3339)})
+	}
+}
 
 // escalated leaves a trail of an approval request's escalation: telemetry
 // linked to its Work, and a log line.

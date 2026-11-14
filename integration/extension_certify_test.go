@@ -187,6 +187,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// fixture command writes.
 		{"claude-code", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode", "surfaces.served"}},
 		{"sentry", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		// aws: its operation's refusals, against the fake STS its fixture
+		// command serves.
+		{"aws", "", []string{"operations.cases"}},
 		{"pagerduty", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		// PostHog through inprocsdk: an exporter, a sink and two checks,
 		// none of which a fixture exercises.

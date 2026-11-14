@@ -48,6 +48,10 @@ type Options struct {
 	// false when the scope is disabled or has none).
 	Entry func(scope domain.ID) (Entry, bool)
 	Now   func() time.Time
+	// Granted, when set, hears each call an approval's grant (valid_for)
+	// let through without asking, so the run's trail says which approval
+	// covered it.
+	Granted func(ctx context.Context, a extension.Authority, g Grant)
 }
 
 // Tools implements human.ask.
