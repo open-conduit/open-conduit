@@ -457,6 +457,8 @@ func (configData) EffectText(kind string) string {
 		return "Attached to the Work, not its input"
 	case "unmatched":
 		return "No route matched"
+	case "held":
+		return "Held: a dependency filter could not answer"
 	}
 	return kind
 }

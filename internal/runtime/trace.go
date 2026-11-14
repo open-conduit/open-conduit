@@ -35,6 +35,10 @@ const (
 	// Event in its history without making it input (extension.DeliverNone).
 	EffectAttach    = extension.DispositionAttach
 	EffectUnmatched = "unmatched"
+	// EffectHeld: a dependency subscription's filter could not answer
+	// about the Event now, so the subscription holds before it and asks
+	// again on a later pass; the Work stays parked until it answers.
+	EffectHeld = "held"
 )
 
 // RouteTrace is a dry run of routing for a hypothetical Event against the
@@ -86,6 +90,9 @@ type traceWait struct {
 	wakes   bool
 	first   string
 	refused string
+	// unanswered: a dependency subscription's filter couldn't answer about
+	// the Event (the dependency and the error), so it holds before it.
+	unanswered string
 }
 
 // Trace explains how the router would route e in scopeID now. It reads the
@@ -180,11 +187,19 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 	for _, route := range s.routes {
 		out.Routes = append(out.Routes, RouteStep{Route: route.Name, Handler: route.Handler, Binding: route.Binding, Verdict: VerdictNotReached})
 	}
+	var held []RouteEffect
 	for _, w := range wakes {
+		if w.unanswered != "" {
+			held = append(held, RouteEffect{Kind: EffectHeld, WorkID: w.work.ID, Binding: w.meta.Binding, Detail: string(w.work.ID) + " in scope " + string(w.work.ScopeID) + " stays parked for now: " + w.unanswered + "; its subscription holds before this event and asks again on the next pass"})
+			continue
+		}
 		if s.work == nil || w.work.ID != s.work.ID {
 			out.Also = append(out.Also, wakeEffect(w, "through its dependency on this event"))
 		}
 	}
+	// Held dependencies come after the wakes; only a wake can become the
+	// Event's effect below.
+	out.Also = append(out.Also, held...)
 	if waiting != nil {
 		// A match that only attaches keys isn't input, so the wait has
 		// nothing to decide (as routing does it).
@@ -271,7 +286,7 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		return out, err
 	}
 	if p.selected == nil {
-		if s.work == nil && len(out.Also) > 0 {
+		if s.work == nil && len(out.Also) > 0 && out.Also[0].Kind == EffectWake {
 			// The Event's only consequence is waking other Work.
 			out.Effect, out.Also = out.Also[0], out.Also[1:]
 			return out, nil
@@ -457,11 +472,32 @@ func (r *Router) subscriptionWakes(tx storage.Tx, scope domain.ID, a domain.Acce
 			continue
 		}
 		if sub.Request.Filter != nil {
-			// A filter that can't answer now wakes nothing now.
 			if filter == nil {
 				continue
 			}
-			if match, err := filter(sub.Request.Namespace, *sub.Request.Filter, a.Event); err != nil || !match {
+			match, err := filter(sub.Request.Namespace, *sub.Request.Filter, a.Event)
+			if err != nil {
+				// Shown, not folded into "no match": it is why the wait
+				// isn't woken now.
+				w, er := tx.Work(sub.WorkID)
+				if er != nil {
+					return nil, er
+				}
+				wait, er := tx.Wait(sub.Request.WaitID)
+				if er != nil {
+					return nil, er
+				}
+				var meta waitMetadata
+				if er = getJSON(tx, waitNamespace, identity(string(wait.ID)), &meta); er != nil && !errors.Is(er, storage.ErrNotFound) {
+					return nil, er
+				}
+				if w.State == domain.WorkWaiting {
+					seen[w.ID] = true
+					out = append(out, traceWait{wait: wait, meta: meta, work: w, unanswered: sub.Request.Namespace + "'s filter for " + sub.Request.Label + " could not answer (" + err.Error() + ")"})
+				}
+				continue
+			}
+			if !match {
 				continue
 			}
 		}

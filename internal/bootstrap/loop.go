@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -68,8 +69,8 @@ func (d *daemon) loop(ctx context.Context) error {
 		}
 		d.startReady(ctx)
 		d.dispatchControls(ctx, c)
-		if err = c.scheduler.ReconcileSubscriptions(ctx, passLimit); err != nil && ctx.Err() == nil {
-			d.report("subscriptions", "", errorCode(err))
+		if err = c.scheduler.ReconcileSubscriptions(ctx, passLimit); ctx.Err() == nil {
+			d.reportSubscriptions(err)
 		}
 		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("ingress", "", errorCode(err))
@@ -413,6 +414,55 @@ func (d *daemon) releaseAll(ctx context.Context) {
 }
 
 // errorCode maps runtime errors to safe stable diagnostic codes.
+// reportSubscriptions reports a subscription pass. Each dependency a filter
+// couldn't answer about is its own diagnostic, with its Wait as the subject
+// and the namespace, dependency and Event as the cause, so the held Work can
+// be found; one that answers again is cleared. Any other failure is the
+// pass's own.
+func (d *daemon) reportSubscriptions(err error) {
+	held := map[domain.ID]bool{}
+	var rest []error
+	for _, e := range joined(err) {
+		var f *runtime.DependencyFilterError
+		if !errors.As(e, &f) {
+			rest = append(rest, e)
+			continue
+		}
+		code := "dependency_filter_unavailable"
+		if !f.Held {
+			code = "dependency_filter_passed_by"
+		} else {
+			held[f.WaitID] = true
+		}
+		d.report("subscription", f.WaitID, code, f.Error())
+	}
+	d.mu.Lock()
+	var cleared []domain.ID
+	for key, code := range d.reported {
+		if id, ok := strings.CutPrefix(key, "subscription\x00"); ok && code == "dependency_filter_unavailable" && !held[domain.ID(id)] {
+			cleared = append(cleared, domain.ID(id))
+		}
+	}
+	d.mu.Unlock()
+	for _, id := range cleared {
+		d.report("subscription", id, "")
+	}
+	d.report("subscriptions", "", errorCode(errors.Join(rest...)))
+}
+
+// joined is err's parts when it is an errors.Join, else err alone.
+func joined(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		if _, typed := err.(*runtime.DependencyFilterError); !typed {
+			return j.Unwrap()
+		}
+	}
+	return []error{err}
+}
+
 func errorCode(err error) string {
 	var capacity *runtime.CapacityError
 	var route *runtime.RouteError

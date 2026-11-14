@@ -40,6 +40,8 @@ type toolbeltHarness struct {
 	// filterDown makes the fixture's dependency filter fail to answer, as
 	// a remote extension's does while it times out or restarts.
 	filterDown bool
+	// filterCalls counts the fixture's dependency filter calls.
+	filterCalls int
 	// records are the toolbelt's call records; refusal classifies a
 	// refused call (ToolbeltOptions.Refusal) when set.
 	records *[]observability.Record
@@ -126,6 +128,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) (bool, error) {
 		h.mu.Lock()
 		unavailable := h.filterDown
+		h.filterCalls++
 		h.mu.Unlock()
 		if unavailable {
 			return false, errors.New("filter unavailable")
