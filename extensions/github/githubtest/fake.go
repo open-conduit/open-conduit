@@ -626,6 +626,14 @@ func (s *Server) ForcePushPull(n int, sha string) {
 // Pull returns a copy of a pull request's state.
 func (s *Server) Pull(n int) Pull { s.mu.Lock(); defer s.mu.Unlock(); return *s.pulls[n] }
 
+// SetBase retargets a PR to another base branch.
+func (s *Server) SetBase(n int, base string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[n].BaseRef = base
+	s.issue(n).Updated = s.tick()
+}
+
 // PushPull moves a PR head.
 func (s *Server) PushPull(n int, sha string) {
 	s.mu.Lock()
@@ -1657,6 +1665,9 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 				continue
 			}
 			if head := q.Get("head"); head != "" && head != owner+":"+s.pulls[n].HeadRef {
+				continue
+			}
+			if base := q.Get("base"); base != "" && base != s.pulls[n].BaseRef {
 				continue
 			}
 			list = append(list, s.pullJSON(n))
