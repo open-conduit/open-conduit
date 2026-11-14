@@ -82,9 +82,54 @@ func (x *provider) get(ctx context.Context) (*docker.Provider, error) {
 		if v := os.Getenv("OPEN_CONDUIT_GATEWAY_IMAGE"); v != "" {
 			gateway = v
 		}
-		x.p = docker.New(docker.Options{Helper: append(self, "run"), Host: h.ContainerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"), Contexts: x.configured})
+		x.p = docker.New(docker.Options{Helper: append(self, "run"), Host: h.ContainerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
+			NoPull: pullOff(os.Getenv("OPEN_CONDUIT_GATEWAY_PULL")), Log: stderrLog, Contexts: x.configured})
 	})
 	return x.p, x.err
+}
+
+// pullOff is whether OPEN_CONDUIT_GATEWAY_PULL turns the gateway pull off.
+func pullOff(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "off", "false", "0", "no", "never":
+		return true
+	}
+	return false
+}
+
+// stderrLog writes a line to the package's log: its stderr, which the host
+// keeps beside its own logs.
+func stderrLog(msg string) {
+	fmt.Fprintf(os.Stderr, "%s docker: %s\n", time.Now().UTC().Format(time.RFC3339), msg)
+}
+
+// pullGateways starts, without waiting, a pull of the gateway image on
+// each configured context that lacks it, so the first run (and doctor)
+// finds it there (docker.Provider.EnsureGateway); a run's plan pulls it
+// again if this one fails.
+func (x *provider) pullGateways(ctx context.Context) {
+	contexts := x.configured()
+	if len(contexts) == 0 {
+		return
+	}
+	p, err := x.get(ctx)
+	if err != nil {
+		return
+	}
+	startPulls(ctx, p, contexts)
+}
+
+// startPulls starts EnsureGateway on each context and returns at once,
+// with what finishes once they have (configure doesn't wait on it); the
+// pulls outlive ctx's cancellation (configure's call), not its values.
+func startPulls(ctx context.Context, p *docker.Provider, contexts []string) *sync.WaitGroup {
+	bg := context.WithoutCancel(ctx)
+	var wg sync.WaitGroup
+	for _, dctx := range contexts {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = p.EnsureGateway(bg, dctx) }()
+	}
+	return &wg
 }
 
 // configured are the Docker contexts the last configure's bindings use.
@@ -182,8 +227,9 @@ var _ interface {
 func Build() *sdk.Extension {
 	x := &provider{}
 	return &sdk.Extension{Manifest: Manifest(),
-		Configure: func(_ context.Context, _ *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
+		Configure: func(ctx context.Context, _ *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
 			x.configure(p.Containers)
+			x.pullGateways(ctx)
 			return protocol.ConfigureResult{}, nil
 		},
 		Validate: func(_ context.Context, v protocol.ValidateParams) error {

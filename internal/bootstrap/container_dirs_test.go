@@ -69,8 +69,8 @@ func TestForwardAddress(t *testing.T) {
 // container switches that are set, and nothing else of the daemon's
 // OPEN_CONDUIT_* environment.
 func TestContainerSwitches(t *testing.T) {
-	got := containerSwitches([]string{"OPEN_CONDUIT_GATEWAY_IMAGE=sha256:x", "OPEN_CONDUIT_CONFIG=/c", "OPEN_CONDUIT_PASS_FILE=/p", "PATH=/bin"})
-	if want := []string{"OPEN_CONDUIT_GATEWAY_IMAGE=sha256:x"}; !slices.Equal(got, want) {
+	got := containerSwitches([]string{"OPEN_CONDUIT_GATEWAY_IMAGE=sha256:x", "OPEN_CONDUIT_GATEWAY_PULL=off", "OPEN_CONDUIT_CONFIG=/c", "OPEN_CONDUIT_PASS_FILE=/p", "PATH=/bin"})
+	if want := []string{"OPEN_CONDUIT_GATEWAY_IMAGE=sha256:x", "OPEN_CONDUIT_GATEWAY_PULL=off"}; !slices.Equal(got, want) {
 		t.Fatalf("switches %v, want %v", got, want)
 	}
 }

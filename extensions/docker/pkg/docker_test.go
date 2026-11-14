@@ -95,3 +95,50 @@ case "$*" in *"good@"*) echo '2.1.0 (Claude Code)';; *) echo 'claude: not found'
 		t.Fatalf("an image without claude: %+v", out)
 	}
 }
+
+// TestPullOff: OPEN_CONDUIT_GATEWAY_PULL turns the gateway pull off only
+// when it says so; unset or anything else leaves pulls on.
+func TestPullOff(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "on": false, "true": false, "off": true, "OFF": true, "false": true, "0": true, "never": true} {
+		if got := pullOff(v); got != want {
+			t.Errorf("pullOff(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// TestConfigureStartsPulls: configure's pulls run on every configured
+// context without the caller waiting and outlive its cancelled context,
+// one pull per context; once they finish the image is there, and nothing
+// pulls again. A startPulls that pulled nothing leaves pulls empty.
+func TestConfigureStartsPulls(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	script := "#!/bin/sh\nd=" + dir + "\ncase \"$3\" in\nimage) [ -f \"$d/have-$2\" ] && exit 0; exit 1;;\npull) echo \"$2\" >> \"$d/pulls\"; touch \"$d/have-$2\";;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := docker.New(docker.Options{Docker: bin, Host: "h", Gateway: "ghcr.io/o/g@sha256:" + strings.Repeat("1", 64),
+		Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH")} }})
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := startPulls(ctx, p, []string{"a", "b"})
+	cancel()
+	wg.Wait()
+	b, _ := os.ReadFile(filepath.Join(dir, "pulls"))
+	got := strings.Fields(string(b))
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("pulls %q, want one on each context", got)
+	}
+	if err := p.EnsureGateway(context.Background(), "a"); err != nil || len(strings.Fields(string(mustRead(t, filepath.Join(dir, "pulls"))))) != 2 {
+		t.Fatalf("after configure's pulls: %v, pulled again", err)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

@@ -108,7 +108,16 @@ type Options struct {
 	// Forward is ForwardUnix or ForwardTCP (tcp on macOS, unix elsewhere,
 	// when empty).
 	Forward string
-	Now     func() time.Time
+	// NoPull leaves a missing gateway image for the operator to load: a
+	// host with no registry access (OPEN_CONDUIT_GATEWAY_PULL=off).
+	// Otherwise the provider pulls it by digest (EnsureGateway).
+	NoPull bool
+	// PullTimeout bounds one pull of the gateway image (default 10m).
+	PullTimeout time.Duration
+	// Log records the provider's own actions, a gateway pull (discarded
+	// when nil).
+	Log func(msg string)
+	Now func() time.Time
 	// QueryTimeout bounds each read of the daemon's state (info, ps,
 	// inspect), so a wedged Docker can't hold the caller (default 5s).
 	// Creating, stopping and removing containers keep the caller's
@@ -119,11 +128,16 @@ type Options struct {
 // DefaultQueryTimeout bounds a docker info, ps or inspect.
 const DefaultQueryTimeout = 5 * time.Second
 
+// DefaultPullTimeout bounds one pull of the gateway image.
+const DefaultPullTimeout = 10 * time.Minute
+
 // Provider implements extension.ContainerProvider.
 type Provider struct {
 	o      Options
 	mu     sync.Mutex
 	health map[string]time.Time
+	// pulls are the gateway pulls in flight or last finished, by context.
+	pulls map[string]*pull
 }
 
 // New returns the provider.
@@ -143,6 +157,12 @@ func New(o Options) *Provider {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Log == nil {
+		o.Log = func(string) {}
+	}
+	if o.PullTimeout <= 0 {
+		o.PullTimeout = DefaultPullTimeout
+	}
 	if o.Contexts == nil {
 		o.Contexts = func() []string { return nil }
 	}
@@ -155,7 +175,7 @@ func New(o Options) *Provider {
 			o.Forward = ForwardTCP
 		}
 	}
-	return &Provider{o: o, health: map[string]time.Time{}}
+	return &Provider{o: o, health: map[string]time.Time{}, pulls: map[string]*pull{}}
 }
 
 // ForwardMode is how gateways reach the toolbelt: ForwardUnix or ForwardTCP.
@@ -299,7 +319,7 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if err != nil {
 		return extension.ContainerPlan{}, err
 	}
-	if h := p.Health(ctx, s.Context, cfg.Image, paths.Records, true); h.Status == "fail" {
+	if h := p.assess(ctx, s.Context, cfg.Image, paths.Records, true, true); h.Status == "fail" {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: docker on context %s: %s", extension.ErrSandboxUnavailable, s.Context, h.Detail)
 	}
 	plan := Plan{Context: s.Context, User: fmt.Sprintf("%d:%d", p.o.UID, p.o.GID), Workdir: l.Dir, Mounts: mounts, Argv: l.Argv,

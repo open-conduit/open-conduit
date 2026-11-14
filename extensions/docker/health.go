@@ -33,8 +33,15 @@ type Health struct {
 // under --user into dir, a host directory shared as workspaces are, is
 // the operator's on the host, that the gateway image is there by digest,
 // and the preflight (Preflight). Any failure blocks the provider, whatever
-// the Docker. With cached, a pass in the last ten minutes stands.
+// the Docker. With cached, a pass in the last ten minutes stands. Health
+// only looks: it never pulls the gateway image (EnsureGateway does).
 func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached bool) Health {
+	return p.assess(ctx, dctx, image, dir, cached, false)
+}
+
+// assess is Health, pulling a missing gateway image first with pull (a
+// launch's plan).
+func (p *Provider) assess(ctx context.Context, dctx, image, dir string, cached, pull bool) Health {
 	key := dctx + "\x00" + image
 	if cached {
 		p.mu.Lock()
@@ -44,7 +51,7 @@ func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached b
 			return Health{Status: "ok", Code: "ok"}
 		}
 	}
-	h := p.check(ctx, dctx, image, dir)
+	h := p.check(ctx, dctx, image, dir, pull)
 	if h.Status == "ok" {
 		p.mu.Lock()
 		p.health[key] = p.o.Now()
@@ -53,7 +60,7 @@ func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached b
 	return h
 }
 
-func (p *Provider) check(ctx context.Context, dctx, image, dir string) Health {
+func (p *Provider) check(ctx context.Context, dctx, image, dir string, pull bool) Health {
 	out, err := p.docker(ctx, dctx, "info", "--format", "{{.ID}}|{{.ServerVersion}}|{{.OperatingSystem}}")
 	if err != nil {
 		return Health{Status: "fail", Code: "docker_unreachable", Detail: fmt.Sprintf("no Docker daemon on context %s: %v%s", dctx, err, p.envHint())}
@@ -82,7 +89,11 @@ func (p *Provider) check(ctx context.Context, dctx, image, dir string) Health {
 		h.Status, h.Code, h.Detail = "fail", "shared_path_failed", fmt.Sprintf("context %s: %v", dctx, err)
 		return h
 	}
-	if code, err := p.gatewayPresent(ctx, dctx); err != nil {
+	present := p.gatewayPresent
+	if pull {
+		present = p.ensureGateway
+	}
+	if code, err := present(ctx, dctx); err != nil {
 		h.Status, h.Code, h.Detail = "fail", code, fmt.Sprintf("context %s: %v", dctx, err)
 		return h
 	}
@@ -93,7 +104,9 @@ func (p *Provider) check(ctx context.Context, dctx, image, dir string) Health {
 }
 
 // gatewayPresent checks the build has a gateway image pinned by digest and
-// that the context's daemon has it.
+// that the context's daemon has it. A missing one's error says how it gets
+// there: pulled by the provider (with the last pull's failure, if any), or,
+// with pulls off or nothing to pull from, by the operator.
 func (p *Provider) gatewayPresent(ctx context.Context, dctx string) (string, error) {
 	gw := p.o.Gateway
 	switch {
@@ -102,14 +115,99 @@ func (p *Provider) gatewayPresent(ctx context.Context, dctx string) (string, err
 	case !gatewayRef.MatchString(gw):
 		return "gateway_unpinned", fmt.Errorf("the gateway image %s is not pinned by digest", gw)
 	}
-	if _, err := p.docker(ctx, dctx, "image", "inspect", "--format", "{{.Id}}", gw); err != nil {
-		hint := ""
-		if strings.Contains(gw, "@") {
-			hint = fmt.Sprintf(": docker --context %s pull %s", dctx, gw)
-		}
-		return "gateway_missing", fmt.Errorf("the gateway image %s is not there%s", gw, hint)
+	if _, err := p.docker(ctx, dctx, "image", "inspect", "--format", "{{.Id}}", gw); err == nil {
+		return "", nil
 	}
-	return "", nil
+	var how string
+	switch {
+	case !p.pullable():
+		if strings.Contains(gw, "@") {
+			how = fmt.Sprintf(": pulls are off (OPEN_CONDUIT_GATEWAY_PULL=off), so run docker --context %s pull %s", dctx, gw)
+		} else {
+			how = ": it is a local image ID, so build it there (make gateway-image)"
+		}
+	default:
+		p.mu.Lock()
+		f := p.pulls[dctx]
+		p.mu.Unlock()
+		switch {
+		case f == nil:
+			how = "; Open Conduit pulls it when the daemon applies its config and before a run"
+		case !f.finished():
+			how = "; Open Conduit is pulling it now"
+		case f.err != nil:
+			how = fmt.Sprintf("; Open Conduit's last pull failed (%v) and is tried again before a run, or run docker --context %s pull %s", f.err, dctx, gw)
+		}
+	}
+	return "gateway_missing", fmt.Errorf("the gateway image %s is not there%s", gw, how)
+}
+
+// pullable is whether a missing gateway image is pulled: pulls are on and
+// the image names a repository (a local image ID can't be pulled).
+func (p *Provider) pullable() bool {
+	return !p.o.NoPull && strings.Contains(p.o.Gateway, "@")
+}
+
+// pull is one pull of the gateway image on a context; done closes once err
+// is set.
+type pull struct {
+	done chan struct{}
+	err  error
+}
+
+func (f *pull) finished() bool {
+	select {
+	case <-f.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// EnsureGateway makes sure the context's daemon has the gateway image,
+// pulling it by digest when it is missing and pulls are on, and logging
+// the pull. A pull already in flight on the context is joined, not
+// repeated, and runs to its own deadline (PullTimeout) even if the caller
+// stops waiting. A failed pull is tried again on the next call: before the
+// next launch, or the next time the daemon applies its config.
+func (p *Provider) EnsureGateway(ctx context.Context, dctx string) error {
+	_, err := p.ensureGateway(ctx, dctx)
+	return err
+}
+
+func (p *Provider) ensureGateway(ctx context.Context, dctx string) (string, error) {
+	code, err := p.gatewayPresent(ctx, dctx)
+	if code != "gateway_missing" || !p.pullable() {
+		return code, err
+	}
+	p.mu.Lock()
+	f := p.pulls[dctx]
+	if f == nil || f.finished() {
+		f = &pull{done: make(chan struct{})}
+		p.pulls[dctx] = f
+		go p.pull(context.WithoutCancel(ctx), dctx, f)
+	}
+	p.mu.Unlock()
+	select {
+	case <-f.done:
+	case <-ctx.Done():
+		return "gateway_missing", fmt.Errorf("the gateway image %s is not there yet: %w", p.o.Gateway, ctx.Err())
+	}
+	return p.gatewayPresent(ctx, dctx)
+}
+
+func (p *Provider) pull(ctx context.Context, dctx string, f *pull) {
+	defer close(f.done)
+	ctx, cancel := context.WithTimeout(ctx, p.o.PullTimeout)
+	defer cancel()
+	gw := p.o.Gateway
+	p.o.Log(fmt.Sprintf("pulling the gateway image %s on docker context %s", gw, dctx))
+	if _, err := p.docker(ctx, dctx, "pull", "--quiet", gw); err != nil {
+		f.err = err
+		p.o.Log(fmt.Sprintf("could not pull the gateway image %s on docker context %s: %v", gw, dctx, err))
+		return
+	}
+	p.o.Log(fmt.Sprintf("pulled the gateway image %s on docker context %s", gw, dctx))
 }
 
 // Preflight makes a network as an execution's internal one is made, and
