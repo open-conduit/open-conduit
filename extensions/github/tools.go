@@ -105,6 +105,8 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[issueCreateInput]()},
 		{Name: OpPRList, Summary: "List the PRs of this Work's issue, or the PRs this Work opened when it has no issue, open or not; with open, every open PR in the repository.",
 			Input: extension.InputSchema[prListInput]()},
+		{Name: OpPRSearch, Summary: "Search the repository's PRs, whoever opened them, by state, author, head and base branch, newest first, without their bodies; github.issue.list lists its open issues.",
+			Input: extension.InputSchema[prSearchInput]()},
 		{Name: OpPRView, Summary: "Read a PR with every comment, inline review comment and review on it.",
 			Input: extension.InputSchema[prViewInput]()},
 		{Name: OpPRCreate, Summary: "Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise; without an issue, from the branch you name.",
@@ -264,6 +266,9 @@ func (t *Tools) Registration() extension.Registration {
 			// List binds any Work: with open, a PR's own Work or a job
 			// lists every open PR; otherwise it needs code work of its own.
 			{Name: OpPRList, Handler: pr(t.prList)},
+			// Search binds any Work: the repository's PRs, whoever opened
+			// them, in a repository the Work's scope registers.
+			{Name: OpPRSearch, Handler: pr(t.prSearch)},
 			{Name: OpPRView, Handler: pr(t.prView)},
 			{Name: OpPRCreate, Handler: code(t.prCreate)},
 			// Edit acts only on a PR this Work opened: whose body carries

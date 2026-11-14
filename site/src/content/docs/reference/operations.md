@@ -463,6 +463,20 @@ Submit one review of a PR: approve, request changes or comment, with optional in
 | `number` | integer | yes | the PR to review |
 | `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
 
+#### `github.pr.search`
+
+Search the repository's PRs, whoever opened them, by state, author, head and base branch, newest first, without their bodies; github.issue.list lists its open issues.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `author` | string |  | only PRs this GitHub login opened |
+| `base` | string |  | only PRs into this branch |
+| `head` | string |  | only PRs from this branch; owner:branch for a fork's |
+| `limit` | integer |  | the most PRs to return, 1 to 100 (default 30); more is true when there are others |
+| `repo` | string |  | the repository (owner/name); defaults to this Work's own, else this project's only one |
+| `sort` | string |  | created (default) or updated; newest first |
+| `state` | string |  | open (default), closed (without merging), merged, or all |
+
 #### `github.pr.update-branch`
 
 Bring a PR's branch up to date with its base, from the head you read, while no agent on it is working.
