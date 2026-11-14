@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -268,7 +269,7 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 		return codeError("slack_state_unavailable")
 	}
 	if err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
-		return x.book.Register(tx, settings.Namespace, settings.Channels, x.now())
+		return x.book.Register(tx, settings.Namespace, settings.StartChannels(), x.now())
 	}); err != nil {
 		return codeError("slack_state_unavailable")
 	}
@@ -577,7 +578,18 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		}
 		notes = append(notes, x.startNote(set))
 		unclaimed := s.ingress.Unclaimed()
-		for _, ch := range set.Channels {
+		chans := append([]string{}, set.Channels...)
+		for ch := range unclaimed {
+			if IsDirect(ch) {
+				chans = append(chans, ch)
+			}
+		}
+		for _, ch := range x.book.ForeignChannels(set.Namespace) {
+			if IsDirect(ch) && !slices.Contains(chans, ch) {
+				chans = append(chans, ch)
+			}
+		}
+		for _, ch := range chans {
 			if n := x.book.ForeignCount(set.Namespace, ch); n > 0 {
 				raise(inproc.CheckWarn, "state_not_moved")
 				notes = append(notes, fmt.Sprintf("%s in %s %s replies marked by Work this daemon has no record of: state was not moved here, and none is claimed (restore a backup bundle to continue them)", threads(n), ch, map[bool]string{true: "has", false: "have"}[n == 1]))
@@ -628,8 +640,8 @@ func (x *Extension) startNote(set Settings) string {
 		return "claims threads of any age (claim_from all)"
 	}
 	var first, last time.Time
-	missing := 0
-	for _, ch := range set.Channels {
+	missing, chans := 0, set.StartChannels()
+	for _, ch := range chans {
 		t, ok := set.StartPoint(x.book, ch)
 		if !ok {
 			missing++
@@ -643,7 +655,7 @@ func (x *Extension) startNote(set Settings) string {
 		}
 	}
 	switch {
-	case missing == len(set.Channels):
+	case missing == len(chans):
 		return "no start point recorded yet"
 	case first.Equal(last):
 		return "claims threads begun from " + first.UTC().Format(time.RFC3339) + " (claim_from " + set.claimFrom() + ")"

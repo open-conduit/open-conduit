@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +28,32 @@ type claimRecord struct {
 	At        time.Time `json:"at"`
 }
 
+// DirectStart stands for every direct message with the app in an entry's
+// start points: they share one, the entry's first registration with
+// direct messages on, since no direct message is known before one
+// arrives. Slack IDs are upper case, so it names no channel.
+const DirectStart = "direct"
+
+// startChannel is the start point a channel's threads are claimed from.
+func startChannel(channel string) string {
+	if IsDirect(channel) {
+		return DirectStart
+	}
+	return channel
+}
+
 func startKey(namespace, channel string) string {
-	return "start/" + url.PathEscape(namespace) + "/" + channel
+	return "start/" + url.PathEscape(namespace) + "/" + startChannel(channel)
+}
+
+// StartChannels are the start points the entry records: one per watched
+// channel, and DirectStart when it takes direct messages.
+func (s Settings) StartChannels() []string {
+	out := append([]string{}, s.Channels...)
+	if s.DirectMessages {
+		out = append(out, DirectStart)
+	}
+	return out
 }
 
 func foreignPrefix(namespace string) string {
@@ -104,6 +130,26 @@ func (b *Book) ForeignCount(namespace, channel string) int {
 	return n
 }
 
+// ForeignChannels are the channels of the entry with marked threads.
+func (b *Book) ForeignChannels(namespace string) []string {
+	if b == nil {
+		return nil
+	}
+	prefix := foreignPrefix(namespace)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	var out []string
+	for k := range b.foreign {
+		if rest, ok := strings.CutPrefix(k, prefix); ok {
+			if ch, _, ok := strings.Cut(rest, "/"); ok && !slices.Contains(out, ch) {
+				out = append(out, ch)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Register records, once, the start point of each of the entry's channels
 // that has none, and loads the entry's records into the book. A channel
 // registered before keeps its first start point, so neither a restart nor
@@ -134,7 +180,7 @@ func (b *Book) Register(tx storage.Tx, namespace string, channels []string, now 
 			}
 		case errors.Is(err, storage.ErrNotFound):
 			at := now.UTC()
-			if t, ok := earliest[ch]; ok && t.Before(at) {
+			if t, ok := earliest[startChannel(ch)]; ok && t.Before(at) {
 				at = t.UTC()
 			}
 			rec = claimRecord{Namespace: namespace, Channel: ch, At: at}
@@ -179,6 +225,7 @@ func earliestWork(tx storage.Tx, namespace string) (map[string]time.Time, error)
 				continue
 			}
 			if ch, _, ok := ParseOwnedKey(k.ExternalID); ok {
+				ch = startChannel(ch)
 				if t, seen := out[ch]; !seen || w.CreatedAt.Before(t) {
 					out[ch] = w.CreatedAt
 				}

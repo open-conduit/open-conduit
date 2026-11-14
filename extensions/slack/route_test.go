@@ -40,7 +40,7 @@ func event(t *testing.T, typ string, p slack.MessagePayload, received time.Time)
 // any message the tests write.
 func registered() slack.Route {
 	b := slack.NewBook()
-	for _, ch := range []string{chanA, chanB} {
+	for _, ch := range []string{chanA, chanB, slack.DirectStart} {
 		b.SetStart(ns, ch, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
 	}
 	return slack.Route{Book: b}

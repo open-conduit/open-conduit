@@ -231,6 +231,12 @@ func TestStartPointsAreRecordedOnce(t *testing.T) {
 	if !restarted.Foreign(ns, chanB, "1794597426.185892") || restarted.ForeignCount(ns, chanB) != 1 {
 		t.Fatal("a restart lost the marked thread")
 	}
+	if err := b.Register(tx, ns, []string{slack.DirectStart}, first.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := b.StartPoint(ns, "D0ANYONE"); !ok || !at.Equal(first.Add(time.Minute)) {
+		t.Fatalf("a direct message's start point %v %v, want the entry's registration with direct messages", at, ok)
+	}
 	if _, ok := restarted.StartPoint("slack/T0OTHER", chanB); ok {
 		t.Fatal("another namespace shares the start point")
 	}
