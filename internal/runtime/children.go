@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -90,6 +91,59 @@ func childEndedInTx(tx storage.Tx, now time.Time, child domain.Work) error {
 	delivery := "child-ended/" + string(child.ID)
 	e := domain.Event{ID: domain.ID("child-ended/" + identity(string(child.ID))), Type: domain.TypeChildEnded, Source: domain.LineageSource, DeliveryID: delivery,
 		CorrelationKey: &key, WorkID: parent.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildEnded, Data: data}}
+	_, _, err = AcceptInTx(tx, parent.ScopeID, e)
+	return err
+}
+
+// childReportedInTx tells a child's parent what a turn of the child
+// handed back when the turn leaves the child open, in the transition that
+// stores the turn's outcome: a domain.TypeChildReported Event on the
+// parent's lineage key, with the child's state, the turn's status and
+// summary, and its result. It is how child Work that keeps going (follow-up it
+// still answers for) gives its asker an answer without ending;
+// its end is still told with domain.TypeChildEnded (childEndedInTx). The
+// core reads no meaning into the status: any turn that carries a result
+// and leaves the child nonterminal reports, and a failed attempt, a turn
+// without a result, Work that has ended (its end tells the parent), Work
+// with no parent, and a parent that has ended or never claimed its
+// lineage key get nothing. The delivery identity is the execution's lease
+// epoch, so a repeated transition is a no-op while a resumed attempt's
+// next turn reports again. Like a child's end it is a fact, accepted with
+// the turn's trigger as its causation and charging no budget.
+func childReportedInTx(tx storage.Tx, now time.Time, x domain.Execution) error {
+	d, ok := domain.TurnOf(x.Outcome)
+	if !ok || !d.HasResult() || x.Outcome.Kind == domain.OutcomeFailed {
+		return nil
+	}
+	child, err := tx.Work(x.WorkID)
+	if err != nil {
+		return err
+	}
+	if child.ParentID == "" || child.State.Terminal() {
+		return nil
+	}
+	parent, err := tx.Work(child.ParentID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	key := domain.LineageKey(parent.ID)
+	if parent.State.Terminal() || !slices.Contains(parent.CorrelationKeys, key) {
+		return nil
+	}
+	trigger, err := executionTriggerInTx(tx, x)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(domain.ChildReported{Work: string(child.ID), Kind: child.Kind, State: child.State, Status: d.Status, Summary: x.Outcome.Summary, Result: d.Result})
+	if err != nil {
+		return err
+	}
+	delivery := fmt.Sprintf("child-reported/%s/%d", x.ID, x.Lease.Epoch)
+	e := domain.Event{ID: domain.ID("child-reported/" + identity(delivery)), Type: domain.TypeChildReported, Source: domain.LineageSource, DeliveryID: delivery,
+		CorrelationKey: &key, WorkID: parent.ID, CausationID: trigger, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: domain.SchemaChildReported, Data: data}}
 	_, _, err = AcceptInTx(tx, parent.ScopeID, e)
 	return err
 }
@@ -197,9 +251,10 @@ func (s *Scheduler) resultMissingInTx(tx storage.Tx, ref domain.LeaseRef, outcom
 const CodeNoChildInProgress = "no_child_in_progress"
 
 // childEndReachableInTx refuses a wait that can never be satisfied because
-// it waits only for a child's end (every type it names is
-// domain.TypeChildEnded) and no such Event can come: the Work has no child
-// that hasn't ended, and no child's end has arrived after the wait's
+// it waits only for news of a child (every type it names is
+// domain.TypeChildEnded or domain.TypeChildReported) and no such Event can
+// come: the Work has no child that hasn't ended, and no child's end or
+// report has arrived after the wait's
 // watermark for it to wake on; or the wait's keys leave out the Work's
 // lineage key, the only key a child's end arrives on. Declaring such a wait
 // would release the execution's authority and park the Work for good (a
@@ -212,7 +267,7 @@ func childEndReachableInTx(tx storage.Tx, w domain.Work, match domain.EventMatch
 		return nil
 	}
 	for _, name := range match.Types {
-		if name != domain.TypeChildEnded {
+		if !domain.IsChildNews(name) {
 			return nil
 		}
 	}
@@ -221,7 +276,7 @@ func childEndReachableInTx(tx storage.Tx, w domain.Work, match domain.EventMatch
 		if !slices.Contains(w.CorrelationKeys, lineage) {
 			return noChildInProgress()
 		}
-		return &extension.OperationError{Code: CodeNoChildInProgress, Message: "a child Work's end arrives only on this Work's own key, " + lineage.Source + "/" + lineage.ExternalID + ", which this wait leaves out: give no keys, or include it"}
+		return &extension.OperationError{Code: CodeNoChildInProgress, Message: "a child Work's end or report arrives only on this Work's own key, " + lineage.Source + "/" + lineage.ExternalID + ", which this wait leaves out: give no keys, or include it"}
 	}
 	live, err := tx.CountWorks(storage.WorkQuery{ParentID: w.ID, States: []domain.WorkState{domain.WorkReady, domain.WorkRunning, domain.WorkWaiting}})
 	if err != nil || live > 0 {
@@ -232,7 +287,7 @@ func childEndReachableInTx(tx storage.Tx, w domain.Work, match domain.EventMatch
 		return err
 	}
 	for _, a := range arrived {
-		if a.Event.Type == domain.TypeChildEnded && a.Event.Source == domain.LineageSource {
+		if domain.IsChildNews(a.Event.Type) && a.Event.Source == domain.LineageSource {
 			return nil
 		}
 	}

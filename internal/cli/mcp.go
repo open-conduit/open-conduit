@@ -58,7 +58,7 @@ var mcpTools = []mcpTool{
 		"correlation_key": keySchema,
 		"occurred_at":     map[string]any{"type": "string", "description": "RFC 3339."},
 	}, "type", "delivery_id")},
-	{Name: "create_work", Description: "Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result; wait for it, after this call, never before.", InputSchema: object(map[string]any{
+	{Name: "create_work", Description: "Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result, and when it answers but keeps working, a core.work.child.reported event with its result; wait for them, after this call, never before.", InputSchema: object(map[string]any{
 		"kind":             map[string]any{"type": "string", "description": "A kind of child Work your toolbelt guidance lists; the host refuses any other."},
 		"id":               map[string]any{"type": "string"},
 		"correlation_keys": map[string]any{"type": "array", "items": keySchema},
@@ -68,7 +68,7 @@ var mcpTools = []mcpTool{
 		"work_id": map[string]any{"type": "string", "description": "The child Work's ID, as create_work returned it."},
 		"reason":  map[string]any{"type": "string", "description": "Why you no longer need it, in a few words; recorded on the child's history."},
 	}, "work_id")},
-	{Name: "wait", Description: "Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. wait is the last call of a turn: after it, every other call is refused, so finish your turn. To hand a task over, call create_work first, then wait; a wait only for core.work.child.ended with no child in progress is refused.", InputSchema: object(map[string]any{
+	{Name: "wait", Description: "Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. wait is the last call of a turn: after it, every other call is refused, so finish your turn. To hand a task over, call create_work first, then wait; a wait only for core.work.child.ended or core.work.child.reported with no child in progress is refused.", InputSchema: object(map[string]any{
 		"match": map[string]any{"type": "object", "properties": map[string]any{
 			"types": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"keys":  map[string]any{"type": "array", "items": keySchema},

@@ -671,6 +671,8 @@ func TestProductionToolbeltRefusesAWaitNoChildCanEnd(t *testing.T) {
 		h := newToolbeltHarness(t, "persistent")
 		_, err := h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded))
 		refused(t, err)
+		_, err = h.belt.Call(ctx, h.token, childEnd(domain.TypeChildEnded, domain.TypeChildReported))
+		refused(t, err)
 		// Nothing was declared: the turn can still ask for the child, and
 		// then wait for it.
 		child := domain.Work{Kind: "fixture.child"}

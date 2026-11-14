@@ -46,7 +46,7 @@ Emit a declared event for this Work.
 
 ### `create_work`
 
-Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result; wait for it, after this call, never before.
+Hand a task to another agent as child Work in this scope, of a kind your grant lists. When it ends you receive a core.work.child.ended event with its result, and when it answers but keeps working, a core.work.child.reported event with its result; wait for them, after this call, never before.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -68,7 +68,7 @@ Cancel child Work you asked for with create_work that hasn't ended yet, when you
 
 ### `wait`
 
-Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. wait is the last call of a turn: after it, every other call is refused, so finish your turn. To hand a task over, call create_work first, then wait; a wait only for core.work.child.ended with no child in progress is refused.
+Suspend this Work until an event matching the types and/or correlation keys arrives, or the timeout passes. wait is the last call of a turn: after it, every other call is refused, so finish your turn. To hand a task over, call create_work first, then wait; a wait only for core.work.child.ended or core.work.child.reported with no child in progress is refused.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
