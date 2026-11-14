@@ -334,12 +334,17 @@ func (d *daemon) launchFailed(c *components, a runtime.Attempt, work domain.ID, 
 // observe waits for a launched attempt's result under its hold (ctx ends
 // when the lease is lost, and lost is closed then).
 func (d *daemon) observe(ctx context.Context, c *components, a runtime.Attempt, lost <-chan struct{}) {
-	err := c.scheduler.Observe(ctx, a)
-	for i := 0; i < 5 && errors.Is(err, storage.ErrConflict); i++ {
-		// Completion cannot overtake accepted unrouted input (such as the
-		// execution's own emission): route it, then reapply the result.
-		d.routePending(ctx, d.current.Load())
-		err = c.scheduler.Observe(ctx, a)
+	result, err := c.scheduler.Await(ctx, a)
+	if err == nil {
+		err = c.scheduler.Complete(ctx, a.Lease, result)
+		for i := 0; i < 5 && errors.Is(err, storage.ErrConflict); i++ {
+			// Completion cannot overtake accepted unrouted input (such as
+			// the execution's own emission): route it, then apply the
+			// result again. The handle gives its result only once, so it
+			// is the same result, never a second wait.
+			d.routePending(ctx, d.current.Load())
+			err = c.scheduler.Complete(ctx, a.Lease, result)
+		}
 	}
 	if err != nil {
 		select {
