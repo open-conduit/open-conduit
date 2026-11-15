@@ -143,15 +143,30 @@ type fakeToolbelt struct {
 	guide  client.ToolbeltGuide
 	calls  []client.ToolCall
 	refuse map[string]error
+	// block, when set, holds every call until the call's context ends,
+	// after saying so on entered.
+	block   chan struct{}
+	entered chan struct{}
 }
 
 func (b *fakeToolbelt) ToolbeltGuide(context.Context) (client.ToolbeltGuide, error) {
 	return b.guide, nil
 }
-func (b *fakeToolbelt) ToolbeltCall(_ context.Context, c client.ToolCall) (client.ToolResult, error) {
+func (b *fakeToolbelt) ToolbeltCall(ctx context.Context, c client.ToolCall) (client.ToolResult, error) {
+	b.mu.Lock()
+	b.calls = append(b.calls, c)
+	block := b.block
+	b.mu.Unlock()
+	if block != nil {
+		b.entered <- struct{}{}
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return client.ToolResult{}, ctx.Err()
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.calls = append(b.calls, c)
 	if err := b.refuse[c.Operation]; err != nil {
 		return client.ToolResult{}, err
 	}
@@ -534,7 +549,7 @@ func TestNudgeThenNoOutcome(t *testing.T) {
 func TestHandoffOnSize(t *testing.T) {
 	h := newHarness(t,
 		calls([3]string{"c1", "declare_outcome", `{"kind":"handoff","summary":"halfway through the list"}`}),
-		calls([3]string{"c2", "declare_outcome", `{"kind":"completed","summary":"done"}`}))
+		calls([3]string{"c1", "declare_outcome", `{"kind":"completed","summary":"done"}`}))
 	cfg := map[string]any{"handoff_tokens": 10}
 	h.run(h.request(cfg))
 	res := h.run(h.request(cfg))
@@ -544,6 +559,11 @@ func TestHandoffOnSize(t *testing.T) {
 	msgs := h.ep.requests()[1].Messages
 	if len(msgs) != 2 || !strings.Contains(msgs[1]["content"].(string), "## Handoff from your last session\n\nhalfway through the list") {
 		t.Fatalf("fresh conversation: %v", msgs)
+	}
+	// The fresh conversation's first call has the same place and ID as the
+	// last one's, but not the same request ID: the turn is in it.
+	if belt := h.belt.recorded(); len(belt) != 2 || belt[0].RequestID == belt[1].RequestID {
+		t.Fatalf("request IDs repeat across a handoff: %+v", belt)
 	}
 }
 
@@ -599,43 +619,42 @@ func TestStop(t *testing.T) {
 	}
 }
 
-// TestLostCallsFinished: an attempt that ended between a reply asking for
-// calls and their results leaves the next one to make them, with the same
-// request IDs, before anything else.
-func TestLostCallsFinished(t *testing.T) {
+// TestCutOffCallsNotRepeated: a call an interrupt cuts off is left
+// unanswered rather than saved as failed, and the next attempt (a new
+// execution, whose calls the host doesn't replay) answers it as maybe run
+// and doesn't make it again.
+func TestCutOffCallsNotRepeated(t *testing.T) {
 	h := newHarness(t,
 		calls([3]string{"c1", "notes_lookup", `{"id":"a"}`}),
-		calls([3]string{"c2", "declare_outcome", `{"kind":"completed","summary":"done"}`}))
-	h.belt.refuse = map[string]error{"notes.lookup": context.Canceled}
-	// The first call's answer is lost: make it look so by removing it.
-	res := h.run(h.request(nil))
-	_ = res
-	path, _ := filepath.Glob(filepath.Join(h.state, "work", "*.json"))
-	raw, _ := os.ReadFile(path[0])
-	var th map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &th)
-	var msgs []json.RawMessage
-	_ = json.Unmarshal(th["messages"], &msgs)
-	// Keep the user message and the reply asking for c1, as if the attempt
-	// ended before c1's result was saved; the turn is still open.
-	cut, _ := json.Marshal(msgs[:2])
-	th["messages"], th["open"] = cut, json.RawMessage(`true`)
-	raw, _ = json.Marshal(th)
-	if err := os.WriteFile(path[0], raw, 0o600); err != nil {
+		calls([3]string{"c2", "declare_outcome", `{"kind":"completed","summary":"checked"}`}))
+	h.belt.block = make(chan struct{})
+	h.belt.entered = make(chan struct{}, 1)
+	r := h.request(nil)
+	handle, err := h.e.Run(context.Background(), r)
+	if err != nil {
 		t.Fatal(err)
 	}
-	h.belt.refuse = nil
-	h.ep.mu.Lock()
-	h.ep.script = []answer{calls([3]string{"c2", "declare_outcome", `{"kind":"completed","summary":"done"}`})}
-	h.ep.mu.Unlock()
-	before := h.belt.recorded()
-	res = h.run(h.request(nil))
+	<-h.belt.entered
+	if err := h.e.Interrupt(context.Background(), r.Execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := handle.Wait(context.Background()); resultData(t, res)["reason"] != "interrupted" {
+		t.Fatalf("%+v", res.Outcome)
+	}
+	if last := thread(t, h.state); last[len(last)-1].Role != "assistant" {
+		t.Fatalf("the cut-off call was answered: %+v", last[len(last)-1])
+	}
+	h.belt.block = nil
+	res := h.run(h.request(nil, r.Inputs...))
 	if res.Outcome.Kind != domain.OutcomeCompleted {
 		t.Fatalf("%+v %s", res.Outcome, res.Outcome.Data.Data)
 	}
-	after := h.belt.recorded()[len(before):]
-	if len(after) < 1 || after[0].Operation != "notes.lookup" || after[0].RequestID != before[0].RequestID {
-		t.Fatalf("the lost call was not made again with its request ID: %+v then %+v", before, after)
+	if n := len(h.belt.recorded()); n != 2 {
+		t.Fatalf("toolbelt calls: %+v, want the cut-off lookup once and the declaration", h.belt.recorded())
+	}
+	msgs := h.ep.requests()[1].Messages
+	if tool := msgs[len(msgs)-1]; tool["role"] != "tool" || tool["tool_call_id"] != "c1" || !strings.Contains(tool["content"].(string), "may or may not have taken effect") {
+		t.Fatalf("the cut-off call's answer: %v", tool)
 	}
 }
 

@@ -176,6 +176,14 @@ var builtinTools = map[string]builtinTool{
 	}, "required": []string{"kind", "summary"}})},
 }
 
+// cutOff marks a call its attempt's end cut off, unanswered.
+const cutOff = "cut_off"
+
+// maybeRun answers a call an earlier attempt made or was making when it
+// ended: the host may have run it, and a new attempt is a new execution,
+// whose calls the host doesn't replay, so it isn't made again.
+const maybeRun = "unknown: your last attempt ended while this call was in progress, so it may or may not have taken effect. Check (for example by reading what it would have changed) before making it again."
+
 // callOutcome is what a tool call did to the turn: nothing, or ended it
 // with a wait or a declared outcome.
 type callOutcome struct {
@@ -186,11 +194,13 @@ type callOutcome struct {
 	result  json.RawMessage
 }
 
-// requestID is a tool call's idempotency key: the same call (by its place
-// in the conversation and its ID) made again after a lost attempt never
-// repeats its effect.
-func requestID(work domain.ID, index int, id string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", work, index, id)))
+// requestID is a tool call's idempotency key: the Work, the turn (which
+// never repeats, a fresh conversation included), the call's place in the
+// conversation and its ID. The host replays a key only within one
+// execution, so it protects a call retried within the attempt; a call an
+// ended attempt cut off is never made again (see finishCalls).
+func requestID(work domain.ID, turn, index int, id string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%s", work, turn, index, id)))
 	return "chat-" + hex.EncodeToString(sum[:12])
 }
 
@@ -249,6 +259,11 @@ func call(ctx context.Context, tb Toolbelt, ts toolset, tc ToolCall, key string)
 	}
 	result, err := tb.ToolbeltCall(ctx, request)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Cut off by an interrupt or stop: the host may have run it,
+			// so it isn't answered as failed (finishCalls says so).
+			return "", callOutcome{ended: cutOff}
+		}
 		return "error: " + toolError(err), callOutcome{}
 	}
 	var shown any

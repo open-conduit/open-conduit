@@ -515,11 +515,11 @@ func (e *Executor) attempt(ctx context.Context, rn *run, r extension.RunRequest)
 		return s.fail(rn, reasonState, "the Work's conversation could not be saved", nil, false)
 	}
 
-	// A continued turn first finishes the calls its last reply asked for
-	// that have no result (the attempt ended partway through them), with
-	// the same request IDs, so none is repeated.
+	// A continued turn first answers the calls its last reply asked for
+	// that have no result (the attempt ended partway through them) as
+	// maybe run, so the model checks rather than repeats them.
 	if s.d.Kind == kindContinue {
-		if out, done := e.finishCalls(ctx, tb, ts, &th, r.Work.ID, s, save); done {
+		if out, done := e.finishCalls(ctx, tb, ts, &th, r.Work.ID, true, s, save); done {
 			return s.end(rn, out, &th, save)
 		}
 		var fresh []domain.Event
@@ -601,7 +601,7 @@ func (e *Executor) attempt(ctx context.Context, rn *run, r extension.RunRequest)
 			}
 			continue
 		}
-		if out, done := e.finishCalls(ctx, tb, ts, &th, r.Work.ID, s, save); done {
+		if out, done := e.finishCalls(ctx, tb, ts, &th, r.Work.ID, false, s, save); done {
 			return s.end(rn, out, &th, save)
 		}
 		if cause := context.Cause(ctx); ctx.Err() != nil {
@@ -690,10 +690,15 @@ func normalizeCalls(m *Message, index int) {
 	}
 }
 
-// finishCalls runs, in order, the last reply's tool calls that have no
-// result yet. Once one ends the turn (wait or declare_outcome), the rest
-// are answered as not run.
-func (e *Executor) finishCalls(ctx context.Context, tb Toolbelt, ts toolset, th *thread, work domain.ID, s *attemptState, save func() error) (callOutcome, bool) {
+// finishCalls answers, in order, the last reply's tool calls that have no
+// result yet. With resumed (an earlier attempt ended partway through
+// them), each is answered as maybe run rather than made again: the host
+// replays a request ID only within one execution, so making it again could
+// repeat its effect. Otherwise each is made through the toolbelt. Once one
+// ends the turn (wait or declare_outcome), the rest are answered as not
+// run. A call cut off by an interrupt or stop is left unanswered, for the
+// next attempt to answer as maybe run.
+func (e *Executor) finishCalls(ctx context.Context, tb Toolbelt, ts toolset, th *thread, work domain.ID, resumed bool, s *attemptState, save func() error) (callOutcome, bool) {
 	index := -1
 	for i := len(th.Messages) - 1; i >= 0; i-- {
 		if th.Messages[i].Role == "assistant" {
@@ -720,14 +725,19 @@ func (e *Executor) finishCalls(ctx context.Context, tb Toolbelt, ts toolset, th 
 		switch {
 		case ended.ended != "":
 			text = "not run: your turn ended with " + ended.ended + " before this call"
+		case resumed:
+			text = maybeRun
 		case ctx.Err() != nil:
 			return callOutcome{}, false
 		case tb == nil:
 			text = "error: this turn has no toolbelt"
 		default:
 			var out callOutcome
-			text, out = call(ctx, tb, ts, tc, requestID(work, index, tc.ID))
+			text, out = call(ctx, tb, ts, tc, requestID(work, th.Turns, index, tc.ID))
 			s.d.ToolCalls++
+			if out.ended == cutOff {
+				return callOutcome{}, false
+			}
 			if out.ended != "" {
 				ended = out
 			}

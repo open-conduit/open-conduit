@@ -24,7 +24,7 @@ The model gets one function per operation the attempt may call, and nothing else
 - **Functions.** An operation's function is its name with `.` and any other character a provider refuses turned into `_` (`github.issue.comment` becomes `github_issue_comment`), with a `_2` suffix in the rare case two collide. Its parameters are the operation's input schema when that is an object, and an empty object otherwise. Its description is the summary.
 - **Builtins.** `wait` and `declare_outcome` are offered whenever they are granted. `read_context`, `emit`, `create_work` and `cancel_work` are offered when granted and the binding's `operations` don't narrow them out. They take the wire inputs `os mcp` gives Claude Code. `declare_outcome` also takes an optional `status` (a turn status word, such as `review`, [execution scheduling](../execution-scheduling/#outcomes-handoff-and-retry)) and `result`, which the executor reports in its result rather than sending to the host.
 - **Narrowing.** The binding's `operations` (exact names, or `github.*` for a namespace) narrow which granted operations become tools. They grant nothing: the host still checks every call.
-- **The call.** An extension's operation is called with the arguments as its input's `data`, and a builtin with the arguments as its wire input. Every call has a request ID derived from the Work, the reply's place in the conversation and the call's ID, so a call made again after a lost attempt never repeats its effect. The model reads an operation's output `data` (a builtin's event, Work, wait or context) as JSON, and a refusal as `error: <the host's message>`.
+- **The call.** An extension's operation is called with the arguments as its input's `data`, and a builtin with the arguments as its wire input. Every call has a request ID derived from the Work, the turn (which never repeats, even on a fresh conversation), the reply's place in the conversation and the call's ID. The host replays a request ID only within one execution ([toolbelt authority](../toolbelt-management/#toolbelt-authority)), so the executor never makes a call again in a later attempt (see [failures and retries](#failures-and-retries)). The model reads an operation's output `data` (a builtin's event, Work, wait or context) as JSON, and a refusal as `error: <the host's message>`.
 
 An older daemon that names no `granted` operations gets the described operations and `read_context`, `wait` and `declare_outcome`.
 
@@ -66,7 +66,7 @@ Tool calling differs between providers, and the loop absorbs the differences:
 
 ## Failures and retries
 
-A request that gets no usable reply ends the attempt as failed, and the loop never sleeps: the runtime decides when to try again. The conversation is saved after every message, so the next attempt carries the open turn on from where it was. It finishes any tool calls the last reply asked for that have no result yet, with the same request IDs, and shows only inputs the turn hasn't seen.
+A request that gets no usable reply ends the attempt as failed, and the loop never sleeps: the runtime decides when to try again. The conversation is saved after every message, so the next attempt carries the open turn on from where it was. Any tool call the last reply asked for that has no result yet is answered as maybe run (`unknown: your last attempt ended while this call was in progress, so it may or may not have taken effect…`), so the model checks before making it again: a later attempt is a new execution, whose calls the host doesn't replay, so making the call again could repeat its effect. A call an interrupt or stop cuts off is left unanswered for this reason rather than saved as failed. The next attempt shows only inputs the turn hasn't seen.
 
 | Reply | Reason | The runtime |
 | --- | --- | --- |
@@ -139,11 +139,11 @@ The config is strict and validated at load:
 - [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/extensions/chatcompletions) run the executor against an `httptest` fake endpoint and a fake toolbelt. They cover:
   - the shared executor and inject conformance cases
   - the tools from the grant, their names, narrowing, the system message and the request's key, headers and pass-through
-  - a call's input and request ID, and `declare_outcome` with a status and result as `core.turn.v1`
+  - a call's input, its request ID (different on a fresh conversation), and `declare_outcome` with a status and result as `core.turn.v1`
   - malformed arguments, missing IDs, object arguments and calls after a `wait`
   - a 429 with `Retry-After` and the retry carrying the open turn on, and every failure class
   - `wait` and the wake replaying the conversation
-  - the reminder and `no_outcome`, the size handoff, interrupt, stop, and a lost call made again with its request ID
+  - the reminder and `no_outcome`, the size handoff, interrupt, stop, and a call cut off by an interrupt answered as maybe run, not made again
   - the config's validation
 - `open-conduit extension certify` certifies the package (`TestCertificationFirstPartyPackages`). Its fixture command serves a fake endpoint on loopback, so certification never calls a provider.
 - [`TestDaemonChatCompletionsExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_chatcompletions_test.go) runs the composed daemon with the package and the notes example installed, against a fake endpoint. The tools are listed from the grant, a call reaches the notes package through the toolbelt, `wait` parks the Work, the wake replays the conversation, a 429 ends that attempt with a retry hint the runtime schedules a retry from, and the retry carries the turn on to its declared outcome.
