@@ -189,12 +189,11 @@ func newDrill(t *testing.T) *drill {
 	}
 	t.Cleanup(func() {
 		d.kill()
-		// A failed drill can leave the detached fixture process waiting for a
-		// release file; it is its own process-group leader.
-		if b, err := os.ReadFile(filepath.Join(root, "pid")); err == nil {
-			if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 1 {
-				_ = syscall.Kill(-pid, syscall.SIGKILL)
-			}
+		// Every run the drill started is detached in a group its wrapper
+		// leads, and a drill.slow fixture polls for its release file until
+		// killed: kill each group, not only the last fixture's.
+		if err := reapUnder(root); err != nil {
+			t.Error(err)
 		}
 		d.log.Close()
 		out, _ := os.ReadFile(filepath.Join(root, "daemon.log"))

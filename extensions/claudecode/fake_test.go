@@ -277,11 +277,7 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	root, err := os.MkdirTemp("", "claude-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(root) })
+	root := newRoot(t)
 	h := &harness{t: t, root: root, fake: filepath.Join(root, "fake"), binary: filepath.Join(root, "claude"), config: filepath.Join(root, "claude-config"), state: filepath.Join(root, "state"),
 		store: newMemStore(), art: &memoryArtifacts{data: map[string][]byte{}}, clock: &clock{now: time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)}, reports: &reports{}}
 	for _, d := range []string{h.fake, h.config} {
