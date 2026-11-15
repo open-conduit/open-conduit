@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // os git-credential, git's credential helper before the git transport,
@@ -35,10 +39,21 @@ func TestToolbeltGitCredentialAnswersNothing(t *testing.T) {
 		}
 	}
 	_, _, hint := run("get", "protocol=https\r\nhost=github.com\r\n\r\n")
-	for _, want := range []string{"retired", "-c 'alias.remote-open-conduit=!os git-remote'", "-c protocol.open-conduit.allow=always", "-c url.open-conduit::https://github.com/.insteadOf=https://github.com/"} {
+	// The options are the transport's own layer, so a change to it reaches
+	// adopted runs too.
+	layer := extension.GitTransportLayer("github.com")
+	n, _ := strconv.Atoi(layer["GIT_CONFIG_COUNT"])
+	if n == 0 || !strings.Contains(hint, "retired") {
+		t.Fatalf("hint %q", hint)
+	}
+	for i := 0; i < n; i++ {
+		want := "-c '" + layer[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)] + "=" + layer[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)] + "'"
 		if !strings.Contains(hint, want) {
 			t.Fatalf("hint %q lacks %q", hint, want)
 		}
+	}
+	if strings.Count(hint, "-c '") != n {
+		t.Fatalf("hint %q has options beyond the layer's %d", hint, n)
 	}
 	for _, in := range []string{"protocol=http\nhost=github.com\n\n", "protocol=ssh\nhost=github.com\n\n", "protocol=https\n\n", "protocol=https\nhost=x'; rm -rf ~\n\n", ""} {
 		if code, out, errOut := run("get", in); code != 0 || out != "" || errOut != "" {

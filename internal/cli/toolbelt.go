@@ -583,10 +583,16 @@ func gitTransportHint(request string) string {
 	if protocol != "https" || host == "" || strings.ContainsAny(host, " \t'\"\\/`$;&|<>()") {
 		return ""
 	}
-	return fmt.Sprintf("os: git-credential is retired, and this run's git config is from an Open Conduit before the git transport "+
-		"(the run started before the daemon was upgraded). Git signs in through the transport now: run the git command again as "+
-		"git -c 'alias.remote-%[1]s=!os git-remote' -c protocol.%[1]s.allow=always -c url.%[1]s::https://%[2]s/.insteadOf=https://%[2]s/ <command>",
-		extension.GitTransport, host)
+	layer := extension.GitTransportLayer(host)
+	n, _ := strconv.Atoi(layer["GIT_CONFIG_COUNT"])
+	var opts strings.Builder
+	for i := 0; i < n; i++ {
+		kv := layer[fmt.Sprintf("GIT_CONFIG_KEY_%d", i)] + "=" + layer[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i)]
+		opts.WriteString("-c '" + strings.ReplaceAll(kv, "'", `'\''`) + "' ")
+	}
+	return "os: git-credential is retired, and this run's git config is from an Open Conduit before the git transport " +
+		"(the run started before the daemon was upgraded). Git signs in through the transport now: run the git command again as " +
+		"git " + opts.String() + "<command>"
 }
 
 // callTimeout bounds one toolbelt call. An operation can make several
