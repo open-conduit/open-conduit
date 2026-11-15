@@ -169,6 +169,15 @@ type taskSpace struct {
 	refusal     string
 }
 
+// noToolbelt is the `os` first on a task's PATH. A task has no toolbelt
+// client, but the run layer it keeps may still call `os` (git's transport
+// does), so whatever calls it fails closed saying why, not with
+// `os: command not found`.
+const noToolbelt = `#!/bin/sh
+echo "os: a task has no toolbelt (it outlives the turn's authority), so it can't call Open Conduit, and git can't fetch or push through it: fetch before claude-code.task.start, and push or call Open Conduit after claude-code.task.wait resumes you" >&2
+exit 1
+`
+
 func newTaskSpace(r extension.RunRequest, cfg Config, dir string, env []string) *taskSpace {
 	s := &taskSpace{scope: r.Work.ScopeID, work: r.Work.ID, dir: dir}
 	for _, kv := range env {
@@ -416,8 +425,17 @@ func (e *Executor) spawnTask(rec taskRecord, space *taskSpace, command string) e
 		return err
 	}
 	defer log.Close()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(bin, "os"), []byte(noToolbelt), 0o700); err != nil {
+		return err
+	}
+	path, _ := lookupEnv(space.env, "PATH")
+	env := setEnv(space.env, "PATH="+bin+string(os.PathListSeparator)+path)
 	cmd := exec.Command("/bin/sh", "-c", taskWrapper, taskMarker+rec.Nonce, dir, "/bin/sh", "-c", command)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = space.dir, space.env, log, log
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = space.dir, env, log, log
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
