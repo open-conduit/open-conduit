@@ -56,6 +56,7 @@ export default defineConfig({
 						{ label: 'Configuration and secrets', slug: 'guides/configuration' },
 						{ label: 'Give agents their own GitHub account', slug: 'guides/github-bot' },
 						{ label: 'Run agents on Codex', slug: 'guides/codex' },
+						{ label: 'Use models from other providers', slug: 'guides/third-party-models' },
 						{ label: 'Sandbox your agents', slug: 'guides/sandboxes' },
 						{ label: 'Run agents on another machine', slug: 'guides/remote-runners' },
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
