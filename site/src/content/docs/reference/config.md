@@ -310,6 +310,7 @@ Binding `config`:
 | `pass_env` |  |  |
 | `secret_env` |  |  |
 | `extra_args` |  | added to every codex exec; may not set the session, output files, sandbox, approvals, model or toolbelt |
+| `provider` |  | a model provider other than Codex's default, speaking the Responses API: id, base_url, and api_key_secret, a selected secret sent as its key |
 | `timeout_seconds` |  |  |
 | `handoff_minutes` | `55` |  |
 | `cold_turns` | `handoff` | what a turn does once the thread is handoff_minutes old One of handoff, resume. |

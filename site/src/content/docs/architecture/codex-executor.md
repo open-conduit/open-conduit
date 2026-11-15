@@ -107,7 +107,7 @@ The environment follows B05:
 2. **Provider layer.** `OS_*` names are dropped.
 3. **Run layer** (`ExecutionContext.Env`), with `extension.ApplyEnv`. When there is one and a toolbelt, codex also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so the layer can call `os`.
 4. **Binding `env`.**
-5. **Selected secrets.** An API key comes only from a secret mapped with `secret_env` (for example `OPENAI_API_KEY`). A Codex login lives in `CODEX_HOME` (default `~/.codex`).
+5. **Selected secrets.** An API key comes only from a secret mapped with `secret_env` (for example `OPENAI_API_KEY`). A Codex login lives in `CODEX_HOME` (default `~/.codex`). The `provider`'s `api_key_secret` goes in `OC_PROVIDER_API_KEY`, the provider's `env_key`, and not under its own name.
 6. **Execution identity** (`OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`).
 
 ## Binding config
@@ -126,7 +126,8 @@ The config is strict and validated at load. Every field is optional:
 | `branch`, `workspace_mode` | The workspace request. |
 | `dir` | An absolute folder a workspace-free binding's turns run in. |
 | `env`, `pass_env`, `secret_env` | The environment. `pass_env` here admits variables of the executor's own process only, with a `config check` warning (`ConfigWarnings`); name the daemon's variables in the binding's `pass_env`. |
-| `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the approval policy, the model or the toolbelt server, whether as flags (`--full-auto` and `--dangerously-bypass-approvals-and-sandbox` included) or as `-c`/`--config` overrides of `sandbox_mode`, `approval_policy`, `model` or `mcp_servers.open-conduit`. |
+| `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the approval policy, the model or the toolbelt server, whether as flags (`--full-auto` and `--dangerously-bypass-approvals-and-sandbox` included) or as `-c`/`--config` overrides of `sandbox_mode`, `approval_policy`, `model` or `mcp_servers.open-conduit`. An override that sets a provider's `wire_api` to `chat` is refused: Codex speaks only the Responses API since early 2026, so a Chat Completions-only provider needs a translating proxy such as LiteLLM. |
+| `provider` | A model provider other than Codex's default ([third-party models](../../guides/third-party-models/)). `id` names it in Codex's config (lower-case letters, digits, `-` and `_`; not `openai`, `ollama` or `lmstudio`, which Codex builds in and won't let config replace). `base_url` is the API's base: an absolute `http` or `https` URL with a host and no credentials, query or fragment, not ending in `/responses` or `/chat/completions`. `api_key_secret` names a selected secret Codex sends as the key; leave it out for an endpoint that needs none. `wire_api` may only be `responses`, the default. The executor passes `-c model_provider=<id>` and `-c model_providers.<id>.{name,base_url,wire_api,env_key}` after its own overrides and before `extra_args`, which may then not set `model_provider` or that provider's settings. `env` may not set `OC_PROVIDER_API_KEY`, and `secret_env` may not map the key's secret. |
 | `timeout_seconds` | A segment's deadline, persisted across restart. |
 | `handoff_minutes` | How long after a turn the thread counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) starts a new thread from the note, `resume` resumes the thread. |
@@ -148,6 +149,7 @@ The config is strict and validated at load. Every field is optional:
   - failures, a usage limit, a missing binary, a missing status and an unstructured turn
   - adoption by a second instance without a second launch, interrupt and lower-epoch refusal
   - config validation and the resource mode
+  - a `provider` (`provider_test.go`): its overrides in codex's arguments with the key only in its `env_key` and never under the secret's own name, no `env_key` for a keyless provider, and its refusals, a Chat Completions wire protocol in a raw override among them, with raw provider overrides on a binding without one as the accepted control
   - a cold thread left for a new one from the note, a warm one resuming and `cold_turns: resume` resuming a cold one (`TestColdThreadHandsOff`)
   - a large thread left for a new one from the note, a smaller one resuming, `handoff_tokens: 0` always resuming, and `auto_compact_tokens` in codex's arguments (`TestLargeThreadHandsOff`)
 - `open-conduit extension certify` certifies the package (`TestCertificationFirstPartyPackages`). Its fixture command writes a fake codex into the runner's directory, so certification never runs the real CLI.
