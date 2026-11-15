@@ -203,8 +203,9 @@ func TestTaskOutlivesTurnAndAnnouncesItsEnd(t *testing.T) {
 }
 
 // TestTaskGitSaysItHasNoToolbelt: a turn with the git transport's run
-// layer has the toolbelt client, but its task doesn't, so git in the task
-// fails saying why rather than with "os: command not found" (#658).
+// layer has the toolbelt client, but its task doesn't: the task's `os`
+// fails saying why, so git in the task (and any other call to os) does
+// too, rather than with "os: command not found" (#658).
 func TestTaskGitSaysItHasNoToolbelt(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -214,7 +215,7 @@ func TestTaskGitSaysItHasNoToolbelt(t *testing.T) {
 		r.Context.Env = botLayer
 	})
 	defer th.release(handle)
-	cmd := `env > "$FAKE_DIR/task-env"; git ls-remote open-conduit::https://example.invalid/acme/repo 2> "$FAKE_DIR/task-git"; exit 0`
+	cmd := `env > "$FAKE_DIR/task-env"; git ls-remote open-conduit::https://example.invalid/acme/repo 2> "$FAKE_DIR/task-git"; os github.issue.view 2> "$FAKE_DIR/task-os"; echo "$?" > "$FAKE_DIR/task-os-exit"; exit 0`
 	th.start(context.Background(), map[string]any{"command": cmd, "name": "git"})
 	th.ended(1)
 	raw, _ := os.ReadFile(filepath.Join(th.fake, "task-env"))
@@ -225,6 +226,12 @@ func TestTaskGitSaysItHasNoToolbelt(t *testing.T) {
 	msg, _ := os.ReadFile(filepath.Join(th.fake, "task-git"))
 	if !strings.Contains(string(msg), "a task has no toolbelt") || strings.Contains(string(msg), "command not found") {
 		t.Errorf("git in the task said %q", msg)
+	}
+	// Any other call to os, outside git, fails closed the same way.
+	direct, _ := os.ReadFile(filepath.Join(th.fake, "task-os"))
+	exit, _ := os.ReadFile(filepath.Join(th.fake, "task-os-exit"))
+	if !strings.Contains(string(direct), "a task has no toolbelt") || strings.TrimSpace(string(exit)) == "0" {
+		t.Errorf("os in the task said %q, exit %q", direct, exit)
 	}
 }
 
