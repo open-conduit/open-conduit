@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/open-conduit/open-conduit/protocol"
@@ -19,10 +20,14 @@ func Certification() protocol.CertificationFile {
 	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
-// barrierHeader names a file the fake endpoint waits for before it
-// answers. The inject case sends it, so the attempt's first request is
-// still in flight when the runner injects.
+// barrierHeader marks a request the fake endpoint holds until the
+// runner's finish file exists. The inject case sends it, so the attempt's
+// first request is still in flight when the runner injects.
 const barrierHeader = "X-Fake-Barrier"
+
+// finishFile is the inject case's finish file, in the fixture command's
+// working directory (the runner's {tmp} for a fixture command).
+const finishFile = "inject-go"
 
 // Fixture is the certification fixture for a fake endpoint at baseURL:
 // the executor case answers at once, and the inject case's requests wait
@@ -30,10 +35,10 @@ const barrierHeader = "X-Fake-Barrier"
 // into a second request.
 func Fixture(baseURL string) protocol.Fixture {
 	run, _ := json.Marshal(map[string]any{"base_url": baseURL, "model": "fake"})
-	inject, _ := json.Marshal(map[string]any{"base_url": baseURL, "model": "fake", "headers": map[string]string{barrierHeader: "{tmp}/inject-go"}})
+	inject, _ := json.Marshal(map[string]any{"base_url": baseURL, "model": "fake", "headers": map[string]string{barrierHeader: "1"}})
 	return protocol.Fixture{
 		Executor: &protocol.ExecutorCase{Executor: Name, Config: protocol.Payload{Data: run}},
-		Inject:   &protocol.InjectCase{Executor: Name, Config: protocol.Payload{Data: inject}, FinishFile: "{tmp}/inject-go"},
+		Inject:   &protocol.InjectCase{Executor: Name, Config: protocol.Payload{Data: inject}, FinishFile: "{tmp}/" + finishFile},
 	}
 }
 
@@ -45,7 +50,12 @@ func ServeFixture(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: http.HandlerFunc(fakeEndpoint), ReadHeaderTimeout: 10 * time.Second}
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	barrier := filepath.Join(dir, finishFile)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fakeEndpoint(w, r, barrier) }), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 	b, err := json.Marshal(Fixture("http://" + l.Addr().String() + "/v1"))
@@ -60,14 +70,14 @@ func ServeFixture(stdin io.Reader, stdout io.Writer) error {
 }
 
 // fakeEndpoint answers every request with a text reply, after the
-// barrier file when the request names one.
-func fakeEndpoint(w http.ResponseWriter, r *http.Request) {
+// barrier file exists when the request is marked to wait for it.
+func fakeEndpoint(w http.ResponseWriter, r *http.Request, barrier string) {
 	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
 		http.NotFound(w, r)
 		return
 	}
 	_, _ = io.Copy(io.Discard, r.Body)
-	if barrier := r.Header.Get(barrierHeader); barrier != "" {
+	if r.Header.Get(barrierHeader) != "" {
 		tick := time.NewTicker(20 * time.Millisecond)
 		defer tick.Stop()
 		for {
