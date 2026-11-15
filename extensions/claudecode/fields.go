@@ -27,6 +27,7 @@ func bindingFields() []protocol.FieldDecl {
 		{Name: "extra_args"},
 		{Name: "builtin_tools", Help: "the only built-in tools offered; [] turns them all off"},
 		{Name: "models", Help: "models a Work may pick with model in its context"},
-		{Name: "usage", Help: "doctor reads the subscription usage windows of this binding's Claude login"},
+		{Name: "provider", Help: "an Anthropic-compatible endpoint other than Anthropic's: base_url, and auth_token_secret, a selected secret sent as the bearer token"},
+		{Name: "usage", Help: "doctor reads the subscription usage windows of this binding's Claude login; not with a provider"},
 	}
 }

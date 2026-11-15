@@ -59,6 +59,9 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 	}
 	secret := map[string]bool{}
 	for name := range selected {
+		if cfg.providerSecret(name) {
+			continue
+		}
 		secret[cfg.secretVariable(name)] = true
 	}
 	var out, secrets []string
@@ -210,7 +213,7 @@ func (e *Executor) ContainerAttach(ctx context.Context, req extension.ContainerA
 		return extension.ContainerAttachSpec{}, err
 	}
 	argv := append([]string{a.Binary, "--resume", session, "--model", a.Model, "--permission-mode", a.PermissionMode}, a.ExtraArgs...)
-	needs := extension.SandboxNeeds{Write: []string{a.Dir, req.Home}, Hosts: []string{"api.anthropic.com"}}
+	needs := extension.SandboxNeeds{Write: []string{a.Dir, req.Home}, Hosts: []string{cfg.apiHost()}}
 	if a.PluginDir != "" {
 		argv = append(argv, "--plugin-dir", a.PluginDir)
 		needs.Read = append(needs.Read, a.PluginDir)

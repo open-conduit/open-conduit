@@ -16,7 +16,8 @@ import (
 
 // Checks() is doctor's claude-code: `--version` for every claude-code
 // binding's binary on the host and, for a binding that sets usage, its
-// login's subscription usage windows. A binding whose container provider
+// login's subscription usage windows. A binding with a provider has none,
+// so its usage is reported as not applying rather than read. A binding whose container provider
 // runs its version probe in the binding's image (CheckBinding.Probed) runs
 // the binary there, not on the host, so this one only names it; any other
 // binding is looked for on the host. It reads only the configuration and the machine, so doctor
@@ -39,6 +40,9 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 	binaries := map[string][]string{}
 	var contained []string
 	logins := map[string]bool{}
+	// providers are the bindings that set usage but send their turns to
+	// another provider, which has no subscription windows to read.
+	var providers []string
 	for _, scope := range cfg.Scopes {
 		for _, b := range scope.Bindings {
 			if b.Executor != Name {
@@ -53,7 +57,10 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 			} else {
 				binaries[c.Binary] = append(binaries[c.Binary], scope.ID+"/"+b.Name)
 			}
-			if c.Usage {
+			switch {
+			case c.Usage && c.Provider != nil:
+				providers = append(providers, scope.ID+"/"+b.Name)
+			case c.Usage:
 				logins[c.Env["CLAUDE_CONFIG_DIR"]] = true
 			}
 		}
@@ -84,6 +91,10 @@ func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inpr
 	}
 	if x.h.DryRun {
 		res.Items = append(res.Items, "dry run: turns are stubs on a cheap model")
+	}
+	if len(providers) > 0 {
+		sort.Strings(providers)
+		res.Items = append(res.Items, "usage doesn't apply to bindings with a provider (its windows are Anthropic's): "+strings.Join(providers, ", "))
 	}
 	dirs := make([]string, 0, len(logins))
 	for dir := range logins {

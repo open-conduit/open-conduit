@@ -273,7 +273,8 @@ Binding `config`:
 | `extra_args` |  |  |
 | `builtin_tools` |  | the only built-in tools offered; [] turns them all off |
 | `models` |  | models a Work may pick with model in its context |
-| `usage` |  | doctor reads the subscription usage windows of this binding's Claude login |
+| `provider` |  | an Anthropic-compatible endpoint other than Anthropic's: base_url, and auth_token_secret, a selected secret sent as the bearer token |
+| `usage` |  | doctor reads the subscription usage windows of this binding's Claude login; not with a provider |
 
 ### Cloudflare tunnel (`cloudflared`)
 

@@ -35,3 +35,26 @@ func TestStatusProbe(t *testing.T) {
 		}
 	}
 }
+
+// Given a provider's base URL, the status probe says the Claude sign-in
+// doesn't apply, and reads no login; a bad URL says what to fix.
+func TestStatusProbeProvider(t *testing.T) {
+	found := func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	version := func(context.Context, string) (string, error) { return "2.1.0 (Claude Code)", nil }
+	read := false
+	login := func(context.Context, string) (string, error) { read = true; return "", errors.New("no login") }
+	p := Probes{LookPath: found, Version: version, LoginToken: login, Getenv: func(string) string { return "" }}
+	probe := p.SetupProbes()[0]
+	if len(probe.Args) != 1 || probe.Args[0].Name != "base_url" || probe.Args[0].Required {
+		t.Fatalf("args %+v", probe.Args)
+	}
+	r, _ := probe.Run(context.Background(), map[string]string{"base_url": "https://openrouter.ai/api"})
+	b, _ := json.Marshal(r.Output)
+	if !strings.Contains(string(b), `"signed_in":true,"login":"provider","provider":"openrouter.ai"`) || read {
+		t.Errorf("provider: %s (login read %v)", b, read)
+	}
+	r, _ = probe.Run(context.Background(), map[string]string{"base_url": "openrouter.ai"})
+	if b, _ = json.Marshal(r.Output); !strings.Contains(string(b), `"signed_in":false`) || !strings.Contains(string(b), "base URL must be") {
+		t.Errorf("bad URL: %s", b)
+	}
+}

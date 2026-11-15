@@ -109,10 +109,17 @@ type Config struct {
 	// container binding's per-Work home on its first use. It is a copy,
 	// never a mount, and its .credentials.json is left out.
 	HomeSeed string `json:"home_seed,omitempty"`
+	// Provider points turns at a model endpoint other than Anthropic's (an
+	// Anthropic-compatible gateway such as OpenRouter, LiteLLM or Ollama).
+	// The executor sets ANTHROPIC_BASE_URL and the bearer token from it, and
+	// a sandboxed or container launch reaches its host instead of
+	// api.anthropic.com.
+	Provider *Provider `json:"provider,omitempty"`
 	// Usage lets doctor read the subscription's 5-hour and 7-day usage
 	// windows with this binding's Claude login (the undocumented endpoint
 	// Claude Code itself uses), warning at 90%. It is off by default
-	// because it reads the login token.
+	// because it reads the login token. A binding with a provider has no
+	// subscription windows, so doctor says usage doesn't apply to it.
 	Usage bool `json:"usage,omitempty"`
 }
 
@@ -120,7 +127,7 @@ var (
 	envName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	skillName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	toolName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
-	modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$`)
+	modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*$`)
 	// ErrConfig is returned for a binding config the executor rejects.
 	// Messages never echo configured values.
 	ErrConfig = errors.New("invalid claude code binding config")
@@ -324,9 +331,10 @@ func parseConfig(data []byte) (c Config, ce *extension.ConfigError, decoded bool
 	}
 	for i, m := range c.Models {
 		if !modelName.MatchString(m) {
-			ce.Add(extension.ConfigPointer("models", i), "invalid_model", "models must be model aliases or IDs, such as opus or claude-opus-5-5")
+			ce.Add(extension.ConfigPointer("models", i), "invalid_model", "models must be model aliases or IDs, such as opus, claude-opus-5-5 or a provider's anthropic/claude-opus-5-5")
 		}
 	}
+	c.checkProvider(ce)
 	return c, ce, true
 }
 
@@ -378,6 +386,12 @@ func (c Config) toolArgs() []string {
 	return out
 }
 
+// providerSecret reports whether a selected secret is the provider's
+// bearer token, which only the provider's variable carries.
+func (c Config) providerSecret(secret string) bool {
+	return c.Provider != nil && c.Provider.AuthTokenSecret != "" && secret == c.Provider.AuthTokenSecret
+}
+
 // secretVariable is the environment name for one selected secret.
 func (c Config) secretVariable(secret string) string {
 	if name, ok := c.SecretEnv[secret]; ok {
@@ -409,7 +423,13 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 			ce.Add(extension.ConfigPointer("secret_env", secret), "secret_not_selected", "secret_env names a secret the binding does not select; add it to the binding's secret_names or remove it here")
 		}
 	}
+	if p := c.Provider; p != nil && p.AuthTokenSecret != "" && !slices.Contains(secretNames, p.AuthTokenSecret) {
+		ce.Add("/provider/auth_token_secret", "secret_not_selected", "provider.auth_token_secret names a secret the binding does not select; add it to the binding's secret_names")
+	}
 	for _, secret := range secretNames {
+		if c.providerSecret(secret) {
+			continue
+		}
 		if reserved(c.secretVariable(secret)) && c.SecretEnv[secret] == "" {
 			ce.Add("/secret_env", "reserved_env", "a selected secret's default variable is an OS_* name, which is the toolbelt's own; map it to another name in secret_env")
 		}
@@ -493,6 +513,9 @@ func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
 	var out []string
 	if c.HandoffShare != nil {
 		out = append(out, "config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
+	}
+	if c.Usage && c.Provider != nil {
+		out = append(out, "config.usage doesn't apply with a provider: subscription windows are Anthropic's, so doctor skips this binding's usage")
 	}
 	if len(c.PassEnv) > 0 {
 		out = append(out, "config.pass_env admits only variables of the executor's own process, which runs as a package with a sanitized environment; to pass variables of the daemon's environment (a proxy, CLAUDE_CONFIG_DIR), name them in the binding's pass_env")

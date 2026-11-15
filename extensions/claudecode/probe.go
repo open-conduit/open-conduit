@@ -26,20 +26,25 @@ type InstallStatus struct {
 	Path      string `json:"path,omitempty"`
 	Version   string `json:"version,omitempty"`
 	SignedIn  bool   `json:"signed_in"`
-	// Login is "subscription" (a Claude login) or "api_key"
-	// (ANTHROPIC_API_KEY in the daemon's environment).
+	// Login is "subscription" (a Claude login), "api_key"
+	// (ANTHROPIC_API_KEY in the daemon's environment) or "provider": the
+	// probe was given a provider's base URL, so turns sign in with the
+	// binding's provider secret and a Claude login doesn't apply.
 	Login string `json:"login,omitempty"`
-	Next  string `json:"next,omitempty"`
+	// Provider is the provider's host, when the probe was given one.
+	Provider string `json:"provider,omitempty"`
+	Next     string `json:"next,omitempty"`
 }
 
 func (p Probes) SetupProbes() []extension.SetupProbe {
 	return []extension.SetupProbe{{Name: "status", Summary: "whether claude is on the daemon's PATH, its version, and whether it is signed in and how",
-		Run: func(ctx context.Context, _ map[string]string) (extension.ProbeResult, error) {
-			return extension.ProbeResult{Command: "claude --version", Output: p.status(ctx)}, nil
+		Args: []extension.ProbeArg{{Name: "base_url", Summary: "the provider base URL a binding will set (provider.base_url), when its turns go to a provider other than Anthropic; the Claude sign-in then doesn't apply"}},
+		Run: func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
+			return extension.ProbeResult{Command: "claude --version", Output: p.status(ctx, args["base_url"])}, nil
 		}}}
 }
 
-func (p Probes) status(ctx context.Context) InstallStatus {
+func (p Probes) status(ctx context.Context, baseURL string) InstallStatus {
 	look, version, login, getenv := p.LookPath, p.Version, p.LoginToken, p.Getenv
 	if look == nil {
 		look = exec.LookPath
@@ -62,6 +67,16 @@ func (p Probes) status(ctx context.Context) InstallStatus {
 	s.Installed, s.Path = true, path
 	if v, err := version(ctx, path); err == nil {
 		s.Version = v
+	}
+	if baseURL != "" {
+		host, ok := providerHost(baseURL)
+		if !ok {
+			s.Next = "the base URL must be an absolute http or https URL with a host, and no credentials, query or fragment"
+			return s
+		}
+		// The provider's key is a selected secret the probe can't see.
+		s.SignedIn, s.Login, s.Provider = true, "provider", host
+		return s
 	}
 	switch {
 	case func() bool { _, err := login(ctx, ""); return err == nil }():
