@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 const toolbeltHelp = `os — Open Conduit execution toolbelt (CLI transport)
@@ -543,12 +544,49 @@ func (t *toolbelt) callData(f *toolFlags, operation string, input any) int {
 // signs in through `os git-remote`, the git transport, with a credential
 // that stays with the host), so it answers nothing and git asks its next
 // helper; a run config that still names it keeps working.
+//
+// Only a run whose git config was set before the transport names it: one a
+// daemon from before it launched, which a newer daemon adopted on upgrade
+// and gave its own `os` (the stable toolbelt link). Its git config can't
+// change, so `get` says on stderr, which git shows, how to send this one
+// git command through the transport instead (gitTransportHint).
 func (t *toolbelt) gitCredential(args []string) int {
 	if len(args) != 1 {
 		return t.usage("git-credential takes get, store or erase")
 	}
+	in, _ := io.ReadAll(io.LimitReader(t.stdin, 64<<10))
 	_, _ = io.Copy(io.Discard, t.stdin)
+	if args[0] == "get" {
+		if hint := gitTransportHint(string(in)); hint != "" {
+			fmt.Fprintln(t.errOut, hint)
+		}
+	}
 	return 0
+}
+
+// gitTransportHint is what the retired credential helper tells git's user
+// for a credential request (git's key=value lines) for an https host: that
+// the run's git config predates the git transport, and the `git -c` options
+// that send the command's https remote on that host through it. It is ""
+// for any other protocol or a host that isn't a plain host name.
+func gitTransportHint(request string) string {
+	var protocol, host string
+	for _, line := range strings.Split(request, "\n") {
+		k, v, _ := strings.Cut(strings.TrimSuffix(line, "\r"), "=")
+		switch k {
+		case "protocol":
+			protocol = v
+		case "host":
+			host = v
+		}
+	}
+	if protocol != "https" || host == "" || strings.ContainsAny(host, " \t'\"\\/`$;&|<>()") {
+		return ""
+	}
+	return fmt.Sprintf("os: git-credential is retired, and this run's git config is from an Open Conduit before the git transport "+
+		"(the run started before the daemon was upgraded). Git signs in through the transport now: run the git command again as "+
+		"git -c 'alias.remote-%[1]s=!os git-remote' -c protocol.%[1]s.allow=always -c url.%[1]s::https://%[2]s/.insteadOf=https://%[2]s/ <command>",
+		extension.GitTransport, host)
 }
 
 // callTimeout bounds one toolbelt call. An operation can make several
