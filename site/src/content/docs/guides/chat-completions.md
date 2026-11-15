@@ -5,7 +5,7 @@ description: Run Work that needs judgement but no shell or files, such as triage
 
 Some Work needs judgement and the toolbelt, but no shell, files or checkout: triaging an issue, replying in a Slack thread, summarising a thread, labelling. The `chat-completions` executor runs that Work on any endpoint that speaks the OpenAI Chat Completions API, such as OpenRouter, Ollama, OpenAI itself or a LiteLLM proxy. Each turn is a series of HTTP requests with no CLI, workspace or container, so cheap models and many parallel turns cost little.
 
-The agent's tools are the toolbelt operations its binding is granted, one function each, and nothing else. It can't run commands or read files. Every call goes through the toolbelt, so the grant, gates and run history apply exactly as they do for Claude Code. For Work that changes code, keep using Claude Code or [Codex](../codex/).
+The agent's tools are the toolbelt operations its binding is granted, one function each, and nothing else. It can't run commands or read files. Every call goes through the toolbelt, so the grant, gates and run history apply exactly as they do for Claude Code. For Work that changes code, keep using Claude Code or [Codex](../codex/), which can also run on these providers' models ([use models from other providers](../third-party-models/)).
 
 ## What you need
 
