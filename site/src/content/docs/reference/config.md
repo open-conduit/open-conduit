@@ -273,7 +273,8 @@ Binding `config`:
 | `extra_args` |  |  |
 | `builtin_tools` |  | the only built-in tools offered; [] turns them all off |
 | `models` |  | models a Work may pick with model in its context |
-| `usage` |  | doctor reads the subscription usage windows of this binding's Claude login |
+| `provider` |  | an Anthropic-compatible endpoint other than Anthropic's: base_url, and auth_token_secret, a selected secret sent as the bearer token |
+| `usage` |  | doctor reads the subscription usage windows of this binding's Claude login; not with a provider |
 
 ### Cloudflare tunnel (`cloudflared`)
 
@@ -309,6 +310,7 @@ Binding `config`:
 | `pass_env` |  |  |
 | `secret_env` |  |  |
 | `extra_args` |  | added to every codex exec; may not set the session, output files, sandbox, approvals, model or toolbelt |
+| `provider` |  | a model provider other than Codex's default, speaking the Responses API: id, base_url, and api_key_secret, a selected secret sent as its key |
 | `timeout_seconds` |  |  |
 | `handoff_minutes` | `55` |  |
 | `cold_turns` | `handoff` | what a turn does once the thread is handoff_minutes old One of handoff, resume. |

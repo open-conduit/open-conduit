@@ -69,6 +69,9 @@ type Config struct {
 	// when that turn ended with more context than this (default 200000; 0
 	// turns it off and always resumes).
 	HandoffTokens *int64 `json:"handoff_tokens,omitempty"`
+	// Provider is a model provider other than Codex's default, written as
+	// Codex's model_provider and model_providers.<id> overrides.
+	Provider *Provider `json:"provider,omitempty"`
 	// AutoCompactTokens is where Codex compacts a thread in the middle of a
 	// turn, passed as -c model_auto_compact_token_limit (default 250000; 0
 	// leaves Codex's own). A -c in extra_args overrides it.
@@ -181,8 +184,16 @@ func ParseConfig(data []byte) (Config, error) {
 	if *c.HandoffTokens < 0 || *c.AutoCompactTokens < 0 {
 		return Config{}, configError("handoff_tokens and auto_compact_tokens must not be negative")
 	}
-	if !extraArgsAllowed(c.ExtraArgs) {
+	if !extraArgsAllowed(c.ExtraArgs, nil) {
 		return Config{}, configError("extra_args may not set the session, output, sandbox, approvals, model or toolbelt")
+	}
+	var conflict string
+	extraArgsAllowed(c.ExtraArgs, func(key, value string) bool {
+		conflict = c.overrideConflict(key, value)
+		return conflict == ""
+	})
+	if conflict != "" {
+		return Config{}, configError(conflict)
 	}
 	for name, value := range c.Env {
 		if !envName.MatchString(name) || reserved(name) || strings.ContainsRune(value, 0) {
@@ -202,13 +213,17 @@ func ParseConfig(data []byte) (Config, error) {
 	if c.TimeoutSeconds < 0 || c.TimeoutSeconds > maxTimeoutSeconds {
 		return Config{}, configError("timeout_seconds must be between 0 and 31536000")
 	}
+	if msg := c.checkProvider(); msg != "" {
+		return Config{}, configError(msg)
+	}
 	return c, nil
 }
 
 // extraArgsAllowed reports whether extra_args leave the session, output,
 // sandbox, approval policy, model and toolbelt server as the executor
-// sets them, as flags or as -c/--config overrides.
-func extraArgsAllowed(args []string) bool {
+// sets them, as flags or as -c/--config overrides, and whether also, which
+// is given each override's key and value, allows each.
+func extraArgsAllowed(args []string, also func(key, value string) bool) bool {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		flag, _, _ := strings.Cut(a, "=")
@@ -230,9 +245,12 @@ func extraArgsAllowed(args []string) bool {
 		default:
 			continue
 		}
-		key, _, _ := strings.Cut(override, "=")
+		key, value, _ := strings.Cut(override, "=")
 		key = strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "").Replace(key)
 		if slices.Contains(forbiddenKeys, key) || key == "mcp_servers" || key == "mcp_servers."+mcpServer || strings.HasPrefix(key, "mcp_servers."+mcpServer+".") {
+			return false
+		}
+		if also != nil && !also(key, value) {
 			return false
 		}
 	}
@@ -269,7 +287,13 @@ func ValidateConfig(raw json.RawMessage, secretNames []string) error {
 			return configError("secret_env names a secret the binding does not select")
 		}
 	}
+	if c.Provider != nil && c.Provider.APIKeySecret != "" && !slices.Contains(secretNames, c.Provider.APIKeySecret) {
+		return configError("provider.api_key_secret names a secret the binding does not select")
+	}
 	for _, secret := range secretNames {
+		if c.providerKey(secret) {
+			continue
+		}
 		if reserved(c.secretVariable(secret)) {
 			return configError("a selected secret maps to a reserved OS_* variable; set secret_env")
 		}

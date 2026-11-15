@@ -20,6 +20,7 @@ func BindingFields() []protocol.FieldDecl {
 		{Name: "pass_env"},
 		{Name: "secret_env"},
 		{Name: "extra_args", Help: "added to every codex exec; may not set the session, output files, sandbox, approvals, model or toolbelt"},
+		{Name: "provider", Help: "a model provider other than Codex's default, speaking the Responses API: id, base_url, and api_key_secret, a selected secret sent as its key"},
 		{Name: "timeout_seconds"},
 		{Name: "handoff_minutes", Default: "55"},
 		{Name: "cold_turns", Help: "what a turn does once the thread is handoff_minutes old", Default: "handoff", Options: []string{"handoff", "resume"}},

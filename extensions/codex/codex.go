@@ -364,8 +364,8 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 }
 
 // codexArgs are the options every turn of the segment passes: the
-// sandbox, no approvals, the model, the toolbelt's MCP server and the
-// binding's extra arguments.
+// sandbox, no approvals, the model, the toolbelt's MCP server, the
+// provider and the binding's extra arguments.
 func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string) ([]string, error) {
 	args := []string{"--skip-git-repo-check", "-c", "sandbox_mode=" + tomlString(cfg.Sandbox), "-c", `approval_policy="never"`}
 	if cfg.Model != "" {
@@ -394,6 +394,7 @@ func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string) ([]
 	if n := cfg.AutoCompactTokens; n != nil && *n > 0 {
 		args = append(args, "-c", "model_auto_compact_token_limit="+strconv.FormatInt(*n, 10))
 	}
+	args = append(args, cfg.providerArgs()...)
 	return append(args, cfg.ExtraArgs...), nil
 }
 
@@ -431,7 +432,7 @@ func (e *Executor) register(rn *run) {
 
 // environment applies the B05 order: sanitized baseline, the executor
 // config's pass_env and the binding's (HostEnv) → resource-provider layer → the extensions' run layer → binding env →
-// selected secrets → execution identity. codex never gets the toolbelt
+// selected secrets (the provider's key as its env_key) → execution identity. codex never gets the toolbelt
 // credential; only its MCP server does. A run layer gets the toolbelt
 // client (OS_ENDPOINT, OS_TOKEN_FILE, `os` on PATH) so it can call `os`.
 func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, layer map[string]string) ([]string, error) {
@@ -475,6 +476,9 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 	}
 	for secret, value := range r.Context.Secrets {
 		name := cfg.secretVariable(secret)
+		if cfg.providerKey(secret) {
+			name = providerKeyVar
+		}
 		if reserved(name) || strings.ContainsRune(value, 0) {
 			return nil, configError("secret maps to a reserved variable")
 		}

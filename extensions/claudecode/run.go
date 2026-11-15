@@ -323,7 +323,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// the operator's claude config; with /tmp out of reach its temporary
 	// files go in the segment's own directory.
 	// A container binding needs the same, its config being the Work's home.
-	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(operator), Hosts: []string{"api.anthropic.com"}}
+	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(operator), Hosts: []string{cfg.apiHost()}}
 	if cfg.PluginDir != "" {
 		needs.Read = append(needs.Read, cfg.PluginDir)
 	}
@@ -511,7 +511,7 @@ func (e *Executor) presetWith(ctx context.Context, rn *run, schema, reason, summ
 
 // environment applies the B05 order: sanitized baseline → resource-provider
 // layer → the extensions' run layer (ExecutionContext.Env) → binding env →
-// selected secrets → trusted execution identity, which no earlier layer can
+// selected secrets → provider → trusted execution identity, which no earlier layer can
 // override. Toolbelt credentials enter claude's own environment only for a
 // run with a run layer (withToolbelt) or in a container; otherwise only the
 // MCP server receives them.
@@ -545,12 +545,16 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 		vars[name] = value
 	}
 	for secret, value := range r.Context.Secrets {
+		if cfg.providerSecret(secret) {
+			continue
+		}
 		name := cfg.secretVariable(secret)
 		if reserved(name) || strings.ContainsRune(value, 0) {
 			return nil, invalidConfig{extension.Invalid("/secret_env", "reserved_env", "a selected secret maps to a reserved OS_* variable; map it to another name in secret_env")}
 		}
 		vars[name] = value
 	}
+	cfg.applyProvider(vars, r.Context.Secrets)
 	vars["OS_SCOPE_ID"] = string(r.Work.ScopeID)
 	vars["OS_WORK_ID"] = string(r.Work.ID)
 	vars["OS_EXECUTION_ID"] = string(r.Execution.ID)
