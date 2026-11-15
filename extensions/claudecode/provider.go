@@ -25,17 +25,17 @@ type Provider struct {
 // The variables a provider sets. A binding with a provider may not set
 // them through env or secret_env.
 const (
-	baseURLVar   = "ANTHROPIC_BASE_URL"
-	authTokenVar = "ANTHROPIC_AUTH_TOKEN"
-	apiKeyVar    = "ANTHROPIC_API_KEY"
+	endpointEnv = "ANTHROPIC_BASE_URL"
+	bearerEnv   = "ANTHROPIC_AUTH_TOKEN"
+	blankedEnv  = "ANTHROPIC_API_KEY"
 )
 
-var providerVars = []string{baseURLVar, authTokenVar, apiKeyVar}
+var providerVars = []string{endpointEnv, bearerEnv, blankedEnv}
 
-// placeholderToken is the bearer token a provider without a secret sends.
+// placeholderBearer is the bearer token a provider without a secret sends.
 // Claude Code always sends one; a set token also keeps it from falling back
 // to the binding's Claude login and sending that to another endpoint.
-const placeholderToken = "open-conduit"
+const placeholderBearer = "open-conduit"
 
 // anthropicHost is the API host a binding without a provider reaches.
 const anthropicHost = "api.anthropic.com"
@@ -109,10 +109,10 @@ func (c Config) applyProvider(vars map[string]string, secrets map[string]string)
 	if p == nil {
 		return
 	}
-	vars[baseURLVar] = p.BaseURL
-	vars[apiKeyVar] = ""
-	vars[authTokenVar] = placeholderToken
+	vars[endpointEnv] = p.BaseURL
+	vars[blankedEnv] = ""
+	vars[bearerEnv] = placeholderBearer
 	if v := secrets[p.AuthTokenSecret]; p.AuthTokenSecret != "" && v != "" {
-		vars[authTokenVar] = v
+		vars[bearerEnv] = v
 	}
 }
