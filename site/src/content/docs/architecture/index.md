@@ -47,6 +47,7 @@ Each page separates three kinds of material:
 - [Process sandboxes and the srt provider](sandboxes/) (decision B09)
 - [Claude Code executor and private continuity](claude-code-executor/)
 - [Codex executor](codex-executor/)
+- [Chat Completions executor: toolbelt-only turns on any OpenAI-compatible endpoint](chat-completions-executor/)
 - [Engineering tools, waits and playbooks](engineering-tools/)
 - [Slack ingress, conversations and marked replies](slack-extension/)
 - [Scheduled jobs](schedule-extension/)

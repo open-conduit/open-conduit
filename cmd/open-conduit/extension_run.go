@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/extensions/aws"
 	bitbucketext "github.com/open-conduit/open-conduit/extensions/bitbucket/pkg"
+	chatcompletionsext "github.com/open-conduit/open-conduit/extensions/chatcompletions/pkg"
 	claudecodeext "github.com/open-conduit/open-conduit/extensions/claudecode/pkg"
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
 	dockerext "github.com/open-conduit/open-conduit/extensions/docker/pkg"
@@ -54,29 +55,30 @@ var runnable = map[string]struct {
 	Playbooks func() map[string]string
 	Bundled   bool
 }{
-	"aws":           {aws.Main, aws.Manifest, nil, true},
-	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
-	"claude-code":   {claudecodeext.Main, claudecodeext.Manifest, nil, true},
-	"cloudflared":   {tunnelext.Main(tunnel.Cloudflared), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Cloudflared) }, nil, true},
-	"codex":         {codexext.Main, codexext.Manifest, nil, true},
-	"docker":        {dockerext.Main, dockerext.Manifest, nil, true},
-	"git":           {gitext.Main, gitext.Manifest, nil, true},
-	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks, true},
-	"human":         {humanext.Main, humanext.Manifest, nil, true},
-	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks, true},
-	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks, true},
-	"ngrok":         {tunnelext.Main(tunnel.Ngrok), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Ngrok) }, nil, true},
-	"linear":        {linearext.Main, linearext.Manifest, linearext.Playbooks, true},
-	"observe":       {observeext.Main, observeext.Manifest, nil, true},
-	"pagerduty":     {pagerduty.Main, pagerduty.Manifest, nil, false},
-	"posthog":       {posthogext.Main, posthogext.Manifest, nil, true},
-	"schedule":      {scheduleext.Main, scheduleext.Manifest, nil, true},
-	"sentry":        {sentry.Main, sentry.Manifest, nil, false},
-	"shell":         {shellext.Main, shellext.Manifest, nil, true},
-	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
-	"srt":           {srtext.Main, srtext.Manifest, nil, true},
-	"ssh":           {sshext.Main, sshext.Manifest, nil, true},
-	"webhook":       {webhook.Main, webhook.Manifest, nil, true},
+	"aws":              {aws.Main, aws.Manifest, nil, true},
+	"bitbucket":        {bitbucketext.Main, bitbucketext.Manifest, nil, true},
+	"chat-completions": {chatcompletionsext.Main, chatcompletionsext.Manifest, nil, true},
+	"claude-code":      {claudecodeext.Main, claudecodeext.Manifest, nil, true},
+	"cloudflared":      {tunnelext.Main(tunnel.Cloudflared), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Cloudflared) }, nil, true},
+	"codex":            {codexext.Main, codexext.Manifest, nil, true},
+	"docker":           {dockerext.Main, dockerext.Manifest, nil, true},
+	"git":              {gitext.Main, gitext.Manifest, nil, true},
+	"github":           {githubext.Main, githubext.Manifest, githubext.Playbooks, true},
+	"human":            {humanext.Main, humanext.Manifest, nil, true},
+	"introspection":    {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks, true},
+	"jira":             {jiraext.Main, jiraext.Manifest, jiraext.Playbooks, true},
+	"ngrok":            {tunnelext.Main(tunnel.Ngrok), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Ngrok) }, nil, true},
+	"linear":           {linearext.Main, linearext.Manifest, linearext.Playbooks, true},
+	"observe":          {observeext.Main, observeext.Manifest, nil, true},
+	"pagerduty":        {pagerduty.Main, pagerduty.Manifest, nil, false},
+	"posthog":          {posthogext.Main, posthogext.Manifest, nil, true},
+	"schedule":         {scheduleext.Main, scheduleext.Manifest, nil, true},
+	"sentry":           {sentry.Main, sentry.Manifest, nil, false},
+	"shell":            {shellext.Main, shellext.Manifest, nil, true},
+	"slack":            {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
+	"srt":              {srtext.Main, srtext.Manifest, nil, true},
+	"ssh":              {sshext.Main, sshext.Manifest, nil, true},
+	"webhook":          {webhook.Main, webhook.Manifest, nil, true},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the
