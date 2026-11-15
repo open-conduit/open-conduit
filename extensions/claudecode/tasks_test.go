@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ type taskHarness struct {
 
 // liveTurn starts a turn that stays running until released, so tasks can
 // be started from it.
-func liveTurn(t *testing.T, extra map[string]any) (*taskHarness, extension.RunHandle) {
+func liveTurn(t *testing.T, extra map[string]any, with ...func(*extension.RunRequest)) (*taskHarness, extension.RunHandle) {
 	t.Helper()
 	h := newHarness(t)
 	h.mode("wait")
@@ -57,6 +58,9 @@ func liveTurn(t *testing.T, extra map[string]any) (*taskHarness, extension.RunHa
 	got := &accepted{}
 	e.SetTaskHost(claudecode.TaskHost{Accept: got.accept})
 	r, _ := h.request("work/t", "exec-t", 1, extra)
+	for _, f := range with {
+		f(&r)
+	}
 	handle, err := e.Run(context.Background(), r)
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +199,32 @@ func TestTaskOutlivesTurnAndAnnouncesItsEnd(t *testing.T) {
 	alias := domain.Event{Type: claudecode.TypeTaskFinished, CausationID: "src"}
 	if text, ok := claudecode.RenderTask(alias, func(id domain.ID) (domain.Event, bool) { return ev, id == "src" }); !ok || !strings.Contains(text, "Task suite failed") {
 		t.Fatalf("alias render %q", text)
+	}
+}
+
+// TestTaskGitSaysItHasNoToolbelt: a turn with the git transport's run
+// layer has the toolbelt client, but its task doesn't, so git in the task
+// fails saying why rather than with "os: command not found" (#658).
+func TestTaskGitSaysItHasNoToolbelt(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	th, handle := liveTurn(t, nil, func(r *extension.RunRequest) {
+		r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+		r.Context.Env = botLayer
+	})
+	defer th.release(handle)
+	cmd := `env > "$FAKE_DIR/task-env"; git ls-remote open-conduit::https://example.invalid/acme/repo 2> "$FAKE_DIR/task-git"; exit 0`
+	th.start(context.Background(), map[string]any{"command": cmd, "name": "git"})
+	th.ended(1)
+	raw, _ := os.ReadFile(filepath.Join(th.fake, "task-env"))
+	env := envMap(strings.Split(strings.TrimSpace(string(raw)), "\n"))
+	if env["OS_ENDPOINT"] != "" || env["OS_TOKEN_FILE"] != "" || env["GIT_AUTHOR_NAME"] != "acme[bot]" {
+		t.Errorf("task env: endpoint %q, token file %q, author %q", env["OS_ENDPOINT"], env["OS_TOKEN_FILE"], env["GIT_AUTHOR_NAME"])
+	}
+	msg, _ := os.ReadFile(filepath.Join(th.fake, "task-git"))
+	if !strings.Contains(string(msg), "a task has no toolbelt") || strings.Contains(string(msg), "command not found") {
+		t.Errorf("git in the task said %q", msg)
 	}
 }
 

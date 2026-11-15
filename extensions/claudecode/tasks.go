@@ -160,8 +160,11 @@ func TaskToolsets() []extension.Toolset {
 
 // taskSpace is where a segment's tasks run: its Work, workspace and the
 // environment its claude has, without the toolbelt's variables (a task
-// outlives the segment's authority). refusal, when set, says why the
-// segment's tasks can't run outside it.
+// outlives the segment's authority). Git config that runs the toolbelt
+// (the git transport's remote helper, `!os git-remote`) is pointed at
+// noTaskToolbelt instead, so git in a task fails saying why rather than
+// with `os: command not found`. refusal, when set, says why the segment's
+// tasks can't run outside it.
 type taskSpace struct {
 	scope, work domain.ID
 	dir         string
@@ -169,10 +172,19 @@ type taskSpace struct {
 	refusal     string
 }
 
+// noTaskToolbelt stands in for a git helper or alias that runs the
+// toolbelt, in a task's git config: it fails, saying why.
+const noTaskToolbelt = `!f() { echo "open-conduit: a task has no toolbelt (it outlives the turn's authority), so git can't reach the remote through Open Conduit: fetch before claude-code.task.start, and push after claude-code.task.wait resumes you" >&2; exit 1; }; f`
+
 func newTaskSpace(r extension.RunRequest, cfg Config, dir string, env []string) *taskSpace {
 	s := &taskSpace{scope: r.Work.ScopeID, work: r.Work.ID, dir: dir}
 	for _, kv := range env {
-		if name, _, _ := strings.Cut(kv, "="); !domain.ReservedEnv(name) {
+		name, value, _ := strings.Cut(kv, "=")
+		switch {
+		case domain.ReservedEnv(name):
+		case strings.HasPrefix(name, "GIT_CONFIG_VALUE_") && strings.HasPrefix(value, "!os "):
+			s.env = append(s.env, name+"="+noTaskToolbelt)
+		default:
 			s.env = append(s.env, kv)
 		}
 	}
