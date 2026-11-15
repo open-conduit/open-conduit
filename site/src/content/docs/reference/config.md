@@ -244,6 +244,27 @@ Extension entry `config`:
 | `manage_webhook` |  | create or re-point the repository webhook at the listener's public URL (needs admin) |
 | `dry_run` |  |  |
 
+### Chat Completions (`chat-completions`)
+
+Runs toolbelt-only turns as a Chat Completions tool loop against an OpenAI-compatible endpoint. Registers: executor.
+
+Binding `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `base_url` |  | Required. the endpoint's API root; requests go to <base_url>/chat/completions |
+| `model` |  | Required. the request's model |
+| `api_key_secret` |  | a selected secret sent as the bearer token |
+| `headers` |  | added to every request; may not carry credentials |
+| `playbook` |  | the playbook a turn starts on; none (or -) starts it on the rendered Work alone |
+| `plugin_dir` |  | holds the playbooks as <dir>/skills/<playbook>/SKILL.md; the host's own by default |
+| `args` | `{number}` | the playbook's argument template |
+| `operations` |  | narrows which granted operations become tools: names, or name.* for a namespace |
+| `max_rounds` | `30` | the most requests one attempt makes |
+| `timeout_seconds` | `300` | one request's time limit |
+| `handoff_tokens` | `100000` | a turn after one whose last request carried more prompt tokens starts afresh from the note; 0 turns it off |
+| `request` |  | passed through in every request's body (temperature, max_tokens); the executor's own fields are reserved |
+
 ### Claude Code (`claude-code`)
 
 Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt. Registers: executor.

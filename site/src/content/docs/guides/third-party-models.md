@@ -3,7 +3,7 @@ title: Use models from other providers
 description: Point a Claude Code or Codex binding at OpenRouter, LiteLLM or Ollama with its provider setting, and what changes when you do.
 ---
 
-A Claude Code or Codex binding sends its turns to Anthropic or OpenAI by default. Give it a `provider` and it sends them to another endpoint instead: a gateway such as OpenRouter, a proxy you run such as LiteLLM, or a local model server such as Ollama. The agent works the same way either way. It gets the same toolbelt, playbook and turns, and doesn't need to know which model it's running on.
+A Claude Code or Codex binding sends its turns to Anthropic or OpenAI by default. Give it a `provider` and it sends them to another endpoint instead: a gateway such as OpenRouter, a proxy you run such as LiteLLM, or a local model server such as Ollama. The agent works the same way either way. It gets the same toolbelt, playbook and turns, and doesn't need to know which model it's running on. For Work that needs only the toolbelt, with no shell or checkout, the [Chat Completions executor](../chat-completions/) runs turns on any of these endpoints without a CLI.
 
 The executor sets everything the CLI needs from `provider`: the endpoint, the key and, for a sandboxed binding, the host it may reach. Don't set `ANTHROPIC_BASE_URL`, `-c model_provider=…` or similar in `env` or `extra_args` as well. A binding with a `provider` refuses them.
 

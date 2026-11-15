@@ -205,6 +205,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"webhook", "", []string{"ingress.conformance", "routes.decisions", "operations.cases"}},
 		{"introspection", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
+		// The Chat Completions executor, against the fake endpoint its
+		// fixture command serves.
+		{"chat-completions", "", []string{"executor.conformance", "executor.inject", "executor.controls"}},
 		// srt, a sandbox provider: its policy cases, and adopt refusing a
 		// plan it never made.
 		{"srt", "", []string{"sandboxes.policy", "surfaces.served"}},

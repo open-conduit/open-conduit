@@ -10,7 +10,7 @@ Open Conduit ships two commands, kept side by side:
 - `open-conduit` is the daemon and operator client.
 - `os` is the small toolbelt that shell commands call from inside a run. The daemon looks for it beside its own executable.
 
-Homebrew, the release archives and the install script also carry the extension packages beside the binaries, in `extensions/`: the first-party integrations, executors and providers (GitHub, Slack, Linear, Jira, Claude Code, the [Codex executor](/open-conduit/guides/codex/), the shell executor and the rest), and the setup assistant in `extensions/setup/`, which runs `init --with claude` (or `--with codex`) and the browser setup and gives a fresh install its first configuration. `go install` doesn't bring them; see [below](#go-install).
+Homebrew, the release archives and the install script also carry the extension packages beside the binaries, in `extensions/`: the first-party integrations, executors and providers (GitHub, Slack, Linear, Jira, Claude Code, the [Codex executor](/open-conduit/guides/codex/), the [Chat Completions executor](/open-conduit/guides/chat-completions/), the shell executor and the rest), and the setup assistant in `extensions/setup/`, which runs `init --with claude` (or `--with codex`) and the browser setup and gives a fresh install its first configuration. `go install` doesn't bring them; see [below](#go-install).
 
 A release build sends anonymous usage telemetry: a daily count of runs and the scopes and first-party extensions in use. [Usage telemetry](/open-conduit/reference/telemetry/) lists exactly what is sent; `open-conduit serve --no-telemetry` or `DO_NOT_TRACK=1` turns it off.
 

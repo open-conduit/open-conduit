@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -440,6 +441,18 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	}
 	if d, err := h.belt.Described(ctx, narrow, ""); err != nil || len(d) != 0 {
 		t.Fatalf("described for an ungranted operation = %+v, %v", d, err)
+	}
+	// So do the granted names: every builtin and operation the full token
+	// names, described or not, but not fixture.serve, which serves a
+	// capability, and only read_context for the narrow one.
+	if g, err := h.belt.Granted(ctx, h.token, ""); err != nil || !slices.Contains(g, "fixture.wait") || slices.Contains(g, "fixture.serve") || !slices.Contains(g, extension.DeclareOutcome) || !slices.Contains(g, "fixture.echo") {
+		t.Fatalf("granted = %v, %v", g, err)
+	}
+	if g, err := h.belt.Granted(ctx, narrow, ""); err != nil || strings.Join(g, ",") != "read_context" {
+		t.Fatalf("granted to the narrow token = %v, %v", g, err)
+	}
+	if _, err = h.belt.Granted(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("granted for another execution's assertion: %v", err)
 	}
 	if _, err = h.belt.Described(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("another execution's assertion accepted: %v", err)

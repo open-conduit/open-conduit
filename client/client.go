@@ -1309,12 +1309,17 @@ func (c *Client) ToolbeltGuidance(ctx context.Context) ([]string, error) {
 }
 
 // ToolbeltGuide is what the execution's token is granted, told to an
-// agent: the operations' guidance, and each operation's summary and input.
+// agent: the operations' guidance, each operation's summary and input, and
+// the name of every operation it may call.
 type ToolbeltGuide struct {
 	Guidance []string `json:"guidance"`
 	// Operations are the granted operations that declare a summary or an
 	// input, in grant order (an older daemon sends none).
 	Operations []OperationDoc `json:"operations"`
+	// Granted names every operation the token is granted, builtins
+	// (read_context, emit, wait, …) included and described or not, in grant
+	// order. Nil from an older daemon, which sends none.
+	Granted []string `json:"granted"`
 }
 
 // OperationDoc is one granted operation's one-line summary and the JSON
