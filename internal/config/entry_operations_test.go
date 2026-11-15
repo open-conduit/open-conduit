@@ -118,6 +118,7 @@ func TestEntryOperationsFailClosed(t *testing.T) {
 			{id: "org", entries: map[string]string{"crm": crm}, ops: []string{"read_context"}},
 			{id: "team", parent: "org", entries: map[string]string{"crm": `{"tools":["lookup"],"summary":"Another tool."}`}, ops: []string{"read_context"}},
 		}, "operation_conflict"},
+		{"a full name longer than the toolbelt takes", []entryScope{{id: "org", entries: map[string]string{strings.Repeat("e", 63): `{"tools":["` + strings.Repeat("t", 63) + `"]}`}, ops: []string{"read_context"}}}, "invalid_operation"},
 		{"an operation the toolbelt can't register", []entryScope{{id: "org", entries: map[string]string{"crm": `{"tools":["Look up"]}`}, ops: []string{"read_context"}}}, "invalid_operation"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

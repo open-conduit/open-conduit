@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -208,8 +207,6 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) (bool, error){}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}, entryScopes: map[string][]domain.ID{}}, nil
 }
 
-var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
-
 func builtinOperation(name string) bool { return extension.BuiltinOperation(name) }
 
 // Register atomically declares an extension's operations and emitted families.
@@ -236,13 +233,13 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 				set++
 			}
 		}
-		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
+		if set != 1 || !extension.OperationName(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
 		if err := extension.ValidateOperationDoc(op.Summary, op.Input); err != nil {
 			return fmt.Errorf("operation %q: %w", op.Name, err)
 		}
-		if op.Serves != "" && (op.Handler == nil || !operationName.MatchString(op.Serves)) {
+		if op.Serves != "" && (op.Handler == nil || !extension.OperationName(op.Serves)) {
 			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
 		}
 		if len(op.SecretOutput) > 0 && op.Handler == nil {

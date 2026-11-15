@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -514,6 +515,7 @@ func ToolbeltCases() []ToolbeltCase {
 			}{
 				{"an entry named outside the segment rule", reg("malformed", decl("crm.eu", "lookup", f.Authority.ScopeID)), extension.ErrInvalid},
 				{"an operation named outside the segment rule", reg("malformed", decl("crm", "Lookup", f.Authority.ScopeID)), extension.ErrInvalid},
+				{"an entry operation whose full name is too long", reg("malformed", decl(strings.Repeat("e", 63), strings.Repeat("o", 63), f.Authority.ScopeID)), extension.ErrInvalid},
 				{"entry operations without a handler", extension.Registration{Version: extension.ContractVersion, Name: "malformed", EntryOperations: []extension.EntryOperation{decl("crm", "lookup", f.Authority.ScopeID)}}, extension.ErrInvalid},
 				{"an entry operation declared twice", reg("twice", decl("crm", "lookup", f.Authority.ScopeID), decl("crm", "lookup", "elsewhere")), extension.ErrConflict},
 				{"an entry operation colliding with a fixed one", extension.Registration{Version: extension.ContractVersion, Name: "colliding", EntryHandler: handler,

@@ -61,6 +61,14 @@ type EntryCall struct {
 // the call's request ID (CallRequestID) in the same way.
 type EntryHandler func(context.Context, Authority, EntryCall) (domain.Payload, error)
 
+var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
+
+// OperationName reports whether s may name a toolbelt operation: a
+// lower-case letter, then up to 127 lower-case letters, digits, dots,
+// hyphens or underscores. A toolbelt refuses to register any other, so
+// whatever composes a name (EntryOperationName) checks the result too.
+func OperationName(s string) bool { return operationName.MatchString(s) }
+
 var entrySegment = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // EntryOperationSegment reports whether s may name an entry or an entry
@@ -117,6 +125,9 @@ func ExpandEntryOperations(r Registration) ([]Operation, map[string][]domain.ID,
 			return nil, nil, err
 		}
 		name := EntryOperationName(r.Name, e.Entry, e.Name)
+		if !OperationName(name) {
+			return nil, nil, fmt.Errorf("%w: entry operation %q is longer than an operation name may be (128 bytes)", ErrInvalid, name)
+		}
 		if _, ok := scopes[name]; ok {
 			return nil, nil, fmt.Errorf("%w: operation %q is declared twice by %s", ErrConflict, name, r.Name)
 		}

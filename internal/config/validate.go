@@ -960,6 +960,10 @@ func (v *validator) declareEntryOperations() {
 					continue
 				}
 				name := extension.EntryOperationName(t.Owner, x.Name, d.Name)
+				if !extension.OperationName(name) {
+					v.fail(p+"/config", "invalid_operation", "the entry declares an operation whose full name, <extension>.<entry>.<operation>, is longer than the toolbelt's 128 bytes; shorten the entry's name or the operation's")
+					continue
+				}
 				if prev, ok := v.entryOps[name]; ok && !sameEntryOperation(prev.decl, d) {
 					v.fail(p+"/config", "operation_conflict", "the entry declares "+name+" differently from the entry at "+prev.path+"; declare it the same in both, or give the entries different names")
 					continue
