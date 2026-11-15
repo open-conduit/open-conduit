@@ -20,3 +20,10 @@ func OnTaskObserved(fn func(task string)) func() {
 	testHookObserved.Store(fn)
 	return func() { testHookObserved.Store(func(string) {}) }
 }
+
+// Process is a process the leak guard found: its ID, its group and its
+// argument vector.
+type Process = procInfo
+
+// Processes lists the host's processes as the executor's sweep sees them.
+func Processes() ([]Process, error) { return scanProcesses() }
