@@ -1321,8 +1321,8 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 // ---- toolbelt ----
 
 // toolbeltGuidance answers the agent guidance of the operations the
-// caller's token is granted, and each one's summary and input (an MCP
-// server's instructions). On an execution's own socket the token must
+// caller's token is granted, each one's summary and input (an MCP
+// server's instructions) and the name of every operation it is granted. On an execution's own socket the token must
 // belong to that execution.
 func (s *Server) toolbeltGuidance(c *call) (int, any, error) {
 	guidance, err := s.o.Toolbelt.Guidance(c.ctx, c.who.token, scopedExecution(c.ctx))
@@ -1347,7 +1347,14 @@ func (s *Server) toolbeltGuidance(c *call) (int, any, error) {
 		}
 		operations = append(operations, o)
 	}
-	return 200, map[string]any{"guidance": guidance, "operations": operations}, nil
+	granted, err := s.o.Toolbelt.Granted(c.ctx, c.who.token, scopedExecution(c.ctx))
+	if err != nil {
+		return 0, nil, err
+	}
+	if granted == nil {
+		granted = []string{}
+	}
+	return 200, map[string]any{"guidance": guidance, "operations": operations, "granted": granted}, nil
 }
 
 // toolbeltServing answers which of the operations the caller's token is

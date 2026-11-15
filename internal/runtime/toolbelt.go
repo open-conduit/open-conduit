@@ -421,6 +421,26 @@ func (t *Toolbelt) Described(ctx context.Context, token string, execution domain
 	return out, err
 }
 
+// Granted names every operation the token's pinned grant includes and
+// current config still enables, builtins (read_context, emit, wait, …)
+// included, in grant order, so an executor that gives its model one tool
+// per operation offers exactly those it may call, described or not. An
+// operation serving a capability is its client's, not the agent's, so it is
+// left out, as from Guidance. Like Guidance, it reveals nothing beyond what
+// the grant already names, and each call to one is authorized as usual.
+func (t *Toolbelt) Granted(ctx context.Context, token string, execution domain.ID) ([]string, error) {
+	var out []string
+	err := t.grantedNames(ctx, token, execution, func(name string) {
+		t.mu.RLock()
+		op := t.operations[name]
+		t.mu.RUnlock()
+		if op.Serves == "" {
+			out = append(out, name)
+		}
+	})
+	return out, err
+}
+
 // Serving names the operations the token's pinned grant includes and
 // current config still enables that serve capability (Operation.Serves), in
 // grant order. Like Guidance, it reveals nothing beyond what the grant
@@ -438,6 +458,20 @@ func (t *Toolbelt) Serving(ctx context.Context, token string, execution domain.I
 // granted visits each registered operation the token's grant includes and
 // current config still enables, once, in grant order.
 func (t *Toolbelt) granted(ctx context.Context, token string, execution domain.ID, visit func(extension.Operation)) error {
+	return t.grantedNames(ctx, token, execution, func(name string) {
+		t.mu.RLock()
+		op, ok := t.operations[name]
+		t.mu.RUnlock()
+		if ok {
+			visit(op)
+		}
+	})
+}
+
+// grantedNames visits each operation name the token's grant includes and
+// current config still enables, builtin or registered, once, in grant
+// order.
+func (t *Toolbelt) grantedNames(ctx context.Context, token string, execution domain.ID, visit func(string)) error {
 	record, err := t.load(ctx, token)
 	if err != nil {
 		return err
@@ -454,16 +488,16 @@ func (t *Toolbelt) granted(ctx context.Context, token string, execution domain.I
 	seen := map[string]bool{}
 	for _, name := range a.Operations {
 		t.mu.RLock()
-		op, ok := t.operations[name]
+		_, registered := t.operations[name]
 		t.mu.RUnlock()
-		if !ok || seen[name] {
+		if seen[name] || !registered && !builtinOperation(name) {
 			continue
 		}
 		seen[name] = true
 		if t.options.Authorize != nil && t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: name}) != nil {
 			continue
 		}
-		visit(op)
+		visit(name)
 	}
 	return nil
 }
