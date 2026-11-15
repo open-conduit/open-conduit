@@ -443,6 +443,54 @@ func (e *Extension) IngressType(extType string, lookup func(name string) (extens
 	return e
 }
 
+// EntryCall is a call of an entry operation as the SDK hands it to the
+// entry type's serve function: the entry's type, name and config in the
+// caller's scope, the operation's declaration as that config gives it, the
+// caller's authority and the input. The SDK has checked that the config
+// declares the operation; serve checks that what the entry fronts still
+// offers it as declared, and refuses the call if it has drifted.
+type EntryCall struct {
+	Type, Entry string
+	Config      json.RawMessage
+	Operation   extension.EntryOperationDecl
+	Authority   extension.Authority
+	Input       domain.Payload
+}
+
+// EntryType is an extension entry type whose config declares toolbelt
+// operations (EntryOperations).
+type EntryType struct {
+	// Declared reads the operations an entry's config declares, from the
+	// config alone: it must not start or reach anything, since config
+	// check asks it offline. An error refuses the config, as Validate's
+	// does.
+	Declared func(config json.RawMessage) ([]extension.EntryOperationDecl, error)
+	// Serve serves a call of one of them.
+	Serve func(ctx context.Context, h *Host, c EntryCall) (domain.Payload, error)
+}
+
+// EntryOperations declares an extension entry type whose config declares
+// toolbelt operations (protocol.ExtensionDecl.Operations), and registers
+// how they are read from an entry's config and served. The host registers
+// each as <extension>.<entry>.<name> in the scopes the entry is in effect
+// in; an operation the config doesn't declare is never registered, granted
+// or served. A type IngressType has declared is marked rather than added
+// again.
+func (e *Extension) EntryOperations(extType string, t EntryType) *Extension {
+	if e.EntryTypes == nil {
+		e.EntryTypes = map[string]EntryType{}
+	}
+	e.EntryTypes[extType] = t
+	for i, x := range e.Manifest.Provides.Extensions {
+		if x.Type == extType {
+			e.Manifest.Provides.Extensions[i].Operations = true
+			return e
+		}
+	}
+	e.Manifest.Provides.Extensions = append(e.Manifest.Provides.Extensions, protocol.ExtensionDecl{Type: extType, Operations: true})
+	return e
+}
+
 // Recurrence registers a calendar recurrence kind and declares it.
 func (e *Extension) Recurrence(kind string, fn RecurrenceFunc) *Extension {
 	if e.Recurrences == nil {

@@ -60,7 +60,17 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if s.ext.Bindings != nil && p.Kind == protocol.ValidateExtension {
 			out.Bindings = s.ext.Bindings(p)
 		}
-		if len(out.Describe) > 0 || len(out.WorkKinds) > 0 || len(out.Bindings) > 0 {
+		if t, ok := s.ext.EntryTypes[p.Type]; ok && t.Declared != nil && p.Kind == protocol.ValidateExtension {
+			ops, err := t.Declared(p.Config)
+			if err != nil {
+				if len(extension.ConfigDiagnostics(err)) > 0 {
+					return nil, err
+				}
+				return nil, protocol.Errorf(protocol.CodeInvalid, "invalid "+p.Kind+" config")
+			}
+			out.Operations = ops
+		}
+		if len(out.Describe) > 0 || len(out.WorkKinds) > 0 || len(out.Bindings) > 0 || len(out.Operations) > 0 {
 			return out, nil
 		}
 		return struct{}{}, nil

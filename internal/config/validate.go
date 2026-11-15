@@ -101,6 +101,15 @@ type ExtensionType struct {
 	// refers to (a human gate's bindings). Each must name an enabled
 	// binding of every scope the entry applies to.
 	Bindings func(config json.RawMessage) []string
+	// Operations, for an entry type whose config declares toolbelt
+	// operations, lists the ones a valid entry's config declares
+	// (extension.EntryOperationDecl), asked after Validate accepts it.
+	// Each is the operation <Owner>.<entry>.<name>, grantable in config
+	// and registered where the entry is in effect (EntryOperations).
+	Operations func(config json.RawMessage) []extension.EntryOperationDecl
+	// Owner is the registration name of the extension that owns the type,
+	// the root of its entry operations' names.
+	Owner string
 }
 
 // Entry is one thing an extension entry sets up, named and described.
@@ -118,6 +127,9 @@ type EffectiveScope struct {
 	SecretRefs                  map[string]string
 	// Source is the included folder the scope came from, or "".
 	Source string
+	// EntryOperations are the entry operations in effect in the scope:
+	// those its effective extension entries declare, by name.
+	EntryOperations []string
 }
 
 // Snapshot is one immutable validated generation candidate. Normalized
@@ -130,7 +142,13 @@ type Snapshot struct {
 	Scopes     map[domain.ID]*EffectiveScope
 	// Connections contain secret reference text: never log or return them.
 	Connections []Connection
-	redacted    json.RawMessage
+	// EntryOperations are the operations the enabled scopes' extension
+	// entries declare, by the registration name of the extension that owns
+	// each entry's type, each with the enabled scopes it is in effect in,
+	// sorted by name. The host registers them for the generation
+	// (extension.Registration.EntryOperations).
+	EntryOperations map[string][]extension.EntryOperation
+	redacted        json.RawMessage
 }
 
 // slots implement B04 stable slots: replacement keeps the ancestor position.
@@ -178,6 +196,9 @@ type effective struct {
 	// resolved are the scope's bindings with their operations lists
 	// resolved against its authorization, by name.
 	resolved map[string]Binding
+	// entryOps are the entry operations the scope's effective entries
+	// declare, sorted.
+	entryOps []string
 }
 
 type validator struct {
@@ -192,6 +213,21 @@ type validator struct {
 	// playbooks caches BindingPlaybook by executor and config, so an
 	// executor in a package is asked once per binding config.
 	playbooks map[string]playbookAnswer
+	// entryChecked are the owners' answers to the extension entries
+	// validated early, for their operations (declareEntryOperations), by
+	// path, so check doesn't ask again.
+	entryChecked map[string]error
+	// entryOps are the entry operations config declares, by name, and
+	// slotOps the names each entry declares, by its declaring slot.
+	entryOps map[string]entryOperation
+	slotOps  map[[2]int][]string
+}
+
+// entryOperation is an operation an extension entry declares, with the
+// owner of its type, the entry's name and where it was first declared.
+type entryOperation struct {
+	owner, entry, path string
+	decl               extension.EntryOperationDecl
 }
 
 type playbookAnswer struct {
@@ -301,6 +337,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 		}
 		v.index[s.ID] = i
 	}
+	v.declareEntryOperations()
 	for _, s := range doc.Scopes {
 		v.resolve(s.ID)
 	}
@@ -349,7 +386,7 @@ func (v *validator) resolve(id string) *effective {
 		auth: Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}, refs: map[string]string{}}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
-			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil}
+			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil, nil}
 	}
 	e.enabled = e.enabled && sc.Enabled
 	if a := sc.Authorization; a != nil {
@@ -472,6 +509,14 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 	secrets := func(names []string) bool {
 		return all(names, func(n string) bool { return e.refs[n] != "" })
 	}
+	e.entryOps = nil
+	for _, name := range e.extensions.names {
+		if s := e.extensions.byName[name]; !s.disabled {
+			e.entryOps = append(e.entryOps, v.slotOps[[2]int{s.scope, s.index}]...)
+		}
+	}
+	slices.Sort(e.entryOps)
+	e.entryOps = slices.Compact(e.entryOps)
 	for _, name := range e.bindings.names {
 		s := e.bindings.byName[name]
 		if s.disabled {
@@ -486,10 +531,13 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		resolved.Playbook, resolved.PlaybookOperations = v.playbook(b)
 		resolved.Operations = v.resolveOperations(b.Operations, e.auth.Operations, p+"/operations", "operation_denied",
 			"binding operations must be registered and within the scope authorization")
+		resolved.Operations = v.inEffect(e, b.Operations, resolved.Operations, p+"/operations")
 		resolved.Grants = slices.Clone(b.Grants)
 		for k, g := range b.Grants {
-			resolved.Grants[k].Operations = v.resolveOperations(g.Operations, e.auth.Operations, fmt.Sprintf("%s/grants/%d/operations", p, k), "operation_denied",
+			gp := fmt.Sprintf("%s/grants/%d/operations", p, k)
+			resolved.Grants[k].Operations = v.resolveOperations(g.Operations, e.auth.Operations, gp, "operation_denied",
 				"grant operations must be registered and within the scope authorization")
+			resolved.Grants[k].Operations = v.inEffect(e, g.Operations, resolved.Grants[k].Operations, gp)
 		}
 		if e.resolved == nil {
 			e.resolved = map[string]Binding{}
@@ -578,6 +626,8 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		t, registered := v.reg.Extensions[x.Type]
 		if own && !registered {
 			v.fail(p+"/type", "unknown_registration", "extension type is not registered; use a registered type"+registeredNames(v.reg.Extensions, x.Type))
+		} else if err, early := v.entryChecked[p]; own && early {
+			v.owned(p+"/config", err, "extension config rejected by its registered owner; fix it against the owner schema")
 		} else if own && t.Validate != nil {
 			v.owned(p+"/config", t.Validate(x.Config, x.SecretNames), "extension config rejected by its registered owner; fix it against the owner schema")
 		}
@@ -873,6 +923,124 @@ func (v *validator) resolveOperations(list, ceiling []string, path, code, messag
 	return ResolveOperations(list, v.reg, ceiling)
 }
 
+// declareEntryOperations asks the owner of each extension entry whose type
+// declares operations which ones its config declares, before any operations
+// list is resolved, and registers each for this validation as
+// <owner>.<entry>.<name>, with the toolsets they join (an entry's name
+// already has the form of a name segment, extension.EntryOperationSegment).
+// It refuses a declaration the toolbelt couldn't register, and a name another operation, or another entry's different
+// declaration, already has. Every declared entry counts, in any scope, so
+// an authorization can grant what a descendant's entry declares; a
+// binding is held to what its own scope has in effect (inEffect).
+func (v *validator) declareEntryOperations() {
+	var names []string
+	toolsets := maps.Clone(v.reg.Toolsets)
+	for i, sc := range v.doc.Scopes {
+		for j, x := range sc.Extensions {
+			t, ok := v.reg.Extensions[x.Type]
+			if x.Disabled || !ok || t.Operations == nil {
+				continue
+			}
+			p := fmt.Sprintf("scopes/%d/extensions/%d", i, j)
+			var err error
+			if t.Validate != nil {
+				err = t.Validate(x.Config, x.SecretNames)
+			}
+			if v.entryChecked == nil {
+				v.entryChecked, v.entryOps, v.slotOps = map[string]error{}, map[string]entryOperation{}, map[[2]int][]string{}
+			}
+			v.entryChecked[p] = err
+			decls := t.Operations(x.Config)
+			if err != nil || len(decls) == 0 {
+				continue
+			}
+			for _, d := range decls {
+				if extension.CheckEntryOperationDecl(d) != nil {
+					v.fail(p+"/config", "invalid_operation", "the entry declares an operation whose name, toolset, summary, guidance or input schema the toolbelt can't register; fix it against the owner's documented config")
+					continue
+				}
+				name := extension.EntryOperationName(t.Owner, x.Name, d.Name)
+				if prev, ok := v.entryOps[name]; ok && !sameEntryOperation(prev.decl, d) {
+					v.fail(p+"/config", "operation_conflict", "the entry declares "+name+" differently from the entry at "+prev.path+"; declare it the same in both, or give the entries different names")
+					continue
+				} else if !ok && v.operation(name) {
+					v.fail(p+"/config", "operation_conflict", "the entry declares "+name+", which another operation already has; give the entry a different name")
+					continue
+				} else if !ok {
+					v.entryOps[name] = entryOperation{owner: t.Owner, entry: x.Name, path: p, decl: d}
+					names = append(names, name)
+				}
+				v.slotOps[[2]int{i, j}] = append(v.slotOps[[2]int{i, j}], name)
+				if d.Toolset == "" {
+					continue
+				}
+				ts := extension.EntryOperationName(t.Owner, x.Name, d.Toolset)
+				if _, fixed := v.reg.Toolsets[ts]; fixed {
+					v.fail(p+"/config", "operation_conflict", "the entry's operations join toolset "+ts+", which the extension already declares; give the entry a different name")
+					continue
+				}
+				if toolsets == nil {
+					toolsets = map[string]extension.Toolset{}
+				}
+				set := toolsets[ts]
+				set.Name = ts
+				if !slices.ContainsFunc(set.Operations, func(o extension.ToolsetOperation) bool { return o.Name == name }) {
+					set.Operations = append(set.Operations, extension.ToolsetOperation{Name: name, Since: 1})
+				}
+				toolsets[ts] = set
+			}
+		}
+	}
+	if len(names) > 0 {
+		v.reg.Operations = append(slices.Clone(v.reg.Operations), names...)
+		v.reg.Toolsets = toolsets
+	}
+}
+
+// sameEntryOperation reports whether two entries declare an operation the
+// same way, so one registration serves both.
+func sameEntryOperation(a, b extension.EntryOperationDecl) bool {
+	return a.Name == b.Name && a.Summary == b.Summary && a.Guidance == b.Guidance && a.Toolset == b.Toolset && jsonEqual(a.Input, b.Input)
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return string(a) == string(b)
+	}
+	ja, _ := json.Marshal(x)
+	jb, _ := json.Marshal(y)
+	return string(ja) == string(jb)
+}
+
+// inEffect is a binding's or grant's resolved operations less the entry
+// operations no entry in effect in scope e declares, and refuses (at path)
+// the list as written when it names one of those itself: an entry
+// operation is granted only where its entry is. One a toolset brings is
+// dropped instead, as a toolset is narrowed to the ceiling.
+func (v *validator) inEffect(e *effective, list, resolved []string, path string) []string {
+	if len(v.entryOps) == 0 {
+		return resolved
+	}
+	missing := func(op string) bool {
+		_, entry := v.entryOps[op]
+		return entry && !slices.Contains(e.entryOps, op)
+	}
+	var named []string
+	for _, item := range list {
+		if name, toolset, denied := grantEntry(item); !toolset && !denied && missing(name) {
+			named = append(named, name)
+		}
+	}
+	if len(named) > 0 {
+		v.fail(path, "operation_not_in_effect", "operations name entry operations no extension entry in effect in this scope declares: "+strings.Join(named, ", ")+"; add the entry to this scope or an ancestor, or remove them")
+	}
+	return slices.DeleteFunc(slices.Clone(resolved), missing)
+}
+
 // grantEntry splits an operations list entry into the name it grants or
 // denies, whether that names a toolset and whether it is denied.
 func grantEntry(entry string) (name string, toolset, denied bool) {
@@ -966,9 +1134,34 @@ func (v *validator) snapshot() *Snapshot {
 		s.Order = append(s.Order, id)
 		s.Scopes[id] = &EffectiveScope{ID: id, ParentID: domain.ID(sc.Parent), Name: sc.Name, Enabled: e.enabled,
 			Concurrency: e.concurrency, AdmissionLimit: e.admission, Authorization: e.auth,
-			Bindings: e.activeBindings(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source}
+			Bindings: e.activeBindings(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source,
+			EntryOperations: slices.Clone(e.entryOps)}
 	}
+	s.EntryOperations = v.registeredEntryOperations(s)
 	return s
+}
+
+// registeredEntryOperations are the entry operations in effect in the
+// snapshot's enabled scopes, by owner, each with those scopes, sorted by
+// name.
+func (v *validator) registeredEntryOperations(s *Snapshot) map[string][]extension.EntryOperation {
+	scopes := map[string][]domain.ID{}
+	for _, id := range s.Order {
+		if sc := s.Scopes[id]; sc.Enabled {
+			for _, op := range sc.EntryOperations {
+				scopes[op] = append(scopes[op], id)
+			}
+		}
+	}
+	var out map[string][]extension.EntryOperation
+	for _, name := range slices.Sorted(maps.Keys(scopes)) {
+		d := v.entryOps[name]
+		if out == nil {
+			out = map[string][]extension.EntryOperation{}
+		}
+		out[d.owner] = append(out[d.owner], extension.EntryOperation{Entry: d.entry, EntryOperationDecl: d.decl, Scopes: scopes[name]})
+	}
+	return out
 }
 
 // activeBindings are the scope's enabled bindings, in slot order, with their

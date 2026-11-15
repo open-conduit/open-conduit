@@ -135,6 +135,17 @@ type ValidateParams struct {
 // entry's config refers to (a human gate's bindings). config check refuses
 // an entry, in each scope it applies to, that names a binding the scope
 // has no enabled binding of. The host keeps them with the describe lines.
+//
+// For kind extension and an entry type that declares operations
+// (ExtensionDecl.Operations), Operations are the toolbelt operations a
+// valid entry's config declares (extension.EntryOperationDecl), each named
+// within the entry: the host registers each as
+// <extension>.<entry>.<name> in the scopes the entry is in effect in, and
+// config check resolves grants against them. They are read from the config
+// alone, so the answer must not depend on anything the package would have
+// to start or reach; the package checks them against what it fronts when it
+// serves a call (OperationParams.Entry). The host keeps them with the
+// describe lines.
 type ValidateResult struct {
 	Mode      string          `json:"mode,omitempty"`
 	Playbook  string          `json:"playbook,omitempty"`
@@ -144,6 +155,8 @@ type ValidateResult struct {
 	Describe  []DescribeLine  `json:"describe,omitempty"`
 	WorkKinds []WorkKind      `json:"work_kinds,omitempty"`
 	Bindings  []string        `json:"bindings,omitempty"`
+	// Operations are the entry operations a valid entry declares.
+	Operations []extension.EntryOperationDecl `json:"operations,omitempty"`
 }
 
 // DescribeLine is one thing a config object sets up: a named element of

@@ -50,7 +50,7 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 			return ErrInvalidConfig
 		}
 		if kind == protocol.ValidateExtension || kind == protocol.ValidateRoute {
-			r.described.put(describeKey(kind, typ, config), validated{out.Describe, out.WorkKinds, out.Bindings})
+			r.described.put(describeKey(kind, typ, config), validated{out.Describe, out.WorkKinds, out.Bindings, out.Operations})
 		}
 		return nil
 	}
@@ -83,11 +83,42 @@ func (r *Remote) Bindings(typ string, config json.RawMessage) (names []string, o
 	return v.bindings, ok
 }
 
+// EntryOperations are the operations the package said an entry config of
+// extension type typ declares when it last validated that config
+// (protocol.ValidateResult.Operations); ok is false when it has not
+// validated it.
+func (r *Remote) EntryOperations(typ string, config json.RawMessage) (ops []extension.EntryOperationDecl, ok bool) {
+	v, ok := r.described.get(describeKey(protocol.ValidateExtension, typ, config))
+	return v.operations, ok
+}
+
+// EntryHandler serves the package's entry operations through
+// operation.call, with the entry each is called through in the caller's
+// scope (protocol.OperationParams.Entry). entry finds that entry's type
+// and config by its name; a call through an entry the scope doesn't have
+// is refused as undeclared without reaching the package.
+func (r *Remote) EntryHandler(entry func(scope domain.ID, name string) (typ string, config json.RawMessage, ok bool)) extension.EntryHandler {
+	return func(ctx context.Context, a extension.Authority, c extension.EntryCall) (domain.Payload, error) {
+		typ, config, ok := entry(a.ScopeID, c.Entry)
+		if !ok {
+			return domain.Payload{}, extension.ErrUndeclared
+		}
+		var out protocol.OperationResult
+		params := protocol.OperationParams{Operation: extension.EntryOperationName(r.m.Name, c.Entry, c.Operation), Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input), RequestID: extension.CallRequestID(ctx),
+			Entry: &protocol.OperationEntry{Type: typ, Name: c.Entry, Operation: c.Operation, Config: config}}
+		if err := r.p.Call(ctx, "operation.call", params, &out); err != nil {
+			return domain.Payload{}, err
+		}
+		return out.Output.Domain(), nil
+	}
+}
+
 // validated is what the package said about a config object it validated.
 type validated struct {
-	lines    []protocol.DescribeLine
-	kinds    []protocol.WorkKind
-	bindings []string
+	lines      []protocol.DescribeLine
+	kinds      []protocol.WorkKind
+	bindings   []string
+	operations []extension.EntryOperationDecl
 }
 
 // describedCap bounds each of describedCache's two maps.

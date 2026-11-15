@@ -318,6 +318,19 @@ func (r squattableRegistrar) Register(reg extension.Registration) error {
 	return nil
 }
 
+// undeclaringRegistrar accepts an operation config doesn't declare: each
+// entry that declares operations gets a "delete" as well.
+type undeclaringRegistrar struct{ extension.Registrar }
+
+func (r undeclaringRegistrar) Register(reg extension.Registration) error {
+	if len(reg.EntryOperations) > 0 {
+		extra := reg.EntryOperations[0]
+		extra.Name = "delete"
+		reg.EntryOperations = append(slices.Clone(reg.EntryOperations), extra)
+	}
+	return r.Registrar.Register(reg)
+}
+
 // unsealingRegistrar drops what a registration seals, as a toolbelt whose
 // builtin emit took any declared family would.
 type unsealingRegistrar struct{ extension.Registrar }
@@ -408,6 +421,15 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 			f.Belt = anyCancelBelt{f.Belt}
 			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "isn't the caller's child accepted") {
 				t.Fatalf("cancel of foreign Work undetected: %v", err)
+			}
+		}
+		if c.Name == "entry_operations" {
+			// A toolbelt that registers an entry operation no entry
+			// declares.
+			f := toolbeltFixture()
+			f.Registrar = undeclaringRegistrar{f.Registrar}
+			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "config doesn't declare accepted") {
+				t.Fatalf("an undeclared entry operation undetected: %v", err)
 			}
 		}
 		if c.Name == "sealed_family" {

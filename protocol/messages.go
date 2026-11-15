@@ -199,11 +199,29 @@ type DependencyFilterResult struct {
 
 // Operations.
 
+// OperationParams is operation.call's request (and operation.wait's and
+// operation.emit's). For an entry operation (ValidateResult.Operations)
+// Entry names the entry the operation is declared by, in the caller's
+// scope, with its config and the operation's name within it; it is absent
+// for an operation the manifest declares.
 type OperationParams struct {
-	Operation string    `json:"operation"`
-	Authority Authority `json:"authority"`
-	Input     Payload   `json:"input"`
-	RequestID string    `json:"request_id,omitempty"`
+	Operation string          `json:"operation"`
+	Authority Authority       `json:"authority"`
+	Input     Payload         `json:"input"`
+	RequestID string          `json:"request_id,omitempty"`
+	Entry     *OperationEntry `json:"entry,omitempty"`
+}
+
+// OperationEntry is the config entry an entry operation is called through:
+// its type and name, its config in the caller's scope, and the operation's
+// name within it (extension.EntryCall). The host has checked that the
+// entry, as configured in that scope, declares the operation; the package
+// refuses the call if what it fronts no longer offers it as declared.
+type OperationEntry struct {
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	Operation string          `json:"operation"`
+	Config    json.RawMessage `json:"config,omitempty"`
 }
 type OperationResult struct {
 	Output Payload `json:"output"`

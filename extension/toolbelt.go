@@ -501,6 +501,13 @@ type Registration struct {
 	// checks, so an executor can't forge one with the builtin emit.
 	SealedEventTypes []string
 	Operations       []Operation
+	// EntryOperations are the operations the generation's config entries
+	// declare for this registration (EntryOperation), each registered as
+	// <Name>.<entry>.<name> alongside Operations and under the same
+	// conflict checks, and callable only from the scopes listed with it.
+	// EntryHandler serves them; it is required when there are any.
+	EntryOperations []EntryOperation
+	EntryHandler    EntryHandler
 	// DependencyFilter evaluates the opaque Filter of this registration's
 	// dependencies against a type-matching source Event. Its answer must be
 	// pure and deterministic: core calls it inside coordination

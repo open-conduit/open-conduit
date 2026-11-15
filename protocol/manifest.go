@@ -322,6 +322,13 @@ type ExtensionDecl struct {
 	// Fields describe the entry config's fields for the operator's
 	// catalogue (`open-conduit adapters`, the config editor).
 	Fields []FieldDecl `json:"fields,omitempty"`
+	// Operations marks an entry type whose config declares toolbelt
+	// operations (extension.EntryOperationDecl): validate returns an
+	// entry's (ValidateResult.Operations), the host registers each as
+	// <extension>.<entry>.<name> where the entry is in effect, and serves
+	// a call of one through operation.call with the entry
+	// (OperationParams.Entry).
+	Operations bool `json:"operations,omitempty"`
 }
 
 // Setting value types.
@@ -1230,7 +1237,7 @@ func (m Manifest) Enabled() []string {
 	}
 	set("work_kinds", len(p.WorkKinds) > 0)
 	set("recurrences", len(p.Recurrences) > 0)
-	set("operations", len(p.Operations) > 0)
+	set("operations", len(p.Operations) > 0 || slices.ContainsFunc(p.Extensions, func(x ExtensionDecl) bool { return x.Operations }))
 	for _, o := range p.Operations {
 		set("operations.wait", o.Kind == OperationWait)
 		set("operations.emit", o.Kind == OperationEmit)

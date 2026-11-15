@@ -488,6 +488,77 @@ func ToolbeltCases() []ToolbeltCase {
 			}
 			return nil
 		}},
+		// Entry operations exist because config declares them: the
+		// toolbelt registers exactly the operations a registration's
+		// entries declare, as <registration>.<entry>.<name> under the
+		// namespace and conflict rules, serves them from the entry
+		// handler and only in the scopes where the entry is in effect,
+		// and refuses everything else as undeclared, granted or not.
+		{"entry_operations", func(f ToolbeltFixture) error {
+			ctx := context.Background()
+			var got []extension.EntryCall
+			handler := func(_ context.Context, a extension.Authority, c extension.EntryCall) (domain.Payload, error) {
+				got = append(got, c)
+				return c.Input, nil
+			}
+			decl := func(entry, name string, scopes ...domain.ID) extension.EntryOperation {
+				return extension.EntryOperation{Entry: entry, EntryOperationDecl: extension.EntryOperationDecl{Name: name, Summary: "Look a customer up."}, Scopes: scopes}
+			}
+			reg := func(name string, ops ...extension.EntryOperation) extension.Registration {
+				return extension.Registration{Version: extension.ContractVersion, Name: name, EntryOperations: ops, EntryHandler: handler}
+			}
+			for _, c := range []struct {
+				why string
+				reg extension.Registration
+				err error
+			}{
+				{"an entry named outside the segment rule", reg("malformed", decl("crm.eu", "lookup", f.Authority.ScopeID)), extension.ErrInvalid},
+				{"an operation named outside the segment rule", reg("malformed", decl("crm", "Lookup", f.Authority.ScopeID)), extension.ErrInvalid},
+				{"entry operations without a handler", extension.Registration{Version: extension.ContractVersion, Name: "malformed", EntryOperations: []extension.EntryOperation{decl("crm", "lookup", f.Authority.ScopeID)}}, extension.ErrInvalid},
+				{"an entry operation declared twice", reg("twice", decl("crm", "lookup", f.Authority.ScopeID), decl("crm", "lookup", "elsewhere")), extension.ErrConflict},
+				{"an entry operation colliding with a fixed one", extension.Registration{Version: extension.ContractVersion, Name: "colliding", EntryHandler: handler,
+					Operations: []extension.Operation{{Name: "colliding.crm.lookup", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+						return domain.Payload{}, nil
+					}}},
+					EntryOperations: []extension.EntryOperation{decl("crm", "lookup", f.Authority.ScopeID)}}, extension.ErrConflict},
+			} {
+				if err := f.Registrar.Register(c.reg); !errors.Is(err, c.err) {
+					return fmt.Errorf("%s accepted: %v", c.why, err)
+				}
+			}
+			if err := f.Registrar.Register(reg("entries", decl("crm", "lookup", f.Authority.ScopeID), decl("crm", "archive", "elsewhere"))); err != nil {
+				return fmt.Errorf("declared entry operations refused: %v", err)
+			}
+			a := f.Authority
+			a.Operations = append(slices.Clone(a.Operations), "entries.crm.lookup", "entries.crm.archive")
+			token, err := f.Issuer.Issue(ctx, a)
+			if err != nil {
+				return err
+			}
+			input := domain.Payload{Schema: "fixture.lookup.v1", Data: []byte(`{"id":"c1"}`)}
+			out, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: "entries.crm.lookup", Input: input})
+			if err != nil {
+				return fmt.Errorf("a declared entry operation refused: %v", err)
+			}
+			if !reflect.DeepEqual(input, out.Output) || len(got) != 1 || got[0].Entry != "crm" || got[0].Operation != "lookup" {
+				return fmt.Errorf("entry handler not given the entry and operation: %+v", got)
+			}
+			if _, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: "entries.crm.archive"}); !errors.Is(err, extension.ErrUndeclared) {
+				return fmt.Errorf("entry operation called from a scope its entry isn't in accepted: %v", err)
+			}
+			// What no entry declares can't be called, even by a token that
+			// names it (a toolbelt may refuse to issue that token at all).
+			a.Operations = append(a.Operations, "entries.crm.delete")
+			if token, err = f.Issuer.Issue(ctx, a); errors.Is(err, extension.ErrUndeclared) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			if _, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: "entries.crm.delete"}); !errors.Is(err, extension.ErrUndeclared) {
+				return fmt.Errorf("an entry operation config doesn't declare accepted: %v", err)
+			}
+			return nil
+		}},
 		{"emission_causation", func(f ToolbeltFixture) error {
 			e := domain.Event{ID: "emission", Type: "fixture.changed.v1", DeliveryID: "report", OccurredAt: NewClock().Now()}
 			out, err := f.Belt.Call(context.Background(), f.Token, extension.ToolCall{Operation: extension.Emit, Event: &e})

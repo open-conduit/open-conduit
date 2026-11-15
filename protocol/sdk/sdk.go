@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -113,6 +114,9 @@ type Extension struct {
 	// entry's scope has no enabled binding of. It is asked after Validate
 	// accepts an object of kind extension.
 	Bindings func(p protocol.ValidateParams) []string
+	// EntryTypes are the extension entry types whose config declares
+	// toolbelt operations, by type (EntryOperations).
+	EntryTypes map[string]EntryType
 	// Webhooks returns the handler of a webhook path the last configure
 	// registered. The handler verifies the request and pushes through
 	// Host.Deliver before writing a 2xx status.
@@ -628,10 +632,38 @@ func (s *Server) ingress(ctx context.Context, method string, raw json.RawMessage
 	return protocol.FromSnapshot(snap), nil
 }
 
+// entryOperation serves a call of an entry operation: only operation.call,
+// only of an operation the entry's config, as the host sent it, declares
+// under the name called, and only through the entry type's Serve.
+func (s *Server) entryOperation(ctx context.Context, method string, p protocol.OperationParams) (any, error) {
+	e := p.Entry
+	t, ok := s.ext.EntryTypes[e.Type]
+	if method != "operation.call" || !ok || t.Declared == nil || t.Serve == nil {
+		return nil, protocol.Errorf(protocol.CodeUndeclared, "unknown operation")
+	}
+	decls, err := t.Declared(e.Config)
+	if err != nil {
+		return nil, protocol.Errorf(protocol.CodeUndeclared, "unknown operation")
+	}
+	i := slices.IndexFunc(decls, func(d extension.EntryOperationDecl) bool { return d.Name == e.Operation })
+	if i < 0 || p.Operation != extension.EntryOperationName(s.ext.Manifest.Name, e.Name, e.Operation) {
+		return nil, protocol.Errorf(protocol.CodeUndeclared, "unknown operation")
+	}
+	ctx = extension.WithCallRequestID(ctx, p.RequestID)
+	out, err := t.Serve(ctx, s.host, EntryCall{Type: e.Type, Entry: e.Name, Config: e.Config, Operation: decls[i], Authority: p.Authority.Extension(), Input: p.Input.Domain()})
+	if err != nil {
+		return nil, err
+	}
+	return protocol.OperationResult{Output: protocol.FromPayload(out)}, nil
+}
+
 func (s *Server) operation(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	var p protocol.OperationParams
 	if err := jsonrpc.Params(raw, &p); err != nil {
 		return nil, err
+	}
+	if p.Entry != nil {
+		return s.entryOperation(ctx, method, p)
 	}
 	var op *extension.Operation
 	for i := range s.ext.Operations {

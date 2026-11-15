@@ -211,13 +211,18 @@ type Options struct {
 	// Entries are the configs of the generated entries, by extension type
 	// ({} for a type not here). Each must name a type a manifest declares.
 	Entries map[string]json.RawMessage
+	// Operations are granted to the binding, and in the scope's
+	// authorization, beyond those the manifests declare: the operations a
+	// generated entry's config declares (<package>.<entry>.<name>), or a
+	// toolset of them as @<name>.
+	Operations []string
 }
 
 // Generate is the config of one scope, ScopeID, for the manifests: an
 // entry for each extension type they declare (named after its type, with
 // its config from Entries, and every secret selected), a binding
 // AgentBinding running Shell or Agent granted every operation they declare plus
-// read_context, wait and declare_outcome, a route for each route handler
+// read_context, wait, declare_outcome and Operations, a route for each route handler
 // they declare, and a manual route last. env is what the daemon's
 // environment needs for the secrets given by value.
 func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []string, err error) {
@@ -244,6 +249,11 @@ func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []st
 				config = raw
 			}
 			entries = append(entries, map[string]any{"name": Name(e.Type), "type": e.Type, "secret_names": names, "config": config})
+		}
+	}
+	for _, op := range o.Operations {
+		if !contains(ops, op) {
+			ops = append(ops, op)
 		}
 	}
 	var undeclared []string
