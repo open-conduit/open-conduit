@@ -199,7 +199,8 @@ func (s *Server) RateLimit(method string, retryAfter, n int) {
 
 // FailNextPost makes the next chat.postMessage misbehave: "lost" creates the
 // message and then answers 500 (an ambiguous post); "refuse:<code>" answers
-// ok:false without posting.
+// ok:false without posting, and "refuse:<code>:<message>" also says why, as
+// Slack's response_metadata messages do.
 func (s *Server) FailNextPost(mode string) { s.mu.Lock(); s.postMode = mode; s.mu.Unlock() }
 
 // WithholdMetadata makes listings omit message metadata, as for a token or
@@ -594,7 +595,12 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 	mode := s.postMode
 	s.postMode = ""
 	if code, ok := strings.CutPrefix(mode, "refuse:"); ok {
-		return apiAnswer{"ok": false, "error": code}, http.StatusOK
+		code, said, _ := strings.Cut(code, ":")
+		answer := apiAnswer{"ok": false, "error": code}
+		if said != "" {
+			answer["response_metadata"] = map[string]any{"messages": []string{said}}
+		}
+		return answer, http.StatusOK
 	}
 	ts := s.tick()
 	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata, Blocks: p.Blocks}

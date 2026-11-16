@@ -78,6 +78,8 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 
 Work that didn't start in Slack can post there too: a nightly job's findings, or a summary of a failed deploy. Grant its binding `slack.post` and list in the Slack entry's `post` the channels that binding may post in. Each must also be in the entry's `channels`. The agent calls `slack.post {"channel": "C0123456789", "text": "…"}`, and the message's thread becomes the job's Work: a person's reply there reaches the same agent, on its own binding, and it answers with `slack.reply`. The daemon refuses any channel the binding isn't allowed, whatever the prompt says. The scope still needs a `slack` route; it takes the replies in posted threads whatever binding it names.
 
+Agents write their messages in standard markdown, which Slack shows as written. A message can also carry a table, a chart or a card after its text, as `blocks`; the daemon refuses buttons and other interactive elements, since nothing would handle a press. To keep Slack's own `mrkdwn` syntax instead, set `"projection": {"format": "mrkdwn"}` on the Slack entry.
+
 A reply after the job's Work has completed is recorded and starts nothing, as for any completed Work.
 
 ```json

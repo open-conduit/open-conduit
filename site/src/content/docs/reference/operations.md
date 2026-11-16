@@ -778,8 +778,9 @@ Post a new message to a Slack channel; its thread becomes this Work's, so replie
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `blocks` | array of object |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `channel` | string | yes | the Slack channel ID (C… or G…) to post in; it must be one your binding may post in |
-| `text` | string | yes | the message as Slack mrkdwn text, not blank and at most 40000 bytes |
+| `text` | string | yes | the message, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.reply`
 
@@ -787,8 +788,9 @@ Post a reply in this Work's Slack thread; a retried call posts it once.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `blocks` | array of object |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
-| `text` | string | yes | the reply as Slack mrkdwn text, not blank and at most 40000 bytes |
+| `text` | string | yes | the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.thread`
 
@@ -878,8 +880,9 @@ Post a new message to a Slack channel; its thread becomes this Work's, so replie
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `blocks` | array of object |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `channel` | string | yes | the Slack channel ID (C… or G…) to post in; it must be one your binding may post in |
-| `text` | string | yes | the message as Slack mrkdwn text, not blank and at most 40000 bytes |
+| `text` | string | yes | the message, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.reply`
 
@@ -887,8 +890,9 @@ Post a reply in this Work's Slack thread; a retried call posts it once.
 
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| `blocks` | array of object |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
-| `text` | string | yes | the reply as Slack mrkdwn text, not blank and at most 40000 bytes |
+| `text` | string | yes | the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.thread`
 

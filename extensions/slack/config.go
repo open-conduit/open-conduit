@@ -113,7 +113,17 @@ const (
 type Projection struct {
 	Disabled bool `json:"disabled,omitempty"`
 	DryRun   bool `json:"dry_run,omitempty"`
+	// Format is how a message's text is laid out: markdown (default) sends
+	// it as a markdown block, so it is read as standard markdown; mrkdwn
+	// sends it as plain message text, read as Slack's own mrkdwn.
+	Format string `json:"format,omitempty"`
 }
+
+// Text formats (projection.format).
+const (
+	FormatMarkdown = "markdown"
+	FormatMrkdwn   = "mrkdwn"
+)
 
 // ExtensionConfig is the opaque config of a `slack` extension entry: one
 // Slack app installation in one workspace, observing a set of channels.
@@ -478,6 +488,13 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	sort.Strings(s.Channels)
 	s.Namespace, s.Scope, s.Team = c.Namespace, c.Scope, c.Team
 	s.SigningSecret, s.Projection = c.SigningSecret, c.Projection
+	switch s.Projection.Format {
+	case "":
+		s.Projection.Format = FormatMarkdown
+	case FormatMarkdown, FormatMrkdwn:
+	default:
+		return s, errors.New("slack extension: projection format must be markdown or mrkdwn")
+	}
 	s.Start = c.Start
 	switch s.Start {
 	case "":

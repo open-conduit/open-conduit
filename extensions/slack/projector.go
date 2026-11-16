@@ -121,8 +121,12 @@ type Intent struct {
 	// re-derived from durable outcomes instead.
 	Durable bool
 	// Blocks lay the message out (a prompt's buttons); they are derived
-	// again on every pass, never stored.
+	// again on every pass, never stored, and replace the text's layout.
 	Blocks []map[string]any
+	// Content is the display blocks an agent sends after the text
+	// (checkBlocks): part of the intent's identity, and kept with the text
+	// when Durable.
+	Content []map[string]any
 	// Cause is the Event a top-level post derives from (the posting
 	// attempt's trigger), so the thread's attachment joins its chain.
 	Cause domain.ID
@@ -135,15 +139,21 @@ type Intent struct {
 }
 
 type intentRecord struct {
-	ID          string    `json:"id"`
-	Work        domain.ID `json:"work"`
-	Execution   domain.ID `json:"execution,omitempty"`
-	Channel     string    `json:"channel"`
-	Thread      string    `json:"thread"`
-	TextDigest  string    `json:"text_digest"`
-	Broadcast   bool      `json:"broadcast,omitempty"`
-	State       string    `json:"state"`
-	Code        string    `json:"code,omitempty"`
+	ID         string    `json:"id"`
+	Work       domain.ID `json:"work"`
+	Execution  domain.ID `json:"execution,omitempty"`
+	Channel    string    `json:"channel"`
+	Thread     string    `json:"thread"`
+	TextDigest string    `json:"text_digest"`
+	// BlocksDigest identifies the intent's Content ("" for none).
+	BlocksDigest string           `json:"blocks_digest,omitempty"`
+	Content      []map[string]any `json:"content,omitempty"`
+	Broadcast    bool             `json:"broadcast,omitempty"`
+	State        string           `json:"state"`
+	Code         string           `json:"code,omitempty"`
+	// Detail is what Slack said about a refusal (sanitized), so an agent
+	// can correct the blocks it sent.
+	Detail      string    `json:"detail,omitempty"`
 	Attempts    int       `json:"attempts"`
 	CreatedAt   time.Time `json:"created_at"`
 	AttemptedAt time.Time `json:"attempted_at,omitempty"`
@@ -204,7 +214,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && (in.Broadcast || in.Work == "" || p.o.Open == nil) {
 		return "", storage.ErrInvalid
 	}
-	key, textDigest := intentKey(in.ID), digest(in.Text)
+	key, textDigest, blocks := intentKey(in.ID), digest(in.Text), blocksDigest(in.Content)
 	var rec intentRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		found, err := p.get(tx, key, &rec)
@@ -213,13 +223,13 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
-				Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding}
+				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding}
 			if in.Durable {
-				rec.Text = in.Text
+				rec.Text, rec.Content = in.Text, in.Content
 			}
 			return p.put(tx, key, rec)
 		}
-		if rec.TextDigest != textDigest || rec.Channel != in.Channel || rec.Thread != in.Thread || rec.Broadcast != in.Broadcast {
+		if rec.TextDigest != textDigest || rec.BlocksDigest != blocks || rec.Channel != in.Channel || rec.Thread != in.Thread || rec.Broadcast != in.Broadcast {
 			return ErrIntentConflict
 		}
 		return nil
@@ -249,6 +259,9 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		return rec.State, nil
 	}
 	post := Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: in.Blocks, Metadata: Marker(in.Work, in.Execution, in.ID)}
+	if post.Blocks == nil {
+		post.Blocks = layout(p.o.Settings.Projection.Format, in.Text, in.Content)
+	}
 	if id, ok := p.o.Settings.IdentityOf(rec.Binding); ok {
 		// Slack posts under the app's name when the token lacks the
 		// scope, so the scope is checked first: a binding with its own
@@ -295,7 +308,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		return IntentPending, err
 	case errors.As(err, &refused):
 		// Slack answered ok:false; nothing was posted.
-		return p.finish(ctx, key, IntentFailed, "", refused.Code, false)
+		return p.finishWith(ctx, key, IntentFailed, "", refused.Code, refused.Detail, false)
 	case err != nil:
 		// Ambiguous: the marker search decides after SearchDelay.
 		return IntentAttempted, err
@@ -363,12 +376,17 @@ func (p *Projector) own(ctx context.Context, m Message) bool {
 }
 
 func (p *Projector) finish(ctx context.Context, key, state, ts, code string, recovered bool) (string, error) {
+	return p.finishWith(ctx, key, state, ts, code, "", recovered)
+}
+
+// finishWith is finish that also records what Slack said about a refusal.
+func (p *Projector) finishWith(ctx context.Context, key, state, ts, code, detail string, recovered bool) (string, error) {
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		var cur intentRecord
 		if _, err := p.get(tx, key, &cur); err != nil {
 			return err
 		}
-		cur.State, cur.TS, cur.Code = state, ts, code
+		cur.State, cur.TS, cur.Code, cur.Detail = state, ts, code, detail
 		if state == IntentPosted && cur.Thread == "" {
 			// A top-level post is made: its thread becomes the posting
 			// Work's in the same transaction, however it was confirmed.
@@ -411,16 +429,16 @@ func (p *Projector) opened(tx storage.Tx, rec intentRecord) error {
 }
 
 // IntentState is an intent's durable record: its state, the posted
-// message's ts and a refusal code.
+// message's ts, and a refusal's code and what Slack said about it.
 type IntentState struct {
-	State, TS, Code string
+	State, TS, Code, Detail string
 }
 
 // Lookup reads an intent's durable record (State is "" when unknown).
 func (p *Projector) Lookup(ctx context.Context, id string) (IntentState, error) {
 	var rec intentRecord
 	err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, intentKey(id), &rec); return e })
-	return IntentState{State: rec.State, TS: rec.TS, Code: rec.Code}, err
+	return IntentState{State: rec.State, TS: rec.TS, Code: rec.Code, Detail: rec.Detail}, err
 }
 
 func replyDeclaration(x domain.Execution) (ReplyDeclaration, bool) {
@@ -503,7 +521,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Text != "" && rec.State != IntentPosted && rec.State != IntentFailed {
-				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause, Binding: rec.Binding})
+				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Content: rec.Content, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause, Binding: rec.Binding})
 			}
 		}
 		return err

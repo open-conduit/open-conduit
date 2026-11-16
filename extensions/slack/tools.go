@@ -60,7 +60,7 @@ func Declared() []extension.Operation {
 const uploadGuidance = "Use `slack.upload` to put a file into this Work's Slack thread, such as a screenshot: `call slack.upload {\"file_path\": \"shot.png\", \"title\": \"…\"}` with a `request_id`, so a retried call uploads once. The client reads `file_path` for you. The Slack entry sets which media types and sizes are accepted; a refusal says what it allows. To say something about the file, reply in the thread as usual."
 
 // postGuidance tells an agent granted slack.post when to use it.
-const postGuidance = "Use `slack.post` to send what you have to say to a Slack channel when this Work did not start in Slack, for example a report at the end of a job: `call slack.post {\"channel\": \"C…\", \"text\": \"…\"}` with a `request_id`, so a retried call posts once. You may post only in the channels your binding is allowed; a refusal says which. The message's thread becomes this Work's: a person's reply there is your next input, and `slack.reply`, `slack.thread` and `slack.context` then act on that thread. Post once per thread you want; reply in it rather than posting again."
+const postGuidance = "Use `slack.post` to send what you have to say to a Slack channel when this Work did not start in Slack, for example a report at the end of a job: `call slack.post {\"channel\": \"C…\", \"text\": \"…\"}` with a `request_id`, so a retried call posts once. You may post only in the channels your binding is allowed; a refusal says which. The message's thread becomes this Work's: a person's reply there is your next input, and `slack.reply`, `slack.thread` and `slack.context` then act on that thread. Post once per thread you want; reply in it rather than posting again. A report that is a table or a chart can carry it as `blocks` after the text."
 
 // Source is one registered Slack extension entry the tools can act on.
 type Source struct {
@@ -166,11 +166,14 @@ func refusal(err error) error {
 }
 
 // failed is the refusal for a reply or post that was not made.
-func failed(what, binding, code string) error {
-	if code == CodeIdentityScope {
+func failed(what, binding string, st IntentState) error {
+	if st.Code == CodeIdentityScope {
 		return refuse("identity_scope_missing", "nothing was posted: binding %s posts under its own name and icon, which needs the Slack app's %s scope, and its token lacks it; report it as a problem so the owner adds the scope and reinstalls the app", binding, CustomizeScope)
 	}
-	return refuse("slack_refused", "Slack refused the %s (%s)", what, code)
+	if st.Detail != "" {
+		return refuse("slack_refused", "Slack refused the %s (%s): %s", what, st.Code, st.Detail)
+	}
+	return refuse("slack_refused", "Slack refused the %s (%s)", what, st.Code)
 }
 
 // execution is the calling attempt's stored Execution, read within its own
@@ -337,8 +340,23 @@ func author(p MessagePayload) string {
 
 // replyInput is slack.reply's input.
 type replyInput struct {
-	Text      string `json:"text" doc:"the reply as Slack mrkdwn text, not blank and at most 40000 bytes"`
-	Broadcast bool   `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
+	Text      string           `json:"text" doc:"the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
+	Blocks    []map[string]any `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
+	Broadcast bool             `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
+}
+
+// checkMessage admits a message's text and blocks for an entry.
+func checkMessage(s Settings, text string, blocks []map[string]any) error {
+	if strings.TrimSpace(text) == "" {
+		return refuse("empty_text", "the text is empty")
+	}
+	if len(text) > maxText {
+		return refuse("text_too_long", "the text is longer than Slack's 40,000 characters")
+	}
+	if err := checkBlocks(blocks); err != nil {
+		return err
+	}
+	return checkLayout(s.Projection.Format, text, blocks)
 }
 
 func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
@@ -346,11 +364,8 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(in.Text) == "" {
-		return nil, refuse("empty_text", "the text is empty")
-	}
-	if len(in.Text) > maxText {
-		return nil, refuse("text_too_long", "the text is longer than Slack's 40,000 characters")
+	if err := checkMessage(b.src.Settings, in.Text, in.Blocks); err != nil {
+		return nil, err
 	}
 	// The binding, and so the name the reply posts under, is the calling
 	// attempt's own, read from its stored Execution, never the input.
@@ -359,7 +374,7 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 		return nil, err
 	}
 	intent := Intent{ID: intentID(ctx, b, OpReply, data), Work: b.work.ID, Execution: b.a.ExecutionID, Channel: b.channel, Thread: b.thread,
-		Text: in.Text, Broadcast: in.Broadcast, Durable: true, Binding: x.ExecutorBinding}
+		Text: in.Text, Content: in.Blocks, Broadcast: in.Broadcast, Durable: true, Binding: x.ExecutorBinding}
 	state, err := b.src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err
@@ -369,7 +384,7 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 		return map[string]any{"state": IntentPosted, "ts": st.TS}, nil
 	}
 	if e == nil && st.State == IntentFailed {
-		return nil, failed("reply", x.ExecutorBinding, st.Code)
+		return nil, failed("reply", x.ExecutorBinding, st)
 	}
 	if b.src.Settings.Projection.DryRun {
 		return map[string]any{"state": "dry_run", "note": "dry run: nothing was posted"}, nil
@@ -381,8 +396,9 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 
 // postInput is slack.post's input.
 type postInput struct {
-	Channel string `json:"channel" doc:"the Slack channel ID (C… or G…) to post in; it must be one your binding may post in"`
-	Text    string `json:"text" doc:"the message as Slack mrkdwn text, not blank and at most 40000 bytes"`
+	Channel string           `json:"channel" doc:"the Slack channel ID (C… or G…) to post in; it must be one your binding may post in"`
+	Text    string           `json:"text" doc:"the message, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
+	Blocks  []map[string]any `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
 }
 
 // post posts a new top-level message for the calling Work in a channel its
@@ -396,11 +412,13 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(in.Text) == "" {
-		return nil, refuse("empty_text", "the text is empty")
+	// The text and the blocks themselves are checked before the channel,
+	// and the layout once the entry, whose format it follows, is known.
+	if err := checkMessage(Settings{}, in.Text, nil); err != nil {
+		return nil, err
 	}
-	if len(in.Text) > maxText {
-		return nil, refuse("text_too_long", "the text is longer than Slack's 40,000 characters")
+	if err := checkBlocks(in.Blocks); err != nil {
+		return nil, err
 	}
 	var w domain.Work
 	var x domain.Execution
@@ -442,6 +460,9 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 		}
 		return nil, refuse("channel_not_allowed", "binding %s may not post in channel %s; the Slack entry's post config lists the channels each binding may post in", x.ExecutorBinding, in.Channel)
 	}
+	if err := checkLayout(src.Settings.Projection.Format, in.Text, in.Blocks); err != nil {
+		return nil, err
+	}
 	id := "post/" + string(a.ExecutionID) + "/" + digest(string(data))[:24]
 	if r := extension.CallRequestID(ctx); r != "" {
 		id = "post/" + string(w.ID) + "/" + r
@@ -450,7 +471,7 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	if cause == "" {
 		cause = x.TriggerID
 	}
-	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Durable: true, Cause: cause, Binding: x.ExecutorBinding}
+	intent := Intent{ID: id, Work: w.ID, Execution: a.ExecutionID, Channel: in.Channel, Text: in.Text, Content: in.Blocks, Durable: true, Cause: cause, Binding: x.ExecutorBinding}
 	state, err := src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err
@@ -462,7 +483,7 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	case st.State == IntentPosted:
 		return map[string]any{"state": IntentPosted, "channel": in.Channel, "ts": st.TS, "reply": fmt.Sprintf("call %s {\"text\": …}", OpReply)}, nil
 	case st.State == IntentFailed:
-		return nil, failed("post", x.ExecutorBinding, st.Code)
+		return nil, failed("post", x.ExecutorBinding, st)
 	case src.Settings.Projection.DryRun:
 		return map[string]any{"state": "dry_run", "note": "dry run: nothing was posted"}, nil
 	}

@@ -761,6 +761,70 @@ func TestSlackReplyToolIsDurableAndOnce(t *testing.T) {
 	}
 }
 
+// TestSlackReplyToolSendsMarkdownAndBlocks: a reply's text is sent as a
+// markdown block with the text as its fallback, an agent's display blocks
+// follow it, interactive blocks are refused before anything is posted, and
+// what Slack says about blocks it refuses reaches the agent.
+func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "How did the week go?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	attempt := e.startAttempt(w.ID)
+	tools, err := sl.NewTools(sl.ToolsOptions{Store: e.store, Now: e.clock.Now, Sources: func() []sl.Source {
+		return []sl.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply extension.Operation
+	for _, op := range tools.Registration().Operations {
+		if op.Name == sl.OpReply {
+			reply = op
+		}
+	}
+	auth := extension.Authority{ScopeID: slScope, WorkID: w.ID, ExecutionID: attempt}
+	call := func(request, input string) (map[string]any, error) {
+		ctx := extension.WithCallRequestID(context.Background(), request)
+		out, err := reply.Handler(ctx, auth, domain.Payload{Schema: "json", Data: json.RawMessage(input)})
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		_ = json.Unmarshal(out.Data, &m)
+		return m, nil
+	}
+	table := `{"type":"table","rows":[[{"type":"raw_text","text":"Day"},{"type":"raw_text","text":"Tickets"}],[{"type":"raw_text","text":"Mon"},{"type":"raw_text","text":"4"}]]}`
+	if out, err := call("r1", `{"text":"**Five** tickets closed.","blocks":[`+table+`]}`); err != nil || out["state"] != sl.IntentPosted {
+		t.Fatalf("reply with blocks: %v %v", out, err)
+	}
+	posted := e.fake.AgentReplies(slChannel, root)
+	if len(posted) != 1 || posted[0].Text != "**Five** tickets closed." || len(posted[0].Blocks) != 2 ||
+		posted[0].Blocks[0]["type"] != "markdown" || posted[0].Blocks[0]["text"] != "**Five** tickets closed." || posted[0].Blocks[1]["type"] != "table" {
+		t.Fatalf("posted: %+v", posted)
+	}
+	var op *extension.OperationError
+	for name, blocks := range map[string]string{
+		"a button":         `{"type":"section","text":{"type":"mrkdwn","text":"x"},"accessory":{"type":"button","text":{"type":"plain_text","text":"Go"}}}`,
+		"an actions block": `{"type":"actions","elements":[]}`,
+		"a card's actions": `{"type":"card","title":{"type":"plain_text","text":"x"},"actions":[]}`,
+		"an action cell":   `{"type":"data_table","caption":"x","rows":[[{"type":"raw_text","text":"a"}],[{"type":"action_cell","element":{"type":"button"}}]]}`,
+	} {
+		if _, err := call("r-"+name, `{"text":"x","blocks":[`+blocks+`]}`); !errors.As(err, &op) || op.Code != "block_interactive" && op.Code != "block_not_allowed" {
+			t.Errorf("%s was not refused: %v", name, err)
+		}
+	}
+	if n := len(e.fake.AgentReplies(slChannel, root)); n != 1 {
+		t.Fatalf("a refused reply was posted: %d", n)
+	}
+	e.fake.FailNextPost("refuse:invalid_blocks:[ERROR] missing required field: text [json-pointer:/blocks/1/rows/1/0]")
+	if _, err := call("r2", `{"text":"x","blocks":[{"type":"divider"}]}`); !errors.As(err, &op) || op.Code != "slack_refused" || !strings.Contains(op.Message, "json-pointer:/blocks/1/rows/1/0") {
+		t.Fatalf("Slack's reason was not passed on: %v", err)
+	}
+}
+
 // TestSlackRateLimitedScanInfersNoAbsence: a rate-limited generation infers
 // no absence; once the limit lifts, deletions surface as generic absence that
 // reaches no Work as input.
