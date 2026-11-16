@@ -295,8 +295,8 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	sort.Strings(names)
 	var errs []error
 	for _, name := range names {
-		removed, err := extension.ReconcileContainers(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]bool, error) {
-			live := map[domain.ID]bool{}
+		removed, err := extension.ReconcileContainersKeeping(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+			keep := map[domain.ID]extension.ContainerKeep{}
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				for _, id := range ids {
 					x, err := tx.Execution(id)
@@ -306,11 +306,11 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 					if err != nil {
 						return err
 					}
-					live[id] = containersLive(x.State)
+					keep[id] = containersKept(x.State)
 				}
 				return nil
 			})
-			return live, err
+			return keep, err
 		})
 		if removed > 0 {
 			d.log.Info("removed what ended or parked runs left in containers", "provider", name, "removed", removed)
@@ -327,15 +327,23 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	d.clear("containers", "")
 }
 
-// containersLive is whether an execution in state may still use its
-// containers: it is pending or running a segment. A parked execution's
-// segment is over and its result recorded, and its wake launches a new
-// container; what it has is a stopped one and what the provider made
-// beside it, which can hold resources with a small fixed limit (Docker's
-// networks), so reconcile removes them as it does a finished execution's
-// (#669).
-func containersLive(state domain.ExecutionState) bool {
-	return state == domain.ExecutionPending || state == domain.ExecutionRunning
+// containersKept is how much of an execution's containers reconcile
+// keeps. A pending or running execution keeps them all. A parked
+// execution's segment is over and its result recorded, and its wake
+// launches a new container; what it has is a stopped one and what the
+// provider made beside it, which can hold resources with a small fixed
+// limit (Docker's networks), so reconcile removes them as it does a
+// finished execution's (#669). It keeps a parked execution's attach,
+// which an operator may be launching (nothing of it runs until their CLI
+// starts it); their detach or the wake's launch removes it.
+func containersKept(state domain.ExecutionState) extension.ContainerKeep {
+	switch state {
+	case domain.ExecutionPending, domain.ExecutionRunning:
+		return extension.ContainerKeepAll
+	case domain.ExecutionParked:
+		return extension.ContainerKeepAttach
+	}
+	return extension.ContainerKeepNone
 }
 
 // segmentEnded tells every extension that issued something for an

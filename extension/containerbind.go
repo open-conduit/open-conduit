@@ -519,14 +519,50 @@ func ContainerMounts(ctx context.Context, p ContainerProvider, owner ResourceOwn
 	return out, nil
 }
 
+// ContainerKeep is how much of an execution's containers (and what the
+// provider made beside them) reconcile keeps.
+type ContainerKeep int
+
+const (
+	// ContainerKeepNone removes them all, but an attach still running: the
+	// execution is over or gone.
+	ContainerKeepNone ContainerKeep = iota
+	// ContainerKeepAttach removes all but its attach's: the execution runs
+	// no segment (it is parked), but an operator may be attaching to it,
+	// and an attach being launched has nothing running yet. The attach's
+	// own detach, or the wake's launch, removes those.
+	ContainerKeepAttach
+	// ContainerKeepAll keeps them all: the execution may be running a
+	// segment, or about to, and recovery may adopt a stopped container.
+	ContainerKeepAll
+)
+
 // ReconcileContainers removes this host's containers (and what the
 // provider made for them, which its host-wide listing reports after them)
 // whose execution is not live, and returns how many entries it removed.
-// live reports, for the executions found, which may still be running a
-// segment (or about to); one it leaves out is gone. The host counts a
-// parked execution as not live: its segment is over, and its wake's launch
-// makes a new container.
+// live reports, for the executions found, which are still live; one it
+// leaves out is gone. It is ReconcileContainersKeeping with live as
+// ContainerKeepAll and anything else as ContainerKeepNone.
 func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, live func([]domain.ID) (map[domain.ID]bool, error)) (int, error) {
+	return ReconcileContainersKeeping(ctx, p, host, func(ids []domain.ID) (map[domain.ID]ContainerKeep, error) {
+		alive, err := live(ids)
+		keep := map[domain.ID]ContainerKeep{}
+		for id, ok := range alive {
+			if ok {
+				keep[id] = ContainerKeepAll
+			}
+		}
+		return keep, err
+	})
+}
+
+// ReconcileContainersKeeping removes this host's containers, and what the
+// provider made for them, as keep says for each execution found; one it
+// leaves out is gone (ContainerKeepNone). It returns how many entries it
+// removed. A running attach is always kept: an operator's attach runs
+// beside a finished execution until they exit, and their detach removes
+// it then.
+func ReconcileContainersKeeping(ctx context.Context, p ContainerProvider, host string, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {
 		return 0, err
@@ -543,7 +579,7 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	alive, err := live(ids)
+	kept, err := keep(ids)
 	if err != nil {
 		return 0, err
 	}
@@ -551,12 +587,12 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 	var errs []error
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
-		if st.Ref.Labels[ContainerLabelHost] != host || id == "" || alive[id] {
+		if st.Ref.Labels[ContainerLabelHost] != host || id == "" {
 			continue
 		}
-		// An operator's attach runs beside a finished execution until they
-		// exit; their attach removes it then.
-		if st.Running && st.Ref.Labels[ContainerLabelSegment] == ContainerSegmentAttach {
+		attach := st.Ref.Labels[ContainerLabelSegment] == ContainerSegmentAttach
+		switch k := kept[id]; {
+		case k == ContainerKeepAll, k == ContainerKeepAttach && attach, st.Running && attach:
 			continue
 		}
 		if err := p.Remove(ctx, st.Ref); err != nil {

@@ -28,9 +28,11 @@ func (p *listedProvider) Remove(_ context.Context, ref extension.ContainerRef) e
 // TestParkedExecutionsReleaseTheirContainers (#669): reconcile removes the
 // stopped container of a parked execution, as it does a finished one's, so
 // a waiting conversation holds nothing a provider made for its last
-// segment (Docker's networks, of which an engine has few). The negative
-// control: a pending or running execution's containers stay, the stopped
-// one too, since recovery may adopt it.
+// segment (Docker's networks, of which an engine has few). It keeps a
+// parked execution's attach, which an operator may be launching with
+// nothing of it running yet; a finished execution's stopped attach goes.
+// The negative control: a pending or running execution's containers stay,
+// the stopped one too, since recovery may adopt it.
 func TestParkedExecutionsReleaseTheirContainers(t *testing.T) {
 	states := map[domain.ID]domain.ExecutionState{
 		"x-pending": domain.ExecutionPending, "x-running": domain.ExecutionRunning, "x-parked": domain.ExecutionParked,
@@ -38,15 +40,17 @@ func TestParkedExecutionsReleaseTheirContainers(t *testing.T) {
 	}
 	p := &listedProvider{}
 	for id := range states {
-		p.listed = append(p.listed, extension.ContainerState{Ref: extension.ContainerRef{ID: string(id),
-			Labels: map[string]string{extension.ContainerLabelHost: "host", extension.ContainerLabelExecution: string(id)}}})
-	}
-	_, err := extension.ReconcileContainers(context.Background(), p, "host", func(ids []domain.ID) (map[domain.ID]bool, error) {
-		live := map[domain.ID]bool{}
-		for _, id := range ids {
-			live[id] = containersLive(states[id])
+		for _, segment := range []string{"1", extension.ContainerSegmentAttach} {
+			p.listed = append(p.listed, extension.ContainerState{Ref: extension.ContainerRef{ID: string(id) + "/" + segment,
+				Labels: map[string]string{extension.ContainerLabelHost: "host", extension.ContainerLabelExecution: string(id), extension.ContainerLabelSegment: segment}}})
 		}
-		return live, nil
+	}
+	_, err := extension.ReconcileContainersKeeping(context.Background(), p, "host", func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		keep := map[domain.ID]extension.ContainerKeep{}
+		for _, id := range ids {
+			keep[id] = containersKept(states[id])
+		}
+		return keep, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,9 +60,13 @@ func TestParkedExecutionsReleaseTheirContainers(t *testing.T) {
 		removed[id] = true
 	}
 	for id, state := range states {
-		want := state != domain.ExecutionPending && state != domain.ExecutionRunning
-		if removed[string(id)] != want {
-			t.Errorf("%s execution: removed %v, want %v", state, removed[string(id)], want)
+		live := state == domain.ExecutionPending || state == domain.ExecutionRunning
+		if got := removed[string(id)+"/1"]; got == live {
+			t.Errorf("%s execution's segment container: removed %v, want %v", state, got, !live)
+		}
+		want := !live && state != domain.ExecutionParked
+		if got := removed[string(id)+"/"+extension.ContainerSegmentAttach]; got != want {
+			t.Errorf("%s execution's stopped attach: removed %v, want %v", state, got, want)
 		}
 	}
 }
