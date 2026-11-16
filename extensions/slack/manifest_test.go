@@ -75,6 +75,16 @@ func TestManifestCoversWhatTheExtensionUses(t *testing.T) {
 	if err := f.client.RemoveReaction(context.Background(), chanA, root, "eyes"); err != nil {
 		t.Fatal(err)
 	}
+	upload, file, err := f.client.UploadURL(context.Background(), "shot.png", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.SendUpload(context.Background(), upload, []byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.CompleteUpload(context.Background(), file, "Shot", chanA, root); err != nil {
+		t.Fatal(err)
+	}
 	cfg, _ := slack.ParseConnection([]byte(`{"api_url":"` + f.fake.URL + `"}`))
 	app, _ := slack.NewClient(cfg, func(context.Context, string) (string, error) { return "xapp-test", nil }, slack.ClientOptions{})
 	sock := slack.NewSocket(app, slack.SocketOptions{})

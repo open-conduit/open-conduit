@@ -472,8 +472,8 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 	return out, err
 }
 
-// Converge runs one bounded pass: outcome replies and unfinished durable
-// (tool) intents. Rate limits and credential failures stop the pass; other
+// Converge runs one bounded pass: outcome replies, unfinished durable
+// (tool) intents and uploads whose share's answer was lost. Rate limits and credential failures stop the pass; other
 // per-item failures are reported as safe codes and retried next pass.
 func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, error) {
 	var res ProjectionResult
@@ -540,6 +540,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 				code = "reply:" + CodeIdentityScope
 			}
 			res.Codes = append(res.Codes, code)
+		}
+	}
+	if done < limit {
+		if _, err := p.convergeUploads(ctx, limit-done, &res); err != nil {
+			return res, err
 		}
 	}
 	n, codes, err := p.Progress(ctx, limit)

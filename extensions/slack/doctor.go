@@ -23,7 +23,8 @@ type AuthReport struct {
 // auth.test with the bot token must belong to the entry's team and bot user,
 // and the token's granted scopes are compared with the manifest. Missing
 // history or chat:write scopes fail (reconcile or replies cannot work), as
-// does a missing chat:write.customize when the entry sets identities;
+// does a missing chat:write.customize when the entry sets identities, or a
+// missing files:write when it turns uploads on;
 // any other missing manifest scope warns, naming what it costs. An entry
 // that turns direct messages on fails without DirectScopes, since DMs could
 // then be neither read nor recovered.
@@ -72,7 +73,7 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	for _, g := range id.Scopes {
 		have[g] = true
 	}
-	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"] || len(direct) > 0 || len(s.Identities) > 0 && !have[CustomizeScope]
+	essential := !have["chat:write"] || !have["channels:history"] && !have["groups:history"] || len(direct) > 0 || len(s.Identities) > 0 && !have[CustomizeScope] || s.Uploads && !have[FilesScope]
 	if essential {
 		raise(DoctorFail, "scopes_missing")
 	} else {
@@ -80,8 +81,13 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	}
 	r.Item += "; missing scopes " + strings.Join(missing, ", ")
 	for _, m := range missing {
-		if m == MarkerScope {
+		switch {
+		case m == MarkerScope:
 			r.Item += " (reply markers are found by the text fallback only)"
+		case m == FilesScope && s.Uploads:
+			r.Item += " (uploads is on, but every slack.upload is refused)"
+		case m == FilesScope:
+			r.Item += " (slack.upload is refused, should the entry turn uploads on)"
 		}
 	}
 	if len(direct) > 0 {
