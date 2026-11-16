@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"unicode/utf8"
@@ -47,18 +48,30 @@ const (
 )
 
 // checkBlocks admits an agent's blocks: display blocks only, nothing
-// interactive anywhere in them.
-func checkBlocks(blocks []map[string]any) error {
+// interactive anywhere in them. The blocks stay as the agent sent them
+// (json.RawMessage), so their numbers reach Slack exactly; only a copy is
+// decoded to check them.
+func checkBlocks(blocks []json.RawMessage) error {
 	if len(blocks) == 0 {
 		return nil
 	}
 	if len(blocks) > maxBlocks {
 		return refuse("too_many_blocks", "a message takes at most %d blocks after its text", maxBlocks)
 	}
-	if data, err := json.Marshal(blocks); err != nil || len(data) > maxBlockBytes {
+	size := 0
+	for _, b := range blocks {
+		size += len(b)
+	}
+	if size > maxBlockBytes {
 		return refuse("blocks_too_large", "the blocks are larger than %d bytes", maxBlockBytes)
 	}
-	for i, b := range blocks {
+	for i, raw := range blocks {
+		var b map[string]any
+		d := json.NewDecoder(bytes.NewReader(raw))
+		d.UseNumber()
+		if d.Decode(&b) != nil || b == nil {
+			return refuse("block_not_allowed", "block %d is not a JSON object", i+1)
+		}
 		t, _ := b["type"].(string)
 		if !displayBlocks[t] {
 			return refuse("block_not_allowed", "block %d has type %q; only display blocks may be sent: %s", i+1, t, displayList())
@@ -101,7 +114,7 @@ func interactive(v any, path string) (string, bool) {
 
 // checkLayout refuses text that can't lead a message with blocks in the
 // entry's format: it must fit one markdown block, or in mrkdwn one section.
-func checkLayout(format, text string, blocks []map[string]any) error {
+func checkLayout(format, text string, blocks []json.RawMessage) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -120,25 +133,56 @@ func checkLayout(format, text string, blocks []map[string]any) error {
 // the agent's blocks. nil posts the text alone. Markdown text longer than
 // one message's markdown allowance, with nothing after it, is posted as
 // plain text rather than refused (checkLayout refuses it with blocks).
-func layout(format, text string, blocks []map[string]any) []map[string]any {
-	if format == FormatMrkdwn {
-		if len(blocks) == 0 {
-			return nil
-		}
-		return append([]map[string]any{{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}}, blocks...)
-	}
-	if len(blocks) == 0 && utf8.RuneCountInString(text) > maxMarkdown {
+func layout(format, text string, blocks []json.RawMessage) []json.RawMessage {
+	var lead map[string]any
+	switch {
+	case format == FormatMrkdwn && len(blocks) == 0:
 		return nil
+	case format == FormatMrkdwn:
+		lead = map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}
+	case len(blocks) == 0 && utf8.RuneCountInString(text) > maxMarkdown:
+		return nil
+	default:
+		lead = map[string]any{"type": "markdown", "text": text}
 	}
-	return append([]map[string]any{{"type": "markdown", "text": text}}, blocks...)
+	return append([]json.RawMessage{raw(lead)}, blocks...)
 }
 
-// blocksDigest identifies blocks in an intent record ("" for none, so a
-// record written before blocks existed still matches).
-func blocksDigest(blocks []map[string]any) string {
+// raw encodes blocks the host lays out itself (the text's, a prompt's).
+func raw(v any) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return data
+}
+
+// raws encodes a prompt's blocks; nil stays nil.
+func raws(blocks []map[string]any) []json.RawMessage {
+	if blocks == nil {
+		return nil
+	}
+	out := make([]json.RawMessage, len(blocks))
+	for i, b := range blocks {
+		out[i] = raw(b)
+	}
+	return out
+}
+
+// blocksDigest identifies blocks in an intent record by their bytes ("" for none, so a record written before blocks existed still
+// matches).
+func blocksDigest(blocks []json.RawMessage) string {
 	if len(blocks) == 0 {
 		return ""
 	}
-	data, _ := json.Marshal(blocks)
-	return digest(string(data))
+	// Compacted, since the stored record keeps them compacted: a block
+	// sent with whitespace is the same intent when the projector finishes
+	// it from the record.
+	parts := make([]string, len(blocks))
+	for i, b := range blocks {
+		var c bytes.Buffer
+		if json.Compact(&c, b) != nil {
+			c.Reset()
+			c.Write(b)
+		}
+		parts[i] = c.String()
+	}
+	return digest(parts...)
 }

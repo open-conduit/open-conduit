@@ -408,7 +408,7 @@ type Post struct {
 	Metadata  *Metadata `json:"metadata,omitempty"`
 	// Blocks, when set, lay the message out (a prompt's buttons); Text is
 	// then its notification and accessibility text.
-	Blocks []map[string]any `json:"blocks,omitempty"`
+	Blocks []json.RawMessage `json:"blocks,omitempty"`
 	// Links are not unfurled: a reply never creates follow-up previews.
 	UnfurlLinks bool `json:"unfurl_links"`
 	UnfurlMedia bool `json:"unfurl_media"`

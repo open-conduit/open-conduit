@@ -126,7 +126,7 @@ type Intent struct {
 	// Content is the display blocks an agent sends after the text
 	// (checkBlocks): part of the intent's identity, and kept with the text
 	// when Durable.
-	Content []map[string]any
+	Content []json.RawMessage
 	// Cause is the Event a top-level post derives from (the posting
 	// attempt's trigger), so the thread's attachment joins its chain.
 	Cause domain.ID
@@ -146,11 +146,11 @@ type intentRecord struct {
 	Thread     string    `json:"thread"`
 	TextDigest string    `json:"text_digest"`
 	// BlocksDigest identifies the intent's Content ("" for none).
-	BlocksDigest string           `json:"blocks_digest,omitempty"`
-	Content      []map[string]any `json:"content,omitempty"`
-	Broadcast    bool             `json:"broadcast,omitempty"`
-	State        string           `json:"state"`
-	Code         string           `json:"code,omitempty"`
+	BlocksDigest string            `json:"blocks_digest,omitempty"`
+	Content      []json.RawMessage `json:"content,omitempty"`
+	Broadcast    bool              `json:"broadcast,omitempty"`
+	State        string            `json:"state"`
+	Code         string            `json:"code,omitempty"`
 	// Detail is what Slack said about a refusal (sanitized), so an agent
 	// can correct the blocks it sent.
 	Detail      string    `json:"detail,omitempty"`
@@ -258,7 +258,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if p.o.Settings.Projection.DryRun {
 		return rec.State, nil
 	}
-	post := Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: in.Blocks, Metadata: Marker(in.Work, in.Execution, in.ID)}
+	post := Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: raws(in.Blocks), Metadata: Marker(in.Work, in.Execution, in.ID)}
 	if post.Blocks == nil {
 		post.Blocks = layout(p.o.Settings.Projection.Format, in.Text, in.Content)
 	}

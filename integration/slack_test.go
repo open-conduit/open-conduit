@@ -796,14 +796,37 @@ func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
 		_ = json.Unmarshal(out.Data, &m)
 		return m, nil
 	}
-	table := `{"type":"table","rows":[[{"type":"raw_text","text":"Day"},{"type":"raw_text","text":"Tickets"}],[{"type":"raw_text","text":"Mon"},{"type":"raw_text","text":"4"}]]}`
-	if out, err := call("r1", `{"text":"**Five** tickets closed.","blocks":[`+table+`]}`); err != nil || out["state"] != sl.IntentPosted {
+	// A number beyond float64's precision reaches Slack exactly as sent.
+	table := `{"type":"table","rows":[[{"type":"raw_text","text":"Day"},{"type":"raw_text","text":"Tickets"}],[{"type":"raw_text","text":"Mon"},{"type":"raw_number","value":12345678901234567890,"text":"many"}]]}`
+	out, err := call("r1", `{"text":"**Five** tickets closed.","blocks":[`+table+`]}`)
+	if err != nil || out["state"] != sl.IntentPosted {
 		t.Fatalf("reply with blocks: %v %v", out, err)
+	}
+	if sent := e.fake.PostedBlocks(out["ts"].(string)); len(sent) != 2 || string(sent[1]) != table {
+		t.Fatalf("the table was not posted as sent: %s", sent)
 	}
 	posted := e.fake.AgentReplies(slChannel, root)
 	if len(posted) != 1 || posted[0].Text != "**Five** tickets closed." || len(posted[0].Blocks) != 2 ||
 		posted[0].Blocks[0]["type"] != "markdown" || posted[0].Blocks[0]["text"] != "**Five** tickets closed." || posted[0].Blocks[1]["type"] != "table" {
 		t.Fatalf("posted: %+v", posted)
+	}
+	// A rate-limited reply is finished later from its record, still exact.
+	e.fake.RateLimit("chat.postMessage", 20, 1)
+	spaced := strings.ReplaceAll(table, ",", ", ")
+	if out, err := call("r-later", `{"text":"Again.","blocks":[`+spaced+`]}`); err != nil || out["state"] != "pending" {
+		t.Fatalf("rate-limited reply: %v %v", out, err)
+	}
+	e.clock.Add(21 * time.Second)
+	e.fake.Advance(21 * time.Second)
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("finished from the record: %+v", res)
+	}
+	later := e.fake.AgentReplies(slChannel, root)
+	if len(later) != 2 {
+		t.Fatalf("replies: %d", len(later))
+	}
+	if sent := e.fake.PostedBlocks(later[1].TS); len(sent) != 2 || string(sent[1]) != table {
+		t.Fatalf("the record's table was not posted as sent: %s", sent)
 	}
 	var op *extension.OperationError
 	for name, blocks := range map[string]string{
@@ -816,7 +839,7 @@ func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
 			t.Errorf("%s was not refused: %v", name, err)
 		}
 	}
-	if n := len(e.fake.AgentReplies(slChannel, root)); n != 1 {
+	if n := len(e.fake.AgentReplies(slChannel, root)); n != 2 {
 		t.Fatalf("a refused reply was posted: %d", n)
 	}
 	e.fake.FailNextPost("refuse:invalid_blocks:[ERROR] missing required field: text [json-pointer:/blocks/1/rows/1/0]")

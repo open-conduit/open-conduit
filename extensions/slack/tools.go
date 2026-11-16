@@ -340,13 +340,13 @@ func author(p MessagePayload) string {
 
 // replyInput is slack.reply's input.
 type replyInput struct {
-	Text      string           `json:"text" doc:"the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
-	Blocks    []map[string]any `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
-	Broadcast bool             `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
+	Text      string            `json:"text" doc:"the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
+	Blocks    []json.RawMessage `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
+	Broadcast bool              `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
 }
 
 // checkMessage admits a message's text and blocks for an entry.
-func checkMessage(s Settings, text string, blocks []map[string]any) error {
+func checkMessage(s Settings, text string, blocks []json.RawMessage) error {
 	if strings.TrimSpace(text) == "" {
 		return refuse("empty_text", "the text is empty")
 	}
@@ -396,9 +396,9 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 
 // postInput is slack.post's input.
 type postInput struct {
-	Channel string           `json:"channel" doc:"the Slack channel ID (C… or G…) to post in; it must be one your binding may post in"`
-	Text    string           `json:"text" doc:"the message, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
-	Blocks  []map[string]any `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
+	Channel string            `json:"channel" doc:"the Slack channel ID (C… or G…) to post in; it must be one your binding may post in"`
+	Text    string            `json:"text" doc:"the message, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
+	Blocks  []json.RawMessage `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
 }
 
 // post posts a new top-level message for the calling Work in a channel its
