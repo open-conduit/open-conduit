@@ -521,9 +521,11 @@ func ContainerMounts(ctx context.Context, p ContainerProvider, owner ResourceOwn
 
 // ReconcileContainers removes this host's containers (and what the
 // provider made for them, which its host-wide listing reports after them)
-// whose execution is terminal or gone, and returns how many entries it
-// removed. live reports, for the executions found, which are still live;
-// one it leaves out is gone.
+// whose execution is not live, and returns how many entries it removed.
+// live reports, for the executions found, which may still be running a
+// segment (or about to); one it leaves out is gone. The host counts a
+// parked execution as not live: its segment is over, and its wake's launch
+// makes a new container.
 func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, live func([]domain.ID) (map[domain.ID]bool, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {

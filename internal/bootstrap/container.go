@@ -267,9 +267,10 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 	return extension.StopContainer(ctx, d.containers.providers[pin.Provider], pin, d.containerRecords(state.ExecutionID), containerStopGrace)
 }
 
-// reconcileContainers removes this host's containers whose execution is
-// terminal or gone, with what each provider made for them, and the homes
-// of finished Work, at most once per resource interval.
+// reconcileContainers removes this host's containers whose execution runs
+// no segment (parked, terminal or gone), with what each provider made for
+// them, and the homes of finished Work, at most once per resource
+// interval.
 func (d *daemon) reconcileContainers(ctx context.Context) {
 	if len(d.containers.providers) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
@@ -305,14 +306,14 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 					if err != nil {
 						return err
 					}
-					live[id] = !x.State.Terminal()
+					live[id] = containersLive(x.State)
 				}
 				return nil
 			})
 			return live, err
 		})
 		if removed > 0 {
-			d.log.Info("removed what ended runs left in containers", "provider", name, "removed", removed)
+			d.log.Info("removed what ended or parked runs left in containers", "provider", name, "removed", removed)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
@@ -324,6 +325,17 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 		return
 	}
 	d.clear("containers", "")
+}
+
+// containersLive is whether an execution in state may still use its
+// containers: it is pending or running a segment. A parked execution's
+// segment is over and its result recorded, and its wake launches a new
+// container; what it has is a stopped one and what the provider made
+// beside it, which can hold resources with a small fixed limit (Docker's
+// networks), so reconcile removes them as it does a finished execution's
+// (#669).
+func containersLive(state domain.ExecutionState) bool {
+	return state == domain.ExecutionPending || state == domain.ExecutionRunning
 }
 
 // segmentEnded tells every extension that issued something for an
