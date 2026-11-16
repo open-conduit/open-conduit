@@ -184,13 +184,14 @@ type interaction struct {
 }
 
 // Interact takes one interactive payload: a press of a prompt's button is
-// handed to Act as its presser, and they are told the outcome. Anything
-// else is ignored. An error is one the host could not act on now; the
+// handed to Act as its presser, and they are told the outcome; a progress
+// message's Stop and a reply's feedback buttons are taken by stop and
+// feedback. Anything else is ignored. An error is one the host could not act on now; the
 // press is not retried (Slack has been acknowledged), so the person is
 // asked to press again.
 func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 	var in interaction
-	if json.Unmarshal(payload, &in) != nil || in.Type != "block_actions" || p.o.Act == nil {
+	if json.Unmarshal(payload, &in) != nil || in.Type != "block_actions" {
 		return nil
 	}
 	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !p.o.Settings.Observes(in.Container.ChannelID) {
@@ -200,7 +201,10 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 		if a.ActionID == stopAction {
 			return p.stop(ctx, in, a.Value, a.ActionTS)
 		}
-		if !strings.HasPrefix(a.ActionID, buttonPrefix) {
+		if a.ActionID == feedbackAction {
+			return p.feedback(ctx, in, a.Value, a.ActionTS)
+		}
+		if !strings.HasPrefix(a.ActionID, buttonPrefix) || p.o.Act == nil {
 			continue
 		}
 		var v buttonValue

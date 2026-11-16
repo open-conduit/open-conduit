@@ -790,6 +790,7 @@ Post a reply in this Work's Slack thread; a retried call posts it once.
 | --- | --- | --- | --- |
 | `blocks` | array of any |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
+| `feedback` | boolean |  | false leaves the feedback buttons off this reply when the Slack entry puts them below your replies; default true |
 | `text` | string | yes | the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.thread`
@@ -892,6 +893,7 @@ Post a reply in this Work's Slack thread; a retried call posts it once.
 | --- | --- | --- | --- |
 | `blocks` | array of any |  | Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements |
 | `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
+| `feedback` | boolean |  | false leaves the feedback buttons off this reply when the Slack entry puts them below your replies; default true |
 | `text` | string | yes | the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn |
 
 #### `slack.thread`

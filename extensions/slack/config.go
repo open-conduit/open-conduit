@@ -184,6 +184,18 @@ type ExtensionConfig struct {
 	// conversation's thread for each run a person's message starts or
 	// wakes, updated from the run's durable state. Off by default.
 	Progress *ProgressConfig `json:"progress,omitempty"`
+	// Feedback, when enabled, puts Slack's thumbs up and down below the
+	// replies of the bindings it names (every binding when it names none).
+	// A press is recorded on the Work as slack.feedback. Off by default.
+	Feedback *FeedbackConfig `json:"feedback,omitempty"`
+}
+
+// FeedbackConfig turns on feedback buttons below replies.
+type FeedbackConfig struct {
+	Enabled bool `json:"enabled"`
+	// Bindings narrows the buttons to these bindings' replies; empty is
+	// every binding's.
+	Bindings []string `json:"bindings,omitempty"`
 }
 
 // ProgressConfig turns on the progress message and says who may stop a run
@@ -299,6 +311,23 @@ type Settings struct {
 	// Slack users who may press its Stop button.
 	Progress  bool
 	StopUsers []string
+	// Feedback turns on feedback buttons below replies; FeedbackBindings
+	// (sorted) narrows them to those bindings' replies, empty for all.
+	Feedback         bool
+	FeedbackBindings []string
+}
+
+// AsksFeedback reports whether a reply posted on binding carries feedback
+// buttons.
+func (s Settings) AsksFeedback(binding string) bool {
+	if !s.Feedback {
+		return false
+	}
+	if len(s.FeedbackBindings) == 0 {
+		return true
+	}
+	_, ok := slices.BinarySearch(s.FeedbackBindings, binding)
+	return ok && binding != ""
 }
 
 // MayStop reports whether user may press a progress message's Stop button.
@@ -453,6 +482,22 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("slack extension: progress stop needs progress enabled")
 		}
 		s.Progress, s.StopUsers = pc.Enabled, users
+	}
+	if fc := c.Feedback; fc != nil {
+		if len(fc.Bindings) > 1000 {
+			return s, errors.New("slack extension: feedback bindings must list at most 1000 bindings")
+		}
+		bindings := slices.Clone(fc.Bindings)
+		sort.Strings(bindings)
+		for i, b := range bindings {
+			if strings.TrimSpace(b) == "" || i > 0 && bindings[i-1] == b {
+				return s, errors.New("slack extension: feedback bindings must be distinct binding names")
+			}
+		}
+		if len(bindings) > 0 && !fc.Enabled {
+			return s, errors.New("slack extension: feedback bindings needs feedback enabled")
+		}
+		s.Feedback, s.FeedbackBindings = fc.Enabled, bindings
 	}
 	if u := c.Uploads; u != nil {
 		s.Uploads, s.UploadMax = true, MaxUpload

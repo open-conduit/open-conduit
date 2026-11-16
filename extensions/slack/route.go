@@ -118,6 +118,9 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 	if e.Type == TypeThreadOpened {
 		return opened(in)
 	}
+	if e.Type == TypeFeedback {
+		return feedback(in)
+	}
 	if !strings.HasPrefix(e.Type, "slack.message.") {
 		return extension.Skip("not a Slack message"), nil
 	}
@@ -311,6 +314,34 @@ func opened(in extension.RouteInput) (extension.RouteDecision, error) {
 		keys = append(keys, domain.CorrelationKey{Source: s.Namespace, ExternalID: PostedKey(p.Channel, p.TS, p.Binding)})
 	}
 	return extension.RouteDecision{Match: true, AttachKeys: keys, Deliver: extension.DeliverNone, Reason: "a thread this Work posted"}, nil
+}
+
+// feedback keeps a press of a reply's feedback buttons in the history of
+// the Work that posted the reply, without making it input: no wait matches
+// it, no run wakes for it, and finished Work opens no successor for it (the
+// router files it as terminal, still on that Work). Only the projector
+// accepts it, from the entry's own source; the family is sealed. As for a
+// posted thread, the route's channel selection is not consulted, since no
+// binding takes the Event.
+func feedback(in extension.RouteInput) (extension.RouteDecision, error) {
+	e := in.Event.Event
+	if in.Work == nil {
+		return extension.Skip("feedback is recorded only on the Work whose reply it is"), nil
+	}
+	var p Feedback
+	if e.Data.Schema != SchemaFeedback || json.Unmarshal(e.Data.Data, &p) != nil {
+		return extension.Skip("not a feedback payload"), nil
+	}
+	if e.Source != p.Namespace {
+		return extension.Skip("feedback comes only from its entry's own source"), nil
+	}
+	if _, ok := settingsFor(in.Scope, p.Namespace); !ok {
+		return extension.Skip("no slack entry in this scope reads " + p.Namespace), nil
+	}
+	if held, _ := holds(*in.Work, p.Namespace, p.Channel, p.Thread); !held {
+		return extension.Skip("feedback on a reply in a thread this Work does not hold"), nil
+	}
+	return extension.RouteDecision{Match: true, Deliver: extension.DeliverNone, Reason: p.Value + " feedback from slack:" + p.User + " on a reply"}, nil
 }
 
 // startReason says what let a message start a conversation.

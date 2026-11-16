@@ -33,6 +33,11 @@ const (
 	// when the post is made; the family is sealed, so no executor can emit
 	// one with the builtin emit and claim a thread.
 	TypeThreadOpened = "slack.thread.opened"
+	// TypeFeedback is a person's press of the feedback buttons below a
+	// reply (Feedback). The projector accepts it on the Work that posted
+	// the reply; the route keeps it in that Work's history without making
+	// it input. The family is sealed, so no executor can emit one.
+	TypeFeedback = "slack.feedback"
 )
 
 // Payload schemas.
@@ -41,7 +46,40 @@ const (
 	SchemaRemoved = "slack.message.removed.v1"
 	// SchemaThreadOpened is TypeThreadOpened's payload (ThreadOpened).
 	SchemaThreadOpened = "slack.thread.opened.v1"
+	// SchemaFeedback is TypeFeedback's payload (Feedback).
+	SchemaFeedback = "slack.feedback.v1"
 )
+
+// FeedbackLoss is the declared loss limitation of TypeFeedback.
+const FeedbackLoss = "a press arrives only as an interactive payload; Slack keeps no history of feedback presses, so one the daemon could not accept is lost and the person is asked to press again"
+
+// Feedback values: which button was pressed.
+const (
+	FeedbackPositive = "positive"
+	FeedbackNegative = "negative"
+)
+
+// Feedback is the SchemaFeedback payload: who pressed which feedback
+// button on which reply. Every press is its own Event, so a change of mind
+// is a later Event, and a person's latest press on a reply is what counts.
+type Feedback struct {
+	Namespace string `json:"namespace"`
+	Team      string `json:"team,omitempty"`
+	Channel   string `json:"channel"`
+	// Thread is the thread's root ts; Message the reply's ts.
+	Thread  string `json:"thread"`
+	Message string `json:"message"`
+	// User is the Slack user who pressed; Value is FeedbackPositive or
+	// FeedbackNegative.
+	User  string `json:"user"`
+	Value string `json:"value"`
+	// Execution and Intent are the attempt that wrote the reply and the
+	// reply's marker (MarkerID), as its metadata carries them.
+	Execution string `json:"execution,omitempty"`
+	Intent    string `json:"intent,omitempty"`
+	// PressedAt is the press's action_ts.
+	PressedAt string `json:"pressed_at"`
+}
 
 // ThreadOpenedLoss is the declared loss limitation of TypeThreadOpened.
 const ThreadOpenedLoss = "accepted by the projector when a post it made is confirmed; Slack's history does not say which Work posted a message, so nothing upstream re-derives it"

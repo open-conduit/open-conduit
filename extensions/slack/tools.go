@@ -93,8 +93,9 @@ func NewTools(o ToolsOptions) (*Tools, error) {
 
 // Registration is the toolbelt registration. The tools emit no Events
 // through the toolbelt: a post's TypeThreadOpened is accepted by the
-// projector when the post is made. The family is declared and sealed here so
-// the builtin emit refuses it, as the package manifest's sealed family does.
+// projector when the post is made, and a reply's TypeFeedback when a person
+// presses its feedback buttons. The families are declared and sealed here so
+// the builtin emit refuses them, as the package manifest's sealed families do.
 func (t *Tools) Registration() extension.Registration {
 	h := func(f func(context.Context, *bound, json.RawMessage) (any, error)) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
@@ -114,7 +115,7 @@ func (t *Tools) Registration() extension.Registration {
 		}
 	}
 	return extension.Registration{Version: extension.ContractVersion, Name: Type,
-		EventTypes: []string{TypeThreadOpened}, SealedEventTypes: []string{TypeThreadOpened},
+		EventTypes: []string{TypeThreadOpened, TypeFeedback}, SealedEventTypes: []string{TypeThreadOpened, TypeFeedback},
 		Operations: []extension.Operation{
 			{Name: OpContext, Handler: h(t.context)},
 			{Name: OpThread, Handler: h(t.thread)},
@@ -343,6 +344,7 @@ type replyInput struct {
 	Text      string            `json:"text" doc:"the reply, not blank and at most 40000 bytes; written in markdown, unless the Slack entry is set to Slack's own mrkdwn"`
 	Blocks    []json.RawMessage `json:"blocks,omitempty" doc:"Block Kit blocks shown after the text: markdown, section, header, divider, context, image, rich_text, table, data_table, data_visualization or card, with no buttons, selects or other interactive elements"`
 	Broadcast bool              `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
+	Feedback  *bool             `json:"feedback,omitempty" doc:"false leaves the feedback buttons off this reply when the Slack entry puts them below your replies; default true"`
 }
 
 // checkMessage admits a message's text and blocks for an entry.
@@ -374,7 +376,8 @@ func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any,
 		return nil, err
 	}
 	intent := Intent{ID: intentID(ctx, b, OpReply, data), Work: b.work.ID, Execution: b.a.ExecutionID, Channel: b.channel, Thread: b.thread,
-		Text: in.Text, Content: in.Blocks, Broadcast: in.Broadcast, Durable: true, Binding: x.ExecutorBinding}
+		Text: in.Text, Content: in.Blocks, Broadcast: in.Broadcast, Durable: true, Binding: x.ExecutorBinding,
+		Feedback: b.src.Settings.AsksFeedback(x.ExecutorBinding) && (in.Feedback == nil || *in.Feedback)}
 	state, err := b.src.Projector.Deliver(ctx, intent)
 	if err != nil && state != IntentAttempted && state != IntentPending {
 		return nil, err

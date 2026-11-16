@@ -141,9 +141,10 @@ func (x *Extension) Registration() extension.Registration {
 	return x.tools.Registration()
 }
 
-// open accepts a posted thread's TypeThreadOpened through the host, derived
-// from the post's cause when it has one (ProjectorOptions.Open).
-func (x *Extension) open(tx storage.Tx, scope, parent domain.ID, e domain.Event) error {
+// accept accepts an Event of a sealed family (a posted thread's
+// TypeThreadOpened, a reply's TypeFeedback) through the host, derived from
+// its cause when it has one (ProjectorOptions.Accept).
+func (x *Extension) accept(tx storage.Tx, scope, parent domain.ID, e domain.Event) error {
 	var err error
 	switch {
 	case parent != "" && x.h.AcceptDerivedInTx != nil:
@@ -258,7 +259,7 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 		settings.Projection.DryRun = true
 	}
 	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now,
-		Actions: x.h.Actions, Act: x.h.Act, Open: x.open, Cancel: x.h.CancelWork})
+		Actions: x.h.Actions, Act: x.h.Act, Accept: x.accept, Cancel: x.h.CancelWork})
 	if err != nil {
 		return err
 	}

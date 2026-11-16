@@ -60,12 +60,14 @@ type ProjectorOptions struct {
 	Actions ActionsFunc
 	// Act takes a prompt's button press for the person who pressed it.
 	Act ActFunc
-	// Open accepts the TypeThreadOpened Event that gives a posting Work the
-	// thread of its new top-level message, in the transaction that records
-	// the post as made: derived from parent when there is one, else a root
-	// (inproc.Host.AcceptDerivedInTx and AcceptInTx). nil: top-level posts
-	// are refused, since their thread could not become the Work's.
-	Open func(tx storage.Tx, scope, parent domain.ID, e domain.Event) error
+	// Accept accepts an Event of the extension's sealed families: the
+	// TypeThreadOpened that gives a posting Work the thread of its new
+	// top-level message, in the transaction that records the post as made,
+	// and a reply's TypeFeedback. It is derived from parent when there is
+	// one, else a root (inproc.Host.AcceptDerivedInTx and AcceptInTx). nil:
+	// top-level posts are refused, since their thread could not become the
+	// Work's, and feedback presses are not taken.
+	Accept func(tx storage.Tx, scope, parent domain.ID, e domain.Event) error
 	// Cancel cancels a conversation's Work when a person the entry's
 	// progress stop lists presses a progress message's Stop button
 	// (inproc.Host.CancelWork); nil takes no press.
@@ -136,6 +138,10 @@ type Intent struct {
 	// post's thread attachment names it, so a reply's follow-up is checked
 	// against that binding's post config.
 	Binding string
+	// Feedback puts the feedback buttons below the reply (issue #675).
+	// It is not part of the intent's identity: the buttons are the host's
+	// layout, not what the agent said.
+	Feedback bool
 }
 
 type intentRecord struct {
@@ -161,6 +167,7 @@ type intentRecord struct {
 	Text        string    `json:"text,omitempty"`
 	Cause       domain.ID `json:"cause,omitempty"`
 	Binding     string    `json:"binding,omitempty"`
+	Feedback    bool      `json:"feedback,omitempty"`
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -211,7 +218,7 @@ func Marker(work, execution domain.ID, intent string) *Metadata {
 // failed after a definitive refusal.
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	// No Thread posts a new top-level message, which can't be broadcast.
-	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && (in.Broadcast || in.Work == "" || p.o.Open == nil) {
+	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && (in.Broadcast || in.Work == "" || p.o.Accept == nil) {
 		return "", storage.ErrInvalid
 	}
 	key, textDigest, blocks := intentKey(in.ID), digest(in.Text), blocksDigest(in.Content)
@@ -223,7 +230,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
-				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding}
+				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding, Feedback: in.Feedback}
 			if in.Durable {
 				rec.Text, rec.Content = in.Text, in.Content
 			}
@@ -261,6 +268,11 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	post := Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: raws(in.Blocks), Metadata: Marker(in.Work, in.Execution, in.ID)}
 	if post.Blocks == nil {
 		post.Blocks = layout(p.o.Settings.Projection.Format, in.Text, in.Content)
+		// The record's choice, so a retried or recovered post has the
+		// buttons the first attempt had.
+		if fb, ok := feedbackBlock(in.Work, in.Execution, in.ID); ok && rec.Feedback && in.Thread != "" && p.o.Accept != nil {
+			post.Blocks = withFeedback(p.o.Settings.Projection.Format, in.Text, in.Content, fb)
+		}
 	}
 	if id, ok := p.o.Settings.IdentityOf(rec.Binding); ok {
 		// Slack posts under the app's name when the token lacks the
@@ -410,7 +422,7 @@ func (p *Projector) finishWith(ctx context.Context, key, state, ts, code, detail
 // confirm the post. A chain over its causal bounds is recorded by the host
 // and does not undo the post.
 func (p *Projector) opened(tx storage.Tx, rec intentRecord) error {
-	if p.o.Open == nil || rec.Work == "" || rec.TS == "" {
+	if p.o.Accept == nil || rec.Work == "" || rec.TS == "" {
 		return storage.ErrInvalid
 	}
 	data, err := json.Marshal(ThreadOpened{Namespace: p.o.Settings.Namespace, Team: p.o.Settings.Team, Channel: rec.Channel, TS: rec.TS, Binding: rec.Binding})
@@ -421,7 +433,7 @@ func (p *Projector) opened(tx storage.Tx, rec intentRecord) error {
 	at := p.o.Now().UTC()
 	e := domain.Event{Type: TypeThreadOpened, Source: p.o.Settings.Namespace, DeliveryID: "thread/" + digest(p.o.Settings.Namespace, thread)[:32],
 		WorkID: rec.Work, OccurredAt: at, ReceivedAt: at, Data: domain.Payload{Schema: SchemaThreadOpened, Data: data}}
-	err = p.o.Open(tx, domain.ID(p.o.Settings.Scope), rec.Cause, e)
+	err = p.o.Accept(tx, domain.ID(p.o.Settings.Scope), rec.Cause, e)
 	if errors.Is(err, inproc.ErrCausalLimit) {
 		return nil
 	}
@@ -486,7 +498,8 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 			sort.Slice(xs, func(i, j int) bool { return xs[i].Attempt < xs[j].Attempt })
 			for _, x := range xs {
 				if d, ok := replyDeclaration(x); ok {
-					out = append(out, Intent{ID: "outcome/" + string(x.ID), Work: w.ID, Execution: x.ID, Channel: channel, Thread: thread, Text: d.Text, Broadcast: d.Broadcast, Binding: x.ExecutorBinding})
+					out = append(out, Intent{ID: "outcome/" + string(x.ID), Work: w.ID, Execution: x.ID, Channel: channel, Thread: thread, Text: d.Text, Broadcast: d.Broadcast, Binding: x.ExecutorBinding,
+						Feedback: p.o.Settings.AsksFeedback(x.ExecutorBinding)})
 				}
 			}
 		}
@@ -521,7 +534,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Text != "" && rec.State != IntentPosted && rec.State != IntentFailed {
-				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Content: rec.Content, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause, Binding: rec.Binding})
+				durable = append(durable, Intent{ID: rec.ID, Work: rec.Work, Execution: rec.Execution, Channel: rec.Channel, Thread: rec.Thread, Text: rec.Text, Content: rec.Content, Broadcast: rec.Broadcast, Durable: true, Cause: rec.Cause, Binding: rec.Binding, Feedback: rec.Feedback})
 			}
 		}
 		return err
