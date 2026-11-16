@@ -603,3 +603,53 @@ func (c *Client) DirectMessages(ctx context.Context, maxPages int) (out []Direct
 	}
 	return out, maxPages, true, nil
 }
+
+// UploadURL reserves a file upload (files.getUploadURLExternal; files:write):
+// the URL to send its content to and the file's ID. A reserved file nobody
+// completes is never shared.
+func (c *Client) UploadURL(ctx context.Context, filename string, length int) (uploadURL, fileID string, err error) {
+	var out struct {
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	form := url.Values{"filename": {filename}, "length": {strconv.Itoa(length)}}
+	if err := c.call(ctx, "files.getUploadURLExternal", form, nil, &out); err != nil {
+		return "", "", err
+	}
+	u, perr := url.Parse(out.UploadURL)
+	if perr != nil || u.Host == "" || u.Scheme != "https" && u.Scheme != "http" || !slackIDPattern.MatchString(out.FileID) {
+		return "", "", &APIError{Method: "files.getUploadURLExternal", Code: "no_upload_url"}
+	}
+	return out.UploadURL, out.FileID, nil
+}
+
+// SendUpload sends a reserved file's content to its upload URL. The URL is
+// already signed, so it is sent no token.
+func (c *Client) SendUpload(ctx context.Context, uploadURL string, content []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(content))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+	res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		return &StatusError{Method: "upload", Status: res.StatusCode}
+	}
+	return nil
+}
+
+// CompleteUpload shares a reserved, sent file in a thread under title
+// (files.completeUploadExternal; files:write).
+func (c *Client) CompleteUpload(ctx context.Context, fileID, title, channel, thread string) error {
+	files, err := json.Marshal([]map[string]string{{"id": fileID, "title": title}})
+	if err != nil {
+		return err
+	}
+	form := url.Values{"files": {string(files)}, "channel_id": {channel}, "thread_ts": {thread}}
+	return c.call(ctx, "files.completeUploadExternal", form, nil, nil)
+}

@@ -21,8 +21,10 @@ import (
 // reactions:write and app_mentions:read are granted for names and
 // acknowledgements, and are not required by this extension's calls.
 // chat:write.customize (CustomizeScope) lets chat.postMessage post under a
-// binding's own name and icon (the entry's identities).
-var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "chat:write.customize", "metadata.message:read", "reactions:write", "users:read", "app_mentions:read"}
+// binding's own name and icon (the entry's identities). files:write
+// (FilesScope) lets slack.upload reserve and share a file
+// (files.getUploadURLExternal, files.completeUploadExternal).
+var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "chat:write.customize", "metadata.message:read", "reactions:write", "users:read", "app_mentions:read", FilesScope}
 
 // DirectScopes are the bot scopes direct messages need: im:history for
 // conversations.history and conversations.replies in a DM, im:read to list
@@ -48,15 +50,17 @@ var AppTokenScopes = []string{"connections:write"}
 // MethodScopes maps each Web API method the extension calls to the bot scopes
 // that permit it (any one suffices; empty means none is needed).
 var MethodScopes = map[string][]string{
-	"conversations.history": {"channels:history", "groups:history", "im:history"},
-	"conversations.replies": {"channels:history", "groups:history", "im:history"},
-	"chat.postMessage":      {"chat:write"},
-	"chat.postEphemeral":    {"chat:write"},
-	"chat.update":           {"chat:write"},
-	"reactions.add":         {"reactions:write"},
-	"reactions.remove":      {"reactions:write"},
-	"users.conversations":   {"channels:read", "groups:read", "im:read"},
-	"auth.test":             {},
+	"conversations.history":        {"channels:history", "groups:history", "im:history"},
+	"conversations.replies":        {"channels:history", "groups:history", "im:history"},
+	"chat.postMessage":             {"chat:write"},
+	"chat.postEphemeral":           {"chat:write"},
+	"chat.update":                  {"chat:write"},
+	"reactions.add":                {"reactions:write"},
+	"reactions.remove":             {"reactions:write"},
+	"users.conversations":          {"channels:read", "groups:read", "im:read"},
+	"files.getUploadURLExternal":   {FilesScope},
+	"files.completeUploadExternal": {FilesScope},
+	"auth.test":                    {},
 }
 
 // AppMethods are called with the app-level token instead.

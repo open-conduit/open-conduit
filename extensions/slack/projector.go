@@ -224,6 +224,11 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		return nil
 	})
+	if errors.Is(err, ErrIntentConflict) {
+		// The stored record is another call's: its state is not this one's,
+		// so a caller never takes it for an answer still being confirmed.
+		return "", err
+	}
 	if err != nil || rec.State == IntentPosted || rec.State == IntentFailed {
 		return rec.State, err
 	}
@@ -472,8 +477,8 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 	return out, err
 }
 
-// Converge runs one bounded pass: outcome replies and unfinished durable
-// (tool) intents. Rate limits and credential failures stop the pass; other
+// Converge runs one bounded pass: outcome replies, unfinished durable
+// (tool) intents and uploads whose share's answer was lost. Rate limits and credential failures stop the pass; other
 // per-item failures are reported as safe codes and retried next pass.
 func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, error) {
 	var res ProjectionResult
@@ -540,6 +545,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 				code = "reply:" + CodeIdentityScope
 			}
 			res.Codes = append(res.Codes, code)
+		}
+	}
+	if done < limit {
+		if _, err := p.convergeUploads(ctx, limit-done, &res); err != nil {
+			return res, err
 		}
 	}
 	n, codes, err := p.Progress(ctx, limit)

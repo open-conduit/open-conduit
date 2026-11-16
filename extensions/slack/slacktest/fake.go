@@ -1,7 +1,8 @@
 // Package slacktest is an in-memory fake of the Slack Web API and Events API
 // deliveries for tests. It implements only what the Slack extension calls:
 // conversations.history, conversations.replies, chat.postMessage,
-// chat.update, reactions.add and reactions.remove and auth.test, with cursor pagination, message metadata, edits, deletions
+// chat.update, reactions.add and reactions.remove, the external file upload
+// and auth.test, with cursor pagination, message metadata, edits, deletions
 // (tombstones for parents with replies), 429 rate limits and injected faults.
 // It is test support only; nothing in production imports it.
 package slacktest
@@ -10,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -51,6 +53,46 @@ type Server struct {
 	listLimit int                 // users.conversations page size override (0: the request's)
 	reactions map[string][]string // channel/ts -> the app's reactions, in order added
 	updates   int
+
+	files        map[string]*upload // reserved files by ID
+	fileSeq      int
+	completeMode string
+}
+
+// upload is a file reserved with files.getUploadURLExternal.
+type upload struct {
+	Name    string
+	Length  int
+	Content []byte
+	Sent    bool
+	Shared  bool
+}
+
+// FailNextComplete makes the next files.completeUploadExternal misbehave as
+// FailNextPost does: "lost" shares the file and then answers 500;
+// "refuse:<code>" answers ok:false without sharing it.
+func (s *Server) FailNextComplete(mode string) { s.mu.Lock(); s.completeMode = mode; s.mu.Unlock() }
+
+// Uploads returns the thread's messages that share a file.
+func (s *Server) Uploads(channel, thread string) []slack.Message {
+	var out []slack.Message
+	for _, m := range s.Thread(channel, thread) {
+		if len(m.Files) > 0 {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// FileContent is a reserved file's content as sent to its upload URL.
+func (s *Server) FileContent(id string) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.files[id]
+	if !ok || !f.Sent {
+		return nil, false
+	}
+	return append([]byte(nil), f.Content...), true
 }
 
 // Reactions are the app's reactions on the message ts in channel.
@@ -361,6 +403,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveSocket(w, r)
 		return
 	}
+	if id, ok := strings.CutPrefix(r.URL.Path, "/upload/"); ok {
+		s.receive(w, r, id)
+		return
+	}
 	method := strings.TrimPrefix(r.URL.Path, "/api/")
 	s.mu.Lock()
 	s.calls[method]++
@@ -440,6 +486,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer = s.update(r)
 	case "reactions.add", "reactions.remove":
 		answer = s.react(r, method == "reactions.add")
+	case "files.getUploadURLExternal":
+		_ = r.ParseForm()
+		answer = s.reserve(r)
+	case "files.completeUploadExternal":
+		_ = r.ParseForm()
+		answer, status = s.complete(r)
 	case "chat.postEphemeral":
 		var e slack.Ephemeral
 		if err := json.NewDecoder(r.Body).Decode(&e); err != nil || e.Text == "" || e.User == "" {
@@ -609,6 +661,73 @@ func (s *Server) react(r *http.Request, add bool) apiAnswer {
 		s.reactions[key] = slices.Delete(list, i, i+1)
 	}
 	return apiAnswer{"ok": true}
+}
+
+// reserve answers files.getUploadURLExternal.
+func (s *Server) reserve(r *http.Request) apiAnswer {
+	if !s.granted(slack.FilesScope) {
+		return apiAnswer{"ok": false, "error": "missing_scope", "needed": slack.FilesScope}
+	}
+	length, err := strconv.Atoi(r.Form.Get("length"))
+	if err != nil || length <= 0 || r.Form.Get("filename") == "" {
+		return apiAnswer{"ok": false, "error": "invalid_arguments"}
+	}
+	if s.files == nil {
+		s.files = map[string]*upload{}
+	}
+	s.fileSeq++
+	id := fmt.Sprintf("F%08d", s.fileSeq)
+	s.files[id] = &upload{Name: r.Form.Get("filename"), Length: length}
+	return apiAnswer{"ok": true, "upload_url": strings.TrimSuffix(s.URL, "/api") + "/upload/" + id, "file_id": id}
+}
+
+// receive takes a reserved file's content at its upload URL.
+func (s *Server) receive(w http.ResponseWriter, r *http.Request, id string) {
+	body, err := io.ReadAll(r.Body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.files[id]
+	if err != nil || !ok || f.Sent || len(body) != f.Length {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	f.Content, f.Sent = body, true
+	_, _ = fmt.Fprintf(w, "OK - %d", len(body))
+}
+
+// complete answers files.completeUploadExternal: each sent file is shared
+// once in the thread, as a message of the bot's carrying it.
+func (s *Server) complete(r *http.Request) (apiAnswer, int) {
+	var files []struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(r.Form.Get("files")), &files); err != nil || len(files) == 0 {
+		return apiAnswer{"ok": false, "error": "invalid_arguments"}, http.StatusOK
+	}
+	channel, thread := r.Form.Get("channel_id"), r.Form.Get("thread_ts")
+	if _, ok := s.channels[channel]; !ok {
+		return apiAnswer{"ok": false, "error": "channel_not_found"}, http.StatusOK
+	}
+	mode := s.completeMode
+	s.completeMode = ""
+	if code, ok := strings.CutPrefix(mode, "refuse:"); ok {
+		return apiAnswer{"ok": false, "error": code}, http.StatusOK
+	}
+	var shared []slack.File
+	for _, f := range files {
+		up, ok := s.files[f.ID]
+		if !ok || !up.Sent || up.Shared {
+			return apiAnswer{"ok": false, "error": "file_not_found"}, http.StatusOK
+		}
+		up.Shared = true
+		shared = append(shared, slack.File{ID: f.ID, Name: up.Name})
+	}
+	s.channels[channel] = append(s.channels[channel], &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, TS: s.tick(), ThreadTS: thread, Files: shared})
+	if mode == "lost" {
+		return nil, http.StatusInternalServerError
+	}
+	return apiAnswer{"ok": true, "files": shared}, http.StatusOK
 }
 
 // ---- Events API deliveries -------------------------------------------------

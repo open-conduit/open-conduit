@@ -2,9 +2,12 @@ package slack
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -21,7 +24,8 @@ import (
 // that Work's own thread, except slack.post, which opens one: it posts in a
 // channel the entry's post config lets the calling binding post in, and the
 // new thread becomes the Work's. Posts and replies are marked, intent-backed
-// and re-driven, so each is written once.
+// and re-driven, so each is written once; uploads are intent-backed and
+// found again by their file's ID (upload.go).
 
 // Operation names.
 const (
@@ -29,6 +33,7 @@ const (
 	OpThread  = "slack.thread"
 	OpReply   = "slack.reply"
 	OpPost    = "slack.post"
+	OpUpload  = "slack.upload"
 )
 
 // Operations lists every tool operation (for binding operation lists).
@@ -46,8 +51,13 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[replyInput]()},
 		{Name: OpPost, Summary: "Post a new message to a Slack channel; its thread becomes this Work's, so replies there reach it.",
 			Input: extension.InputSchema[postInput](), Guidance: postGuidance},
+		{Name: OpUpload, Summary: "Put a file from your directory (a screenshot, a log) into this Work's Slack thread; a retried call uploads it once.",
+			Input: extension.InputSchema[uploadInput](), Guidance: uploadGuidance},
 	}
 }
+
+// uploadGuidance tells an agent granted slack.upload how to use it.
+const uploadGuidance = "Use `slack.upload` to put a file into this Work's Slack thread, such as a screenshot: `call slack.upload {\"file_path\": \"shot.png\", \"title\": \"…\"}` with a `request_id`, so a retried call uploads once. The client reads `file_path` for you. The Slack entry sets which media types and sizes are accepted; a refusal says what it allows. To say something about the file, reply in the thread as usual."
 
 // postGuidance tells an agent granted slack.post when to use it.
 const postGuidance = "Use `slack.post` to send what you have to say to a Slack channel when this Work did not start in Slack, for example a report at the end of a job: `call slack.post {\"channel\": \"C…\", \"text\": \"…\"}` with a `request_id`, so a retried call posts once. You may post only in the channels your binding is allowed; a refusal says which. The message's thread becomes this Work's: a person's reply there is your next input, and `slack.reply`, `slack.thread` and `slack.context` then act on that thread. Post once per thread you want; reply in it rather than posting again."
@@ -109,6 +119,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpContext, Handler: h(t.context)},
 			{Name: OpThread, Handler: h(t.thread)},
 			{Name: OpReply, Handler: h(t.reply)},
+			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpPost, Handler: func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 				out, err := t.post(ctx, a, in.Data)
 				if err != nil {
@@ -147,7 +158,7 @@ func refusal(err error) error {
 	case errors.Is(err, ErrThreadTooLong):
 		return refuse("thread_too_long", "the thread is too long to read in full")
 	case errors.Is(err, ErrIntentConflict):
-		return refuse("intent_conflict", "this request ID was already used for a different reply; use a new request ID")
+		return refuse("intent_conflict", "this request ID was already used for a different call; use a new request ID")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	}
@@ -459,4 +470,88 @@ func (t *Tools) post(ctx context.Context, a extension.Authority, data json.RawMe
 	// through its marker, so it is never repeated; its thread becomes this
 	// Work's when it is made. The agent need not call again.
 	return map[string]any{"state": "pending", "note": "the post is being confirmed and will appear once; its thread becomes this Work's when it does; do not post it again"}, nil
+}
+
+// uploadInput is slack.upload's input.
+type uploadInput struct {
+	Name          string `json:"name,omitempty" doc:"the file's name in Slack; file_path's base name when the os client fills content_base64"`
+	Title         string `json:"title,omitempty" doc:"the title Slack shows for the file, at most 255 characters; default its name"`
+	ContentBase64 string `json:"content_base64" doc:"the file's content, base64; pass file_path instead and the os client reads the file into it"`
+}
+
+// maxTitle bounds an upload's name and title.
+const maxTitle = 255
+
+func (t *Tools) upload(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
+	var in uploadInput
+	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	content, err := base64.StdEncoding.DecodeString(in.ContentBase64)
+	if err != nil || len(content) == 0 {
+		return nil, refuse("missing_field", "content_base64 (the file, base64) is required; pass file_path to the os client to fill it")
+	}
+	s := b.src.Settings
+	if !s.Uploads {
+		return nil, refuse("uploads_off", "nothing was uploaded: the Slack entry does not take uploads; its uploads setting turns them on")
+	}
+	// The host's limits, checked before anything reaches Slack. The type is
+	// what the content sniffs as, so a name can't pass one file off as another.
+	if len(content) > s.UploadMax {
+		return nil, refuse("too_large", "nothing was uploaded: the file is %d bytes and the Slack entry accepts at most %d", len(content), s.UploadMax)
+	}
+	mediaType := http.DetectContentType(content)
+	if !s.UploadsType(mediaType) {
+		return nil, refuse("media_type_not_allowed", "nothing was uploaded: the file is %s and the Slack entry accepts %s", mediaType, strings.Join(s.UploadTypes, ", "))
+	}
+	name := uploadName(in.Name)
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = name
+	}
+	if len([]rune(title)) > maxTitle || strings.ContainsAny(title, "\r\n\t") {
+		return nil, refuse("invalid_title", "the title must be one line of at most %d characters", maxTitle)
+	}
+	intent := UploadIntent{ID: intentID(ctx, b, OpUpload, data), Work: b.work.ID, Execution: b.a.ExecutionID, Channel: b.channel, Thread: b.thread,
+		Name: name, Title: title, Content: content}
+	state, err := b.src.Projector.Upload(ctx, intent)
+	if err != nil && state != IntentAttempted {
+		return nil, err
+	}
+	st, e := b.src.Projector.LookupUpload(ctx, intent.ID)
+	switch {
+	case e != nil:
+		return nil, e
+	case st.State == IntentPosted:
+		return map[string]any{"state": IntentPosted, "file": st.File, "name": name}, nil
+	case st.State == IntentFailed:
+		if st.Code == "missing_scope" {
+			return nil, refuse("upload_scope_missing", "nothing was uploaded: the Slack app lacks the %s scope; report it as a problem so the owner adds the scope and reinstalls the app", FilesScope)
+		}
+		return nil, refuse("slack_refused", "Slack refused the upload (%s)", st.Code)
+	case s.Projection.DryRun:
+		return map[string]any{"state": "dry_run", "note": "dry run: would upload " + name}, nil
+	}
+	// The content was sent and the share's answer was lost or deferred: the
+	// projector finishes it with the same file, so it appears once.
+	return map[string]any{"state": "pending", "note": "the file is being confirmed and will appear once; do not upload it again"}, nil
+}
+
+// uploadName is a file name safe to give Slack: the base name, on one line,
+// at most maxTitle characters; "file" when nothing is left.
+func uploadName(name string) string {
+	name = path.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	if r := []rune(name); len(r) > maxTitle {
+		name = string(r[:maxTitle])
+	}
+	if name == "" || name == "." || name == "/" || name == ".." {
+		return "file"
+	}
+	return name
 }

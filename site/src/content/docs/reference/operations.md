@@ -798,6 +798,16 @@ Read the messages of this Work's Slack thread, oldest first.
 | --- | --- | --- | --- |
 | `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
 
+#### `slack.upload`
+
+Put a file from your directory (a screenshot, a log) into this Work's Slack thread; a retried call uploads it once.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `content_base64` | string | yes | the file's content, base64; pass file_path instead and the os client reads the file into it |
+| `name` | string |  | the file's name in Slack; file_path's base name when the os client fills content_base64 |
+| `title` | string |  | the title Slack shows for the file, at most 255 characters; default its name |
+
 ### Webhook (`webhook`)
 
 Signed webhooks where each delivery is Work of its own, deduplicated by a delivery key and threaded by a correlation key.
@@ -887,3 +897,13 @@ Read the messages of this Work's Slack thread, oldest first.
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
+
+#### `slack.upload`
+
+Put a file from your directory (a screenshot, a log) into this Work's Slack thread; a retried call uploads it once.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `content_base64` | string | yes | the file's content, base64; pass file_path instead and the os client reads the file into it |
+| `name` | string |  | the file's name in Slack; file_path's base name when the os client fills content_base64 |
+| `title` | string |  | the title Slack shows for the file, at most 255 characters; default its name |

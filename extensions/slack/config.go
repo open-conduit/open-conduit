@@ -167,6 +167,9 @@ type ExtensionConfig struct {
 	// starts a conversation, whatever start says, if the limit admits its
 	// sender.
 	DirectMessages *DirectMessages `json:"direct_messages,omitempty"`
+	// Uploads, when set, lets slack.upload put files into a Work's thread
+	// within its limits. Without it every upload is refused.
+	Uploads *UploadsConfig `json:"uploads,omitempty"`
 	// Progress, when enabled, keeps one progress message in a
 	// conversation's thread for each run a person's message starts or
 	// wakes, updated from the run's durable state. Off by default.
@@ -182,6 +185,29 @@ type ProgressConfig struct {
 	// Stop button.
 	Stop []string `json:"stop,omitempty"`
 }
+
+// UploadsConfig is the host's limits on slack.upload, checked before
+// anything is sent to Slack.
+type UploadsConfig struct {
+	// MaxBytes is the largest file accepted, at most MaxUpload; default
+	// MaxUpload.
+	MaxBytes int `json:"max_bytes,omitempty"`
+	// MediaTypes lists the media types accepted, each exact (image/png),
+	// a type's every subtype (image/*) or anything (*/*). A file's type
+	// is the one its content sniffs as, not its name.
+	MediaTypes []string `json:"media_types"`
+}
+
+// MaxUpload bounds a file slack.upload accepts: what one call to the
+// extension carries once base64 grows it by a third, within the protocol's
+// 16 MiB message bound (protocol.MaxMessageBytes), since the bundled
+// extension runs out of process.
+const MaxUpload = 10 << 20
+
+// FilesScope is the bot scope slack.upload needs.
+const FilesScope = "files:write"
+
+var mediaTypePattern = regexp.MustCompile(`^([a-z0-9][a-z0-9!#$&^_.+-]{0,126}|\*)/([a-z0-9][a-z0-9!#$&^_.+-]{0,126}|\*)$`)
 
 // DirectMessages is who may start Work by direct message. Exactly one of
 // Users and Anyone is set, so turning DMs on always says who they admit.
@@ -254,6 +280,11 @@ type Settings struct {
 	DirectMessages bool
 	DMUsers        []string
 	DMAnyone       bool
+	// Uploads turns slack.upload on, up to UploadMax bytes of the
+	// UploadTypes media types.
+	Uploads     bool
+	UploadMax   int
+	UploadTypes []string
 	// Progress turns on the progress message; StopUsers (sorted) are the
 	// Slack users who may press its Stop button.
 	Progress  bool
@@ -267,6 +298,28 @@ func (s Settings) MayStop(user string) bool {
 	}
 	i := sort.SearchStrings(s.StopUsers, user)
 	return i < len(s.StopUsers) && s.StopUsers[i] == user
+}
+
+// MayUpload reports whether a file of size bytes that sniffs as
+// mediaType (its parameters are ignored) is within the entry's uploads.
+func (s Settings) MayUpload(size int, mediaType string) bool {
+	if !s.Uploads || size <= 0 || size > s.UploadMax {
+		return false
+	}
+	return s.UploadsType(mediaType)
+}
+
+// UploadsType reports whether the entry's uploads accept mediaType.
+func (s Settings) UploadsType(mediaType string) bool {
+	mt, _, _ := strings.Cut(mediaType, ";")
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	major, _, _ := strings.Cut(mt, "/")
+	for _, want := range s.UploadTypes {
+		if want == "*/*" || want == mt || strings.HasSuffix(want, "/*") && strings.TrimSuffix(want, "/*") == major {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDirect reports whether channel is a direct message conversation (D…).
@@ -390,6 +443,26 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("slack extension: progress stop needs progress enabled")
 		}
 		s.Progress, s.StopUsers = pc.Enabled, users
+	}
+	if u := c.Uploads; u != nil {
+		s.Uploads, s.UploadMax = true, MaxUpload
+		if u.MaxBytes != 0 {
+			if u.MaxBytes < 1 || u.MaxBytes > MaxUpload {
+				return s, fmt.Errorf("slack extension: uploads max_bytes must be 1-%d", MaxUpload)
+			}
+			s.UploadMax = u.MaxBytes
+		}
+		if len(u.MediaTypes) == 0 || len(u.MediaTypes) > 100 {
+			return s, errors.New("slack extension: uploads media_types must list 1-100 media types (*/* accepts any)")
+		}
+		types := slices.Clone(u.MediaTypes)
+		sort.Strings(types)
+		for i, t := range types {
+			if !mediaTypePattern.MatchString(t) || strings.HasPrefix(t, "*/") && t != "*/*" || i > 0 && types[i-1] == t {
+				return s, fmt.Errorf("slack extension: uploads media_types must be distinct lower-case media types (image/png, image/* or */*), not %q", t)
+			}
+		}
+		s.UploadTypes = types
 	}
 	if len(c.Channels) > 100 || len(c.Channels) == 0 && !s.DirectMessages {
 		return s, errors.New("slack extension: channels must list 1-100 channel IDs (or none, with direct_messages)")

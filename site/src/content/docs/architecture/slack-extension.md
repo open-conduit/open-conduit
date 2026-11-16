@@ -16,7 +16,7 @@ This page records two decisions: the manifest requests `metadata.message:read` f
 | Interactivity | On, over Socket Mode, so it needs no request URL. It carries the button presses of [prompts](#prompts-and-button-answers) |
 | Bot user | Yes, always online |
 | App Home | The messages tab on and writable, so people can send the app a [direct message](#direct-messages) |
-| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `chat:write.customize`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read`, `im:history`, `im:read` |
+| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `chat:write.customize`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read`, `files:write`, `im:history`, `im:read` |
 | Bot events | `message.channels`, `message.groups`, `message.im`, `app_mention` |
 | App-level token | `connections:write` (Socket Mode only) |
 
@@ -24,6 +24,7 @@ The extension's own calls need only part of this:
 
 - `conversations.history` and `conversations.replies` need `channels:history` (public channels), `groups:history` (private channels) or `im:history` (direct messages).
 - `chat.postMessage` and `chat.postEphemeral` need `chat:write`. A message posted under a binding's own name and icon ([identities](#binding-identities)) also needs `chat:write.customize`.
+- `files.getUploadURLExternal` and `files.completeUploadExternal` ([uploads](#uploads)) need `files:write`.
 - `auth.test` needs no scope.
 - `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`; listing the app's direct messages for reconcile needs `im:read`.
 - `apps.connections.open` uses the app-level token.
@@ -52,7 +53,7 @@ With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts
 
 The `slack-cli` path is unverified against a real Slack CLI. The manifest URL path and the token checks have been run against real Slack.
 
-**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). When the entry sets `identities` and the token lacks `chat:write.customize`, or doesn't report its scopes, the check fails with `identity_scope_missing`, because those bindings' messages are refused. The extension maps its severity onto the check it serves.
+**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback; for `files:write`: `slack.upload` is refused). When the entry turns `uploads` on and the token lacks `files:write`, the missing scope fails instead, since every upload would be refused. When the entry sets `identities` and the token lacks `chat:write.customize`, or doesn't report its scopes, the check fails with `identity_scope_missing`, because those bindings' messages are refused. The extension maps its severity onto the check it serves.
 
 ## Configuration
 
@@ -83,8 +84,9 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `post` | Which bindings may post a new message (`slack.post`) and where: `[{"binding": "nightly", "channels": ["C0123"]}]`. Each channel must be one of `channels`, so the new thread's replies are observed. An entry's `follow_up` (`{"grants": ["…"]}`, or `{}` for none) lets a person's reply to that binding's post open a successor once the posting Work has finished, with only those binding grants. Without it such a reply starts nothing. Empty: no binding may post. |
 | `progress` | `{"enabled": true, "stop": ["slack:U…", …]}` keeps a [progress message](#progress-messages) for each run in a conversation's thread. `stop` (at most 1000, each `slack:<user ID>`, the form a gate's responders take) lists who may press its **Stop** button; empty shows none, and `stop` without `enabled` is refused. Unset: no progress message, as before. |
 | `identities` | The name and icon each binding's messages post under: `[{"binding": "engineer", "username": "Steve", "icon_emoji": ":wrench:"}]`, with `icon_url` (https) instead of `icon_emoji` if you like. Each entry sets a `username`, an icon or both. Needs `chat:write.customize`. A binding with no entry posts as the app. See [binding identities](#binding-identities). |
+| `uploads` | Turns [uploads](#uploads) (`slack.upload`) on: `{"max_bytes": 5242880, "media_types": ["image/png", "image/*"]}`. `max_bytes` defaults to, and may not exceed, 10 MB: what one call carries to the extension, which runs out of process, once base64 has grown it by a third. `media_types` is required: each is exact, a type's every subtype (`image/*`) or anything (`*/*`). Needs `files:write`. Unset: every upload is refused. |
 
-The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread`, `slack.reply` and `slack.post`.
+The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread`, `slack.reply`, `slack.post` and `slack.upload`.
 
 `init slack` stores the tokens through the secret store (the keyring by default) and writes `keyring:` references. `env:` references work the same way.
 
@@ -259,6 +261,17 @@ A rate limit or a credential failure returns the record to `pending`. A lost ans
 The marker is message metadata: `event_type` `open_conduit_reply`, with payload `{work, execution, intent}` where intent is `i<digest>`. When Slack returns no metadata for the app's messages, the search falls back to the app's bot user, or its bot ID, posting exactly this text, and normalization still recognizes the app's own messages (`bot_user_id`) as agent messages that are never input. That fallback could confuse two identical replies of different intents in one thread. Links are never unfurled.
 
 The projector runs at most every five seconds in the background. `slack.context` returns the thread's identity, and `slack.thread` reads the thread (normalized and classified). Both act only on the Work's own thread.
+
+## Uploads
+
+`slack.upload` puts a file into the Work's own thread, such as a screenshot an agent took with a browser. Its input is `{content_base64, name?, title?}`; the agent passes `file_path` and the `os` client reads the file from its directory into `content_base64` and `name`, as for `github.attachment.upload`.
+
+- **Limits at the host.** The entry's `uploads` sets the largest file and the media types accepted, and the host checks both before anything is sent to Slack: `too_large`, `media_type_not_allowed`, or `uploads_off` when the entry has no `uploads`. The media type is what the content sniffs as (Go's `http.DetectContentType`, the WHATWG algorithm), not the name, so a name can't pass one kind of file off as another. Sniffing tells a text file only as `text/plain`, so an entry that takes Markdown or JSON lists `text/plain` (or `text/*`).
+- **Slack's external upload flow.** `files.getUploadURLExternal` reserves the file and returns its ID and a signed upload URL; the content is sent to that URL without a token; `files.completeUploadExternal` with `channel_id` and `thread_ts` shares it in the thread. A token without `files:write` is refused at the first call, with nothing reserved, as `upload_scope_missing`.
+- **Written once, without a marker.** A file carries no message metadata, so the intent record (`call/<execution>/<request id>`, like a tool reply's) keeps the reserved file's ID instead. Only the share publishes anything, so only it can be ambiguous: the record is `attempted`, with the file's ID, before `files.completeUploadExternal` is called. A failure before that leaves the record `pending` and shares nothing (a reserved file nobody completes stays invisible), so a retry reserves another file. A lost answer leaves it `attempted`; after 30 seconds the call or the projector's next pass reads the thread and completes the record when a message there carries the file's ID. When none does, the same file is shared again, which needs only its ID, so the record never holds the content. A refusal to share ends the record `failed` (`slack_refused`), except that after a lost answer the thread is read once more first, in case the earlier share was made after all. The same request ID with another file is refused (`intent_conflict`).
+- **Not input.** The file's message is the app's own, so normalization classes it as an agent message (with `bot_user_id`) or a bot message, never a person's.
+
+`TestSlackUploadIsOnceAndWithinTheEntrysLimits` and `TestSlackUploadNeedsTheEntrysUploadsAndTheScope` cover this against the fake, which shares a file once and can lose or refuse the share's answer.
 
 ## Verification
 
