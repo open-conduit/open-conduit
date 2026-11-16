@@ -170,7 +170,7 @@ func (e *slEnv) open() {
 			return e.cancel(ctx, work, expected, reason, key)
 		},
 		// As the host accepts an extension's own Event in its transaction.
-		Open: func(tx storage.Tx, scope, parent domain.ID, ev domain.Event) error {
+		Accept: func(tx storage.Tx, scope, parent domain.ID, ev domain.Event) error {
 			ev.ID = domain.ID(protocol.EmittedEventID(ev.Source, ev.DeliveryID))
 			var err error
 			if parent != "" {

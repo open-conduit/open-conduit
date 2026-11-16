@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"unicode/utf8"
+
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Message layout (issue #674). A message's text is sent as a markdown block
@@ -13,7 +16,8 @@ import (
 // fallback. An agent may add display blocks (a table, a chart, a card)
 // after it. The host admits only display blocks with no interactive
 // element anywhere in them: a button or select would send presses that
-// nothing here handles. Everything else about a block (its fields, sizes and
+// nothing here handles. The host adds the one interactive block it does
+// handle, the feedback buttons below a reply (issue #675), itself. Everything else about a block (its fields, sizes and
 // counts) is Slack's to judge, and its refusal is passed back.
 
 // displayBlocks are the top-level block types an agent may send.
@@ -184,4 +188,44 @@ func blocksDigest(blocks []json.RawMessage) string {
 		parts[i] = string(data)
 	}
 	return digest(parts...)
+}
+
+// feedbackAction is the action_id of the feedback buttons below a reply.
+const feedbackAction = "oc_feedback"
+
+// feedbackValue is what each feedback button carries back: the Work that
+// posted the reply, the attempt and the reply's marker, and which button.
+type feedbackValue struct {
+	Work      domain.ID `json:"w"`
+	Execution domain.ID `json:"x,omitempty"`
+	Intent    string    `json:"i,omitempty"`
+	Value     string    `json:"v"`
+}
+
+// feedbackBlock is the context_actions block with Slack's feedback buttons
+// for a reply; false when its values would not fit a button.
+func feedbackBlock(work, execution domain.ID, intent string) (json.RawMessage, bool) {
+	button := func(v, text, label string) (map[string]any, bool) {
+		data, _ := json.Marshal(feedbackValue{Work: work, Execution: execution, Intent: MarkerID(intent), Value: v})
+		return map[string]any{"text": map[string]any{"type": "plain_text", "text": text}, "value": string(data), "accessibility_label": label}, len(data) <= 2000
+	}
+	pos, ok1 := button(FeedbackPositive, "👍", "Mark this reply as good")
+	neg, ok2 := button(FeedbackNegative, "👎", "Mark this reply as bad")
+	if work == "" || !ok1 || !ok2 {
+		return nil, false
+	}
+	return raw(map[string]any{"type": "context_actions", "elements": []map[string]any{{
+		"type": "feedback_buttons", "action_id": feedbackAction, "positive_button": pos, "negative_button": neg}}}), true
+}
+
+// withFeedback is layout with the feedback block after the agent's blocks.
+// A reply that can't carry one more block (its text too long to lead
+// blocks, or the agent's blocks already at the limit) is laid out without
+// it: the reply matters more than the buttons.
+func withFeedback(format, text string, blocks []json.RawMessage, feedback json.RawMessage) []json.RawMessage {
+	all := append(slices.Clip(blocks), feedback)
+	if len(all) > maxBlocks || checkLayout(format, text, all) != nil {
+		return layout(format, text, blocks)
+	}
+	return layout(format, text, all)
 }

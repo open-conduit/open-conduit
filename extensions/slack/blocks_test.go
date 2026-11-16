@@ -141,3 +141,33 @@ func TestBlocksDigestMatchesTheRecord(t *testing.T) {
 		t.Fatal("digest")
 	}
 }
+
+// The feedback block follows the agent's blocks, and is left off a reply
+// that can't take one more block rather than refusing the reply.
+func TestWithFeedback(t *testing.T) {
+	fb, ok := feedbackBlock("work/1", "work/1/attempt/1", "reply/1")
+	if !ok {
+		t.Fatal("no feedback block")
+	}
+	if types, _ := shape(withFeedback(FormatMarkdown, "hi", nil, fb)); !slices.Equal(types, []string{"markdown", "context_actions"}) {
+		t.Fatalf("plain reply: %v", types)
+	}
+	table := rb(`{"type":"table","rows":[]}`)
+	if types, _ := shape(withFeedback(FormatMrkdwn, "*hi*", table, fb)); !slices.Equal(types, []string{"section", "table", "context_actions"}) {
+		t.Fatalf("mrkdwn with a table: %v", types)
+	}
+	long := strings.Repeat("a", maxMarkdown+1)
+	if got := withFeedback(FormatMarkdown, long, nil, fb); got != nil {
+		t.Fatalf("text past the markdown allowance took blocks: %d", len(got))
+	}
+	full := make([]json.RawMessage, maxBlocks)
+	for i := range full {
+		full[i] = json.RawMessage(`{"type":"divider"}`)
+	}
+	if got := withFeedback(FormatMarkdown, "hi", full, fb); len(got) != maxBlocks+1 {
+		t.Fatalf("a full reply: %d blocks", len(got))
+	}
+	if _, ok := feedbackBlock("", "", "reply/1"); ok {
+		t.Fatal("a feedback block for no Work")
+	}
+}
