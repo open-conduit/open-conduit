@@ -30,6 +30,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "signing_secret"},
 		{Name: "projection"},
 		{Name: "post"},
+		{Name: "progress", Help: `{"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed`},
 		{Name: "identities", Help: "a binding's own name and icon: [{binding, username, icon_emoji or icon_url}]"},
 	}
 }

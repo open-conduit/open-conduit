@@ -213,6 +213,16 @@ To run DMs on their own binding, put a route with `{"direct_messages": true}` be
 
 An app created before this needs reinstalling from the manifest (`open-conduit init slack` prints its create-app URL): DMs need the `im:history` and `im:read` scopes, the `message.im` event and the App Home messages tab. `open-conduit doctor --check-secrets` fails the entry until the token has the scopes.
 
+## Show progress in the thread
+
+Without it, the thread is quiet between the agent's replies, while it hands work to child Work or waits for an approval. Turn on a progress message in the entry:
+
+```json
+"progress": {"enabled": true, "stop": ["slack:U0ALICE", "slack:U0BOB"]}
+```
+
+Each message a person writes then gets an `eyes` reaction and, in the thread, a plan of what the run is doing: a task per child Work and per approval or wait, ticked off as each finishes. When the run hands back, the plan shows its last state and the reaction becomes a check mark (`x` if it failed). The people in `stop` see a **Stop** button on it that cancels the conversation; leave `stop` out for no button. The daemon keeps the message up to date from the run's own state, so the agent doesn't call anything and a run parked for hours still shows where it is. The app needs no new scope. See [progress messages](../../architecture/slack-extension/#progress-messages).
+
 To turn a request in a thread into an issue and a PR, and tell the thread when it merges, see [Slack to PR](../slack-to-pr/).
 
 See [Slack ingress, conversations and marked replies](../../architecture/slack-extension/) for the details.

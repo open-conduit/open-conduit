@@ -81,6 +81,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `refresh_minutes` | Default 60. How long an unchanged thread's replies are taken from memory. |
 | `projection` | `disabled`, `dry_run`. `serve --dry-run` forces a dry run. |
 | `post` | Which bindings may post a new message (`slack.post`) and where: `[{"binding": "nightly", "channels": ["C0123"]}]`. Each channel must be one of `channels`, so the new thread's replies are observed. An entry's `follow_up` (`{"grants": ["…"]}`, or `{}` for none) lets a person's reply to that binding's post open a successor once the posting Work has finished, with only those binding grants. Without it such a reply starts nothing. Empty: no binding may post. |
+| `progress` | `{"enabled": true, "stop": ["slack:U…", …]}` keeps a [progress message](#progress-messages) for each run in a conversation's thread. `stop` (at most 1000, each `slack:<user ID>`, the form a gate's responders take) lists who may press its **Stop** button; empty shows none, and `stop` without `enabled` is refused. Unset: no progress message, as before. |
 | `identities` | The name and icon each binding's messages post under: `[{"binding": "engineer", "username": "Steve", "icon_emoji": ":wrench:"}]`, with `icon_url` (https) instead of `icon_emoji` if you like. Each entry sets a `username`, an icon or both. Needs `chat:write.customize`. A binding with no entry posts as the app. See [binding identities](#binding-identities). |
 
 The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread`, `slack.reply` and `slack.post`.
@@ -307,6 +308,32 @@ A press arrives over Socket Mode as an `interactive` envelope, which is acknowle
 
 Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take interactivity, and an app created before this needs **Interactivity** turned on in its settings.
 
+## Progress messages
+
+With `progress` enabled, each run of a conversation (`slack.conversation`) gets one message in its thread that shows what the run is doing. A run is what one person's message starts or wakes: the latest person's message routed to the Work as input, not an edit or a deletion. It lasts until the next such message, which begins the next run.
+
+Nothing runs alongside the run, and the agent calls nothing. Every projection pass (every five seconds) derives each live run's message from durable state alone: the Work, the child Work made since the run's message was accepted, the Work's Waits and the actions offered on it (`Host.Actions`). A run parked for hours, or a daemon restarted in between, shows the same message, because nothing about it lives in a process. Slack's streams close ten minutes after they start, which a hand-off can outlast, so the message is a `chat.postMessage` with a `plan` block that `chat.update` changes in place, as Slack advises for long tasks.
+
+| What the run is doing | Plan title | Reaction on the person's message |
+| --- | --- | --- |
+| Queued, or held for an approval to start | Starting (Waiting while held) | `eyes` |
+| Running | Working | `eyes` |
+| Waiting for an approval or a question (an awaited action) | Waiting | `eyes` |
+| Waiting for a child Work | Waiting for hand-offs | `eyes` |
+| Waiting for anything else (a timer, another system) | Waiting | `eyes` |
+| Waiting only for a person to write in the thread | Waiting for your reply | `white_check_mark` |
+| Ended by the next person's message, or the Work completed | Done | `white_check_mark` |
+| Failed | Failed | `x` |
+| Cancelled | Stopped | `octagonal_sign` |
+
+The plan has a task per child Work (its display title, `in_progress` until it completes, `error` if it failed or was cancelled), and a task per step the run waited on: an awaited action (an approval or a question, by its label) and a Wait that says what it is for (by its description and progress line). A step no longer offered or active is shown `complete`. A run with neither has one task, the plan's title. Slack's limit of 50 tasks keeps the latest. What a child or a gate means stays its owner's; the plan only shows their state. An approval's buttons are its [prompt](#prompts-and-button-answers), posted beside the progress message as before.
+
+The message is posted once, as a marked reply with the intent `progress/<work>/<run event>` (so a lost post is found by its marker), under the binding's identity when the binding has one. It is then updated only when what it shows changes, at most once a pass, and each layout gets new block IDs, as Slack asks of an updated plan. A run that has already handed back by the first pass that sees it gets no message, so turning `progress` on doesn't post into every waiting conversation. Each run's record (the namespace's `progress/` keys) holds what it last showed and the reaction it last set, and is not read again once the run has ended and both are up to date.
+
+While the run is live and `stop` lists anyone, the message carries a **Stop** button, with a confirmation. A press arrives like a prompt's: Slack says who pressed it, and the extension checks them against `stop`. Slack holds the authority here because the conversation is Slack's own Work kind; `Host.CancelWork` accepts only an extension's own kinds and checks the Work's revision. A press from anyone else, from another workspace or channel, or for Work that isn't this entry's conversation in that channel, cancels nothing. The cancellation is keyed by the presser and the press's `action_ts` and its reason (`stopped from Slack by slack:<user>`) goes in the Work's history. The presser is told the outcome in a message only they see.
+
+The calls are `chat.update` (`chat:write`) and `reactions.add`/`reactions.remove` (`reactions:write`), both in the manifest already, so the setting needs no new scope and no Agents & AI Apps setting.
+
 ## Moving to a new host
 
 Copy the state, not just the config. Stop the daemon, `backup create` a bundle, and on the new host `backup restore` it and point the daemon at the restored directory ([backups](../../guides/backups/)). The bundle carries every Work and its thread keys, its waits, and the entry's start points and marked-thread records, so waiting conversations continue in their threads and nothing is claimed twice.
@@ -319,6 +346,7 @@ If the new host starts with an empty state directory instead, the entry register
 - **Posting.** `slack.post` has not been run on real Slack. A Work that posts several threads owns them all, but `slack.reply` and `slack.thread` act on the first thread key it holds. A successor answers only the thread whose question opened it. A message in another thread its predecessor posted, while the successor is live or after it has finished, is skipped and starts nothing, so it is never answered in the wrong thread. A thread posted before the binding was recorded (by Work from before this change) holds no posted key and opens no successor.
 - **Identities.** Posting under a binding's own name has not been run on real Slack; the fake follows Slack's documented shape. A message posted under a custom name while Slack withholds metadata has no marker and no bot user, so normalization classifies it as `slack.message.bot`. That is never input either, but `slack.thread` shows it as a bot's message, not the agent's.
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
+- **Progress messages.** These have been exercised only against the `slacktest` fake; the `plan` block and its updates follow Slack's documented shape and the issue's probe. A plan block and an `actions` block in the same message is not documented by Slack. A turn's status summary isn't shown, and the final reply isn't streamed.
 - **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
 
 ## History
@@ -331,6 +359,7 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 04-02 delivered extension-owned setup (`init slack`), the manifest decision for `metadata.message:read`, the support binding and conversation lifecycle, and the generic inject acknowledgement. 04-01 and 04-02 used only fixtures and the `slacktest` fake.
 - Ticket 04-03 added the fake-clock multi-day scenario (`slack_multiday_test.go`) and a short real-Slack run, below. A real multi-day wait was deferred to real-world operation by user decision.
 - Issue #364 added prompts and button answers: a waiting Work's actions with choices are posted as buttons, and a press answers through `Host.Act` as `slack:<user>`. The manifest turned Interactivity on. This has been exercised only against the `slacktest` fake. Later in the same issue, ready Work that hasn't started was prompted too, so a held start can be approved from the thread.
+- Issue #673 added progress messages: with `progress` enabled, a plan per run derived from durable state on each projection pass, with reactions on the person's message and a Stop button for the people `stop` lists, cancelling through `Host.CancelWork`.
 
 ### Real Slack run (04-03)
 

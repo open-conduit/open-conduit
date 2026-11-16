@@ -404,6 +404,48 @@ func (c *Client) PostMessage(ctx context.Context, p Post) (string, error) {
 	return out.TS, nil
 }
 
+// Update is a new text and layout for a message the app posted
+// (chat.update). Its metadata (the marker) is kept, since it is omitted.
+type Update struct {
+	Channel string           `json:"channel"`
+	TS      string           `json:"ts"`
+	Text    string           `json:"text"`
+	Blocks  []map[string]any `json:"blocks"`
+}
+
+// UpdateMessage replaces a posted message's text and blocks.
+func (c *Client) UpdateMessage(ctx context.Context, u Update) error {
+	return c.call(ctx, "chat.update", nil, u, nil)
+}
+
+type reaction struct {
+	Channel   string `json:"channel"`
+	Timestamp string `json:"timestamp"`
+	Name      string `json:"name"`
+}
+
+// AddReaction adds the app's reaction name to a message (reactions.add).
+// One already there is not an error.
+func (c *Client) AddReaction(ctx context.Context, channel, ts, name string) error {
+	err := c.call(ctx, "reactions.add", nil, reaction{channel, ts, name}, nil)
+	var a *APIError
+	if errors.As(err, &a) && a.Code == "already_reacted" {
+		return nil
+	}
+	return err
+}
+
+// RemoveReaction removes the app's reaction name from a message
+// (reactions.remove). One not there is not an error.
+func (c *Client) RemoveReaction(ctx context.Context, channel, ts, name string) error {
+	err := c.call(ctx, "reactions.remove", nil, reaction{channel, ts, name}, nil)
+	var a *APIError
+	if errors.As(err, &a) && a.Code == "no_reaction" {
+		return nil
+	}
+	return err
+}
+
 // Ephemeral is a message only User sees, in a channel's thread.
 type Ephemeral struct {
 	Channel  string `json:"channel"`

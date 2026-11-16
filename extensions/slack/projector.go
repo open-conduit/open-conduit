@@ -66,6 +66,10 @@ type ProjectorOptions struct {
 	// (inproc.Host.AcceptDerivedInTx and AcceptInTx). nil: top-level posts
 	// are refused, since their thread could not become the Work's.
 	Open func(tx storage.Tx, scope, parent domain.ID, e domain.Event) error
+	// Cancel cancels a conversation's Work when a person the entry's
+	// progress stop lists presses a progress message's Stop button
+	// (inproc.Host.CancelWork); nil takes no press.
+	Cancel CancelFunc
 }
 
 // Projector publishes conversation replies. A reply is not re-derivable: each
@@ -80,7 +84,10 @@ type Projector struct {
 // ProjectionResult reports one pass.
 type ProjectionResult struct {
 	Posted, Recovered, Failed int
-	Codes                     []string
+	// Progress counts the progress message writes (a post, an update, a
+	// reaction changed).
+	Progress int
+	Codes    []string
 }
 
 // NewProjector validates options.
@@ -535,7 +542,10 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			res.Codes = append(res.Codes, code)
 		}
 	}
-	return res, nil
+	n, codes, err := p.Progress(ctx, limit)
+	res.Progress = n
+	res.Codes = append(res.Codes, codes...)
+	return res, err
 }
 
 // ErrorCode is a safe diagnostic code for an extension error.

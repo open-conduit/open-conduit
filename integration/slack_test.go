@@ -56,8 +56,11 @@ type slEnv struct {
 	projector *sl.Projector
 	// actions and act stand in for the host's Actions and Act (prompts
 	// and button presses); nil offers and takes nothing.
-	actions  sl.ActionsFunc
-	act      sl.ActFunc
+	actions sl.ActionsFunc
+	act     sl.ActFunc
+	// cancel stands in for the host's CancelWork (a progress message's
+	// Stop button); nil takes no press.
+	cancel   sl.CancelFunc
 	settings sl.Settings
 	webhook  http.Handler
 	// channels the entry watches (default: slChannel).
@@ -159,6 +162,12 @@ func (e *slEnv) open() {
 				return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing here"}
 			}
 			return e.act(ctx, r)
+		},
+		Cancel: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
+			if e.cancel == nil {
+				return "", extension.ErrUnauthorized
+			}
+			return e.cancel(ctx, work, expected, reason, key)
 		},
 		// As the host accepts an extension's own Event in its transaction.
 		Open: func(tx storage.Tx, scope, parent domain.ID, ev domain.Event) error {
