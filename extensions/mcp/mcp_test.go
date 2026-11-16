@@ -549,7 +549,7 @@ func TestKilledPackageTakesItsServers(t *testing.T) {
 	f.cfg.Env[fakeLingerEnv] = "1"
 	self, _ := os.Executable()
 	pkg := exec.Command(self)
-	pkg.Env = append(os.Environ(), fakePackageEnv+"="+string(f.raw(t)))
+	pkg.Env = append(os.Environ(), fakePackageEnv+"="+string(f.raw(t)), fakeRunsEnv+"="+t.TempDir())
 	pkg.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, _ := pkg.StdinPipe()
 	defer stdin.Close()

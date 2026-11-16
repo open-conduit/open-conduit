@@ -35,13 +35,17 @@ const (
 	fakePackageEnv = "MCP_FAKE_PACKAGE"
 	// fakeLingerEnv keeps the fake server running after its stdin closes.
 	fakeLingerEnv = "MCP_FAKE_LINGER"
+	// fakeRunsEnv is the directory a package makes its servers' run
+	// directories in, so the test that started it removes them.
+	fakeRunsEnv = "MCP_FAKE_RUNS"
 )
 
-// packageHost launches a server as it is asked, in a fresh directory.
+// packageHost launches a server as it is asked, in a fresh directory
+// under fakeRunsEnv.
 type packageHost struct{}
 
 func (packageHost) EntrySandbox(_ context.Context, _ domain.ID, entry string, _ extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, string, error) {
-	dir, err := os.MkdirTemp("", entry+"-")
+	dir, err := os.MkdirTemp(os.Getenv(fakeRunsEnv), entry+"-")
 	return extension.SandboxPlan{Argv: l.Argv, Env: l.Env, Digest: "sha256:test"}, dir, err
 }
 func (packageHost) Secrets(_ context.Context, _ domain.ID, names ...string) (map[string]string, error) {
