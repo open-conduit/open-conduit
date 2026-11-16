@@ -2,16 +2,22 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // The test binary is also the fake MCP server: run with fakeServerEnv set,
@@ -23,12 +29,64 @@ const (
 	fakeServerEnv = "MCP_FAKE_SERVER"
 	fakeToolsEnv  = "MCP_FAKE_TOOLS"
 	fakeCallsEnv  = "MCP_FAKE_CALLS"
+	// fakePackageEnv runs the test binary as a package: it starts the
+	// fake server for the entry config the variable holds, prints the
+	// server's pid and waits to be killed.
+	fakePackageEnv = "MCP_FAKE_PACKAGE"
+	// fakeLingerEnv keeps the fake server running after its stdin closes.
+	fakeLingerEnv = "MCP_FAKE_LINGER"
 )
+
+// packageHost launches a server as it is asked, in a fresh directory.
+type packageHost struct{}
+
+func (packageHost) EntrySandbox(_ context.Context, _ domain.ID, entry string, _ extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, string, error) {
+	dir, err := os.MkdirTemp("", entry+"-")
+	return extension.SandboxPlan{Argv: l.Argv, Env: l.Env, Digest: "sha256:test"}, dir, err
+}
+func (packageHost) Secrets(_ context.Context, _ domain.ID, names ...string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, n := range names {
+		out[n] = "s3cret"
+	}
+	return out, nil
+}
+func (packageHost) Update(context.Context, string, string, func([]byte, bool) ([]byte, error)) error {
+	return nil
+}
+
+func runPackage(raw string) int {
+	b := New(Options{})
+	out, err := b.Serve(context.Background(), packageHost{}, Call{Type: StdioType, Entry: "crm", Scope: "org", Config: json.RawMessage(raw), Operation: "lookup", Input: domain.Payload{Data: json.RawMessage(`{"id":"c-1"}`)}})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	var res Result
+	_ = json.Unmarshal(out.Data, &res)
+	var block struct{ Text string }
+	_ = json.Unmarshal(res.Content[0], &block)
+	var seen struct{ PID int }
+	_ = json.Unmarshal([]byte(block.Text), &seen)
+	fmt.Println(seen.PID)
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	return 0
+}
 
 func TestMain(m *testing.M) {
 	if os.Getenv(fakeServerEnv) != "" {
 		serveStdio(os.Stdin, os.Stdout)
+		if os.Getenv(fakeLingerEnv) != "" {
+			// A server that doesn't exit when its input closes. (A bare
+			// select would be reported as a deadlock, which exits.)
+			wait := make(chan os.Signal, 1)
+			signal.Notify(wait, syscall.SIGUSR1)
+			<-wait
+		}
 		os.Exit(0)
+	}
+	if raw := os.Getenv(fakePackageEnv); raw != "" {
+		os.Exit(runPackage(raw))
 	}
 	os.Exit(m.Run())
 }
@@ -89,7 +147,7 @@ func answer(m message, toolsFile, callsFile string) map[string]any {
 			reply["error"] = map[string]any{"code": -32602, "message": "bad arguments"}
 		default:
 			wd, _ := os.Getwd()
-			text, _ := json.Marshal(map[string]any{"args": p.Arguments, "dir": wd, "token": os.Getenv("CRM_TOKEN"), "jailed": os.Getenv("JAILED"), "leaked": os.Getenv("DAEMON_SECRET")})
+			text, _ := json.Marshal(map[string]any{"args": p.Arguments, "dir": wd, "token": os.Getenv("CRM_TOKEN"), "pid": os.Getpid(), "jailed": os.Getenv("JAILED"), "leaked": os.Getenv("DAEMON_SECRET")})
 			reply["result"] = map[string]any{"content": []any{map[string]string{"type": "text", "text": string(text)}}, "structuredContent": map[string]any{"ok": true}}
 		}
 	default:

@@ -1,13 +1,9 @@
-//go:build !unix
+//go:build !linux
 
 package mcp
 
 import "os/exec"
 
-func setGroup(*exec.Cmd) {}
-
-func killGroup(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-}
+// A server stays in the package's process group, so the host's kill of
+// the package's group reaches it.
+func startServer(cmd *exec.Cmd) error { return cmd.Start() }

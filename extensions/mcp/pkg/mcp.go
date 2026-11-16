@@ -95,7 +95,7 @@ func Manifest() protocol.Manifest { return Build(mcp.New(mcp.Options{})).Manifes
 // package-certification print the package files. It returns the process's
 // exit status.
 func Main(args []string) int {
-	if sdk.PackageCommand(args, Manifest(), nil, os.Stdout) {
+	if sdk.PackageCommand(args, Manifest(), protocol.CertificationFile{}, os.Stdout) {
 		return 0
 	}
 	b := mcp.New(mcp.Options{})

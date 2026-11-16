@@ -1,14 +1,20 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -465,3 +471,112 @@ func TestConfigureStopsDroppedServers(t *testing.T) {
 }
 
 var _ Host = (*fakeHost)(nil)
+
+// A remote server that redirects gets no second request: the entry's
+// secrets never reach where it points, and the call fails.
+func TestHTTPRedirectRefused(t *testing.T) {
+	var leaked []http.Header
+	var mu sync.Mutex
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		leaked = append(leaked, r.Header.Clone())
+		mu.Unlock()
+	}))
+	defer elsewhere.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+	cfg, _ := json.Marshal(Config{URL: redirector.URL + "/mcp", SecretHeaders: map[string]string{"X-Api-Key": "crm_token"}, BearerSecret: "crm_token",
+		Tools: []Tool{{Name: "lookup", Description: lookupDescription, InputSchema: lookupSchema}}})
+	h := &fakeHost{t: t, secrets: map[string]string{"crm_token": "tok"}}
+	// A client the caller passes in is used without its redirects too.
+	b := New(Options{HTTPClient: &http.Client{}})
+	defer b.Close()
+	_, err := b.Serve(context.Background(), h, Call{Type: HTTPType, Entry: "crm", Scope: "org", Config: cfg, Operation: "lookup", Input: domain.Payload{Data: json.RawMessage(`{}`)}})
+	if code(err) != "server_unavailable" {
+		t.Fatalf("a redirect: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(leaked) != 0 {
+		t.Fatalf("the redirect's target was sent %v", leaked)
+	}
+}
+
+// A secret rotated in the scope reaches the server on the next call: the
+// server is started again with the new value, and the old one is no
+// longer used.
+func TestRotatedSecretRestartsTheServer(t *testing.T) {
+	f := newFixture(t)
+	h := &fakeHost{t: t, secrets: map[string]string{"crm_token": "old"}}
+	b := newBridge(t)
+	token := func() string {
+		out, err := f.call(t, b, h, "lookup", "", `{"id":"c-1"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res Result
+		_ = json.Unmarshal(out.Data, &res)
+		var block struct{ Text string }
+		_ = json.Unmarshal(res.Content[0], &block)
+		var seen struct{ Token string }
+		_ = json.Unmarshal([]byte(block.Text), &seen)
+		return seen.Token
+	}
+	if got := token(); got != "old" {
+		t.Fatalf("token = %q", got)
+	}
+	h.mu.Lock()
+	h.secrets["crm_token"] = "new"
+	h.mu.Unlock()
+	if got := token(); got != "new" || len(h.asked) != 2 {
+		t.Fatalf("after rotation: token %q, launches %d", got, len(h.asked))
+	}
+	// A revoked secret stops the calls rather than keeping the old one.
+	h.mu.Lock()
+	delete(h.secrets, "crm_token")
+	h.mu.Unlock()
+	if _, err := f.call(t, b, h, "lookup", "", `{"id":"c-1"}`); code(err) != "server_unavailable" {
+		t.Fatalf("a revoked secret: %v", err)
+	}
+}
+
+// A package the host kills, as it does, by its process group takes its
+// servers with it.
+func TestKilledPackageTakesItsServers(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Env[fakeLingerEnv] = "1"
+	self, _ := os.Executable()
+	pkg := exec.Command(self)
+	pkg.Env = append(os.Environ(), fakePackageEnv+"="+string(f.raw(t)))
+	pkg.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdin, _ := pkg.StdinPipe()
+	defer stdin.Close()
+	stdout, _ := pkg.StdoutPipe()
+	pkg.Stderr = os.Stderr
+	if err := pkg.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	pid, perr := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || perr != nil || pid <= 0 {
+		_ = pkg.Process.Kill()
+		t.Fatalf("the package didn't report its server: %q %v", line, err)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("the server isn't running: %v", err)
+	}
+	if err := syscall.Kill(-pkg.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = pkg.Wait()
+	deadline := time.Now().Add(10 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("server %d outlived its package", pid)
+		}
+		runtime.Gosched()
+	}
+}

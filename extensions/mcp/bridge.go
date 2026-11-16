@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -63,7 +64,8 @@ type Options struct {
 	// and LANG (os.Environ when nil). Nothing else of it reaches a server.
 	Environ func() []string
 	// HTTPClient reaches remote servers (a client with no overall timeout
-	// when nil; each call is bounded by its entry's timeout).
+	// when nil; each call is bounded by its entry's timeout). The bridge
+	// uses a copy that never follows a redirect.
 	HTTPClient *http.Client
 	// Now stamps the marks of calls sent (time.Now when nil).
 	Now func() time.Time
@@ -79,10 +81,13 @@ type Bridge struct {
 }
 
 type entrySession struct {
-	digest string
-	once   sync.Once
-	s      *session
-	err    error
+	// digest identifies the entry's config, and secrets the secret
+	// values the session was started with: a change to either starts
+	// it again.
+	digest, secrets string
+	once            sync.Once
+	s               *session
+	err             error
 }
 
 // New returns a bridge.
@@ -90,9 +95,16 @@ func New(o Options) *Bridge {
 	if o.Environ == nil {
 		o.Environ = os.Environ
 	}
-	if o.HTTPClient == nil {
-		o.HTTPClient = &http.Client{}
+	// A redirect would send the entry's secrets on to wherever the server
+	// points, perhaps another host or plain http; streamable HTTP needs
+	// none, so a 3xx is the answer, refused as a non-2xx.
+	client := &http.Client{}
+	if o.HTTPClient != nil {
+		c := *o.HTTPClient
+		client = &c
 	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	o.HTTPClient = client
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -122,7 +134,11 @@ func (b *Bridge) Serve(ctx context.Context, h Host, c Call) (domain.Payload, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.timeout())*time.Second)
 	defer cancel()
-	s, err := b.session(ctx, h, c, cfg)
+	secrets, err := resolve(ctx, h, c, cfg)
+	if err != nil {
+		return domain.Payload{}, err
+	}
+	s, err := b.session(ctx, h, c, cfg, secrets)
 	if err != nil {
 		return domain.Payload{}, err
 	}
@@ -286,21 +302,51 @@ func Sweep(ctx context.Context, h interface {
 	return h.Commit(ctx, b)
 }
 
+// resolve resolves the secrets the entry's config names, on every call,
+// so a rotated or revoked secret is never used after the host stops
+// answering with it.
+func resolve(ctx context.Context, h Host, c Call, cfg Config) (map[string]string, error) {
+	names := cfg.secrets()
+	if len(names) == 0 {
+		return nil, nil
+	}
+	secrets, err := h.Secrets(ctx, c.Scope, names...)
+	if err != nil {
+		return nil, refuse("server_unavailable", "the entry's secrets couldn't be resolved")
+	}
+	for _, n := range names {
+		if secrets[n] == "" {
+			return nil, refuse("server_unavailable", "a secret the entry's config names has no value in this scope")
+		}
+	}
+	return secrets, nil
+}
+
+// secretsDigest identifies a set of secret values without keeping them.
+func secretsDigest(secrets map[string]string) string {
+	h := sha256.New()
+	for _, k := range slices.Sorted(maps.Keys(secrets)) {
+		fmt.Fprintf(h, "%d:%s%d:%s", len(k), k, len(secrets[k]), secrets[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // session is the entry's session in the call's scope, started on first
-// use, or again when the entry's config has changed.
-func (b *Bridge) session(ctx context.Context, h Host, c Call, cfg Config) (*session, error) {
-	key, d := sessionKey(c.Scope, c.Entry), digest(c.Type, c.Config)
+// use, or again when the entry's config or the values of its secrets
+// have changed.
+func (b *Bridge) session(ctx context.Context, h Host, c Call, cfg Config, secrets map[string]string) (*session, error) {
+	key, d, sd := sessionKey(c.Scope, c.Entry), digest(c.Type, c.Config), secretsDigest(secrets)
 	b.mu.Lock()
 	es := b.sessions[key]
-	if es == nil || es.digest != d {
+	if es == nil || es.digest != d || es.secrets != sd {
 		if es != nil {
 			go es.close()
 		}
-		es = &entrySession{digest: d}
+		es = &entrySession{digest: d, secrets: sd}
 		b.sessions[key] = es
 	}
 	b.mu.Unlock()
-	es.once.Do(func() { es.s, es.err = b.start(ctx, h, c, cfg) })
+	es.once.Do(func() { es.s, es.err = b.start(ctx, h, c, cfg, secrets) })
 	if es.err != nil {
 		b.mu.Lock()
 		if b.sessions[key] == es {
@@ -372,19 +418,7 @@ func (b *Bridge) Close() {
 }
 
 // start starts and initializes the entry's server.
-func (b *Bridge) start(ctx context.Context, h Host, c Call, cfg Config) (*session, error) {
-	var secrets map[string]string
-	if names := cfg.secrets(); len(names) > 0 {
-		var err error
-		if secrets, err = h.Secrets(ctx, c.Scope, names...); err != nil {
-			return nil, refuse("server_unavailable", "the entry's secrets couldn't be resolved")
-		}
-		for _, n := range names {
-			if secrets[n] == "" {
-				return nil, refuse("server_unavailable", "a secret the entry's config names has no value in this scope")
-			}
-		}
-	}
+func (b *Bridge) start(ctx context.Context, h Host, c Call, cfg Config, secrets map[string]string) (*session, error) {
 	var t transport
 	var err error
 	switch c.Type {
@@ -437,7 +471,6 @@ func (b *Bridge) launch(ctx context.Context, h Host, c Call, cfg Config, secrets
 	cmd := exec.Command(plan.Argv[0], plan.Argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = plan.Env
-	setGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -449,7 +482,7 @@ func (b *Bridge) launch(ctx context.Context, h Host, c Call, cfg Config, secrets
 	// A server's stderr is its log; it isn't kept, since it may print
 	// what it was given.
 	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := startServer(cmd); err != nil {
 		return nil, refuse("server_unavailable", "the MCP server's command couldn't be started")
 	}
 	exited := make(chan struct{})
@@ -464,7 +497,7 @@ func (b *Bridge) launch(ctx context.Context, h Host, c Call, cfg Config, secrets
 		select {
 		case <-exited:
 		case <-time.After(2 * time.Second):
-			killGroup(cmd)
+			_ = cmd.Process.Kill()
 			<-exited
 		}
 		return nil

@@ -204,6 +204,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"schedule", "", []string{"ingress.conformance"}},
 		{"webhook", "", []string{"ingress.conformance", "routes.decisions", "operations.cases"}},
 		{"introspection", "", nil},
+		// The MCP bridge: entry operations and sandboxed servers, which
+		// its own and the daemon's tests cover; no criterion reaches them.
+		{"mcp", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		// The Chat Completions executor, against the fake endpoint its
 		// fixture command serves.
