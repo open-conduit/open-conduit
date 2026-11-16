@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -159,6 +158,10 @@ type Toolbelt struct {
 	startGates    map[string]extension.StartGate
 	events        map[string]string // emitted family → registration name
 	sealed        map[string]bool   // families only their registration's Emit operations emit
+	// entryScopes are the scopes each entry operation may be called from
+	// (extension.EntryOperation.Scopes); a name absent here is a fixed
+	// operation, callable from any scope its grant reaches.
+	entryScopes map[string][]domain.ID
 }
 
 type tokenRecord struct {
@@ -201,10 +204,8 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) (bool, error){}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) (bool, error){}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}, sealed: map[string]bool{}, entryScopes: map[string][]domain.ID{}}, nil
 }
-
-var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
 
 func builtinOperation(name string) bool { return extension.BuiltinOperation(name) }
 
@@ -219,6 +220,11 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	if t.registrations[r.Name] {
 		return fmt.Errorf("%w: extension %q is already registered", extension.ErrConflict, r.Name)
 	}
+	entries, scopes, err := extension.ExpandEntryOperations(r)
+	if err != nil {
+		return err
+	}
+	r.Operations = append(slices.Clone(r.Operations), entries...)
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
 		set := 0
@@ -227,13 +233,13 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 				set++
 			}
 		}
-		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
+		if set != 1 || !extension.OperationName(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
 		if err := extension.ValidateOperationDoc(op.Summary, op.Input); err != nil {
 			return fmt.Errorf("operation %q: %w", op.Name, err)
 		}
-		if op.Serves != "" && (op.Handler == nil || !operationName.MatchString(op.Serves)) {
+		if op.Serves != "" && (op.Handler == nil || !extension.OperationName(op.Serves)) {
 			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
 		}
 		if len(op.SecretOutput) > 0 && op.Handler == nil {
@@ -272,6 +278,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		t.operations[op.Name] = op
 		t.owners[op.Name] = r.Name
 	}
+	for name, in := range scopes {
+		t.entryScopes[name] = in
+	}
 	if r.DependencyFilter != nil {
 		t.filters[r.Name] = r.DependencyFilter
 	}
@@ -288,6 +297,15 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		t.sealed[name] = true
 	}
 	return nil
+}
+
+// entryScopeAllows reports whether op may be called from scope: any scope
+// for a fixed operation, only the listed ones for an entry operation.
+func (t *Toolbelt) entryScopeAllows(op string, scope domain.ID) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	in, ok := t.entryScopes[op]
+	return !ok || slices.Contains(in, scope)
 }
 
 // ownerLocked is who already registered op, for a conflict's message:
@@ -490,7 +508,7 @@ func (t *Toolbelt) grantedNames(ctx context.Context, token string, execution dom
 		t.mu.RLock()
 		_, registered := t.operations[name]
 		t.mu.RUnlock()
-		if seen[name] || !registered && !builtinOperation(name) {
+		if seen[name] || !registered && !builtinOperation(name) || !t.entryScopeAllows(name, a.ScopeID) {
 			continue
 		}
 		seen[name] = true
@@ -1001,6 +1019,12 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		return out, unauthorized(RefusalNotGranted)
 	}
 	if !t.declared(c.Operation) {
+		return out, extension.ErrUndeclared
+	}
+	// An entry operation exists only where the entry that declares it is
+	// in effect: from any other scope it is as undeclared as a name no
+	// entry declares, whatever the caller's grant says.
+	if !t.entryScopeAllows(c.Operation, a.ScopeID) {
 		return out, extension.ErrUndeclared
 	}
 	if !contains(a.Operations, c.Operation) {

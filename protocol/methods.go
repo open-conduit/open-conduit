@@ -43,7 +43,7 @@ var Methods = []Method{
 	// Lifecycle.
 	{Name: "initialize", Direction: HostToExtension, Contract: []string{"extension.Registration.Version", "extension.Executor.Capabilities (manifest executors[].capabilities)", "extension.InteractiveLauncher.LaunchNames (manifest executors[].launch_names)", "extension.Registration.Name", "extension.Registration.EventTypes"}},
 	{Name: "configure", Direction: HostToExtension, Contract: []string{"host:config apply (register<Extension> on OnApply)", "extension.Source", "host:webhook routes"}},
-	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor, sandbox, container, tunnel config)", "extension.ResourceModeDefaulter.ModeDefault", "extension.ResourceSandboxChecker.SandboxWorkspace", "extension.ResourceModer.ResourceMode", "extension.PlaybookNamer.Playbook", "extension.VersionProber.VersionProbe", "extension.FolderConfigurer.FolderConfig", "inproc.ConfigType.Binding", "extension.RouteBinding"}},
+	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor, sandbox, container, tunnel config)", "extension.ResourceModeDefaulter.ModeDefault", "extension.ResourceSandboxChecker.SandboxWorkspace", "extension.ResourceModer.ResourceMode", "extension.PlaybookNamer.Playbook", "extension.VersionProber.VersionProbe", "extension.FolderConfigurer.FolderConfig", "inproc.ConfigType.Binding", "extension.RouteBinding", "extension.EntryOperationDecl"}},
 	{Name: "shutdown", Direction: HostToExtension, Contract: []string{"observability.Exporter.Shutdown", "host:daemon stop"}},
 	{Name: "$/cancel", Direction: Both, Notification: true, Contract: []string{"context.Context cancellation"}},
 
@@ -60,7 +60,7 @@ var Methods = []Method{
 	{Name: "recurrence.next", Direction: HostToExtension, Provides: "recurrences", InTransaction: true, Contract: []string{"host:runtime.RecurrenceFunc"}},
 
 	// Toolbelt operations registered by the extension.
-	{Name: "operation.call", Direction: HostToExtension, Provides: "operations", Contract: []string{"extension.Operation.Handler", "extension.OperationError", "extension.CallRequestID"}},
+	{Name: "operation.call", Direction: HostToExtension, Provides: "operations", Contract: []string{"extension.Operation.Handler", "extension.OperationError", "extension.CallRequestID", "extension.Registration.EntryHandler", "extension.EntryCall"}},
 	{Name: "operation.wait", Direction: HostToExtension, Provides: "operations.wait", Contract: []string{"extension.Operation.Wait", "extension.WaitPlan", "extension.Dependency"}},
 	{Name: "operation.emit", Direction: HostToExtension, Provides: "operations.emit", Contract: []string{"extension.Operation.Emit", "extension.EmitPlan"}},
 	{Name: "emit.commit", Direction: HostToExtension, Provides: "operations.commit", InTransaction: true, Contract: []string{"extension.EmitPlan.Commit", "extension.Emitted", "extension.EmitCommit"}},

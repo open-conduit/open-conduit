@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,10 +27,12 @@ type Toolbelt struct {
 	operations    map[string]extension.Operation
 	events        map[string]bool
 	sealed        map[string]bool
+	// entryScopes are the scopes each entry operation may be called from.
+	entryScopes map[string][]domain.ID
 }
 
 func NewToolbelt(s storage.Store, now func() time.Time) *Toolbelt {
-	return &Toolbelt{Store: s, Now: now, tokens: map[string]extension.Authority{}, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}, sealed: map[string]bool{}}
+	return &Toolbelt{Store: s, Now: now, tokens: map[string]extension.Authority{}, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}, sealed: map[string]bool{}, entryScopes: map[string][]domain.ID{}}
 }
 func builtin(n string) bool {
 	return n == extension.Emit || n == extension.CreateWork || n == extension.CancelWork || n == extension.Wait || n == extension.DeclareOutcome || n == extension.ReadContext
@@ -43,6 +46,11 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	if t.registrations[r.Name] {
 		return fmt.Errorf("%w: extension %q is already registered", extension.ErrConflict, r.Name)
 	}
+	entries, scopes, err := extension.ExpandEntryOperations(r)
+	if err != nil {
+		return err
+	}
+	r.Operations = append(append([]extension.Operation(nil), r.Operations...), entries...)
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
 		if op.Name == "" || op.Handler == nil {
@@ -76,6 +84,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	t.registrations[r.Name] = true
 	for _, op := range r.Operations {
 		t.operations[op.Name] = op
+	}
+	for name, in := range scopes {
+		t.entryScopes[name] = in
 	}
 	for _, n := range r.EventTypes {
 		t.events[n] = true
@@ -133,6 +144,9 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 		return extension.ToolResult{}, extension.ErrUnauthorized
 	}
 	if !builtin(c.Operation) && t.operations[c.Operation].Handler == nil {
+		return extension.ToolResult{}, extension.ErrUndeclared
+	}
+	if in, entry := t.entryScopes[c.Operation]; entry && !slices.Contains(in, a.ScopeID) {
 		return extension.ToolResult{}, extension.ErrUndeclared
 	}
 	if !contains(a.Operations, c.Operation) {

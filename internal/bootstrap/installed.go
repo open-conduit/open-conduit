@@ -69,6 +69,9 @@ type configType struct {
 	Describe  func(config json.RawMessage) []config.Entry
 	WorkKinds func(config json.RawMessage) []extension.WorkKind
 	Bindings  func(config json.RawMessage) []string
+	// Operations, for an extension type that declares operations, are the
+	// ones an entry's config declares.
+	Operations func(config json.RawMessage) []extension.EntryOperationDecl
 }
 
 // ingressSource is an ingress source a package's configure result
@@ -137,7 +140,7 @@ func (x *installed) Types() []configType {
 	}
 	for _, e := range p.Extensions {
 		out = append(out, configType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
-			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe)), Bindings: x.bindings(e.Type)})
+			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe)), Bindings: x.bindings(e.Type), Operations: x.entryOperations(e)})
 	}
 	for _, r := range p.Routes {
 		if r.Config || r.Binding {
@@ -703,6 +706,29 @@ func (x *installed) bindings(typ string) func(json.RawMessage) []string {
 		}
 		names, _ := r.Bindings(typ, raw)
 		return names
+	}
+}
+
+// entryOperations are the operations an entry config of extension type
+// decl declares: what the package said when it validated that config
+// (protocol.ValidateResult.Operations), else none, so an entry the package
+// hasn't accepted declares nothing. It never calls the package; validation
+// does, before grants are resolved. A type that doesn't declare operations
+// has none.
+func (x *installed) entryOperations(decl protocol.ExtensionDecl) func(json.RawMessage) []extension.EntryOperationDecl {
+	if !decl.Operations {
+		return nil
+	}
+	return func(raw json.RawMessage) []extension.EntryOperationDecl {
+		r := x.r
+		if r == nil && x.offline != nil && x.offline.started {
+			r = x.offline.r
+		}
+		if r == nil {
+			return nil
+		}
+		ops, _ := r.EntryOperations(decl.Type, raw)
+		return ops
 	}
 }
 

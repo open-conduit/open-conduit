@@ -280,3 +280,61 @@ func TestValidateReturnsARouteWorkKinds(t *testing.T) {
 		t.Fatalf("an extension entry carried work kinds: %+v %v", out, err)
 	}
 }
+
+// An entry type whose config declares operations answers validate with
+// them, and serves operation.call for one only when the entry's config
+// declares it under the name called; anything else is undeclared without
+// reaching Serve.
+func TestEntryOperationsOverTheWire(t *testing.T) {
+	ext := sdk.New("bridge")
+	var served []sdk.EntryCall
+	ext.EntryOperations("mcp", sdk.EntryType{
+		Declared: func(raw json.RawMessage) ([]extension.EntryOperationDecl, error) {
+			var c struct{ Tools []string }
+			if err := json.Unmarshal(raw, &c); err != nil {
+				return nil, err
+			}
+			var out []extension.EntryOperationDecl
+			for _, t := range c.Tools {
+				out = append(out, extension.EntryOperationDecl{Name: t, Summary: "a tool"})
+			}
+			return out, nil
+		},
+		Serve: func(_ context.Context, _ *sdk.Host, c sdk.EntryCall) (domain.Payload, error) {
+			served = append(served, c)
+			return domain.Payload{Schema: "bridge.out.v1", Data: []byte(`{"ok":true}`)}, nil
+		},
+	})
+	if x := ext.Manifest.Provides.Extensions; len(x) != 1 || x[0].Type != "mcp" || !x[0].Operations {
+		t.Fatalf("manifest extensions = %+v", x)
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	config := json.RawMessage(`{"tools":["lookup"]}`)
+	var out protocol.ValidateResult
+	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExtension, Type: "mcp", Config: config}, &out); err != nil || len(out.Operations) != 1 || out.Operations[0].Name != "lookup" {
+		t.Fatalf("validate: %+v %v", out, err)
+	}
+	if err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExtension, Type: "mcp", Config: json.RawMessage(`[]`)}, &out); protocol.ErrorCode(err) != protocol.CodeInvalid {
+		t.Fatalf("a config it can't read declared operations: %v", err)
+	}
+	call := func(op, local string) error {
+		var res protocol.OperationResult
+		return host.Call(ctx, "operation.call", protocol.OperationParams{Operation: op, Authority: protocol.Authority{ScopeID: "s"},
+			Entry: &protocol.OperationEntry{Type: "mcp", Name: "crm", Operation: local, Config: config}}, &res)
+	}
+	if err := call("bridge.crm.lookup", "lookup"); err != nil || len(served) != 1 || served[0].Entry != "crm" || served[0].Operation.Name != "lookup" || served[0].Authority.ScopeID != "s" {
+		t.Fatalf("a declared entry operation: %v %+v", err, served)
+	}
+	for _, c := range [][2]string{{"bridge.crm.delete", "delete"}, {"bridge.other.lookup", "lookup"}} {
+		if err := call(c[0], c[1]); protocol.ErrorCode(err) != protocol.CodeUndeclared {
+			t.Fatalf("%s served: %v", c[0], err)
+		}
+	}
+	if len(served) != 1 {
+		t.Fatalf("an undeclared call reached Serve: %+v", served)
+	}
+}

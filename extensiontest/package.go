@@ -24,7 +24,7 @@ const (
 // so the test's author knows what to change.
 const docs = devscope.Docs
 
-// Option configures Daemon: Options, Package, Secret, Entry or
+// Option configures Daemon: Options, Package, Secret, Entry, Grant or
 // UseFakeClaude.
 type Option interface{ apply(*settings) }
 
@@ -33,6 +33,7 @@ type settings struct {
 	packages []string
 	secrets  []secret
 	entries  map[string]any
+	grants   []string
 	claude   bool
 }
 
@@ -87,6 +88,14 @@ func Entry(typ string, config any) Option {
 		}
 		s.entries[typ] = config
 	})
+}
+
+// Grant grants the generated binding, and the scope, operations beyond
+// those the manifests declare: the operations a generated entry's config
+// declares (<package>.<entry>.<name>, the entry named after its type), or
+// a toolset of them as @<name>.
+func Grant(operations ...string) Option {
+	return optionFunc(func(s *settings) { s.grants = append(s.grants, operations...) })
 }
 
 // UseFakeClaude runs the generated scope's agent as a FakeClaude on a
@@ -191,6 +200,7 @@ func (d *Instance) generate(set *settings, manifests []protocol.Manifest) {
 		}
 		o.Entries[typ] = b
 	}
+	o.Operations = set.grants
 	cfg, env, err := devscope.Generate(manifests, o)
 	if err != nil {
 		d.t.Fatalf("extensiontest: %v", err)

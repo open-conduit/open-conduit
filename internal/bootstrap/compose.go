@@ -69,7 +69,7 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 			case protocol.ValidateConnection:
 				reg.Connections[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 			case protocol.ValidateExtension:
-				reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings, Describe: c.Describe, Bindings: c.Bindings}
+				reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings, Describe: c.Describe, Bindings: c.Bindings, Operations: c.Operations, Owner: x.Name()}
 			case protocol.ValidateRoute:
 				reg.HandlerConfig[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 				if c.Binding != nil {
@@ -331,17 +331,23 @@ func (d *daemon) waitTarget(kind string) func(context.Context, domain.ID, string
 	}
 }
 
-// registerPackageTools registers each package's toolbelt registration; one
-// with neither operations, event families nor a gate adds nothing and is
-// skipped, as is an entry-gated one (provides.entry_gated) no enabled scope
-// of the generation has an entry for.
+// registerPackageTools registers each package's toolbelt registration,
+// with the operations the generation's entries of its types declare
+// (config.Snapshot.EntryOperations); one with neither operations, event
+// families nor a gate adds nothing and is skipped, as is an entry-gated
+// one (provides.entry_gated) no enabled scope of the generation has an
+// entry for.
 func (d *daemon) registerPackageTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
 	for _, x := range d.packages {
 		if x.entryGated() && !hasEntry(s, x) {
 			continue
 		}
 		reg := x.Registration()
-		if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil && reg.StartGate == nil {
+		if ops := s.EntryOperations[x.Name()]; len(ops) > 0 {
+			reg.EntryOperations = ops
+			reg.EntryHandler = x.r.EntryHandler(entryIn(s, x))
+		}
+		if len(reg.Operations) == 0 && len(reg.EntryOperations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil && reg.StartGate == nil {
 			continue
 		}
 		if err := belt.Register(reg); err != nil {
@@ -349,6 +355,23 @@ func (d *daemon) registerPackageTools(belt *runtime.Toolbelt, s *config.Snapshot
 		}
 	}
 	return nil
+}
+
+// entryIn finds, in a scope of the generation, the entry of one of the
+// package's operation-declaring types by its name: its type and config.
+func entryIn(s *config.Snapshot, x *installed) func(scope domain.ID, name string) (string, json.RawMessage, bool) {
+	return func(scope domain.ID, name string) (string, json.RawMessage, bool) {
+		sc := s.Scopes[scope]
+		if sc == nil || !sc.Enabled {
+			return "", nil, false
+		}
+		for _, e := range sc.Extensions {
+			if e.Name == name && slices.ContainsFunc(x.m.Provides.Extensions, func(d protocol.ExtensionDecl) bool { return d.Type == e.Type && d.Operations }) {
+				return e.Type, e.Config, true
+			}
+		}
+		return "", nil, false
+	}
 }
 
 // hasEntry reports whether an enabled scope of the generation has an entry
