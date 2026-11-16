@@ -108,6 +108,10 @@ type runView struct {
 	rec      progressRecord
 	work     domain.Work
 	children []domain.Work
+	// askers are each child's subtree (child_requests), and requests what
+	// they hold now, read by syncRun.
+	askers   map[domain.ID][]asker
+	requests map[domain.ID][]childRequest
 	// latest is the person's message Event the Work's latest run began with
 	// (nil when none).
 	latest *domain.AcceptedEvent
@@ -188,6 +192,9 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 					v.rec.Ended = true
 				}
 				v.children = runChildren(kids, r, v.rec.Ended, latest)
+				if v.askers, err = p.askersOf(tx, v.children, children); err != nil {
+					return err
+				}
 				out = append(out, v)
 			}
 			if latest == nil || w.State.Terminal() {
@@ -199,11 +206,31 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 			var pl MessagePayload
 			_ = json.Unmarshal(latest.Event.Data.Data, &pl)
 			rec := progressRecord{Work: w.ID, Run: latest.Event.ID, Seq: latest.Sequence, At: latest.Event.ReceivedAt, Channel: channel, Thread: thread, Message: pl.TS, Binding: binding}
-			out = append(out, runView{rec: rec, work: w, latest: latest, children: runChildren(kids, rec, false, latest)})
+			v := runView{rec: rec, work: w, latest: latest, children: runChildren(kids, rec, false, latest)}
+			if v.askers, err = p.askersOf(tx, v.children, children); err != nil {
+				return err
+			}
+			out = append(out, v)
 		}
 		return nil
 	})
 	return out, err
+}
+
+// askersOf are each of kids' subtrees, when the entry shows child requests.
+func (p *Projector) askersOf(tx storage.Tx, kids []domain.Work, children map[domain.ID][]domain.Work) (map[domain.ID][]asker, error) {
+	if !p.o.Settings.ChildRequests || p.o.Requests == nil {
+		return nil, nil
+	}
+	out := map[domain.ID][]asker{}
+	for _, k := range kids {
+		as, err := p.subtree(tx, k, children)
+		if err != nil {
+			return nil, err
+		}
+		out[k.ID] = as
+	}
+	return out, nil
 }
 
 // runChildren are the child Work the run made: made once its message was
@@ -288,6 +315,10 @@ func (v runView) plan(waits []domain.Wait) runPlan {
 			title = "Hand-off: " + k.Kind
 		}
 		tasks = append(tasks, planTask("c"+digest(string(k.ID))[:16], title, status))
+		// Below the child, the requests it and its own children hold.
+		for _, r := range v.requests[k.ID] {
+			tasks = append(tasks, r.task())
+		}
 	}
 	openSteps := 0
 	for _, s := range v.rec.Steps {
@@ -496,6 +527,12 @@ func (p *Projector) syncRun(ctx context.Context, v *runView) (int, error) {
 		return 0, err
 	}
 	p.steps(ctx, v, waits)
+	if len(v.askers) > 0 {
+		v.requests = map[domain.ID][]childRequest{}
+		for id, as := range v.askers {
+			v.requests[id] = p.requestsOf(ctx, as)
+		}
+	}
 	pl := v.plan(waits)
 	rec := &v.rec
 	if !rec.Shown && !pl.live {

@@ -33,3 +33,12 @@ func TestProgressConfig(t *testing.T) {
 		t.Fatal("progress on without the setting")
 	}
 }
+
+func TestChildRequestsConfig(t *testing.T) {
+	if s := settings(t, `,"child_requests":true`); !s.ChildRequests {
+		t.Fatal("child_requests not read")
+	}
+	if s := settings(t, ""); s.ChildRequests {
+		t.Fatal("child_requests on by default")
+	}
+}

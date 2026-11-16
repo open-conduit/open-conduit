@@ -225,6 +225,8 @@ Without it, the thread is quiet between the agent's replies, while it hands work
 
 Each message a person writes then gets an `eyes` reaction and, in the thread, a plan of what the run is doing: a task per child Work and per approval or wait, ticked off as each finishes. When the run hands back, the plan shows its last state and the reaction becomes a check mark (`x` if it failed). The people in `stop` see a **Stop** button on it that cancels the conversation; leave `stop` out for no button. The daemon keeps the message up to date from the run's own state, so the agent doesn't call anything and a run parked for hours still shows where it is. The app needs no new scope. See [progress messages](../../architecture/slack-extension/#progress-messages).
 
+To see the approvals and questions of the Work the conversation hands tasks to, add `"child_requests": true` too. Each one shows below its hand-off in the plan, naming who asks and who can answer, and is ticked off, or marked as an error if it is refused or times out. When a Slack person can answer one, it is also posted in the thread with its buttons. See [child requests](../../architecture/slack-extension/#child-requests).
+
 ## Collect feedback on replies
 
 To let people rate the agent's answers, turn on feedback buttons in the entry:

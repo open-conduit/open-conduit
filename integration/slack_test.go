@@ -58,6 +58,9 @@ type slEnv struct {
 	// and button presses); nil offers and takes nothing.
 	actions sl.ActionsFunc
 	act     sl.ActFunc
+	// requests stands in for the host's Requests (child_requests); nil
+	// reports none.
+	requests sl.RequestsFunc
 	// cancel stands in for the host's CancelWork (a progress message's
 	// Stop button); nil takes no press.
 	cancel   sl.CancelFunc
@@ -156,6 +159,12 @@ func (e *slEnv) open() {
 				return nil, nil
 			}
 			return e.actions(ctx, scope, work)
+		},
+		Requests: func(ctx context.Context, scope, work domain.ID) ([]extension.RequestOffer, error) {
+			if e.requests == nil {
+				return nil, nil
+			}
+			return e.requests(ctx, scope, work)
 		},
 		Act: func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error) {
 			if e.act == nil {

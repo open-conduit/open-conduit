@@ -259,7 +259,7 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 		settings.Projection.DryRun = true
 	}
 	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now,
-		Actions: x.h.Actions, Act: x.h.Act, Accept: x.accept, Cancel: x.h.CancelWork})
+		Actions: x.h.Actions, Act: x.h.Act, Requests: x.h.Requests, Accept: x.accept, Cancel: x.h.CancelWork})
 	if err != nil {
 		return err
 	}
