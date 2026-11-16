@@ -48,6 +48,7 @@ Each page separates three kinds of material:
 - [Claude Code executor and private continuity](claude-code-executor/)
 - [Codex executor](codex-executor/)
 - [Chat Completions executor: toolbelt-only turns on any OpenAI-compatible endpoint](chat-completions-executor/)
+- [MCP bridge: operator-named MCP servers as toolbelt operations](mcp-bridge/)
 - [Engineering tools, waits and playbooks](engineering-tools/)
 - [Slack ingress, conversations and marked replies](slack-extension/)
 - [Scheduled jobs](schedule-extension/)

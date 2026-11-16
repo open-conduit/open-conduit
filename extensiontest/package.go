@@ -24,8 +24,8 @@ const (
 // so the test's author knows what to change.
 const docs = devscope.Docs
 
-// Option configures Daemon: Options, Package, Secret, Entry, Grant or
-// UseFakeClaude.
+// Option configures Daemon: Options, Package, Secret, Entry, EntrySandbox,
+// Grant or UseFakeClaude.
 type Option interface{ apply(*settings) }
 
 type settings struct {
@@ -33,6 +33,7 @@ type settings struct {
 	packages []string
 	secrets  []secret
 	entries  map[string]any
+	sandbox  map[string]any
 	grants   []string
 	claude   bool
 }
@@ -87,6 +88,19 @@ func Entry(typ string, config any) Option {
 			s.entries = map[string]any{}
 		}
 		s.entries[typ] = config
+	})
+}
+
+// EntrySandbox gives the generated entry for an extension type the
+// package declares a sandbox: the provider (a sandbox type an installed
+// package declares) and its config, for an entry type that declares one
+// (provides.extensions[].sandbox).
+func EntrySandbox(typ, provider string, config any) Option {
+	return optionFunc(func(s *settings) {
+		if s.sandbox == nil {
+			s.sandbox = map[string]any{}
+		}
+		s.sandbox[typ] = map[string]any{"provider": provider, "config": config}
 	})
 }
 
@@ -199,6 +213,16 @@ func (d *Instance) generate(set *settings, manifests []protocol.Manifest) {
 			o.Entries = map[string]json.RawMessage{}
 		}
 		o.Entries[typ] = b
+	}
+	for typ, sb := range set.sandbox {
+		b, err := json.Marshal(sb)
+		if err != nil {
+			d.t.Fatalf("extensiontest: EntrySandbox(%q): %v", typ, err)
+		}
+		if o.Sandboxes == nil {
+			o.Sandboxes = map[string]json.RawMessage{}
+		}
+		o.Sandboxes[typ] = b
 	}
 	o.Operations = set.grants
 	cfg, env, err := devscope.Generate(manifests, o)
