@@ -139,3 +139,46 @@ func TestActPinsTheCallerToTheExtension(t *testing.T) {
 		t.Fatalf("offers on unknown Work: %v", err)
 	}
 }
+
+// requestingProvider reports one request on whatever it is asked about.
+type requestingProvider struct{ recordingProvider }
+
+func (requestingProvider) Requests(_ context.Context, t extension.ActionTarget) ([]extension.Request, error) {
+	return []extension.Request{{ID: "r/" + string(t.Work.ID), Label: "Approve or refuse deploy", Action: "answer", Responders: []string{"slack:U1"}, State: extension.RequestOpen}}, nil
+}
+
+// Host.Requests lists what the request providers report on Work, by
+// provider name; a provider that reports none is skipped, and it needs Work.
+func TestRequestsListsEachProvidersRequests(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := func() time.Time { return time.Unix(1700000000, 0) }
+	if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "eng", Name: "eng"}, 0); err != nil {
+			return err
+		}
+		return tx.PutWork(domain.Work{ID: "w1", ScopeID: "eng", Kind: "fixture.work", State: domain.WorkReady}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []extension.ActionCall
+	providers := map[string]extension.ActionProvider{
+		"tracker":   recordingProvider{action: "claim", calls: &calls},
+		"decisions": requestingProvider{recordingProvider{action: "answer", calls: &calls}},
+	}
+	h := actHost{store: store, now: now, providers: func(context.Context, domain.ID) map[string]extension.ActionProvider { return providers }}
+	rs, err := h.requests(ctx, "eng", "w1")
+	if err != nil || len(rs) != 1 || rs[0].Provider != "decisions" || rs[0].ID != "r/w1" || rs[0].Responders[0] != "slack:U1" {
+		t.Fatalf("requests: %+v %v", rs, err)
+	}
+	if _, err = h.requests(ctx, "eng", ""); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("requests without Work: %v", err)
+	}
+	if _, err = h.requests(ctx, "eng", "elsewhere"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("requests on unknown Work: %v", err)
+	}
+}

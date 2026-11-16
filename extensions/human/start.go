@@ -67,7 +67,7 @@ func (t *Tools) StartGate(ctx context.Context, c extension.StartCall) (*extensio
 		if err = putAsk(tx, rec); err != nil {
 			return err
 		}
-		if err = tx.Put(Namespace, "work/"+string(c.Work.ID), []byte(rec.ID)); err != nil {
+		if err = markLatest(tx, c.Work.ID, rec.ID); err != nil {
 			return err
 		}
 		return tx.Put(Namespace, pointer, []byte(rec.ID))

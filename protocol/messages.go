@@ -590,6 +590,25 @@ type ActionOffer struct {
 	Awaited  bool     `json:"awaited,omitempty"`
 }
 
+// RequestListParams list the requests every provider reports on Work in a
+// scope (extension.RequestOffer), for the extension to show on its own
+// surface.
+type RequestListParams struct {
+	ScopeID string `json:"scope_id"`
+	WorkID  string `json:"work_id"`
+}
+
+// RequestOffer is one listed request and the provider reporting it.
+type RequestOffer struct {
+	Provider string `json:"provider"`
+	Request
+}
+
+// RequestListResult is what request.list answers.
+type RequestListResult struct {
+	Requests []RequestOffer `json:"requests"`
+}
+
 // ActionListResult is what action.list answers.
 type ActionListResult struct {
 	Actions []ActionOffer `json:"actions"`

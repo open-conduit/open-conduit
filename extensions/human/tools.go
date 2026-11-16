@@ -199,7 +199,7 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 		if err = putAsk(tx, rec); err != nil {
 			return err
 		}
-		return tx.Put(Namespace, "work/"+string(a.WorkID), []byte(id))
+		return markLatest(tx, a.WorkID, id)
 	})
 	if err != nil {
 		return extension.WaitPlan{}, err

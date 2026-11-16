@@ -72,6 +72,26 @@ func (s *Service) actionList(ctx context.Context, p protocol.ActionListParams) (
 	return out, nil
 }
 
+// requestList lists the requests every provider reports on Work in a scope
+// the extension is configured for.
+func (s *Service) requestList(ctx context.Context, p protocol.RequestListParams) (protocol.RequestListResult, error) {
+	if s.deps.Requests == nil {
+		return protocol.RequestListResult{}, protocol.Errorf(protocol.CodeUnsupported, "request.list")
+	}
+	if !s.allowedScopes()[domain.ID(p.ScopeID)] {
+		return protocol.RequestListResult{}, unauthorized("scope is not configured for this extension")
+	}
+	offers, err := s.deps.Requests(ctx, s.name, domain.ID(p.ScopeID), domain.ID(p.WorkID))
+	if err != nil {
+		return protocol.RequestListResult{}, err
+	}
+	out := protocol.RequestListResult{Requests: []protocol.RequestOffer{}}
+	for _, o := range offers {
+		out.Requests = append(out.Requests, protocol.RequestOffer{Provider: o.Provider, Request: protocol.FromRequest(o.Request)})
+	}
+	return out, nil
+}
+
 // actionSubmit invokes an action for a person the extension identified on
 // its own surface, in a scope it is configured for, as a caller of its own
 // kind.

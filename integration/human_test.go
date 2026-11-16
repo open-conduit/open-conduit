@@ -692,6 +692,74 @@ func TestHumanGateRefusalAndTimeout(t *testing.T) {
 	}
 }
 
+// A gate's requests say who may answer each and how it ended (issue #681):
+// open while held, refused when refused, expired when nobody answered in
+// time, and answered once approved. Each new hold is a new request, and the
+// earlier ones are still reported.
+func TestHumanGateRequestsSayHowEachEnded(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	ctx := context.Background()
+	states := func() []extension.Request {
+		t.Helper()
+		rs, err := h.actions.Requests(ctx, h.target(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rs
+	}
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	rs := states()
+	if len(rs) != 1 || rs[0].State != extension.RequestOpen || rs[0].Action != hu.ActionAnswer || !strings.Contains(rs[0].Label, "fixture.deploy") || len(rs[0].Responders) == 0 {
+		t.Fatalf("held: %+v", rs)
+	}
+	if _, err = h.answer(t, extension.LocalOperator, "refuse", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalRefused)
+	if rs = states(); len(rs) != 1 || rs[0].State != extension.RequestRefused || rs[0].By != "operator:local" {
+		t.Fatalf("refused: %+v", rs)
+	}
+
+	out, err = h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	h.f.Clock.Advance(3 * time.Hour)
+	if rs = states(); len(rs) != 2 || rs[0].State != extension.RequestRefused || rs[1].State != extension.RequestExpired || rs[1].ID == rs[0].ID {
+		t.Fatalf("timed out: %+v", rs)
+	}
+	if err = h.scheduler.Wake(ctx, out.Wait.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalTimedOut)
+
+	out, err = h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = hu.Sync(ctx, h.f.Store, h.f.Clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if rs = states(); len(rs) != 3 || rs[1].State != extension.RequestExpired || rs[2].State != extension.RequestAnswered || rs[2].By != "operator:local" {
+		t.Fatalf("approved: %+v", rs)
+	}
+}
+
 // A gate with for_bindings holds a call only from a run on one of its
 // bindings, read from the stored Execution (the harness runs on "fixture"):
 // a gate for another binding lets the call through, and its responders

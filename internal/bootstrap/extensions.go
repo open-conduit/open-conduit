@@ -659,6 +659,9 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		Actions: func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.ActionOffer, error) {
 			return d.listActions(owner)(ctx, scope, work)
 		},
+		Requests: func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.RequestOffer, error) {
+			return d.listRequests(owner)(ctx, scope, work)
+		},
 		Probes: d.setupProbes,
 		Config: d.configHost(),
 		SettleHold: func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error) {

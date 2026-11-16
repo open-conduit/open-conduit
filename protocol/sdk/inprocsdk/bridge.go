@@ -405,6 +405,21 @@ func (b *Bridge) wire() {
 			}
 			return out, nil
 		}
+		e.Requests = func(ctx context.Context, _ *sdk.Host, t extension.ActionTarget) ([]extension.Request, error) {
+			var out []extension.Request
+			for _, p := range providers(a, t.Scope.ID) {
+				rp, ok := p.(extension.RequestProvider)
+				if !ok {
+					continue
+				}
+				requests, err := rp.Requests(ctx, t)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, requests...)
+			}
+			return out, nil
+		}
 		// work.act names no provider: the call goes to the one offering
 		// the action now, else to the scope's only provider, whose own
 		// refusal (an answer to a closed question, say) says why, as the
@@ -682,6 +697,7 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 		SettleHold: h.SettleHold,
 		Act:        h.Act,
 		Actions:    h.Actions,
+		Requests:   h.Requests,
 		Capture: func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
 			return h.Capture(ctx, domain.ID(scope), name, at, props)
 		},

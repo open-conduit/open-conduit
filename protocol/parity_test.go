@@ -85,6 +85,7 @@ var parity = map[string][]string{
 	"Host.Capture":           {"manifest:permissions", "method:telemetry.capture"},
 	"Host.Act":               {"manifest:permissions", "method:action.submit"},
 	"Host.Actions":           {"manifest:permissions", "method:action.list"},
+	"Host.Requests":          {"manifest:permissions", "method:request.list"},
 	"Host.Probes":            {"manifest:permissions", "method:probe.list", "method:probe.run"},
 	"Host.Config":            {"manifest:permissions", "method:config.base"},
 

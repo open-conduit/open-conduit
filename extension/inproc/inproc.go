@@ -255,6 +255,11 @@ type Host struct {
 	// on work in it (work non-empty), so the extension can show them on
 	// its own surface for Act to take.
 	Actions func(ctx context.Context, scope, work domain.ID) ([]extension.ActionOffer, error)
+	// Requests lists the requests every provider reports on work in a
+	// scope (extension.RequestProvider): open and settled, with who may
+	// answer each, for the extension to show their state on its own
+	// surface.
+	Requests func(ctx context.Context, scope, work domain.ID) ([]extension.RequestOffer, error)
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error

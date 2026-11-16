@@ -163,7 +163,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 		if err = putAsk(tx, rec); err != nil {
 			return err
 		}
-		if err = tx.Put(Namespace, "work/"+string(a.WorkID), []byte(rec.ID)); err != nil {
+		if err = markLatest(tx, a.WorkID, rec.ID); err != nil {
 			return err
 		}
 		return tx.Put(Namespace, pointer, []byte(rec.ID))

@@ -67,6 +67,9 @@ func (desk) Actions(context.Context, extension.ActionTarget) ([]extension.Action
 func (desk) Invoke(context.Context, extension.ActionCall) (extension.ActionPlan, error) {
 	return extension.ActionPlan{}, nil
 }
+func (desk) Requests(context.Context, extension.ActionTarget) ([]extension.Request, error) {
+	return []extension.Request{{ID: "r1", Label: "Approve", Action: "approve", Responders: []string{"slack"}, State: extension.RequestRefused, By: "slack:U1"}}, nil
+}
 func (desk) Panels(context.Context, extension.ActionTarget) ([]extension.Panel, error) {
 	return []extension.Panel{{ID: "queue", Title: "Queue", Sections: []extension.PanelSection{{Text: "one waiting", Actions: []string{"approve"}}}}}, nil
 }
@@ -100,6 +103,10 @@ func TestBridgeCarriesGatesPanelsAndTelemetry(t *testing.T) {
 	var view protocol.ViewRenderResult
 	if err := h.Call(ctx, "view.render", protocol.ViewRenderParams{Target: protocol.FromActionTarget(extension.ActionTarget{Scope: domain.Scope{ID: "eng"}})}, &view); err != nil || len(view.Panels) != 1 || view.Panels[0].ID != "queue" {
 		t.Fatalf("view.render: %+v %v", view, err)
+	}
+	var reqs protocol.WorkRequestsResult
+	if err := h.Call(ctx, "work.requests", protocol.WorkRequestsParams{Target: protocol.FromActionTarget(extension.ActionTarget{Scope: domain.Scope{ID: "eng"}})}, &reqs); err != nil || len(reqs.Requests) != 1 || reqs.Requests[0].Extension().State != extension.RequestRefused || reqs.Requests[0].By != "slack:U1" || reqs.Requests[0].Responders[0] != "slack" {
+		t.Fatalf("work.requests: %+v %v", reqs, err)
 	}
 	if err := h.Call(ctx, "telemetry.sink", protocol.TelemetryEvent{ScopeID: "eng", Name: "run_finished", At: time.Now()}, nil); err != nil {
 		t.Fatal(err)

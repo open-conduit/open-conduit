@@ -26,7 +26,9 @@ const (
 )
 
 // Namespace is the coordination KV namespace of ask records: "ask/<id>"
-// holds an Ask, "work/<work id>" the ID of that Work's latest ask.
+// holds an Ask, "work/<work id>" the ID of that Work's latest ask, and
+// "asks/<work id>/<id>" marks each of its asks (since issue #681; earlier
+// ones are known by the latest alone).
 const Namespace = "human.asks"
 
 // Ask states.
@@ -303,4 +305,51 @@ func numbered(options []string) string {
 		parts[i] = strconv.Itoa(i+1) + ". " + o
 	}
 	return strings.Join(parts, ", ")
+}
+
+// markLatest records id as work's latest ask, and as one of its asks.
+func markLatest(tx storage.Tx, work domain.ID, id string) error {
+	if err := tx.Put(Namespace, "work/"+string(work), []byte(id)); err != nil {
+		return err
+	}
+	return tx.Put(Namespace, "asks/"+string(work)+"/"+id, []byte(id))
+}
+
+// workAsks are every ask work made that the store still marks, and its
+// latest, in the order they were asked.
+func workAsks(tx storage.Tx, work domain.ID) ([]Ask, error) {
+	seen := map[string]bool{}
+	var out []Ask
+	add := func(id string) error {
+		if id == "" || seen[id] {
+			return nil
+		}
+		seen[id] = true
+		a, err := getAsk(tx, id)
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil
+		}
+		if err == nil && a.Work == work {
+			out = append(out, a)
+		}
+		return err
+	}
+	rows, err := tx.List(Namespace, "asks/"+string(work)+"/")
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if err := add(string(row.Value)); err != nil {
+			return nil, err
+		}
+	}
+	if latest, err := tx.Get(Namespace, "work/"+string(work)); err == nil {
+		if err := add(string(latest)); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return nil, err
+	}
+	slices.SortStableFunc(out, func(a, b Ask) int { return a.AskedAt.Compare(b.AskedAt) })
+	return out, nil
 }

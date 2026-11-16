@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,8 +28,9 @@ type Actions struct {
 }
 
 var (
-	_ extension.ActionProvider = Actions{}
-	_ extension.PanelProvider  = Actions{}
+	_ extension.ActionProvider  = Actions{}
+	_ extension.PanelProvider   = Actions{}
+	_ extension.RequestProvider = Actions{}
 )
 
 // Panels shows the target Work's open question.
@@ -88,15 +90,59 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if len(prompt) > 200 {
 		prompt = "an option's number or text"
 	}
-	label := "Answer the agent's question"
+	now := a.now()
+	return []extension.Action{{ID: ActionAnswer, Label: label(rec, now), Prompt: prompt, Choices: rec.Options, Detail: detail(rec, now), Awaited: true}}, nil
+}
+
+// label is what an ask's action and request read as.
+func label(rec Ask, now time.Time) string {
+	l := "Answer the agent's question"
 	if rec.Gate != "" {
-		label = "Approve or refuse " + rec.Gate
+		l = "Approve or refuse " + rec.Gate
+	}
+	if rec.State == StateOpen && rec.escalated(now) {
+		l += " (escalated)"
+	}
+	return l
+}
+
+// Requests are the target Work's asks of this entry: each with who may
+// answer it, and once settled whether it was answered, refused (an
+// approval answered with anything but approve), expired or withdrawn.
+func (a Actions) Requests(ctx context.Context, t extension.ActionTarget) ([]extension.Request, error) {
+	if t.Work == nil || a.Store == nil {
+		return nil, nil
 	}
 	now := a.now()
-	if rec.escalated(now) {
-		label += " (escalated)"
+	var asks []Ask
+	err := a.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		var err error
+		asks, err = workAsks(tx, t.Work.ID)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec, now), Awaited: true}}, nil
+	var out []extension.Request
+	for _, rec := range asks {
+		if rec.Provider != a.Entry.Name || rec.Scope != t.Scope.ID {
+			continue
+		}
+		r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Action: ActionAnswer, Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen}
+		switch {
+		case rec.State == StateAnswered && rec.Answer != nil:
+			r.State, r.By = extension.RequestAnswered, rec.Answer.Responder
+			if (rec.Gate != "" || rec.Start) && rec.Answer.Answer != OptionApprove {
+				r.State = extension.RequestRefused
+			}
+		case rec.State == StateExpired, rec.State == StateOpen && rec.expired(now):
+			r.State = extension.RequestExpired
+		case rec.State == StateWithdrawn:
+			r.State = extension.RequestWithdrawn
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // detail is what a person needs to decide an ask away from its panel: the
