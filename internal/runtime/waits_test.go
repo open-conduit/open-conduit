@@ -1380,3 +1380,75 @@ func TestProductionWaitContextFollowsTheRoutes(t *testing.T) {
 		t.Fatalf("woken with %v (trigger %s), want %v", got, resumed.Request.Trigger.ID, want)
 	}
 }
+
+// TestProductionWakeScanResumesWhereTheLastLeftOff: a Wait that stays
+// active is not rescanned from its boundary on every pass (#671). Each wake
+// scan that finds no winner records how far it got, across a restart, so
+// the next reads only what arrived since. What it passed still counts:
+// unrouted input it judged on the way becomes context when the Wait wakes,
+// and a match arriving later wins. The control is the scan's position,
+// which stays at zero if passes don't record it.
+func TestProductionWakeScanResumesWhereTheLastLeftOff(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	work, ref, key := waitForWork(t, f, "scan-cursor", true)
+	d := f.Driver.(*waitDriver)
+	if err := d.Wait(ref, domain.Wait{ID: "scan-cursor-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.ready"}}}, true); err != nil {
+		t.Fatal(err)
+	}
+	other := domain.CorrelationKey{Source: "fixture/account", ExternalID: "elsewhere"}
+	for i := range 5 {
+		requireAccept(t, f, fmt.Sprintf("unrelated-%d", i), &other)
+	}
+	ordinary := routingEvent(f, "unrouted-context", &key)
+	ordinary.Type = "fixture.context"
+	if err := d.Accept(ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Wake("scan-cursor-wait"); err != nil {
+		t.Fatal(err)
+	}
+	var head uint64
+	routingRead(t, f, func(tx storage.Tx) error {
+		a, err := tx.Event(ordinary.ID)
+		if err != nil {
+			return err
+		}
+		head = a.Sequence
+		scanned, err := runtime.WaitScanned(tx, "scan-cursor-wait")
+		if err != nil {
+			return err
+		}
+		if scanned != head {
+			return fmt.Errorf("wake scan stopped at %d, want %d: the next pass rescans from the boundary", scanned, head)
+		}
+		return nil
+	})
+	f.Driver = f.Restart()
+	d = f.Driver.(*waitDriver)
+	if err := d.Wake("scan-cursor-wait"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Scheduler.Start(ctx, work); err == nil {
+		t.Fatal("a pass over already-judged input woke the Wait")
+	}
+	winner := routingEvent(f, "scan-cursor-winner", &key)
+	winner.Type = "fixture.ready"
+	if err := d.Accept(winner); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Wake("scan-cursor-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.Scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []domain.ID
+	for _, event := range resumed.Request.Inputs {
+		ids = append(ids, event.ID)
+	}
+	if !reflect.DeepEqual(ids, []domain.ID{ordinary.ID, winner.ID}) || resumed.Request.Trigger.ID != winner.ID {
+		t.Fatalf("wake lost input the scan had passed: inputs%v trigger%s", ids, resumed.Request.Trigger.ID)
+	}
+}
