@@ -72,6 +72,9 @@ type configType struct {
 	// Operations, for an extension type that declares operations, are the
 	// ones an entry's config declares.
 	Operations func(config json.RawMessage) []extension.EntryOperationDecl
+	// Sandbox is the extension type's entry sandbox mode
+	// (protocol.ExtensionDecl.Sandbox).
+	Sandbox string
 }
 
 // ingressSource is an ingress source a package's configure result
@@ -140,7 +143,7 @@ func (x *installed) Types() []configType {
 	}
 	for _, e := range p.Extensions {
 		out = append(out, configType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
-			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe)), Bindings: x.bindings(e.Type), Operations: x.entryOperations(e)})
+			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe)), Bindings: x.bindings(e.Type), Operations: x.entryOperations(e), Sandbox: e.Sandbox})
 	}
 	for _, r := range p.Routes {
 		if r.Config || r.Binding {

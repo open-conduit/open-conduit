@@ -164,6 +164,7 @@ Each entry of a scope's `extensions`.
 | `config` | object |  |  | The entry's fields (open-conduit adapters TYPE). |
 | `connection` | string |  |  | Connection it reads and writes through. |
 | `name` | string | yes |  | Stable entry name. |
+| `sandbox` | object |  |  | Process sandbox provider and its config, for the processes the entry's package runs for it (a type that declares one). |
 | `secret_names` | array of string |  |  | Scope secrets it may resolve. |
 | `type` | string | yes |  | The registered extension type (open-conduit adapters). |
 

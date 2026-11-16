@@ -110,6 +110,11 @@ type ExtensionType struct {
 	// Owner is the registration name of the extension that owns the type,
 	// the root of its entry operations' names.
 	Owner string
+	// Sandbox says whether an entry of the type names a process sandbox
+	// for the processes its owner runs for it (protocol.ExtensionDecl.
+	// Sandbox): "required", "optional", or "" when it may not, since
+	// nothing would confine them.
+	Sandbox string
 }
 
 // Entry is one thing an extension entry sets up, named and described.
@@ -634,6 +639,9 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if x.Connection != "" && !slices.Contains(e.auth.Connections, x.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
 		}
+		if own && registered {
+			v.entrySandbox(p, x, t)
+		}
 		if registered && t.Bindings != nil {
 			var missing []string
 			for _, name := range t.Bindings(x.Config) {
@@ -861,6 +869,27 @@ func (v *validator) contained(p string, b Binding) {
 	}
 	if b.Sandbox == nil {
 		v.sandboxed(p, b)
+	}
+}
+
+// entrySandbox checks an extension entry's sandbox: only a type that
+// declares one may have it, one that requires it must, and its provider
+// must be registered and accept the policy.
+func (v *validator) entrySandbox(p string, x Extension, t ExtensionType) {
+	switch {
+	case x.Sandbox == nil && t.Sandbox == "required":
+		v.fail(p, "sandbox_required", "extension type "+x.Type+" runs processes for its entries that must be confined; add a sandbox with a registered provider")
+	case x.Sandbox != nil && t.Sandbox == "":
+		v.fail(p+"/sandbox", "unsupported_sandbox", "extension type "+x.Type+" runs nothing a sandbox would confine; remove sandbox")
+	case x.Sandbox != nil:
+		check, ok := v.reg.Sandboxes[x.Sandbox.Provider]
+		if !ok {
+			v.fail(p+"/sandbox/provider", "unknown_registration", "sandbox provider is not registered; use a registered provider"+registeredNames(v.reg.Sandboxes, x.Sandbox.Provider))
+		} else if check != nil {
+			if err := check(x.Sandbox.Config); err != nil {
+				v.fail(p+"/sandbox/config", "invalid_config", err.Error())
+			}
+		}
 	}
 }
 

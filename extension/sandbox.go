@@ -139,6 +139,18 @@ type SandboxBroker interface {
 	Adopt(ctx context.Context, parent int) error
 }
 
+// EntrySandbox is what the host offers an extension whose entry type
+// declares a sandbox (protocol.ExtensionDecl.Sandbox): it plans a launch of
+// one of the extension's own processes for its entry named entry in scope,
+// with the provider and policy the entry's sandbox names, never the
+// extension's, and the host's protected set denied whatever the policy
+// grants. The host makes a fresh directory for the process, its working
+// and run directory both, and returns it with the plan; the launch's own
+// Dir and RunDir are ignored. An entry without a sandbox, or one of a type
+// that doesn't declare one, is ErrSandboxUnavailable, and any error means
+// nothing may run.
+type EntrySandbox func(ctx context.Context, scope domain.ID, entry string, needs SandboxNeeds, launch SandboxLaunch) (plan SandboxPlan, dir string, err error)
+
 // WrapLaunch is the one call an executor makes where it builds the argv for
 // its wrapper. With no broker it returns the launch unchanged. Otherwise it
 // fails closed: any error means nothing may run.

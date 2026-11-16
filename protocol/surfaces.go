@@ -955,6 +955,27 @@ type LaunchParams struct {
 	Launch SandboxLaunch `json:"launch"`
 }
 
+// EntrySandboxParams asks the host to plan a launch of one of the
+// package's own processes for a config entry that names a sandbox
+// (ExtensionDecl.Sandbox): the entry's scope and name, the needs the
+// process has beyond the policy, and its argv and environment. The host
+// chooses the working and run directory (EntrySandboxResult.Dir); Dir and
+// RunDir in Launch are ignored.
+type EntrySandboxParams struct {
+	Scope  string        `json:"scope"`
+	Entry  string        `json:"entry"`
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// EntrySandboxResult is the planned launch and the directory, made by the
+// host and the process's own, it runs in: its working directory and run
+// directory both.
+type EntrySandboxResult struct {
+	Plan SandboxPlan `json:"plan"`
+	Dir  string      `json:"dir"`
+}
+
 // SandboxAdoptParams proves a recovered segment's wrapper, pid Parent,
 // still runs in its sandbox.
 type SandboxAdoptParams struct {

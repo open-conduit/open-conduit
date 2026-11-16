@@ -267,6 +267,21 @@ func (h *Host) Secrets(ctx context.Context, scope domain.ID, names ...string) (m
 	return out.Values, err
 }
 
+// EntrySandbox plans a launch of one of the extension's own processes for
+// its entry in scope, in the sandbox that entry names (an entry type
+// declared with a sandbox, protocol.ExtensionDecl.Sandbox): the host plans
+// it with the entry's provider and policy and makes the directory it runs
+// in, its working and run directory both. Run plan.Argv with plan.Env in
+// dir and nothing else; any error means nothing may run.
+func (h *Host) EntrySandbox(ctx context.Context, scope domain.ID, entry string, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (plan extension.SandboxPlan, dir string, err error) {
+	var out protocol.EntrySandboxResult
+	err = h.conn.Call(ctx, "sandbox.entry_plan", protocol.EntrySandboxParams{Scope: string(scope), Entry: entry, Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	if err != nil {
+		return extension.SandboxPlan{}, "", err
+	}
+	return out.Plan.Extension(), out.Dir, nil
+}
+
 // ConnectionSecrets resolves secret names of a connection one of the
 // extension's entries in scope names (07-03), or one of the scope's
 // bindings names when it is of one of the extension's connection types

@@ -721,6 +721,24 @@
               },
               "uniqueItems": true,
               "description": "Scope secrets it may resolve."
+            },
+            "sandbox": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                },
+                "config": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "provider",
+                "config"
+              ],
+              "additionalProperties": false,
+              "description": "Process sandbox provider and its config, for the processes the entry's package runs for it (a type that declares one)."
             }
           },
           "required": [

@@ -23,6 +23,7 @@ var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
 	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true,
+	"mcp": true,
 }
 
 // useCases is the 07-01 inventory: the shipped first-party extensions and
@@ -114,6 +115,7 @@ var useCases = map[string][]string{
 	"action.submit":               {"github"},
 	"probe.serve":                 {"github", "claude-code"},
 	"sandbox.plan":                {"shell", "claude-code"},
+	"sandbox.entry_plan":          {"mcp"},
 	"sandbox.adopt":               {"shell", "claude-code"},
 	"container.launch":            {"shell", "claude-code"},
 	"container.adopt":             {"shell", "claude-code"},
@@ -333,6 +335,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Routes[0].Samples = true
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
+	m.Provides.Extensions[0].Sandbox = protocol.EntrySandboxOptional
 	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true}}
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
 	m.Provides.Resources[0].Sweep = true
@@ -395,6 +398,7 @@ func TestManifestRejections(t *testing.T) {
 		"kinds without routes":       {`"routes": [{"handler": "chat", "config": true}],`, ``},
 		"duplicate permission":       {`"name": "chat"`, `"name": "chat", "permissions": ["probes", "probes"]`},
 		"setting type":               {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "object"}]}`},
+		"entry sandbox mode":         {`"ingress": true}`, `"ingress": true, "sandbox": "always"}`},
 		"setting default":            {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "boolean", "default": "yes"}]}`},
 		"duplicate setting":          {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "string"}, {"field": "team", "type": "string"}]}`},
 		"describe fields":            {`"ingress": true}`, `"ingress": true, "describe": {"list": "", "name": "name"}}`},

@@ -467,6 +467,11 @@ type EntryType struct {
 	Declared func(config json.RawMessage) ([]extension.EntryOperationDecl, error)
 	// Serve serves a call of one of them.
 	Serve func(ctx context.Context, h *Host, c EntryCall) (domain.Payload, error)
+	// Sandbox declares that an entry of the type names a sandbox for the
+	// processes the extension runs for it (protocol.EntrySandboxRequired
+	// or protocol.EntrySandboxOptional), which Host.EntrySandbox plans
+	// them in. Config check refuses a sandbox on a type without one.
+	Sandbox string
 }
 
 // EntryOperations declares an extension entry type whose config declares
@@ -484,10 +489,11 @@ func (e *Extension) EntryOperations(extType string, t EntryType) *Extension {
 	for i, x := range e.Manifest.Provides.Extensions {
 		if x.Type == extType {
 			e.Manifest.Provides.Extensions[i].Operations = true
+			e.Manifest.Provides.Extensions[i].Sandbox = t.Sandbox
 			return e
 		}
 	}
-	e.Manifest.Provides.Extensions = append(e.Manifest.Provides.Extensions, protocol.ExtensionDecl{Type: extType, Operations: true})
+	e.Manifest.Provides.Extensions = append(e.Manifest.Provides.Extensions, protocol.ExtensionDecl{Type: extType, Operations: true, Sandbox: t.Sandbox})
 	return e
 }
 
