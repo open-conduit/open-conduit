@@ -267,9 +267,10 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 	return extension.StopContainer(ctx, d.containers.providers[pin.Provider], pin, d.containerRecords(state.ExecutionID), containerStopGrace)
 }
 
-// reconcileContainers removes this host's containers whose execution is
-// terminal or gone, with what each provider made for them, and the homes
-// of finished Work, at most once per resource interval.
+// reconcileContainers removes this host's containers whose execution runs
+// no segment (parked, terminal or gone), with what each provider made for
+// them, and the homes of finished Work, at most once per resource
+// interval.
 func (d *daemon) reconcileContainers(ctx context.Context) {
 	if len(d.containers.providers) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
@@ -294,8 +295,8 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	sort.Strings(names)
 	var errs []error
 	for _, name := range names {
-		removed, err := extension.ReconcileContainers(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]bool, error) {
-			live := map[domain.ID]bool{}
+		removed, err := extension.ReconcileContainersKeeping(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+			keep := map[domain.ID]extension.ContainerKeep{}
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				for _, id := range ids {
 					x, err := tx.Execution(id)
@@ -305,14 +306,14 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 					if err != nil {
 						return err
 					}
-					live[id] = !x.State.Terminal()
+					keep[id] = containersKept(x.State)
 				}
 				return nil
 			})
-			return live, err
+			return keep, err
 		})
 		if removed > 0 {
-			d.log.Info("removed what ended runs left in containers", "provider", name, "removed", removed)
+			d.log.Info("removed what ended or parked runs left in containers", "provider", name, "removed", removed)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
@@ -324,6 +325,25 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 		return
 	}
 	d.clear("containers", "")
+}
+
+// containersKept is how much of an execution's containers reconcile
+// keeps. A pending or running execution keeps them all. A parked
+// execution's segment is over and its result recorded, and its wake
+// launches a new container; what it has is a stopped one and what the
+// provider made beside it, which can hold resources with a small fixed
+// limit (Docker's networks), so reconcile removes them as it does a
+// finished execution's (#669). It keeps a parked execution's attach,
+// which an operator may be launching (nothing of it runs until their CLI
+// starts it); their detach or the wake's launch removes it.
+func containersKept(state domain.ExecutionState) extension.ContainerKeep {
+	switch state {
+	case domain.ExecutionPending, domain.ExecutionRunning:
+		return extension.ContainerKeepAll
+	case domain.ExecutionParked:
+		return extension.ContainerKeepAttach
+	}
+	return extension.ContainerKeepNone
 }
 
 // segmentEnded tells every extension that issued something for an

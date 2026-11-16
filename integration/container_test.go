@@ -357,13 +357,13 @@ func (l *dockerLab) networkOf(t *testing.T, ref string) {
 	l.gateway, _ = l.docker("network", "inspect", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}", network)
 }
 
-// egress makes an execution's egress network before its launch, as the
+// egress makes a launch's egress network before it, as the
 // provider would but on a subnet that isn't private (198.18.0.0/15, set
 // aside for testing), so stand-in hosts on it pass the gateway's check of
 // where an allowed name resolves. The provider uses it as it finds it.
 func (l *dockerLab) egress(t *testing.T, id domain.ID, subnet int) string {
 	t.Helper()
-	name := docker.ExecutionNetwork(l.host, string(id)) + "-egress"
+	name := docker.LaunchNetwork(l.host, string(id), strconv.Itoa(max(l.segment, 1))) + "-egress"
 	if out, err := l.docker("network", "create", "--driver", "bridge", "--ipv6=false", "--subnet", fmt.Sprintf("198.18.%d.0/24", subnet),
 		"--label", extension.ContainerLabelHost+"="+l.host, "--label", extension.ContainerLabelExecution+"="+string(id), name); err != nil {
 		t.Fatalf("egress network: %v %s", err, out)
@@ -857,8 +857,8 @@ func TestDockerRemoveAndReconcile(t *testing.T) {
 // volume and networks, with no container or gateway, as a daemon stopped
 // before the gateway started leaves them) is gone once
 // reconcile runs and the execution is over; a live execution keeps its
-// networks, and its next segment's launch removes the orphaned gateway of
-// the last. A network or volume with another host's label, or no label,
+// launch's networks, and its next segment's launch removes the orphaned
+// gateway of the last, with its networks. A network or volume with another host's label, or no label,
 // is never touched, even one named as the provider names its own (#637).
 func TestDockerReconcileLeftovers(t *testing.T) {
 	ctx := context.Background()
@@ -901,7 +901,8 @@ func TestDockerReconcileLeftovers(t *testing.T) {
 	// While something still uses the finished execution's network and
 	// volume (an operator's attach beside it), reconcile leaves them and
 	// doesn't fail; the next pass, once it has gone, removes them.
-	cutNetwork, cutVolume := docker.ExecutionNetwork(l.host, "lo-cut"), docker.ExecutionNetwork(l.host, "lo-cut")+"-1-tb"
+	cutNetwork := docker.LaunchNetwork(l.host, "lo-cut", "1")
+	cutVolume := cutNetwork + "-tb"
 	if out, err := l.docker("run", "-d", "--name", cutNetwork+"-user", "--network", cutNetwork, "--mount", "type=volume,source="+cutVolume+",target=/v", dockerTestImage, "sleep", "60"); err != nil {
 		t.Fatalf("a container on the network: %v %s", err, out)
 	}
@@ -925,7 +926,8 @@ func TestDockerReconcileLeftovers(t *testing.T) {
 			t.Errorf("reconcile left the cut-short execution's %s: %s", list[0], out)
 		}
 	}
-	for _, n := range []string{foreign, unlabelled, docker.ExecutionNetwork(l.host, "lo-live")} {
+	liveNetwork := docker.LaunchNetwork(l.host, "lo-live", "1")
+	for _, n := range []string{foreign, unlabelled, liveNetwork} {
 		if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+n+"$"); out == "" {
 			t.Errorf("reconcile removed the network %s", n)
 		}
@@ -949,6 +951,15 @@ func TestDockerReconcileLeftovers(t *testing.T) {
 	}
 	if out, _ := l.docker("ps", "-aq", "--filter", "name="+gateway("lo-live", "2")); out == "" {
 		t.Error("the next segment's launch has no gateway")
+	}
+	// It removes the orphaned launch's networks too, and makes its own.
+	for _, n := range []string{liveNetwork, liveNetwork + "-egress"} {
+		if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+n+"$"); out != "" {
+			t.Errorf("the next segment's launch left the orphaned launch's network %s", n)
+		}
+	}
+	if out, _ := l.docker("network", "ls", "-q", "--filter", "name=^"+docker.LaunchNetwork(l.host, "lo-live", "2")+"$"); out == "" {
+		t.Error("the next segment's launch has no network of its own")
 	}
 }
 

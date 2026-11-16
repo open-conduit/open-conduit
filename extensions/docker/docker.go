@@ -1,6 +1,6 @@
 // Package docker is the container provider for Docker (Engine 28 or later,
 // on Linux or through OrbStack or Docker Desktop on macOS). It creates each
-// launch's container on a per-execution internal network, hardened and
+// launch's container on an internal network of its own, hardened and
 // with the granted host paths mounted at the same paths, beside a gateway
 // container that is its only way out: an allowlisting proxy for the
 // grant's network.allow and a forward to the execution's toolbelt. It
@@ -559,23 +559,42 @@ while :; do g=; wait "$c"; s=$?; if [ -z "$g" ]; then if [ "$s" = 127 ] && [ -n 
 const attachStub = `if [ -n "$1" ]; then . "$1" || exit 125; rm -f "$1"; fi
 shift; exec "$@"`
 
-// names are the container's and its network's names: an execution key
-// (a hash of the host and the execution, so two hosts never collide) and
-// the segment.
-func (p *Provider) names(labels map[string]string) (container, network string) {
-	network = ExecutionNetwork(labels[extension.ContainerLabelHost], labels[extension.ContainerLabelExecution])
-	return network + "-" + labels[extension.ContainerLabelSegment], network
+// launchName is a launch's name, its container's and its internal
+// network's: an execution key (a hash of the host and the execution, so two
+// hosts never collide) and the segment. Everything a launch makes is named
+// after it (its gateway -gw, its volume -tb, its egress network -egress),
+// so a launch's removal never touches another segment's.
+func launchName(labels map[string]string) string {
+	return LaunchNetwork(labels[extension.ContainerLabelHost], labels[extension.ContainerLabelExecution], labels[extension.ContainerLabelSegment])
 }
 
-// ExecutionNetwork is the name of an execution's internal network on a
-// host; its egress network is the name with "-egress" after it. One that
-// exists already, made as the provider makes them, is used as it is.
+// ExecutionNetwork is an execution's key on a host, which the names of
+// everything the provider makes for it start with. Releases before 6.7
+// named the execution's one internal network so, shared by its segments.
 func ExecutionNetwork(host, execution string) string {
 	sum := sha256.Sum256([]byte(host + "/" + execution))
 	return "oc-" + hex.EncodeToString(sum[:8])
 }
 
-func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
+// LaunchNetwork is the name of a launch's internal network (and of its
+// container); its egress network is the name with "-egress" after it. Each
+// launch has its own, so a parked execution holds none (reconcile removes
+// its stopped container, and with it these) and a wake's launch never
+// shares one that is being removed. One that exists already, made as the
+// provider makes them, is used as it is.
+func LaunchNetwork(host, execution, segment string) string {
+	return ExecutionNetwork(host, execution) + "-" + segment
+}
+
+func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, labels map[string]string) (_ extension.ContainerCreated, err error) {
+	// A failure is a refusal of the launch in Docker's own words (an
+	// address pool used up, a missing image), so its cause crosses to the
+	// host and the run's history rather than an internal error.
+	defer func() {
+		if err != nil && !errors.Is(err, extension.ErrSandboxUnavailable) && !errors.Is(err, extension.ErrSandboxDenied) {
+			err = fmt.Errorf("%w: %w", extension.ErrSandboxUnavailable, err)
+		}
+	}()
 	var d Plan
 	if err := json.Unmarshal(plan.Data.Data, &d); err != nil || d.Context == "" || len(d.Argv) == 0 {
 		return extension.ContainerCreated{}, errors.New("the plan isn't a docker plan")
@@ -591,14 +610,15 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	if err != nil {
 		return extension.ContainerCreated{}, err
 	}
-	name, network := p.names(labels)
+	name := launchName(labels)
+	network := name
 	if err := p.network(ctx, d.Context, network, labels, true); err != nil {
 		return extension.ContainerCreated{}, err
 	}
 	if err := p.network(ctx, d.Context, network+"-egress", labels, false); err != nil {
 		return extension.ContainerCreated{}, err
 	}
-	if err := p.removeOrphanGateways(ctx, d.Context, labels); err != nil {
+	if err := p.removeOrphanLaunches(ctx, d.Context, labels); err != nil {
 		return extension.ContainerCreated{}, err
 	}
 	volume, err := p.gateway(ctx, d, name, network, labels)
@@ -729,7 +749,7 @@ func (p *Provider) createNetwork(ctx context.Context, dctx string, args []string
 		all = strconv.Itoa(len(strings.Fields(string(out))))
 	}
 	return fmt.Errorf("%w: Docker on context %s has no address space left for another network; %s of its %s networks are Open Conduit's, "+
-		"and leftovers of ended runs are the likely cause. The daemon removes its own leftovers of ended runs as it reconciles; "+
+		"two for each run in progress, and leftovers of ended or waiting runs are the likely cause. The daemon removes its own as it reconciles; "+
 		"see them with docker --context %s network ls --filter label=%s", err, dctx, ours, all, dctx, labelNetwork)
 }
 
@@ -748,7 +768,7 @@ func networkArgs(name string, labels map[string]string, internal bool) []string 
 		role = "execution"
 	}
 	for _, k := range sortedKeys(labels) {
-		if k == extension.ContainerLabelHost || k == extension.ContainerLabelExecution {
+		if k == extension.ContainerLabelHost || k == extension.ContainerLabelExecution || k == extension.ContainerLabelSegment {
 			args = append(args, "--label", k+"="+labels[k])
 		}
 	}
@@ -809,14 +829,14 @@ func (p *Provider) gateway(ctx context.Context, d Plan, name, network string, la
 	return volume, nil
 }
 
-// removeOrphanGateways removes the execution's gateways that have lost
-// their launch's container: what a launch cut short (the daemon stopped
-// between the gateway and the container) or a removal cut short left. A
-// segment's launch removes every other segment's; an attach's, only those
-// that have stopped, since a segment's launch may be between its gateway
-// and its container. Each holds a place on the execution's networks, and
-// a stopped one is never used again.
-func (p *Provider) removeOrphanGateways(ctx context.Context, dctx string, labels map[string]string) error {
+// removeOrphanLaunches removes the execution's gateways that have lost
+// their launch's container, with their launch's networks: what a launch
+// cut short (the daemon stopped between the gateway and the container) or
+// a removal cut short left. A segment's launch removes every other
+// segment's; an attach's, only those that have stopped, since a segment's
+// launch may be between its gateway and its container. Each holds two of
+// Docker's networks, and a stopped one is never used again.
+func (p *Provider) removeOrphanLaunches(ctx context.Context, dctx string, labels map[string]string) error {
 	filters := []string{"--filter", "label=" + extension.ContainerLabelHost + "=" + labels[extension.ContainerLabelHost],
 		"--filter", "label=" + extension.ContainerLabelExecution + "=" + labels[extension.ContainerLabelExecution]}
 	out, err := p.docker(ctx, dctx, append([]string{"ps", "--all", "--format", "{{.Names}}|{{.State}}|{{.Label \"" + labelRole + "\"}}"}, filters...)...)
@@ -840,7 +860,7 @@ func (p *Provider) removeOrphanGateways(ctx context.Context, dctx string, labels
 			containers[parts[0]] = true
 		}
 	}
-	own, _ := p.names(labels)
+	own := launchName(labels)
 	attach := labels[extension.ContainerLabelSegment] == extension.ContainerSegmentAttach
 	var errs []error
 	for _, g := range gateways {
@@ -848,9 +868,24 @@ func (p *Provider) removeOrphanGateways(ctx context.Context, dctx string, labels
 		if launch == own || containers[launch] || attach && g.running {
 			continue
 		}
-		errs = append(errs, p.removeGateway(ctx, dctx, launch))
+		errs = append(errs, p.removeLaunch(ctx, dctx, launch))
 	}
 	return errors.Join(errs...)
+}
+
+// removeLaunch removes what a launch made beside its container: its
+// gateway and volume, then its networks. Any being gone is not an error,
+// nor is a network something still uses.
+func (p *Provider) removeLaunch(ctx context.Context, dctx, name string) error {
+	if err := p.removeGateway(ctx, dctx, name); err != nil {
+		return err
+	}
+	for _, n := range []string{name, name + "-egress"} {
+		if _, err := p.docker(ctx, dctx, "network", "rm", n); err != nil && !notFound(err) && !inUse(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // removeGateway removes a launch's gateway and its volume; either being
@@ -1119,18 +1154,8 @@ func (p *Provider) Remove(ctx context.Context, ref extension.ContainerRef) error
 	if labels[extension.ContainerLabelExecution] == "" {
 		return nil
 	}
-	// The launch's gateway and its volume go with it, and the execution's
-	// networks, unless a later segment's containers are already on them.
-	name, network := p.names(labels)
-	if err := p.removeGateway(ctx, dctx, name); err != nil {
-		return err
-	}
-	for _, n := range []string{network, network + "-egress"} {
-		if _, err := p.docker(ctx, dctx, "network", "rm", n); err != nil && !notFound(err) && !strings.Contains(err.Error(), "active endpoints") {
-			return err
-		}
-	}
-	return nil
+	// The launch's gateway, volume and networks go with it.
+	return p.removeLaunch(ctx, dctx, launchName(labels))
 }
 
 func splitRef(ref string) (dctx, id string, err error) {

@@ -49,7 +49,7 @@ func TestNetworkAddressSpaceExhausted(t *testing.T) {
 	if err == nil {
 		t.Fatal("created a network with no address space")
 	}
-	for _, want := range []string{"fully subnetted", "3 (2 of them this daemon's) of its 6 networks are Open Conduit's", "leftovers of ended runs", "network ls --filter label=dev.open-conduit.network"} {
+	for _, want := range []string{"fully subnetted", "3 (2 of them this daemon's) of its 6 networks are Open Conduit's", "leftovers of ended or waiting runs", "network ls --filter label=dev.open-conduit.network"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}

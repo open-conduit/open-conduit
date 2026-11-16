@@ -113,11 +113,11 @@ func TestDockerMountsCoverReadOnlyAndDenied(t *testing.T) {
 }
 
 func TestDockerNamesAreHostScoped(t *testing.T) {
-	p := New(Options{})
-	c1, n1 := p.names(map[string]string{extension.ContainerLabelHost: "a", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "2"})
-	c2, _ := p.names(map[string]string{extension.ContainerLabelHost: "b", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "2"})
-	if c1 == c2 || !strings.HasPrefix(c1, n1+"-") || !strings.HasSuffix(c1, "-2") {
-		t.Errorf("names %s %s %s", c1, c2, n1)
+	c1 := launchName(map[string]string{extension.ContainerLabelHost: "a", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "2"})
+	c2 := launchName(map[string]string{extension.ContainerLabelHost: "b", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "2"})
+	c3 := launchName(map[string]string{extension.ContainerLabelHost: "a", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "3"})
+	if c1 == c2 || c1 == c3 || !strings.HasPrefix(c1, ExecutionNetwork("a", "x")+"-") || !strings.HasSuffix(c1, "-2") {
+		t.Errorf("names %s %s %s", c1, c2, c3)
 	}
 }
 
