@@ -224,6 +224,11 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		return nil
 	})
+	if errors.Is(err, ErrIntentConflict) {
+		// The stored record is another call's: its state is not this one's,
+		// so a caller never takes it for an answer still being confirmed.
+		return "", err
+	}
 	if err != nil || rec.State == IntentPosted || rec.State == IntentFailed {
 		return rec.State, err
 	}

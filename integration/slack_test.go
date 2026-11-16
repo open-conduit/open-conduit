@@ -730,6 +730,10 @@ func TestSlackReplyToolIsDurableAndOnce(t *testing.T) {
 	if err != nil || lost["state"] != "pending" {
 		t.Fatalf("lost answer: %v %v", lost, err)
 	}
+	var conflict *extension.OperationError
+	if out, err := call(sl.OpReply, "r2", `{"text":"Something else"}`); !errors.As(err, &conflict) || conflict.Code != "intent_conflict" {
+		t.Fatalf("a reused request ID while attempted: %v %v", out, err)
+	}
 	e.clock.Add(31 * time.Second)
 	if res := e.converge(); res.Recovered != 1 || len(e.fake.AgentReplies(slChannel, root)) != 2 {
 		t.Fatalf("tool intent recovery: %+v", res)

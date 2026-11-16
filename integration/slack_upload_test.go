@@ -87,6 +87,11 @@ func TestSlackUploadIsOnceAndWithinTheEntrysLimits(t *testing.T) {
 	if res := e.converge(); res.Recovered+res.Posted != 0 || len(e.fake.Uploads(slChannel, root)) != 2 {
 		t.Fatalf("shared again before the search delay: %+v", res)
 	}
+	// Reusing the request ID for another file while the first share is
+	// unconfirmed is refused, not answered as the first one's pending.
+	if out, err := call(sl.OpUpload, "u2", slFile(slPNG+"e")); !errors.As(err, &op) || op.Code != "intent_conflict" {
+		t.Fatalf("a reused request ID while attempted: %v %v", out, err)
+	}
 	e.clock.Add(31 * time.Second)
 	if res := e.converge(); res.Recovered != 1 || len(e.fake.Uploads(slChannel, root)) != 2 {
 		t.Fatalf("lost share recovery: %+v", res)
