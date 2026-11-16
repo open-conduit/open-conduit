@@ -672,7 +672,8 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
 			return d.waitTarget(kind)(ctx, scope, name)
 		},
-		Authorize: d.authorize,
+		Authorize:    d.authorize,
+		EntrySandbox: d.entrySandbox(m),
 	}
 }
 

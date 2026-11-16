@@ -329,7 +329,23 @@ type ExtensionDecl struct {
 	// a call of one through operation.call with the entry
 	// (OperationParams.Entry).
 	Operations bool `json:"operations,omitempty"`
+	// Sandbox says whether an entry of the type names a process sandbox
+	// (the entry's sandbox, provider and config, as a binding's): one of
+	// EntrySandboxRequired or EntrySandboxOptional. Absent, config check
+	// refuses an entry that names one, since nothing would confine. The
+	// package's own processes for an entry then launch through
+	// sandbox.entry_plan, which plans them with the entry's provider and
+	// policy and never the package's.
+	Sandbox string `json:"sandbox,omitempty"`
 }
+
+// Entry sandbox modes (ExtensionDecl.Sandbox).
+const (
+	// EntrySandboxRequired: config check refuses an entry with no sandbox.
+	EntrySandboxRequired = "required"
+	// EntrySandboxOptional: an entry may name a sandbox or not.
+	EntrySandboxOptional = "optional"
+)
 
 // Setting value types.
 const (
@@ -935,6 +951,9 @@ func (m Manifest) Validate() error {
 		ingress = ingress || x.Ingress
 		settings("extension type", x.Type, x.Settings)
 		fieldDecls("extension type", x.Type, x.Fields, false)
+		if x.Sandbox != "" && x.Sandbox != EntrySandboxRequired && x.Sandbox != EntrySandboxOptional {
+			fail("extension type %q sandbox must be %q, %q or absent", x.Type, EntrySandboxRequired, EntrySandboxOptional)
+		}
 		for _, err := range settingDisagreements(x.Fields, x.Settings) {
 			fail("extension type %q %v", x.Type, err)
 		}
@@ -1229,6 +1248,7 @@ func (m Manifest) Enabled() []string {
 		ingress = ingress || x.Ingress
 	}
 	set("extensions.ingress", ingress)
+	set("extensions.sandbox", slices.ContainsFunc(p.Extensions, func(x ExtensionDecl) bool { return x.Sandbox != "" }))
 	set("webhooks", p.Webhooks)
 	set("families", len(p.Families) > 0)
 	set("routes", len(p.Routes) > 0)

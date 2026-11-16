@@ -95,6 +95,7 @@ var Methods = []Method{
 	{Name: "resource.acquire", Direction: ExtensionToHost, Provides: "executors.workspace", Contract: []string{"extension.ResourceBroker.Acquire"}},
 	{Name: "sandbox.plan", Direction: ExtensionToHost, Provides: "executors.sandbox", Contract: []string{"extension.SandboxBroker.Plan"}},
 	{Name: "sandbox.adopt", Direction: ExtensionToHost, Provides: "executors.sandbox", Contract: []string{"extension.SandboxBroker.Adopt"}},
+	{Name: "sandbox.entry_plan", Direction: ExtensionToHost, Provides: "extensions.sandbox", Contract: []string{"extension.EntrySandbox"}},
 	{Name: "container.launch", Direction: ExtensionToHost, Provides: "executors.container", Contract: []string{"extension.ContainerBroker.Launch"}},
 	{Name: "container.adopt", Direction: ExtensionToHost, Provides: "executors.container", Contract: []string{"extension.ContainerBroker.Adopt"}},
 	{Name: "resource.lookup", Direction: ExtensionToHost, Provides: "executors.workspace", Contract: []string{"extension.ResourceBroker.Lookup"}},

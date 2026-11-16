@@ -164,6 +164,7 @@ Each entry of a scope's `extensions`.
 | `config` | object |  |  | The entry's fields (open-conduit adapters TYPE). |
 | `connection` | string |  |  | Connection it reads and writes through. |
 | `name` | string | yes |  | Stable entry name. |
+| `sandbox` | object |  |  | Process sandbox provider and its config, for the processes the entry's package runs for it (a type that declares one). |
 | `secret_names` | array of string |  |  | Scope secrets it may resolve. |
 | `type` | string | yes |  | The registered extension type (open-conduit adapters). |
 
@@ -515,6 +516,39 @@ Route `config`:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `match` |  | attribute -> values the route claims (labels, status, title, team, project, priority, assignee, components, custom fields); one entry per scope for multi-scope routing |
+
+### MCP bridge (`mcp`)
+
+Bridges the tools an operator lists from MCP servers into toolbelt operations.
+
+### MCP bridge (mcp-http) (`mcp-http`)
+
+Bridges the tools an operator lists from MCP servers into toolbelt operations. Registers: extension.
+
+Extension entry `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `url` |  | Required. The server's streamable HTTP endpoint (https). |
+| `headers` |  | Headers sent with every request. |
+| `secret_headers` |  | Headers set from the entry's secrets: header to secret name. |
+| `bearer_secret` |  | A secret the entry selects, sent as the bearer token. |
+| `timeout_seconds` | `60` | How long one call, or the server's start, may take. |
+| `tools` |  | Required. The tools taken from the server, each with name, its description and input_schema exactly as the server lists them, and optionally operation, summary, toolset (default tools) and retry_safe (default false). |
+
+### MCP bridge (mcp-stdio) (`mcp-stdio`)
+
+Bridges the tools an operator lists from MCP servers into toolbelt operations. Registers: extension.
+
+Extension entry `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `command` |  | Required. The server's argv, run in the entry's sandbox. |
+| `env` |  | Variables the server sees, besides PATH, HOME and LANG. |
+| `secret_env` |  | Variables set from the entry's secrets: variable to secret name. |
+| `timeout_seconds` | `60` | How long one call, or the server's start, may take. |
+| `tools` |  | Required. The tools taken from the server, each with name, its description and input_schema exactly as the server lists them, and optionally operation, summary, toolset (default tools) and retry_safe (default false). |
 
 ### ngrok tunnel (`ngrok`)
 

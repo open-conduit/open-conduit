@@ -22,6 +22,7 @@ import (
 	introspectionext "github.com/open-conduit/open-conduit/extensions/introspection/pkg"
 	jiraext "github.com/open-conduit/open-conduit/extensions/jira/pkg"
 	linearext "github.com/open-conduit/open-conduit/extensions/linear/pkg"
+	mcpext "github.com/open-conduit/open-conduit/extensions/mcp/pkg"
 	observeext "github.com/open-conduit/open-conduit/extensions/observe/pkg"
 	"github.com/open-conduit/open-conduit/extensions/pagerduty"
 	posthogext "github.com/open-conduit/open-conduit/extensions/posthog/pkg"
@@ -69,6 +70,7 @@ var runnable = map[string]struct {
 	"jira":             {jiraext.Main, jiraext.Manifest, jiraext.Playbooks, true},
 	"ngrok":            {tunnelext.Main(tunnel.Ngrok), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Ngrok) }, nil, true},
 	"linear":           {linearext.Main, linearext.Manifest, linearext.Playbooks, true},
+	"mcp":              {mcpext.Main, mcpext.Manifest, nil, true},
 	"observe":          {observeext.Main, observeext.Manifest, nil, true},
 	"pagerduty":        {pagerduty.Main, pagerduty.Manifest, nil, false},
 	"posthog":          {posthogext.Main, posthogext.Manifest, nil, true},

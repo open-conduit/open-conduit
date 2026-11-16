@@ -274,6 +274,11 @@ type Extension struct {
 	Config     json.RawMessage `json:"config"`
 	// SecretNames selects scope secret names; never reference text.
 	SecretNames []string `json:"secret_names"`
+	// Sandbox confines the processes the owning package runs for this
+	// entry (a stdio MCP server), as a binding's confines its executor:
+	// the provider and its opaque policy, checked by the provider. Only an
+	// entry type that declares it may have one (ExtensionType.Sandbox).
+	Sandbox *Sandbox `json:"sandbox,omitempty"`
 }
 
 // Entries are either whole definitions or tombstones (Disabled with Name only).
@@ -828,7 +833,7 @@ func (c *checker) extension(n *node, path string) ExtensionEntry {
 		return ExtensionEntry{Extension: Extension{Name: name}, Disabled: true}
 	}
 	var e Extension
-	if !c.object(n, path, []string{"name", "type"}, "config", "secret_names", "connection") {
+	if !c.object(n, path, []string{"name", "type"}, "config", "secret_names", "connection", "sandbox") {
 		return ExtensionEntry{Extension: e}
 	}
 	e.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -838,6 +843,11 @@ func (c *checker) extension(n *node, path string) ExtensionEntry {
 	}
 	e.Config = c.opaque(n.field("config"), path+"/config")
 	e.SecretNames = c.list(n.field("secret_names"), path+"/secret_names", idPattern)
+	if r := n.field("sandbox"); r != nil && c.object(r, path+"/sandbox", []string{"provider", "config"}) {
+		e.Sandbox = &Sandbox{}
+		e.Sandbox.Provider, _ = c.str(r.field("provider"), path+"/sandbox/provider", idPattern)
+		e.Sandbox.Config = c.opaque(r.field("config"), path+"/sandbox/config")
+	}
 	return ExtensionEntry{Extension: e}
 }
 

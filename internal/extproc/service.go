@@ -91,6 +91,10 @@ type Deps struct {
 	// handles and answers only redacted copies (config.base, config.edit,
 	// config.validate, config.trace; permission config.read).
 	Config ConfigHost
+	// EntrySandbox plans a launch of one of the extension's own processes
+	// for its config entry in scope, with the entry's sandbox
+	// (sandbox.entry_plan, provides extensions.sandbox).
+	EntrySandbox extension.EntrySandbox
 }
 
 // run is the host side of one executor call: the trusted, lease-fenced
@@ -400,6 +404,22 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		return s.resource(ctx, method, raw)
 	case "sandbox.plan", "sandbox.adopt", "container.launch", "container.adopt":
 		return s.confine(ctx, method, raw)
+	case "sandbox.entry_plan":
+		var p protocol.EntrySandboxParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if !s.allowedScopes()[domain.ID(p.Scope)] {
+			return nil, unauthorized("scope is not configured for this extension")
+		}
+		if s.deps.EntrySandbox == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "sandbox.entry_plan")
+		}
+		plan, dir, err := s.deps.EntrySandbox(ctx, domain.ID(p.Scope), p.Entry, p.Needs.Extension(), p.Launch.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.EntrySandboxResult{Plan: protocol.FromSandboxPlan(plan), Dir: dir}, nil
 	case "provider.owner_status":
 		var p protocol.OwnerStatusParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

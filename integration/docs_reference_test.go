@@ -363,7 +363,12 @@ func configReference(t *testing.T) string {
 	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	for _, a := range catalog {
-		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s Registers: %s.\n", a.Title, a.Type, a.Description, strings.Join(a.Kinds, ", "))
+		if len(a.Kinds) > 0 {
+			fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s Registers: %s.\n", a.Title, a.Type, a.Description, strings.Join(a.Kinds, ", "))
+		} else {
+			// Every type it registers has an entry of its own below.
+			fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s\n", a.Title, a.Type, a.Description)
+		}
 		if a.Setup != "" {
 			fmt.Fprintf(&b, "Set up with `open-conduit init %s`.\n", a.Setup)
 		}

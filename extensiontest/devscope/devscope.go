@@ -211,6 +211,10 @@ type Options struct {
 	// Entries are the configs of the generated entries, by extension type
 	// ({} for a type not here). Each must name a type a manifest declares.
 	Entries map[string]json.RawMessage
+	// Sandboxes are the sandboxes of the generated entries, by extension
+	// type: each the entry's whole sandbox, {"provider", "config"}, for a
+	// type that declares one (provides.extensions[].sandbox).
+	Sandboxes map[string]json.RawMessage
 	// Operations are granted to the binding, and in the scope's
 	// authorization, beyond those the manifests declare: the operations a
 	// generated entry's config declares (<package>.<entry>.<name>), or a
@@ -248,7 +252,11 @@ func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []st
 			if raw, ok := o.Entries[e.Type]; ok {
 				config = raw
 			}
-			entries = append(entries, map[string]any{"name": Name(e.Type), "type": e.Type, "secret_names": names, "config": config})
+			entry := map[string]any{"name": Name(e.Type), "type": e.Type, "secret_names": names, "config": config}
+			if raw, ok := o.Sandboxes[e.Type]; ok {
+				entry["sandbox"] = raw
+			}
+			entries = append(entries, entry)
 		}
 	}
 	for _, op := range o.Operations {
@@ -257,6 +265,11 @@ func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []st
 		}
 	}
 	var undeclared []string
+	for typ := range o.Sandboxes {
+		if _, ok := o.Entries[typ]; !ok && !declared[typ] {
+			undeclared = append(undeclared, typ)
+		}
+	}
 	for typ := range o.Entries {
 		if !declared[typ] {
 			undeclared = append(undeclared, typ)
