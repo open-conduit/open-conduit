@@ -108,41 +108,87 @@ func label(rec Ask, now time.Time) string {
 
 // Requests are the target Work's asks of this entry: each with who may
 // answer it, and once settled whether it was answered, refused (an
-// approval answered with anything but approve), expired or withdrawn.
+// approval answered with anything but approve), expired or withdrawn. An
+// ask is settled here as Sync would settle it, so what is reported doesn't
+// wait for the next pass: open means not settled yet, and Action is set
+// only while the ask is outstanding, exactly when Actions offers it.
 func (a Actions) Requests(ctx context.Context, t extension.ActionTarget) ([]extension.Request, error) {
 	if t.Work == nil || a.Store == nil {
 		return nil, nil
 	}
 	now := a.now()
-	var asks []Ask
-	err := a.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		var err error
-		asks, err = workAsks(tx, t.Work.ID)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
 	var out []extension.Request
-	for _, rec := range asks {
-		if rec.Provider != a.Entry.Name || rec.Scope != t.Scope.ID {
-			continue
+	err := a.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		out = nil
+		asks, err := workAsks(tx, t.Work.ID)
+		if err != nil {
+			return err
 		}
-		r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Action: ActionAnswer, Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen}
-		switch {
-		case rec.State == StateAnswered && rec.Answer != nil:
-			r.State, r.By = extension.RequestAnswered, rec.Answer.Responder
-			if (rec.Gate != "" || rec.Start) && rec.Answer.Answer != OptionApprove {
-				r.State = extension.RequestRefused
+		for _, rec := range asks {
+			if rec.Provider != a.Entry.Name || rec.Scope != t.Scope.ID {
+				continue
 			}
-		case rec.State == StateExpired, rec.State == StateOpen && rec.expired(now):
-			r.State = extension.RequestExpired
-		case rec.State == StateWithdrawn:
-			r.State = extension.RequestWithdrawn
+			r, err := request(tx, rec, now)
+			if err != nil {
+				return err
+			}
+			out = append(out, r)
 		}
-		out = append(out, r)
+		return nil
+	})
+	return out, err
+}
+
+// request is rec as a request, settled as of now without writing it.
+func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
+	r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen}
+	answered := func(g Given) {
+		r.State, r.By = extension.RequestAnswered, g.Responder
+		if (rec.Gate != "" || rec.Start) && g.Answer != OptionApprove {
+			r.State = extension.RequestRefused
+		}
 	}
-	return out, nil
+	switch rec.State {
+	case StateAnswered:
+		if rec.Answer != nil {
+			answered(*rec.Answer)
+		} else {
+			r.State = extension.RequestAnswered
+		}
+		return r, nil
+	case StateExpired:
+		r.State = extension.RequestExpired
+		return r, nil
+	case StateWithdrawn:
+		r.State = extension.RequestWithdrawn
+		return r, nil
+	}
+	// Open in its record: what settle would make of it now.
+	given, _, err := answers(tx, rec, rec.Checked)
+	if err != nil {
+		return r, err
+	}
+	if len(given) > 0 {
+		answered(given[0])
+		return r, nil
+	}
+	if rec.expired(now) {
+		r.State = extension.RequestExpired
+		return r, nil
+	}
+	gone, err := withdrawn(tx, rec)
+	if err != nil {
+		return r, err
+	}
+	if gone {
+		r.State = extension.RequestWithdrawn
+		return r, nil
+	}
+	ok, err := outstanding(tx, rec, now)
+	if ok {
+		r.Action = ActionAnswer
+	}
+	return r, err
 }
 
 // detail is what a person needs to decide an ask away from its panel: the

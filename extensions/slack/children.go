@@ -210,9 +210,18 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 	var out []Intent
 	for _, h := range hs {
 		rs := p.requestsOf(ctx, []asker{h.asker})
+		// An action answers one request: when a provider names it for two,
+		// which of them a press would answer is unknown, so neither is
+		// prompted.
+		named := map[string]int{}
+		for _, r := range rs {
+			if r.State == extension.RequestOpen && r.Action != "" {
+				named[r.Provider+"/"+r.Action]++
+			}
+		}
 		var offers []extension.ActionOffer
 		for _, r := range rs {
-			if r.State != extension.RequestOpen || r.Action == "" || !slackAnswers(r.Responders) {
+			if r.State != extension.RequestOpen || r.Action == "" || named[r.Provider+"/"+r.Action] != 1 || !slackAnswers(r.Responders) {
 				continue
 			}
 			if offers == nil {
@@ -233,7 +242,9 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 				if !ok {
 					continue
 				}
-				id := "prompt/" + string(h.work.ID) + "/" + o.Provider + "/" + o.ID + "/" + digest(append([]string{o.Label, o.Detail}, o.Choices...)...)[:16]
+				// Keyed by the request as well as what is offered, so each
+				// request is prompted once with its own responders.
+				id := "prompt/" + string(h.work.ID) + "/" + o.Provider + "/" + o.ID + "/" + digest(append([]string{r.ID, shown.Label, shown.Detail}, o.Choices...)...)[:16]
 				out = append(out, Intent{ID: id, Work: h.work.ID, Channel: h.channel, Thread: h.thread, Text: shown.Label, Blocks: blocks, Binding: h.binding})
 			}
 		}

@@ -468,6 +468,42 @@ func TestHumanAnswerActionContract(t *testing.T) {
 	})
 }
 
+// The asks meet the shared request contract (issue #681), also in the
+// window before Sync settles an answered ask: ask A is approved and the
+// call runs, then the Work asks B before any pass. A is reported answered
+// without an action, and only B names the answer action, so a surface
+// can't pair A's responders with B's buttons.
+func TestHumanRequestsContract(t *testing.T) {
+	conformance.RunRequests(t, func() conformance.RequestFixture {
+		h := newHumanHarness(t, "persistent", gated)
+		out, err := h.deploy(t, `{"env":"prod"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.park(t, out)
+		if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+			t.Fatal(err)
+		}
+		h.reconcile(t)
+		h.reconcile(t)
+		h.resume(t)
+		if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil {
+			t.Fatalf("the approved call did not run: %+v %v", out, err)
+		}
+		if out, err = h.deploy(t, `{"env":"staging"}`); err != nil || out.Wait == nil {
+			t.Fatalf("the second call was not held: %+v %v", out, err)
+		}
+		h.park(t, out)
+		rs, err := h.actions.Requests(context.Background(), h.target(t))
+		if err != nil || len(rs) != 2 || rs[0].State != extension.RequestAnswered || rs[0].Action != "" || rs[1].State != extension.RequestOpen || rs[1].Action != hu.ActionAnswer {
+			t.Fatalf("requests before Sync: %+v %v", rs, err)
+		}
+		scope := h.target(t)
+		scope.Work = nil
+		return conformance.RequestFixture{Provider: h.actions, Answerable: h.target(t), Others: []extension.ActionTarget{scope}}
+	})
+}
+
 // The question panel meets the shared panel contract: shown with its answer
 // button on Work parked on an ask, and not on the scope.
 func TestHumanQuestionPanelContract(t *testing.T) {
@@ -752,9 +788,7 @@ func TestHumanGateRequestsSayHowEachEnded(t *testing.T) {
 	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = hu.Sync(ctx, h.f.Store, h.f.Clock.Now()); err != nil {
-		t.Fatal(err)
-	}
+	// Reported answered at once, before Sync settles the record.
 	if rs = states(); len(rs) != 3 || rs[1].State != extension.RequestExpired || rs[2].State != extension.RequestAnswered || rs[2].By != "operator:local" {
 		t.Fatalf("approved: %+v", rs)
 	}

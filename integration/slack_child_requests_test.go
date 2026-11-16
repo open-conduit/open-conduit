@@ -166,3 +166,39 @@ func TestSlackChildRequestsAreOffByDefault(t *testing.T) {
 		t.Fatalf("prompted without child_requests: %+v", ps)
 	}
 }
+
+// A request is prompted only when its action answers it alone: when a
+// provider names one action for two open requests, a press could answer
+// either, so neither is prompted, and a request without an action (not
+// answerable yet) isn't either. Both still show in the plan.
+func TestSlackPromptsAChildRequestOnlyWhenItsActionIsItsOwn(t *testing.T) {
+	e := newSlackEnv(t, `,"progress":{"enabled":true},"child_requests":true`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Open a PR for the checkout fix")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.converge()
+	e.moveWork(w.ID, domain.WorkRunning)
+	e.handOff("child/a", w.ID, "specialist", "Open the PR", domain.WorkRunning, domain.WorkWaiting)
+	e.handOff("child/b", w.ID, "specialist", "Sign in", domain.WorkRunning, domain.WorkWaiting)
+	e.requests = func(_ context.Context, _, work domain.ID) ([]extension.RequestOffer, error) {
+		open := func(id, action string) extension.RequestOffer {
+			return extension.RequestOffer{Provider: "decisions", Request: extension.Request{ID: id, Label: "Approve or refuse " + id, Action: action, Responders: []string{"slack"}, State: extension.RequestOpen}}
+		}
+		if work == "child/a" {
+			return []extension.RequestOffer{open("ask/1", "answer"), open("ask/2", "answer")}, nil
+		}
+		return []extension.RequestOffer{open("ask/3", "")}, nil
+	}
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse", Choices: []string{"approve", "refuse"}, Awaited: true}}}, nil
+	}
+	e.converge()
+	if ps := e.prompts(root); len(ps) != 0 {
+		t.Fatalf("prompted an ambiguous or unanswerable request: %+v", ps)
+	}
+	if _, tasks, _ := planOf(t, e.progress(root)[0]); len(tasks) != 5 {
+		t.Fatalf("plan: %+v", tasks)
+	}
+}

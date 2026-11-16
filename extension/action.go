@@ -172,12 +172,18 @@ const (
 )
 
 // Request is one request a person is asked to decide on a target. ID is
-// stable for the request's life and new for each new request. Action is
-// the action that answers it while it is open and offered (see Actions).
-// Responders are who may answer it now, each kind (anyone of that kind)
-// or kind:id, in the provider's own terms (the caller forms Act gives,
-// such as slack:U0123ABCD, and operator). State is one of the Request
-// states, and By who settled it when someone did.
+// stable for the request's life, new for each new request, and unique
+// among the provider's requests on the target. Label says what it is.
+// Action is the action that answers it, set only while that action, offered
+// on the target now, answers this request and no other: so at most one of
+// a provider's requests on a target names a given action, and only an open
+// one. An open request without Action is not answerable yet (or no longer
+// through this provider's actions). Responders are who may answer it now,
+// each kind (anyone of that kind) or kind:id, in the provider's own terms
+// (the caller forms Act gives, such as slack:U0123ABCD, and operator).
+// State is one of the Request states, and By who settled it, set only on
+// a settled request that someone settled. conformance.CheckRequests checks
+// these rules.
 type Request struct {
 	ID         string
 	Label      string
