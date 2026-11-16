@@ -52,6 +52,9 @@ var MethodScopes = map[string][]string{
 	"conversations.replies": {"channels:history", "groups:history", "im:history"},
 	"chat.postMessage":      {"chat:write"},
 	"chat.postEphemeral":    {"chat:write"},
+	"chat.update":           {"chat:write"},
+	"reactions.add":         {"reactions:write"},
+	"reactions.remove":      {"reactions:write"},
 	"users.conversations":   {"channels:read", "groups:read", "im:read"},
 	"auth.test":             {},
 }

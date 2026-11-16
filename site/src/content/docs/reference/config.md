@@ -679,6 +679,7 @@ Extension entry `config`:
 | `signing_secret` |  |  |
 | `projection` |  |  |
 | `post` |  |  |
+| `progress` |  | {"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed |
 | `identities` |  | a binding's own name and icon: [{binding, username, icon_emoji or icon_url}] |
 
 ### srt sandbox (`srt`)

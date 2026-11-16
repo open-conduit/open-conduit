@@ -167,6 +167,20 @@ type ExtensionConfig struct {
 	// starts a conversation, whatever start says, if the limit admits its
 	// sender.
 	DirectMessages *DirectMessages `json:"direct_messages,omitempty"`
+	// Progress, when enabled, keeps one progress message in a
+	// conversation's thread for each run a person's message starts or
+	// wakes, updated from the run's durable state. Off by default.
+	Progress *ProgressConfig `json:"progress,omitempty"`
+}
+
+// ProgressConfig turns on the progress message and says who may stop a run
+// from it.
+type ProgressConfig struct {
+	Enabled bool `json:"enabled"`
+	// Stop lists who may press the progress message's Stop button, each
+	// slack:<user ID>, the form a gate's responders take. Empty shows no
+	// Stop button.
+	Stop []string `json:"stop,omitempty"`
 }
 
 // DirectMessages is who may start Work by direct message. Exactly one of
@@ -240,6 +254,19 @@ type Settings struct {
 	DirectMessages bool
 	DMUsers        []string
 	DMAnyone       bool
+	// Progress turns on the progress message; StopUsers (sorted) are the
+	// Slack users who may press its Stop button.
+	Progress  bool
+	StopUsers []string
+}
+
+// MayStop reports whether user may press a progress message's Stop button.
+func (s Settings) MayStop(user string) bool {
+	if !s.Progress || user == "" {
+		return false
+	}
+	i := sort.SearchStrings(s.StopUsers, user)
+	return i < len(s.StopUsers) && s.StopUsers[i] == user
 }
 
 // IsDirect reports whether channel is a direct message conversation (D…).
@@ -342,6 +369,27 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			}
 		}
 		s.DirectMessages, s.DMUsers, s.DMAnyone = true, users, dm.Anyone
+	}
+	if pc := c.Progress; pc != nil {
+		if len(pc.Stop) > 1000 {
+			return s, errors.New("slack extension: progress stop must list at most 1000 people")
+		}
+		var users []string
+		for _, r := range pc.Stop {
+			u, ok := strings.CutPrefix(r, "slack:")
+			if !ok || !slackIDPattern.MatchString(u) || !strings.HasPrefix(u, "U") && !strings.HasPrefix(u, "W") {
+				return s, fmt.Errorf("slack extension: progress stop entry %q must be slack:<user ID> (U… or W…)", r)
+			}
+			users = append(users, u)
+		}
+		sort.Strings(users)
+		if len(slices.Compact(slices.Clone(users))) != len(users) {
+			return s, errors.New("slack extension: progress stop lists a person more than once")
+		}
+		if len(users) > 0 && !pc.Enabled {
+			return s, errors.New("slack extension: progress stop needs progress enabled")
+		}
+		s.Progress, s.StopUsers = pc.Enabled, users
 	}
 	if len(c.Channels) > 100 || len(c.Channels) == 0 && !s.DirectMessages {
 		return s, errors.New("slack extension: channels must list 1-100 channel IDs (or none, with direct_messages)")

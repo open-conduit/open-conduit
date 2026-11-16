@@ -1,7 +1,7 @@
 // Package slacktest is an in-memory fake of the Slack Web API and Events API
 // deliveries for tests. It implements only what the Slack extension calls:
-// conversations.history, conversations.replies, chat.postMessage and
-// auth.test, with cursor pagination, message metadata, edits, deletions
+// conversations.history, conversations.replies, chat.postMessage,
+// chat.update, reactions.add and reactions.remove and auth.test, with cursor pagination, message metadata, edits, deletions
 // (tombstones for parents with replies), 429 rate limits and injected faults.
 // It is test support only; nothing in production imports it.
 package slacktest
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,8 +48,20 @@ type Server struct {
 	envelopes int
 	acks      map[string]bool
 	ephemeral []slack.Ephemeral
-	listLimit int // users.conversations page size override (0: the request's)
+	listLimit int                 // users.conversations page size override (0: the request's)
+	reactions map[string][]string // channel/ts -> the app's reactions, in order added
+	updates   int
 }
+
+// Reactions are the app's reactions on the message ts in channel.
+func (s *Server) Reactions(channel, ts string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.reactions[channel+"/"+ts]...)
+}
+
+// Updates counts the chat.update calls that changed a message.
+func (s *Server) Updates() int { s.mu.Lock(); defer s.mu.Unlock(); return s.updates }
 
 // SetListLimit makes users.conversations answer at most n conversations a
 // page, whatever the request's limit (0: the request's).
@@ -423,6 +436,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer = s.repliesAnswer(r)
 	case "chat.postMessage":
 		answer, status = s.post(r)
+	case "chat.update":
+		answer = s.update(r)
+	case "reactions.add", "reactions.remove":
+		answer = s.react(r, method == "reactions.add")
 	case "chat.postEphemeral":
 		var e slack.Ephemeral
 		if err := json.NewDecoder(r.Body).Decode(&e); err != nil || e.Text == "" || e.User == "" {
@@ -543,6 +560,55 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 		return nil, http.StatusInternalServerError
 	}
 	return apiAnswer{"ok": true, "channel": p.Channel, "ts": ts}, http.StatusOK
+}
+
+func (s *Server) update(r *http.Request) apiAnswer {
+	var u slack.Update
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		return apiAnswer{"ok": false, "error": "invalid_arguments"}
+	}
+	m := s.find(u.Channel, u.TS)
+	if m == nil {
+		return apiAnswer{"ok": false, "error": "message_not_found"}
+	}
+	if m.BotID != s.botID {
+		return apiAnswer{"ok": false, "error": "cant_update_message"}
+	}
+	// As Slack does: text and blocks are replaced, metadata kept.
+	m.Text, m.Blocks = u.Text, u.Blocks
+	s.updates++
+	return apiAnswer{"ok": true, "channel": u.Channel, "ts": u.TS}
+}
+
+func (s *Server) react(r *http.Request, add bool) apiAnswer {
+	var in struct {
+		Channel   string `json:"channel"`
+		Timestamp string `json:"timestamp"`
+		Name      string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+		return apiAnswer{"ok": false, "error": "invalid_name"}
+	}
+	if s.find(in.Channel, in.Timestamp) == nil {
+		return apiAnswer{"ok": false, "error": "message_not_found"}
+	}
+	if s.reactions == nil {
+		s.reactions = map[string][]string{}
+	}
+	key := in.Channel + "/" + in.Timestamp
+	list := s.reactions[key]
+	i := slices.Index(list, in.Name)
+	switch {
+	case add && i >= 0:
+		return apiAnswer{"ok": false, "error": "already_reacted"}
+	case add:
+		s.reactions[key] = append(list, in.Name)
+	case i < 0:
+		return apiAnswer{"ok": false, "error": "no_reaction"}
+	default:
+		s.reactions[key] = slices.Delete(list, i, i+1)
+	}
+	return apiAnswer{"ok": true}
 }
 
 // ---- Events API deliveries -------------------------------------------------

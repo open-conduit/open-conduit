@@ -60,7 +60,19 @@ func TestManifestCoversWhatTheExtensionUses(t *testing.T) {
 	if _, err := f.client.Channels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.client.PostMessage(context.Background(), slack.Post{Channel: chanA, ThreadTS: root, Text: "hi"}); err != nil {
+	posted, err := f.client.PostMessage(context.Background(), slack.Post{Channel: chanA, ThreadTS: root, Text: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The progress message: updated in place, and a reaction on the
+	// person's message.
+	if err := f.client.UpdateMessage(context.Background(), slack.Update{Channel: chanA, TS: posted, Text: "hi again"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.AddReaction(context.Background(), chanA, root, "eyes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.RemoveReaction(context.Background(), chanA, root, "eyes"); err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ := slack.ParseConnection([]byte(`{"api_url":"` + f.fake.URL + `"}`))

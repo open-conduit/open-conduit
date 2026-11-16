@@ -197,6 +197,9 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 		return nil
 	}
 	for _, a := range in.Actions {
+		if a.ActionID == stopAction {
+			return p.stop(ctx, in, a.Value, a.ActionTS)
+		}
 		if !strings.HasPrefix(a.ActionID, buttonPrefix) {
 			continue
 		}
