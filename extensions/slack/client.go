@@ -36,8 +36,10 @@ func (e *RateLimitError) Error() string {
 }
 
 // APIError is a Slack Web API refusal (`ok: false`). Code is Slack's error
-// name, sanitized; the response body is never retained.
-type APIError struct{ Method, Code string }
+// name, sanitized; Detail is what Slack said about it (its
+// response_metadata messages, such as which block it refused and why),
+// sanitized and bounded. The response body itself is never retained.
+type APIError struct{ Method, Code, Detail string }
 
 func (e *APIError) Error() string { return "slack " + e.Method + ": " + e.Code }
 
@@ -56,6 +58,30 @@ func IsCode(err error, code string) bool {
 }
 
 var safeCode = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// detail keeps what Slack said about a refusal: at most five messages,
+// each printable ASCII and at most 300 bytes.
+func detail(messages []string) string {
+	var out []string
+	for _, m := range messages {
+		if len(out) == 5 {
+			break
+		}
+		m = strings.Map(func(r rune) rune {
+			if r < 0x20 || r > 0x7e {
+				return -1
+			}
+			return r
+		}, m)
+		if len(m) > 300 {
+			m = m[:300]
+		}
+		if m = strings.TrimSpace(m); m != "" {
+			out = append(out, m)
+		}
+	}
+	return strings.Join(out, "; ")
+}
 
 // ClientOptions tune the client.
 type ClientOptions struct {
@@ -217,8 +243,11 @@ func (c *Client) callHeaders(ctx context.Context, secret, method string, form ur
 			return &StatusError{Method: method, Status: res.StatusCode}
 		}
 		var envelope struct {
-			OK    bool   `json:"ok"`
-			Error string `json:"error"`
+			OK               bool   `json:"ok"`
+			Error            string `json:"error"`
+			ResponseMetadata struct {
+				Messages []string `json:"messages"`
+			} `json:"response_metadata"`
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
 			return &StatusError{Method: method, Status: res.StatusCode}
@@ -239,7 +268,7 @@ func (c *Client) callHeaders(ctx context.Context, secret, method string, form ur
 				}
 				return ErrCredential
 			}
-			return &APIError{Method: method, Code: code}
+			return &APIError{Method: method, Code: code, Detail: detail(envelope.ResponseMetadata.Messages)}
 		}
 		if headers != nil {
 			*headers = res.Header.Clone()
@@ -379,7 +408,7 @@ type Post struct {
 	Metadata  *Metadata `json:"metadata,omitempty"`
 	// Blocks, when set, lay the message out (a prompt's buttons); Text is
 	// then its notification and accessibility text.
-	Blocks []map[string]any `json:"blocks,omitempty"`
+	Blocks []json.RawMessage `json:"blocks,omitempty"`
 	// Links are not unfurled: a reply never creates follow-up previews.
 	UnfurlLinks bool `json:"unfurl_links"`
 	UnfurlMedia bool `json:"unfurl_media"`

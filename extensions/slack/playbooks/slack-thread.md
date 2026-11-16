@@ -17,7 +17,7 @@ Everything that touches Slack goes through Open Conduit's toolbelt, which alread
 | --- | --- | --- |
 | `slack.context` | | the team, channel, thread and the exact `wait` input for this thread |
 | `slack.thread` | `limit`? | the whole thread, oldest first, each message classed as human, agent or bot |
-| `slack.reply` | `text`, `broadcast`? | reply in the thread (`broadcast` also posts it to the channel) |
+| `slack.reply` | `text`, `blocks`?, `broadcast`? | reply in the thread (`blocks` adds tables, charts or cards after the text; `broadcast` also posts it to the channel) |
 | `slack.upload` | `file_path`, `title`? | when your toolbelt offers it: put a file from your directory, such as a screenshot, in the thread |
 
 Post every reply with `slack.reply`: it marks the reply as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Never post through any other route.
@@ -28,7 +28,7 @@ Your toolbelt may also offer operations other extensions add, such as `introspec
 
 1. Read what you were given. On a first turn, read the whole thread with `slack.thread` if the messages you were handed are not the full story.
 2. Do what the thread needs from you, following your instructions.
-3. Reply once with `slack.reply`. Write for Slack: short paragraphs, no headings, code in backticks.
+3. Reply once with `slack.reply`. Write for Slack: short paragraphs, no headings, code in backticks. When the answer is a table or a chart, add it as `blocks` (a `table` or `data_visualization` block) rather than drawing it in text.
 4. Unless the conversation is over, wait on the thread: call `wait` with the `wait` object `slack.context` returns (`{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`), then end the turn. Waiting keeps your session: when a person writes in the thread, Open Conduit resumes you with what they wrote, even days later and across restarts.
 
    When your instructions have you wait on something else instead, such as an issue you filed (`github.wait`), use that wait and end the turn. A message in the thread then doesn't resume you; it is handed to you with whatever does. One wake ends that wait: if you were waiting for several things and what's left still isn't ready, wait again.

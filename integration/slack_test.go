@@ -761,6 +761,96 @@ func TestSlackReplyToolIsDurableAndOnce(t *testing.T) {
 	}
 }
 
+// TestSlackReplyToolSendsMarkdownAndBlocks: a reply's text is sent as a
+// markdown block with the text as its fallback, an agent's display blocks
+// follow it, interactive blocks are refused before anything is posted, and
+// what Slack says about blocks it refuses reaches the agent.
+func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "How did the week go?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	attempt := e.startAttempt(w.ID)
+	tools, err := sl.NewTools(sl.ToolsOptions{Store: e.store, Now: e.clock.Now, Sources: func() []sl.Source {
+		return []sl.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply extension.Operation
+	for _, op := range tools.Registration().Operations {
+		if op.Name == sl.OpReply {
+			reply = op
+		}
+	}
+	auth := extension.Authority{ScopeID: slScope, WorkID: w.ID, ExecutionID: attempt}
+	call := func(request, input string) (map[string]any, error) {
+		ctx := extension.WithCallRequestID(context.Background(), request)
+		out, err := reply.Handler(ctx, auth, domain.Payload{Schema: "json", Data: json.RawMessage(input)})
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		_ = json.Unmarshal(out.Data, &m)
+		return m, nil
+	}
+	// A number beyond float64's precision reaches Slack exactly as sent.
+	table := `{"type":"table","rows":[[{"type":"raw_text","text":"Day"},{"type":"raw_text","text":"Tickets"}],[{"type":"raw_text","text":"Mon"},{"type":"raw_number","value":12345678901234567890,"text":"many"}]]}`
+	out, err := call("r1", `{"text":"**Five** tickets closed.","blocks":[`+table+`]}`)
+	if err != nil || out["state"] != sl.IntentPosted {
+		t.Fatalf("reply with blocks: %v %v", out, err)
+	}
+	if sent := e.fake.PostedBlocks(out["ts"].(string)); len(sent) != 2 || string(sent[1]) != table {
+		t.Fatalf("the table was not posted as sent: %s", sent)
+	}
+	posted := e.fake.AgentReplies(slChannel, root)
+	if len(posted) != 1 || posted[0].Text != "**Five** tickets closed." || len(posted[0].Blocks) != 2 ||
+		posted[0].Blocks[0]["type"] != "markdown" || posted[0].Blocks[0]["text"] != "**Five** tickets closed." || posted[0].Blocks[1]["type"] != "table" {
+		t.Fatalf("posted: %+v", posted)
+	}
+	// A rate-limited reply is finished later from its record, still exact.
+	e.fake.RateLimit("chat.postMessage", 20, 1)
+	spaced := strings.ReplaceAll(strings.Replace(table, `"Mon"`, `"Mon & <https://example.com|Tue>"`, 1), ",", ", ")
+	if out, err := call("r-later", `{"text":"Again.","blocks":[`+spaced+`]}`); err != nil || out["state"] != "pending" {
+		t.Fatalf("rate-limited reply: %v %v", out, err)
+	}
+	e.clock.Add(21 * time.Second)
+	e.fake.Advance(21 * time.Second)
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("finished from the record: %+v", res)
+	}
+	later := e.fake.AgentReplies(slChannel, root)
+	if len(later) != 2 {
+		t.Fatalf("replies: %d", len(later))
+	}
+	// Posted as sent, in JSON's encoding (compacted, with <, > and &
+	// escaped, which Slack reads as the same string).
+	want, _ := json.Marshal(json.RawMessage(spaced))
+	if sent := e.fake.PostedBlocks(later[1].TS); len(sent) != 2 || string(sent[1]) != string(want) || !strings.Contains(string(sent[1]), "12345678901234567890") {
+		t.Fatalf("the record's table was not posted as sent: %s", sent)
+	}
+	var op *extension.OperationError
+	for name, blocks := range map[string]string{
+		"a button":         `{"type":"section","text":{"type":"mrkdwn","text":"x"},"accessory":{"type":"button","text":{"type":"plain_text","text":"Go"}}}`,
+		"an actions block": `{"type":"actions","elements":[]}`,
+		"a card's actions": `{"type":"card","title":{"type":"plain_text","text":"x"},"actions":[]}`,
+		"an action cell":   `{"type":"data_table","caption":"x","rows":[[{"type":"raw_text","text":"a"}],[{"type":"action_cell","element":{"type":"button"}}]]}`,
+	} {
+		if _, err := call("r-"+name, `{"text":"x","blocks":[`+blocks+`]}`); !errors.As(err, &op) || op.Code != "block_interactive" && op.Code != "block_not_allowed" {
+			t.Errorf("%s was not refused: %v", name, err)
+		}
+	}
+	if n := len(e.fake.AgentReplies(slChannel, root)); n != 2 {
+		t.Fatalf("a refused reply was posted: %d", n)
+	}
+	e.fake.FailNextPost("refuse:invalid_blocks:[ERROR] missing required field: text [json-pointer:/blocks/1/rows/1/0]")
+	if _, err := call("r2", `{"text":"x","blocks":[{"type":"divider"}]}`); !errors.As(err, &op) || op.Code != "slack_refused" || !strings.Contains(op.Message, "json-pointer:/blocks/1/rows/1/0") {
+		t.Fatalf("Slack's reason was not passed on: %v", err)
+	}
+}
+
 // TestSlackRateLimitedScanInfersNoAbsence: a rate-limited generation infers
 // no absence; once the limit lifts, deletions surface as generic absence that
 // reaches no Work as input.

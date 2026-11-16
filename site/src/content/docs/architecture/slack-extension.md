@@ -80,7 +80,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `claim_from` | The entry's start point: which threads no Work owns it may claim. `registration` (default): only threads begun at or after the time this daemon first registered the channel for the entry. `all`: threads of any age reconcile reads. An RFC 3339 time (`2026-11-13T00:00:00Z`): threads begun from then. See [start points](#start-points). |
 | `history_hours` | Default 336 (14 days), 1–2160. The reconcile window. |
 | `refresh_minutes` | Default 60. How long an unchanged thread's replies are taken from memory. |
-| `projection` | `disabled`, `dry_run`. `serve --dry-run` forces a dry run. |
+| `projection` | `disabled`, `dry_run` and `format` (`markdown`, the default, or `mrkdwn`; see [message layout](#message-layout)). `serve --dry-run` forces a dry run. |
 | `post` | Which bindings may post a new message (`slack.post`) and where: `[{"binding": "nightly", "channels": ["C0123"]}]`. Each channel must be one of `channels`, so the new thread's replies are observed. An entry's `follow_up` (`{"grants": ["…"]}`, or `{}` for none) lets a person's reply to that binding's post open a successor once the posting Work has finished, with only those binding grants. Without it such a reply starts nothing. Empty: no binding may post. |
 | `progress` | `{"enabled": true, "stop": ["slack:U…", …]}` keeps a [progress message](#progress-messages) for each run in a conversation's thread. `stop` (at most 1000, each `slack:<user ID>`, the form a gate's responders take) lists who may press its **Stop** button; empty shows none, and `stop` without `enabled` is refused. Unset: no progress message, as before. |
 | `identities` | The name and icon each binding's messages post under: `[{"binding": "engineer", "username": "Steve", "icon_emoji": ":wrench:"}]`, with `icon_url` (https) instead of `icon_emoji` if you like. Each entry sets a `username`, an icon or both. Needs `chat:write.customize`. A binding with no entry posts as the app. See [binding identities](#binding-identities). |
@@ -248,13 +248,13 @@ One app can serve many agents: a front agent in a thread, the specialists it han
 Replies are not re-derivable. Each one has a stable intent ID, a durable KV record and a discoverable marker:
 
 - **Outcome replies.** An outcome declaring `slack.reply.v1` `{text, broadcast?}` becomes the intent `outcome/<execution id>`, re-derived from durable outcomes on every pass.
-- **Tool replies.** `slack.reply` takes `{text, broadcast?}` and creates the intent `call/<execution>/<request id>` (or a digest of the input). The record keeps the text, so the projector finishes a delivery whose caller is gone.
+- **Tool replies.** `slack.reply` takes `{text, blocks?, broadcast?}` and creates the intent `call/<execution>/<request id>` (or a digest of the input). The record keeps the text and blocks, so the projector finishes a delivery whose caller is gone. The blocks are part of the intent's identity: a reused intent ID with other blocks is refused like other text.
 
 The record moves through these states:
 
 1. `pending`
 2. `attempted`, recorded before `chat.postMessage`
-3. `posted`, or `failed` when Slack answered `ok:false`. Nothing was posted, so it is never retried blindly, and the tool reports `slack_refused`.
+3. `posted`, or `failed` when Slack answered `ok:false`. Nothing was posted, so it is never retried blindly, and the tool reports `slack_refused` with what Slack said about it (its `response_metadata` messages, such as which block field it refused, made printable and cut to five messages of 300 bytes).
 
 A rate limit or a credential failure returns the record to `pending`. A lost answer (a network error or 5xx) leaves it `attempted`. After 30 seconds the projector reads the thread and completes the record when it finds the marker, instead of posting again. A reused intent ID with different content is refused (`intent_conflict`).
 
@@ -272,6 +272,14 @@ The projector runs at most every five seconds in the background. `slack.context`
 - **Not input.** The file's message is the app's own, so normalization classes it as an agent message (with `bot_user_id`) or a bot message, never a person's.
 
 `TestSlackUploadIsOnceAndWithinTheEntrysLimits` and `TestSlackUploadNeedsTheEntrysUploadsAndTheScope` cover this against the fake, which shares a file once and can lose or refuse the share's answer.
+
+## Message layout
+
+Models write standard markdown, so a message's text goes to Slack as a `markdown` block by default, and the agent is never taught Slack's `mrkdwn`. The text is also the message's `text`, which Slack shows in notifications and screen readers, and which the marker's text fallback and `slack.thread` read back. Markdown blocks share a limit of 12,000 characters a message. Longer text with nothing after it is posted as plain text, which Slack reads as `mrkdwn`; with blocks after it, it is refused (`text_too_long`). An entry with `projection.format` `mrkdwn` keeps the older behaviour: the text is posted as plain text, read as `mrkdwn`, and becomes a `section` block (at most 3,000 characters) only when blocks follow it. A prompt lays out its own blocks and isn't affected.
+
+`slack.reply` and `slack.post` take an optional `blocks`: Block Kit blocks shown after the text, such as a `table`, a sortable `data_table`, a `data_visualization` chart or a `card`. The host keeps them as the agent sent them and posts them as sent (only compacted, with `<`, `>` and `&` escaped, which Slack reads as the same string), so a number in a table or chart reaches Slack exactly. The intent's digest of the blocks uses that same encoding, so a reply the projector finishes from its record is the same intent; it decodes only a copy to check them.
+
+**Decision: the host admits display blocks only.** A button, select or input in an agent's message would send presses that nothing here handles, so the host refuses them before anything is posted, and it fails closed. A block's type must be `markdown`, `section`, `header`, `divider`, `context`, `image`, `rich_text`, `table`, `data_table`, `data_visualization` or `card` (otherwise `block_not_allowed`). Nothing anywhere in it may be an interactive element (a `button`, `action_cell`, `feedback_buttons`, any select, picker or text input) or carry `action_id`, `actions` or `dispatch_action` (`block_interactive`), so a card's actions and a data table's button cells are refused while the rest of those blocks pass. The host also bounds what it keeps: at most 49 blocks after the text, 100,000 bytes in all. Everything else about a block (its fields, its sizes, how many charts a message may carry) is Slack's to judge. Its refusal comes back to the agent with Slack's reason, so the agent can correct the block. A probe in a real workspace (issue #674) showed `markdown`, `table`, `data_table`, `data_visualization`, `card` and `context_actions` render in a message for an app with only `chat:write`, `chat:write.customize` and `reactions:write`, and that `alert` is refused in a message. `TestSlackReplyToolSendsMarkdownAndBlocks` covers the layout, the refusals and Slack's reason against the fake.
 
 ## Verification
 

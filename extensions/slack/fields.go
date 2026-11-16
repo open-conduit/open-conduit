@@ -28,7 +28,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "refresh_minutes"},
 		{Name: "receiver", Default: "socket", Options: []string{"socket", "events", "none"}},
 		{Name: "signing_secret"},
-		{Name: "projection"},
+		{Name: "projection", Help: `{"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)}`},
 		{Name: "post"},
 		{Name: "progress", Help: `{"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed`},
 		{Name: "identities", Help: "a binding's own name and icon: [{binding, username, icon_emoji or icon_url}]"},

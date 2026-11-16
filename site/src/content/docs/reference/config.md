@@ -677,7 +677,7 @@ Extension entry `config`:
 | `refresh_minutes` |  |  |
 | `receiver` | `socket` | One of socket, events, none. |
 | `signing_secret` |  |  |
-| `projection` |  |  |
+| `projection` |  | {"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)} |
 | `post` |  |  |
 | `progress` |  | {"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed |
 | `identities` |  | a binding's own name and icon: [{binding, username, icon_emoji or icon_url}] |

@@ -50,6 +50,8 @@ type Server struct {
 	envelopes int
 	acks      map[string]bool
 	ephemeral []slack.Ephemeral
+	// posted keeps each posted message's blocks byte for byte, by ts.
+	posted    map[string][]json.RawMessage
 	listLimit int                 // users.conversations page size override (0: the request's)
 	reactions map[string][]string // channel/ts -> the app's reactions, in order added
 	updates   int
@@ -108,6 +110,14 @@ func (s *Server) Updates() int { s.mu.Lock(); defer s.mu.Unlock(); return s.upda
 // SetListLimit makes users.conversations answer at most n conversations a
 // page, whatever the request's limit (0: the request's).
 func (s *Server) SetListLimit(n int) { s.mu.Lock(); s.listLimit = n; s.mu.Unlock() }
+
+// PostedBlocks are a posted message's blocks exactly as chat.postMessage
+// received them.
+func (s *Server) PostedBlocks(ts string) []json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.posted[ts]
+}
 
 // Ephemerals are the messages shown to one person (chat.postEphemeral).
 func (s *Server) Ephemerals() []slack.Ephemeral {
@@ -199,7 +209,8 @@ func (s *Server) RateLimit(method string, retryAfter, n int) {
 
 // FailNextPost makes the next chat.postMessage misbehave: "lost" creates the
 // message and then answers 500 (an ambiguous post); "refuse:<code>" answers
-// ok:false without posting.
+// ok:false without posting, and "refuse:<code>:<message>" also says why, as
+// Slack's response_metadata messages do.
 func (s *Server) FailNextPost(mode string) { s.mu.Lock(); s.postMode = mode; s.mu.Unlock() }
 
 // WithholdMetadata makes listings omit message metadata, as for a token or
@@ -594,10 +605,24 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 	mode := s.postMode
 	s.postMode = ""
 	if code, ok := strings.CutPrefix(mode, "refuse:"); ok {
-		return apiAnswer{"ok": false, "error": code}, http.StatusOK
+		code, said, _ := strings.Cut(code, ":")
+		answer := apiAnswer{"ok": false, "error": code}
+		if said != "" {
+			answer["response_metadata"] = map[string]any{"messages": []string{said}}
+		}
+		return answer, http.StatusOK
 	}
 	ts := s.tick()
-	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata, Blocks: p.Blocks}
+	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata}
+	for _, b := range p.Blocks {
+		var block map[string]any
+		_ = json.Unmarshal(b, &block)
+		m.Blocks = append(m.Blocks, block)
+	}
+	if s.posted == nil {
+		s.posted = map[string][]json.RawMessage{}
+	}
+	s.posted[ts] = p.Blocks
 	if (p.Username != "" || p.IconEmoji != "" || p.IconURL != "") && s.granted(slack.CustomizeScope) {
 		// As Slack shows a message posted under its own name: a bot
 		// message carrying the app's bot ID and the name, with no user.
