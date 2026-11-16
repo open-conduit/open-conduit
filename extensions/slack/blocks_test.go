@@ -123,9 +123,20 @@ func TestProjectionFormat(t *testing.T) {
 	}
 }
 
-// Whitespace in a block doesn't change the intent it belongs to, since the
-// record the projector finishes from keeps it compacted.
-func TestBlocksDigestIgnoresWhitespace(t *testing.T) {
+// Neither whitespace nor the record's HTML escaping changes the intent a
+// block belongs to, since the projector finishes it from the record.
+func TestBlocksDigestMatchesTheRecord(t *testing.T) {
+	link := `{"type":"section","text":{"type":"mrkdwn","text":"A & B <https://x|y>"}}`
+	stored, _ := json.Marshal(struct {
+		C []json.RawMessage `json:"c"`
+	}{rb(link)})
+	var back struct {
+		C []json.RawMessage `json:"c"`
+	}
+	_ = json.Unmarshal(stored, &back)
+	if blocksDigest(back.C) != blocksDigest(rb(link)) {
+		t.Fatal("a block read back from its record is another intent")
+	}
 	if blocksDigest(rb(`{ "type": "divider" }`)) != blocksDigest(rb(`{"type":"divider"}`)) || blocksDigest(nil) != "" {
 		t.Fatal("digest")
 	}

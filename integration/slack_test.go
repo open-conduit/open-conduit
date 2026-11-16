@@ -812,7 +812,7 @@ func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
 	}
 	// A rate-limited reply is finished later from its record, still exact.
 	e.fake.RateLimit("chat.postMessage", 20, 1)
-	spaced := strings.ReplaceAll(table, ",", ", ")
+	spaced := strings.ReplaceAll(strings.Replace(table, `"Mon"`, `"Mon & <https://example.com|Tue>"`, 1), ",", ", ")
 	if out, err := call("r-later", `{"text":"Again.","blocks":[`+spaced+`]}`); err != nil || out["state"] != "pending" {
 		t.Fatalf("rate-limited reply: %v %v", out, err)
 	}
@@ -825,7 +825,10 @@ func TestSlackReplyToolSendsMarkdownAndBlocks(t *testing.T) {
 	if len(later) != 2 {
 		t.Fatalf("replies: %d", len(later))
 	}
-	if sent := e.fake.PostedBlocks(later[1].TS); len(sent) != 2 || string(sent[1]) != table {
+	// Posted as sent, in JSON's encoding (compacted, with <, > and &
+	// escaped, which Slack reads as the same string).
+	want, _ := json.Marshal(json.RawMessage(spaced))
+	if sent := e.fake.PostedBlocks(later[1].TS); len(sent) != 2 || string(sent[1]) != string(want) || !strings.Contains(string(sent[1]), "12345678901234567890") {
 		t.Fatalf("the record's table was not posted as sent: %s", sent)
 	}
 	var op *extension.OperationError

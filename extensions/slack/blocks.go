@@ -172,17 +172,16 @@ func blocksDigest(blocks []json.RawMessage) string {
 	if len(blocks) == 0 {
 		return ""
 	}
-	// Compacted, since the stored record keeps them compacted: a block
-	// sent with whitespace is the same intent when the projector finishes
-	// it from the record.
+	// In the record's own encoding (json.Marshal compacts a raw value and
+	// escapes <, >, & and U+2028/2029), so a block is the same intent when
+	// the projector finishes it from the record.
 	parts := make([]string, len(blocks))
 	for i, b := range blocks {
-		var c bytes.Buffer
-		if json.Compact(&c, b) != nil {
-			c.Reset()
-			c.Write(b)
+		data, err := json.Marshal(b)
+		if err != nil {
+			data = b
 		}
-		parts[i] = c.String()
+		parts[i] = string(data)
 	}
 	return digest(parts...)
 }
