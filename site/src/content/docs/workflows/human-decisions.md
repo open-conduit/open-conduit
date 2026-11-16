@@ -155,6 +155,8 @@ When the Work is a Slack conversation, the question (with its context) or the ap
 {"operations": ["deploy.*"], "responders": ["slack:U0123ABCD", "operator:local"]}
 ```
 
+When the Work was handed its task by a Slack conversation (`create_work`), at any depth, turn on `"child_requests": true` in the Slack entry to see its requests in that conversation's thread. Each shows in the thread's progress message as "Steve asks: Approve or refuse github.pr.create (for slack:U0123ABCD)", in progress until it is answered, and marked as an error if it is refused or times out. When a Slack person is among the responders, the request is also posted with its buttons, and a press answers the child's request. When only operators or GitHub users may answer, the thread shows only the state, and they answer where they are. Either way the conversation's agent isn't woken, and it can't answer for anyone.
+
 A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
 
 ## Escalation

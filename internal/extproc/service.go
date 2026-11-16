@@ -71,6 +71,9 @@ type Deps struct {
 	// Actions lists what every provider offers on a scope or Work in it,
 	// for owner (action.list, permission action.submit).
 	Actions func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.ActionOffer, error)
+	// Requests lists the requests every provider reports on Work in a
+	// scope, for owner (request.list, permission action.submit).
+	Requests func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.RequestOffer, error)
 	// Probes are the setup probes the host, its extensions and executors
 	// offer, by full name (probe.list and probe.run, permission probes).
 	Probes func() map[string]extension.SetupProbe
@@ -470,6 +473,12 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.actionList(ctx, p)
+	case "request.list":
+		var p protocol.RequestListParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.requestList(ctx, p)
 	case "action.submit":
 		var p protocol.ActionSubmitParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

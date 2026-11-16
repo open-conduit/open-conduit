@@ -188,6 +188,12 @@ type ExtensionConfig struct {
 	// replies of the bindings it names (every binding when it names none).
 	// A press is recorded on the Work as slack.feedback. Off by default.
 	Feedback *FeedbackConfig `json:"feedback,omitempty"`
+	// ChildRequests, when set, shows the requests of a conversation's
+	// child Work, at any depth (an approval its gated call waits on, a
+	// question it asked), in the conversation's thread: as a task of the
+	// run's progress message, and, when the request's responders include
+	// a Slack person, as a prompt with its buttons. Off by default.
+	ChildRequests bool `json:"child_requests,omitempty"`
 }
 
 // FeedbackConfig turns on feedback buttons below replies.
@@ -315,6 +321,9 @@ type Settings struct {
 	// (sorted) narrows them to those bindings' replies, empty for all.
 	Feedback         bool
 	FeedbackBindings []string
+	// ChildRequests shows child Work's requests in the conversation's
+	// thread.
+	ChildRequests bool
 }
 
 // AsksFeedback reports whether a reply posted on binding carries feedback
@@ -499,6 +508,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		}
 		s.Feedback, s.FeedbackBindings = fc.Enabled, bindings
 	}
+	s.ChildRequests = c.ChildRequests
 	if u := c.Uploads; u != nil {
 		s.Uploads, s.UploadMax = true, MaxUpload
 		if u.MaxBytes != 0 {

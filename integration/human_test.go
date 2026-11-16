@@ -468,6 +468,42 @@ func TestHumanAnswerActionContract(t *testing.T) {
 	})
 }
 
+// The asks meet the shared request contract (issue #681), also in the
+// window before Sync settles an answered ask: ask A is approved and the
+// call runs, then the Work asks B before any pass. A is reported answered
+// without an action, and only B names the answer action, so a surface
+// can't pair A's responders with B's buttons.
+func TestHumanRequestsContract(t *testing.T) {
+	conformance.RunRequests(t, func() conformance.RequestFixture {
+		h := newHumanHarness(t, "persistent", gated)
+		out, err := h.deploy(t, `{"env":"prod"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.park(t, out)
+		if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+			t.Fatal(err)
+		}
+		h.reconcile(t)
+		h.reconcile(t)
+		h.resume(t)
+		if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil {
+			t.Fatalf("the approved call did not run: %+v %v", out, err)
+		}
+		if out, err = h.deploy(t, `{"env":"staging"}`); err != nil || out.Wait == nil {
+			t.Fatalf("the second call was not held: %+v %v", out, err)
+		}
+		h.park(t, out)
+		rs, err := h.actions.Requests(context.Background(), h.target(t))
+		if err != nil || len(rs) != 2 || rs[0].State != extension.RequestAnswered || rs[0].Action != "" || rs[1].State != extension.RequestOpen || rs[1].Action != hu.ActionAnswer {
+			t.Fatalf("requests before Sync: %+v %v", rs, err)
+		}
+		scope := h.target(t)
+		scope.Work = nil
+		return conformance.RequestFixture{Provider: h.actions, Answerable: h.target(t), Others: []extension.ActionTarget{scope}}
+	})
+}
+
 // The question panel meets the shared panel contract: shown with its answer
 // button on Work parked on an ask, and not on the scope.
 func TestHumanQuestionPanelContract(t *testing.T) {
@@ -689,6 +725,72 @@ func TestHumanGateRefusalAndTimeout(t *testing.T) {
 	refusedWith(t, err, hu.CodeApprovalTimedOut)
 	if *h.deploys != 0 {
 		t.Fatalf("a refused call ran %d times", *h.deploys)
+	}
+}
+
+// A gate's requests say who may answer each and how it ended (issue #681):
+// open while held, refused when refused, expired when nobody answered in
+// time, and answered once approved. Each new hold is a new request, and the
+// earlier ones are still reported.
+func TestHumanGateRequestsSayHowEachEnded(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	ctx := context.Background()
+	states := func() []extension.Request {
+		t.Helper()
+		rs, err := h.actions.Requests(ctx, h.target(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rs
+	}
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	rs := states()
+	if len(rs) != 1 || rs[0].State != extension.RequestOpen || rs[0].Action != hu.ActionAnswer || !strings.Contains(rs[0].Label, "fixture.deploy") || len(rs[0].Responders) == 0 {
+		t.Fatalf("held: %+v", rs)
+	}
+	if _, err = h.answer(t, extension.LocalOperator, "refuse", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalRefused)
+	if rs = states(); len(rs) != 1 || rs[0].State != extension.RequestRefused || rs[0].By != "operator:local" {
+		t.Fatalf("refused: %+v", rs)
+	}
+
+	out, err = h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	h.f.Clock.Advance(3 * time.Hour)
+	if rs = states(); len(rs) != 2 || rs[0].State != extension.RequestRefused || rs[1].State != extension.RequestExpired || rs[1].ID == rs[0].ID {
+		t.Fatalf("timed out: %+v", rs)
+	}
+	if err = h.scheduler.Wake(ctx, out.Wait.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalTimedOut)
+
+	out, err = h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	// Reported answered at once, before Sync settles the record.
+	if rs = states(); len(rs) != 3 || rs[1].State != extension.RequestExpired || rs[2].State != extension.RequestAnswered || rs[2].By != "operator:local" {
+		t.Fatalf("approved: %+v", rs)
 	}
 }
 

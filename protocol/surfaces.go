@@ -605,6 +605,35 @@ type Action struct {
 	// (extension.Action.Awaited).
 	Awaited bool `json:"awaited,omitempty"`
 }
+
+// Request is one request a person is asked to decide (extension.Request).
+type Request struct {
+	ID         string   `json:"id"`
+	Label      string   `json:"label"`
+	Detail     string   `json:"detail,omitempty"`
+	Action     string   `json:"action,omitempty"`
+	Responders []string `json:"responders,omitempty"`
+	State      string   `json:"state"`
+	By         string   `json:"by,omitempty"`
+}
+
+// FromRequest is r on the wire.
+func FromRequest(r extension.Request) Request {
+	return Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By}
+}
+
+// Extension is r as the contract's.
+func (r Request) Extension() extension.Request {
+	return extension.Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By}
+}
+
+type WorkRequestsParams struct {
+	Target ActionTarget `json:"target"`
+}
+type WorkRequestsResult struct {
+	Requests []Request `json:"requests,omitempty"`
+}
+
 type WorkActionsParams struct {
 	Target ActionTarget `json:"target"`
 }

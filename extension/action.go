@@ -152,3 +152,57 @@ type ActResult struct {
 	Added   bool
 	Message string
 }
+
+// Requests (issue #681). An awaited action answers a request: a question
+// Work asked, or an approval a call needs. A surface away from the Work
+// (the thread of a conversation that handed the Work its task, say) shows
+// the request's state, who may answer it, and how it ended, without
+// knowing what it means. The provider owns all of that: it says who its
+// responders are and whether an answer granted or refused the request.
+
+// Request states: open until it is settled; answered (a question answered,
+// an approval given), refused (an approval refused), expired (nobody
+// answered in time) or withdrawn (the asker stopped waiting) once it is.
+const (
+	RequestOpen      = "open"
+	RequestAnswered  = "answered"
+	RequestRefused   = "refused"
+	RequestExpired   = "expired"
+	RequestWithdrawn = "withdrawn"
+)
+
+// Request is one request a person is asked to decide on a target. ID is
+// stable for the request's life, new for each new request, and unique
+// among the provider's requests on the target. Label says what it is.
+// Action is the action that answers it, set only while that action, offered
+// on the target now, answers this request and no other: so at most one of
+// a provider's requests on a target names a given action, and only an open
+// one. An open request without Action is not answerable yet (or no longer
+// through this provider's actions). Responders are who may answer it now,
+// each kind (anyone of that kind) or kind:id, in the provider's own terms
+// (the caller forms Act gives, such as slack:U0123ABCD, and operator).
+// State is one of the Request states, and By who settled it, set only on
+// a settled request that someone settled. conformance.CheckRequests checks
+// these rules.
+type Request struct {
+	ID         string
+	Label      string
+	Detail     string
+	Action     string
+	Responders []string
+	State      string
+	By         string
+}
+
+// RequestProvider is an ActionProvider that also reports its requests on a
+// target: the open ones, and those it settled that it still remembers
+// (at least the latest), so a surface can say how each ended.
+type RequestProvider interface {
+	Requests(ctx context.Context, t ActionTarget) ([]Request, error)
+}
+
+// RequestOffer is one request and the provider it is from.
+type RequestOffer struct {
+	Provider string
+	Request
+}

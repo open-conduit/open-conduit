@@ -41,6 +41,18 @@ func (d *daemon) listActions(kind string) func(context.Context, domain.ID, domai
 	}
 }
 
+// listRequests is Host.Requests: the requests every provider reports on
+// Work in the scope (issue #681).
+func (d *daemon) listRequests(kind string) func(context.Context, domain.ID, domain.ID) ([]extension.RequestOffer, error) {
+	h := actHost{store: d.coord, now: d.now, providers: d.actions}
+	return func(ctx context.Context, scope, work domain.ID) ([]extension.RequestOffer, error) {
+		if kind == "" || kind == extension.CallerOperator {
+			return nil, extension.ErrUnauthorized
+		}
+		return h.requests(ctx, scope, work)
+	}
+}
+
 // actHost is what Host.Act needs of the daemon: the store, the action
 // providers on a scope and the action path (runtime.Control.Act).
 type actHost struct {
@@ -150,6 +162,39 @@ func (h actHost) list(ctx context.Context, scope, work domain.ID) ([]extension.A
 		}
 		for _, a := range list {
 			out = append(out, extension.ActionOffer{Provider: n, Action: a})
+		}
+	}
+	return out, nil
+}
+
+// requests are what every request provider reports on Work in scope, in
+// provider name order. A provider that fails is left out, as in list.
+func (h actHost) requests(ctx context.Context, scope, work domain.ID) ([]extension.RequestOffer, error) {
+	if scope == "" || work == "" {
+		return nil, extension.ErrInvalid
+	}
+	t, err := h.target(ctx, scope, work)
+	if err != nil {
+		return nil, err
+	}
+	providers := h.providers(ctx, scope)
+	names := make([]string, 0, len(providers))
+	for n := range providers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := []extension.RequestOffer{}
+	for _, n := range names {
+		rp, ok := providers[n].(extension.RequestProvider)
+		if !ok {
+			continue
+		}
+		list, err := rp.Requests(ctx, t)
+		if err != nil {
+			continue
+		}
+		for _, r := range list {
+			out = append(out, extension.RequestOffer{Provider: n, Request: r})
 		}
 	}
 	return out, nil

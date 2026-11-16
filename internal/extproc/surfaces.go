@@ -771,6 +771,31 @@ func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([
 	return actions, nil
 }
 
+var _ extension.RequestProvider = remoteActions{}
+
+// Requests returns the extension's requests on a target (work.requests).
+// An extension that does not serve the method reports none.
+func (a remoteActions) Requests(ctx context.Context, t extension.ActionTarget) ([]extension.Request, error) {
+	if !a.r.m.Provides.Actions {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var out protocol.WorkRequestsResult
+	if err := a.r.p.Call(ctx, "work.requests", protocol.WorkRequestsParams{Target: protocol.FromActionTarget(t)}, &out); err != nil {
+		var pe *protocol.Error
+		if errors.As(err, &pe) && pe.Code == protocol.CodeMethodNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	requests := make([]extension.Request, 0, len(out.Requests))
+	for _, x := range out.Requests {
+		requests = append(requests, x.Extension())
+	}
+	return requests, nil
+}
+
 func (a remoteActions) Invoke(ctx context.Context, c extension.ActionCall) (extension.ActionPlan, error) {
 	if !a.r.m.Provides.Actions {
 		return extension.ActionPlan{}, &extension.OperationError{Code: "unknown_action", Message: a.r.m.Name + " offers no actions"}

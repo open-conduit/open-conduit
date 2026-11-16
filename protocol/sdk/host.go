@@ -395,6 +395,20 @@ func (h *Host) Actions(ctx context.Context, scope, work domain.ID) ([]extension.
 	return offers, nil
 }
 
+// Requests lists the requests every provider reports on work in scope
+// (permission action.submit): open and settled, with who may answer each.
+func (h *Host) Requests(ctx context.Context, scope, work domain.ID) ([]extension.RequestOffer, error) {
+	var out protocol.RequestListResult
+	if err := h.conn.Call(ctx, "request.list", protocol.RequestListParams{ScopeID: string(scope), WorkID: string(work)}, &out); err != nil {
+		return nil, err
+	}
+	offers := make([]extension.RequestOffer, 0, len(out.Requests))
+	for _, r := range out.Requests {
+		offers = append(offers, extension.RequestOffer{Provider: r.Provider, Request: r.Request.Extension()})
+	}
+	return offers, nil
+}
+
 // ConfigBase reads the configuration now (permission config.read): its
 // generation and hash, and a handle on its text with the text itself
 // redacted. The host keeps the reference text.

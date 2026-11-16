@@ -152,6 +152,7 @@ var Methods = []Method{
 	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}},
 	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}},
 	{Name: "action.list", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Actions", "extension.ActionOffer"}},
+	{Name: "request.list", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Requests", "extension.RequestOffer"}},
 	{Name: "action.submit", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Act", "extension.ActRequest", "extension.ActResult"}},
 	{Name: "probe.serve", Direction: HostToExtension, Provides: "probes", Contract: []string{"extension.SetupProbes.SetupProbes"}},
 	{Name: "probe.list", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"inproc.Host.Probes", "extension.SetupProbe.Name", "extension.SetupProbe.Summary", "extension.SetupProbe.Args"}},
@@ -165,6 +166,7 @@ var Methods = []Method{
 	{Name: "run.environment", Direction: HostToExtension, Provides: "run_environment", Contract: []string{"extension.RunEnvironment.RunEnvironment", "extension.RunLayerProvider.RunLayer", "extension.RunEnvironmentRequest", "extension.RunLayer", "extension.ExecutionContext.Env"}},
 	{Name: "work.annotate", Direction: HostToExtension, Provides: "annotate", Contract: []string{"host:management Annotate"}},
 	{Name: "work.actions", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Actions", "extension.ActionTarget", "extension.Action"}},
+	{Name: "work.requests", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.RequestProvider.Requests", "extension.Request"}},
 	{Name: "work.act", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Invoke", "extension.ActionCall", "extension.Caller", "extension.ActionPlan", "extension.OperationError"}},
 	{Name: "view.render", Direction: HostToExtension, Provides: "panels", Contract: []string{"extension.PanelProvider.Panels", "extension.Panel", "extension.PanelSection"}},
 

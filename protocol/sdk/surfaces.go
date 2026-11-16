@@ -358,6 +358,23 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			out.Actions = append(out.Actions, protocol.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices, Detail: a.Detail, Awaited: a.Awaited})
 		}
 		return out, nil
+	case "work.requests":
+		var p protocol.WorkRequestsParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Requests == nil {
+			return nil, notFound(method)
+		}
+		requests, err := s.ext.Requests(ctx, s.host, p.Target.Extension())
+		if err != nil {
+			return nil, err
+		}
+		out := protocol.WorkRequestsResult{}
+		for _, r := range requests {
+			out.Requests = append(out.Requests, protocol.FromRequest(r))
+		}
+		return out, nil
 	case "view.render":
 		var p protocol.ViewRenderParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -60,6 +60,9 @@ type ProjectorOptions struct {
 	Actions ActionsFunc
 	// Act takes a prompt's button press for the person who pressed it.
 	Act ActFunc
+	// Requests lists the requests reported on child Work, to show them in
+	// the conversation's thread (child_requests); nil shows none.
+	Requests RequestsFunc
 	// Accept accepts an Event of the extension's sealed families: the
 	// TypeThreadOpened that gives a posting Work the thread of its new
 	// top-level message, in the transaction that records the post as made,
@@ -528,6 +531,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		return res, err
 	}
 	intents = append(intents, prompts...)
+	children, err := p.childPrompts(ctx)
+	if err != nil {
+		return res, err
+	}
+	intents = append(intents, children...)
 	var durable []Intent
 	if err := p.transact(ctx, func(tx storage.Tx) error {
 		rows, err := tx.List(p.ns, "intent/")

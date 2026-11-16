@@ -155,6 +155,10 @@ type Extension struct {
 	// verbatim.
 	Actions func(ctx context.Context, h *Host, t extension.ActionTarget) ([]extension.Action, error)
 	Act     func(ctx context.Context, h *Host, c extension.ActionCall) (extension.ActionPlan, error)
+	// Requests reports the requests the actions answer on a target, open
+	// and settled, with who may answer each (manifest actions;
+	// extension.RequestProvider). Optional: without it none are reported.
+	Requests func(ctx context.Context, h *Host, t extension.ActionTarget) ([]extension.Request, error)
 	// Panels returns the panels to show on a target now (manifest panels;
 	// extension.PanelProvider). Their buttons name Actions' IDs.
 	Panels func(ctx context.Context, h *Host, t extension.ActionTarget) ([]extension.Panel, error)
@@ -278,7 +282,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "tunnel.run", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "tunnel.run", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)
