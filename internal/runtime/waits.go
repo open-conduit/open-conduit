@@ -95,6 +95,12 @@ type waitMetadata struct {
 	Blocked  bool
 	Reason   string    `json:",omitempty"`
 	Released domain.ID `json:",omitempty"`
+	// Scanned is the highest accepted sequence a wake scan has already
+	// evaluated without finding a winner. Whether an Event wakes the Wait
+	// never changes once it has been judged (its key, type and origin are
+	// fixed, and consumed input stays consumed), so the next scan starts
+	// after it and a wait that stays active reads only what arrived since.
+	Scanned uint64 `json:",omitempty"`
 }
 type wakeReady struct {
 	WaitID, ExecutionID, EventID domain.ID
@@ -410,6 +416,11 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	if err != nil {
 		return "", err
 	}
+	if winner.Event.ID == "" {
+		if err = advanceWaitScanInTx(tx, wait.ID, &meta, all); err != nil {
+			return "", err
+		}
+	}
 	if winner.Event.ID == "" && meta.Timer.ID != "" && !now.Before(meta.Timer.FireAt) {
 		timer, er := tx.Timer(meta.Timer.ID)
 		if er == nil {
@@ -461,7 +472,13 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	}
 	// Earlier ordinary input is durable context, not a reason to miss the wake.
 	// Join its route checkpoints in acceptance order before the winner checkpoint.
-	for _, a := range all {
+	// Only unrouted input can join, and the scan cursor may have passed it, so
+	// read it from the boundary rather than from the candidates.
+	earlier, err := tx.UnroutedEvents(wait.AfterSequence, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range earlier {
 		if a.Sequence >= winner.Sequence {
 			break
 		}
@@ -725,21 +742,37 @@ func wakeRefusalInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait dom
 }
 
 // waitCandidatesInTx is the accepted input that may wake wait, in acceptance
-// order: everything after its boundary, and its timeout Event should that
-// precede the boundary.
+// order: everything after its boundary that no earlier scan has already
+// judged (meta.Scanned), and its timeout Event should that precede where the
+// scan starts.
 func waitCandidatesInTx(tx storage.Tx, wait domain.Wait, meta waitMetadata) ([]domain.AcceptedEvent, error) {
-	all, err := tx.Events(wait.AfterSequence, 0)
+	start := max(wait.AfterSequence, meta.Scanned)
+	all, err := tx.Events(start, 0)
 	if err != nil {
 		return nil, err
 	}
 	if meta.Timer.ID != "" {
-		if t, er := tx.Event(meta.Timer.Event.ID); er == nil && t.Sequence <= wait.AfterSequence {
+		if t, er := tx.Event(meta.Timer.Event.ID); er == nil && t.Sequence <= start {
 			all = append([]domain.AcceptedEvent{t}, all...)
 		} else if er != nil && !errors.Is(er, storage.ErrNotFound) {
 			return nil, er
 		}
 	}
 	return all, nil
+}
+
+// advanceWaitScanInTx records that the candidates in all were judged and
+// none woke the Wait, so the next scan starts after the last of them.
+func advanceWaitScanInTx(tx storage.Tx, id domain.ID, meta *waitMetadata, all []domain.AcceptedEvent) error {
+	last := meta.Scanned
+	for _, a := range all {
+		last = max(last, a.Sequence)
+	}
+	if last == meta.Scanned {
+		return nil
+	}
+	meta.Scanned = last
+	return putJSON(tx, waitNamespace, identity(string(id)), *meta)
 }
 
 // waitWinnerInTx picks, without writing, the first candidate that wakes
