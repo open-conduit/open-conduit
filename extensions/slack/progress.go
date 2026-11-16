@@ -511,6 +511,12 @@ func (p *Projector) syncRun(ctx context.Context, v *runView) (int, error) {
 		return 0, err
 	}
 	if p.o.Settings.Projection.DryRun {
+		// Nothing is written to Slack, but a run that has ended still
+		// retires, so passes don't keep reading every run ever seen.
+		if !pl.live && (rec.Ended || v.work.State.Terminal()) {
+			rec.Done = true
+			return 0, p.saveRun(ctx, *rec)
+		}
 		return 0, nil
 	}
 	id := progressIntent(rec.Work, rec.Run)

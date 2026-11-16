@@ -2,8 +2,11 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -256,4 +259,43 @@ func TestSlackProgressIsOffByDefault(t *testing.T) {
 	if err := e.projector.Interact(context.Background(), e.fake.Press(slChannel, root, root, slAlice, "oc_stop", `{"w":"`+string(w.ID)+`"}`)); err != nil || called {
 		t.Fatalf("a Stop press was taken while progress is off: %v %v", err, called)
 	}
+}
+
+// In a dry run nothing is written to Slack, and a run that has ended is
+// retired all the same, so later passes don't read it again.
+func TestSlackProgressDryRunRetiresEndedRuns(t *testing.T) {
+	e := newSlackEnv(t, `,"projection":{"dry_run":true},"progress":{"enabled":true}`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Why is checkout slow?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.moveWork(w.ID, domain.WorkRunning)
+	e.converge()
+	e.moveWork(w.ID, domain.WorkCompleted)
+	e.converge()
+	if len(e.progress(root)) != 0 || len(e.fake.Reactions(slChannel, root)) != 0 {
+		t.Fatal("a dry run wrote to Slack")
+	}
+	e.read(func(tx storage.Tx) error {
+		rows, err := tx.List("slack.projection."+slProjectionNS(), "progress/")
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			t.Fatalf("progress records: %d", len(rows))
+		}
+		var rec struct{ Done bool }
+		if err := json.Unmarshal(rows[0].Value, &rec); err != nil || !rec.Done {
+			t.Fatalf("the ended run was not retired: %s", rows[0].Value)
+		}
+		return nil
+	})
+}
+
+// slProjectionNS is the projector's state namespace suffix for slNS, as
+// the extension derives it.
+func slProjectionNS() string {
+	h := sha256.Sum256([]byte(strconv.Itoa(len(slNS)) + ":" + slNS + "|"))
+	return hex.EncodeToString(h[:])[:16]
 }
