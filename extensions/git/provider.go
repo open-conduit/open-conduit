@@ -126,17 +126,22 @@ type lease struct {
 	Repository string                  `json:"repository,omitempty"`
 	// Site is the site the workspace is at (Resource.Site), "" for the
 	// host: Path is a path there.
-	Site          string    `json:"site,omitempty"`
-	Path          string    `json:"path"`
-	Remote        string    `json:"remote"`
-	Base          string    `json:"base,omitempty"`
-	Branch        string    `json:"branch,omitempty"`
-	Sign          bool      `json:"sign,omitempty"`
-	DotEnv        bool      `json:"dotenv,omitempty"`
-	Copy          []string  `json:"copy,omitempty"`
-	RetainSeconds int64     `json:"retain_seconds"`
-	Code          string    `json:"code,omitempty"`
-	Attempts      int       `json:"cleanup_attempts,omitempty"`
+	Site          string   `json:"site,omitempty"`
+	Path          string   `json:"path"`
+	Remote        string   `json:"remote"`
+	Base          string   `json:"base,omitempty"`
+	Branch        string   `json:"branch,omitempty"`
+	Sign          bool     `json:"sign,omitempty"`
+	DotEnv        bool     `json:"dotenv,omitempty"`
+	Copy          []string `json:"copy,omitempty"`
+	RetainSeconds int64    `json:"retain_seconds"`
+	Code          string   `json:"code,omitempty"`
+	Attempts      int      `json:"cleanup_attempts,omitempty"`
+	// NextAttempt is when a site lease whose cleanup failed is tried
+	// again (siteBackoff), and RetentionOver that its removal is retention
+	// ending, so it goes whatever it holds.
+	NextAttempt   time.Time `json:"next_attempt,omitempty"`
+	RetentionOver bool      `json:"retention_over,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	RetainUntil   time.Time `json:"retain_until,omitempty"`
@@ -840,6 +845,13 @@ func (p *Provider) reconcileOne(ctx context.Context, ref string, status extensio
 		report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: l.Code, RetainUntil: l.RetainUntil})
 		return nil
 	case stateCleanupFailed:
+		if l.Site != "" {
+			if now.Before(l.NextAttempt) {
+				report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: l.Code})
+				return nil
+			}
+			return p.removeLeaseAtSite(ctx, &l, l.RetentionOver, retain, report)
+		}
 		return remove()
 	}
 	st, err := status(ctx, l.Owner)

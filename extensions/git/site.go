@@ -261,6 +261,18 @@ func (p *Provider) atSite(ctx context.Context, cfg Config, prm params, a extensi
 			return extension.Resource{}, err
 		}
 	}
+	if !info.valid {
+		// The Work is back at a site where its clone was left: take it
+		// back, with its edits and commits.
+		if back, got, err := p.takeBack(ctx, site, ref, log); err != nil {
+			return extension.Resource{}, err
+		} else if got.valid {
+			if ok && l.Site != "" && l.Site != site.ID() {
+				p.leaveAt(ctx, l, log)
+			}
+			l, info = back, got
+		}
+	}
 	if info.valid {
 		w.Reused = true
 		if branch != l.Branch {
@@ -464,17 +476,78 @@ func (p *Provider) abandonAtSite(ctx context.Context, site extension.Site, l *le
 
 // leaveAt deals with the workspace a lease had at another site before
 // the Work's lease moves to a new one: removed when it holds nothing a
-// remote lacks, otherwise left there, and said so.
+// remote lacks. Otherwise it keeps a lease of its own (leftRef), so
+// Reconcile reports it and removes it as any other workspace at a site:
+// retained for retain_failed_seconds under why it was kept, or, when its
+// site couldn't be reached, cleanup_failed and retried.
 func (p *Provider) leaveAt(ctx context.Context, l lease, log io.Writer) {
 	kept, err := p.removeAtSite(ctx, l, false)
-	switch {
-	case err != nil:
-		logf(log, "the workspace at %s couldn't be reached and is left there: %s", l.Site, firstLine(err.Error()))
-	case kept != "":
-		logf(log, "the workspace at %s is left there (%s)", l.Site, kept)
-	default:
+	if err == nil && kept == "" {
 		logf(log, "removed the workspace at %s", l.Site)
+		return
 	}
+	left := l
+	left.Ref, left.Holders = leftRef(l.Ref, l.Site), nil
+	defer p.lock(left.Ref)()
+	now := p.o.Now()
+	if err != nil {
+		left.State, left.Code, left.Attempts, left.NextAttempt = stateCleanupFailed, "cleanup_failed", 1, now.Add(siteBackoff(1)).UTC()
+		logf(log, "the workspace at %s couldn't be reached and is left there, to be removed later: %s", l.Site, firstLine(err.Error()))
+	} else {
+		left.State, left.Code = stateRetained, kept
+		left.RetainUntil = now.Add(time.Duration(l.RetainSeconds) * time.Second).UTC()
+		logf(log, "the workspace at %s is left there (%s) until %s", l.Site, kept, left.RetainUntil.Format(time.RFC3339))
+	}
+	if err := p.save(&left); err != nil {
+		logf(log, "couldn't record the workspace left at %s: %s", l.Site, err)
+	}
+}
+
+// leftRef is the ref of the lease of a workspace a Work's lease ref left
+// at site.
+func leftRef(ref, site string) string {
+	sum := sha256.Sum256([]byte("left\x00" + ref + "\x00" + site))
+	return ModeClone + "-" + hex.EncodeToString(sum[:16])
+}
+
+// takeBack is the workspace the Work's lease ref left at site, when it is
+// still there: its lease, as the Work's again, and what it holds. The
+// left lease is dropped once taken back.
+func (p *Provider) takeBack(ctx context.Context, site extension.Site, ref string, log io.Writer) (lease, siteInfo, error) {
+	left := leftRef(ref, site.ID())
+	defer p.lock(left)()
+	l, ok, err := p.load(left)
+	if err != nil || !ok || l.Site != site.ID() {
+		return lease{}, siteInfo{}, err
+	}
+	info, err := p.info(ctx, site, l.Path)
+	if err != nil {
+		return lease{}, siteInfo{}, err
+	}
+	if !info.valid {
+		return lease{}, siteInfo{}, p.drop(left)
+	}
+	l.Ref, l.State, l.Code, l.Attempts, l.NextAttempt, l.RetentionOver, l.RetainUntil = ref, stateAcquiring, "", 0, time.Time{}, false, time.Time{}
+	if err := p.save(&l); err != nil {
+		return lease{}, siteInfo{}, err
+	}
+	logf(log, "took back the workspace left at %s", site.ID())
+	return l, info, p.drop(left)
+}
+
+// siteReconcileTimeout bounds each site command Reconcile runs for one
+// lease, so a site that hangs doesn't hold up the others for long.
+var siteReconcileTimeout = time.Minute
+
+// siteBackoff is how long a site lease whose cleanup failed for the nth
+// time waits before the next try: a minute, doubling to an hour, so a site
+// that is down doesn't cost every pass a connection attempt.
+func siteBackoff(n int) time.Duration {
+	d := time.Minute
+	for i := 1; i < n && d < time.Hour; i++ {
+		d *= 2
+	}
+	return min(d, time.Hour)
 }
 
 // removeAtSite removes a lease's workspace at its site. Unless force, one
@@ -521,14 +594,20 @@ func (p *Provider) reconcileAtSite(ctx context.Context, l *lease, retain func(st
 }
 
 func (p *Provider) removeLeaseAtSite(ctx context.Context, l *lease, force bool, retain func(string) error, report *extension.ResourceReport) error {
+	ctx, cancel := context.WithTimeout(ctx, siteReconcileTimeout)
+	defer cancel()
 	kept, err := p.removeAtSite(ctx, *l, force)
 	if err != nil {
 		l.State, l.Code = stateCleanupFailed, "cleanup_failed"
 		l.Attempts++
+		// A removal that retention ended stays forced when retried.
+		l.RetentionOver = l.RetentionOver || force
+		l.NextAttempt = p.o.Now().Add(siteBackoff(l.Attempts)).UTC()
 		report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: l.Code})
 		return errors.Join(err, p.save(l))
 	}
 	if kept != "" {
+		l.Attempts, l.NextAttempt = 0, time.Time{}
 		return retain(kept)
 	}
 	report.Removed++

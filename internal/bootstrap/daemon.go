@@ -151,10 +151,12 @@ type daemon struct {
 	resources     resourceState
 	sandboxes     sandboxState
 	containers    containerState
-	hooks         webhookState
-	external      externalState
-	endpoint      string
-	endpoints     *management.Endpoints
+	// sites records the sites the host gave each resource type.
+	sites     siteLedger
+	hooks     webhookState
+	external  externalState
+	endpoint  string
+	endpoints *management.Endpoints
 	// git is the toolbelt's git transport, one across config generations
 	// so a reload doesn't end a git command's session mid-push.
 	git *management.GitTransport
@@ -454,6 +456,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.openResources()
 	d.openSandboxes()
 	d.openContainers()
+	d.sites.dir = filepath.Join(d.o.StateDir, "sites")
 	// Installed extension packages start before the configuration opens,
 	// so their validators check it (07-03).
 	d.openExtensions(ctx)

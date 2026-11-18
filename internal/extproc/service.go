@@ -100,8 +100,9 @@ type Deps struct {
 	EntrySandbox extension.EntrySandbox
 	// Sites resolves a site for one of the extension's resource types
 	// declared with sites (site.run without a call;
-	// extension.SiteResolver). The host resolves only a site of a
-	// container provider a binding pairs with that resource type.
+	// extension.SiteResolver). The host resolves only a site it gave that
+	// resource type in an acquisition, of a container provider a binding
+	// still pairs with it.
 	Sites func(ctx context.Context, resourceType, id string) (extension.Site, error)
 }
 

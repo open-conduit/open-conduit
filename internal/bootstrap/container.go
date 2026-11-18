@@ -561,17 +561,18 @@ func tokenFile(socket, file string) string {
 }
 
 // resolveSite is the host's SiteResolver for a resource type: the site id
-// names, as a Site with no toolbelt, when a binding of an enabled scope in
-// the current config pairs that resource type with the site's container
-// provider and the provider places launches. Anything else is
-// unavailable, so a resource provider reaches only sites its own
-// bindings put it at.
+// names, as a Site with no toolbelt, only when the host gave that type the
+// site in an acquisition (siteLedger), a binding of an enabled scope in
+// the current config still pairs the type with the site's container
+// provider, and that provider places launches. Anything else is
+// unavailable, so a resource provider reaches only the machines the host
+// placed its own acquisitions on.
 func (d *daemon) resolveSite(_ context.Context, resourceType, id string) (extension.Site, error) {
 	current, _ := d.configs.Current()
-	return siteFor(current, d.containers.providers, resourceType, id)
+	return siteFor(current, d.containers.providers, d.sites.given, resourceType, id)
 }
 
-func siteFor(current *config.Snapshot, providers map[string]extension.ContainerProvider, resourceType, id string) (extension.Site, error) {
+func siteFor(current *config.Snapshot, providers map[string]extension.ContainerProvider, given func(resourceType, site string) bool, resourceType, id string) (extension.Site, error) {
 	provider, placement, ok := extension.SplitSiteID(id)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q is not a site", extension.ErrSiteUnavailable, id)
@@ -591,6 +592,9 @@ func siteFor(current *config.Snapshot, providers map[string]extension.ContainerP
 	}
 	if !paired {
 		return nil, fmt.Errorf("%w: no binding pairs resource provider %s with container provider %s", extension.ErrSiteUnavailable, resourceType, provider)
+	}
+	if !given(resourceType, id) {
+		return nil, fmt.Errorf("%w: the host never gave resource provider %s an acquisition at %s", extension.ErrSiteUnavailable, resourceType, id)
 	}
 	placer, ok := providers[provider].(extension.ContainerPlacer)
 	if !ok {

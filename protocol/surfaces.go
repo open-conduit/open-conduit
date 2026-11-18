@@ -273,8 +273,9 @@ type AcquireSite struct {
 // at the site of the provider.acquire that gave the call, with the
 // execution's toolbelt and run environment, and Site, when set, must be
 // that site's. Without, it runs at Site, a site the host resolves for
-// Type (extension.SiteResolver): one of a container provider a binding
-// pairs with the resource type, with no toolbelt. A site the host can't
+// Type (extension.SiteResolver): one it gave the resource type in an
+// acquisition, of a container provider a binding still pairs with it,
+// with no toolbelt. A site the host can't
 // run at is CodeSiteUnavailable.
 type SiteRunParams struct {
 	Type    string      `json:"type"`

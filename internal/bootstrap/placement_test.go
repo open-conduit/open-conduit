@@ -52,7 +52,15 @@ func TestSiteFor(t *testing.T) {
 		"off": {Enabled: false, Bindings: []config.Binding{{Resource: &config.Resource{Provider: "scratch"}, Container: &config.Container{Provider: "ssh"}}}},
 	}}
 	providers := map[string]extension.ContainerProvider{"ssh": sitePlacer{}, "docker": nil}
-	site, err := siteFor(snap, providers, "git", "ssh/oc@runner:22")
+	ledger := &siteLedger{dir: filepath.Join(t.TempDir(), "sites")}
+	for _, g := range [][2]string{{"git", "ssh/oc@runner:22"}, {"git", "docker/x"}, {"scratch", "ssh/x"}, {"git", "pool/x"}} {
+		if err := ledger.give(g[0], g[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Recorded durably: a restarted host still knows.
+	ledger = &siteLedger{dir: ledger.dir}
+	site, err := siteFor(snap, providers, ledger.given, "git", "ssh/oc@runner:22")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,13 +68,14 @@ func TestSiteFor(t *testing.T) {
 		t.Fatalf("site %+v, want the placement with no toolbelt", site)
 	}
 	for _, c := range []struct{ typ, id string }{
-		{"git", "docker/x"},   // paired, but doesn't place
-		{"git", "pool/x"},     // no binding pairs them
-		{"scratch", "ssh/x"},  // paired only in a disabled scope
-		{"other", "ssh/x"},    // another resource type
-		{"git", "not-a-site"}, // not a site ID
+		{"git", "docker/x"},       // paired, but doesn't place
+		{"git", "pool/x"},         // no binding pairs them
+		{"scratch", "ssh/x"},      // paired only in a disabled scope
+		{"other", "ssh/x"},        // another resource type
+		{"git", "not-a-site"},     // not a site ID
+		{"git", "ssh/oc@prod:22"}, // paired, places, but never given to git
 	} {
-		if _, err := siteFor(snap, providers, c.typ, c.id); !errors.Is(err, extension.ErrSiteUnavailable) {
+		if _, err := siteFor(snap, providers, ledger.given, c.typ, c.id); !errors.Is(err, extension.ErrSiteUnavailable) {
 			t.Errorf("%s at %s: %v, want site_unavailable", c.typ, c.id, err)
 		}
 	}

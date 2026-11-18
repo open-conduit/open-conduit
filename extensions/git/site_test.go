@@ -25,6 +25,8 @@ type fakeSite struct {
 	home string
 	mu   sync.Mutex
 	down bool
+	// hang makes every command wait until it is cancelled.
+	hang bool
 	argv [][]string
 	envs [][]string
 }
@@ -33,9 +35,13 @@ func (s *fakeSite) ID() string { return s.id }
 
 func (s *fakeSite) Run(ctx context.Context, cmd extension.SiteCommand) (extension.SiteResult, error) {
 	s.mu.Lock()
-	down := s.down
+	down, hang := s.down, s.hang
 	s.argv, s.envs = append(s.argv, cmd.Argv), append(s.envs, cmd.Env)
 	s.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return extension.SiteResult{}, errors.Join(extension.ErrSiteUnavailable, ctx.Err())
+	}
 	if down {
 		return extension.SiteResult{}, extension.ErrSiteUnavailable
 	}
@@ -51,6 +57,12 @@ func (s *fakeSite) Run(ctx context.Context, cmd extension.SiteCommand) (extensio
 		return extension.SiteResult{}, errors.Join(extension.ErrSiteUnavailable, err)
 	}
 	return extension.SiteResult{ExitCode: c.ProcessState.ExitCode(), Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
+}
+
+func (s *fakeSite) runs() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.argv)
 }
 
 func (s *fakeSite) setDown(down bool) {
@@ -280,7 +292,14 @@ func TestReconcileAtSite(t *testing.T) {
 	if !exists(clean.Dir) || !exists(unpushed.Dir) {
 		t.Fatal("a workspace went while its site was down")
 	}
+	// While it backs off, the down site isn't tried again, so it holds up
+	// no other lease.
+	tries := f.sites["ssh/one"].runs()
+	if report := f.reconcile(); f.sites["ssh/one"].runs() != tries || len(report.Attention) != 2 {
+		t.Fatalf("the site was tried again within its backoff: %+v", report)
+	}
 	f.sites["ssh/one"].setDown(false)
+	f.advance(2 * time.Minute)
 	report := f.reconcile()
 	if exists(clean.Dir) || !exists(unpushed.Dir) || report.Removed != 1 || report.Retained != 1 {
 		t.Fatalf("report %+v: clean %v, unpushed %v", report, exists(clean.Dir), exists(unpushed.Dir))
@@ -297,25 +316,74 @@ func TestReconcileAtSite(t *testing.T) {
 	}
 }
 
-// A Work placed at another site gets a new clone there; the one it had is
-// removed when it holds nothing a remote lacks, and otherwise left and
-// said so.
+// A Work placed at another site gets a new clone there. The one it had
+// is removed when it holds nothing a remote lacks; otherwise it keeps a
+// lease of its own, which Reconcile reports and removes as any workspace
+// at a site, and which the Work takes back if it returns there first.
 func TestWorkMovesSite(t *testing.T) {
 	f := newSiteFixture(t)
+	// The two sites share this machine's disk, so the first site's clone
+	// is moved aside while the second makes its own at the same path, and
+	// swapped back when the first is asked again.
 	c := repoCfg(f.origin, nil)
 	r, err := f.acquireAt("ssh/one", owner("W1", "x1"), c, extension.ResourceRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	write(t, r.Dir, "edit.txt", "x")
+	aside := r.Dir + ".one"
 	var log strings.Builder
 	f.sites["ssh/one"].setDown(true)
-	moved, err := f.acquireAt("ssh/two", owner("W1", "x2"), c, extension.ResourceRequest{Log: &log})
+	moved, err := f.acquireAtAside("ssh/two", owner("W1", "x2"), c, &log, r.Dir, aside)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if moved.Site != "ssh/two" || moved.Ref != r.Ref || syncOf(t, moved).Reused || !strings.Contains(log.String(), "couldn't be reached and is left there") {
 		t.Fatalf("moved: %+v\n%s", moved, log.String())
+	}
+	left, ok, err := f.provider.load(leftRef(r.Ref, "ssh/one"))
+	if err != nil || !ok || left.Site != "ssh/one" || left.State != stateCleanupFailed || left.Path != r.Dir {
+		t.Fatalf("the left workspace's lease: %+v %v %v", left, ok, err)
+	}
+	// Once its site answers, Reconcile finds the edit and retains it.
+	f.sites["ssh/one"].setDown(false)
+	f.advance(2 * time.Minute)
+	swap(t, r.Dir, aside)
+	report := f.reconcile()
+	if a := report.Attention; report.Retained != 1 || len(a) != 1 || a[0].Ref != left.Ref || a[0].Code != keptUncommitted {
+		t.Fatalf("report %+v", report)
+	}
+	// Back at the first site, the Work takes its clone back with the edit.
+	log.Reset()
+	back, err := f.acquireAt("ssh/one", owner("W1", "x3"), c, extension.ResourceRequest{Log: &log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Site != "ssh/one" || !syncOf(t, back).Reused || read(t, filepath.Join(r.Dir, "edit.txt")) != "x" || !strings.Contains(log.String(), "took back") {
+		t.Fatalf("back: %+v\n%s", back, log.String())
+	}
+	if _, ok, _ := f.provider.load(leftRef(r.Ref, "ssh/one")); ok {
+		t.Fatal("the left lease outlived being taken back")
+	}
+}
+
+// acquireAtAside acquires at site with the clone at path moved to aside
+// for the call and its own moved back after: two sites on one disk.
+func (f *siteFixture) acquireAtAside(site string, o extension.ResourceOwner, config domain.Payload, log *strings.Builder, path, aside string) (extension.Resource, error) {
+	if err := os.Rename(path, aside); err != nil {
+		f.t.Fatal(err)
+	}
+	return f.acquireAt(site, o, config, extension.ResourceRequest{Log: log})
+}
+
+// swap exchanges the directories at a and b.
+func swap(t *testing.T, a, b string) {
+	t.Helper()
+	tmp := a + ".swap"
+	for _, m := range [][2]string{{a, tmp}, {b, a}, {tmp, b}} {
+		if err := os.Rename(m[0], m[1]); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -323,4 +391,39 @@ func (f *siteFixture) status1(_ context.Context, o extension.ResourceOwner) (ext
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.status[o.ExecutionID], nil
+}
+
+// A site that hangs costs Reconcile one bounded wait, then backs off, and
+// holds up no other lease.
+func TestReconcileAtAHangingSite(t *testing.T) {
+	f := newSiteFixture(t)
+	defer func(d time.Duration) { siteReconcileTimeout = d }(siteReconcileTimeout)
+	siteReconcileTimeout = 200 * time.Millisecond
+	c := repoCfg(f.origin, nil)
+	done := extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, ExecutionSucceeded: true, WorkDone: true, WorkSucceeded: true}
+	stuck, err := f.acquireAt("ssh/one", owner("W1", "x1"), c, extension.ResourceRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fine, err := f.acquireAt("ssh/two", owner("W2", "y1"), c, extension.ResourceRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.set("x1", done)
+	f.set("y1", done)
+	f.sites["ssh/one"].mu.Lock()
+	f.sites["ssh/one"].hang = true
+	f.sites["ssh/one"].mu.Unlock()
+	start := time.Now()
+	report, _ := f.provider.Reconcile(context.Background(), f.status1)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("reconcile took %s with one site hanging", took)
+	}
+	if exists(fine.Dir) || report.Removed != 1 || !exists(stuck.Dir) {
+		t.Fatalf("report %+v: the other site's clone stayed %v", report, exists(fine.Dir))
+	}
+	tries := f.sites["ssh/one"].runs()
+	if _, err := f.provider.Reconcile(context.Background(), f.status1); err != nil || f.sites["ssh/one"].runs() != tries {
+		t.Fatalf("the hanging site was tried again within its backoff: %v", err)
+	}
 }

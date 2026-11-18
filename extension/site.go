@@ -164,10 +164,11 @@ func layered(layer map[string]string, env []string) []string {
 // SiteResolver gives the Site an ID names (Resource.Site), for a resource
 // provider to act on what it made there after the acquisition: a
 // reconcile or sweep removing a workspace. A command run through it gets
-// no toolbelt and no run environment. The host resolves only a site of a
-// container provider that a binding pairs with the resource provider's
-// type, and refuses any other with ErrSiteUnavailable, as it does a site
-// whose provider can't be reached.
+// no toolbelt and no run environment. The host resolves only a site it
+// gave the resource provider's type in an acquisition, of a container
+// provider a binding still pairs with that type, and refuses any other
+// with ErrSiteUnavailable, as it does a site whose provider can't be
+// reached.
 type SiteResolver func(ctx context.Context, id string) (Site, error)
 
 // ResourceSiteUser is an optional ResourceProvider capability: one that
