@@ -105,11 +105,13 @@ for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" -print0 || ex
 	// roots, every other path whose content or inode changed after the
 	// stamp (a rename or `cp -p` keeps the mtime, not the ctime), and the
 	// paths on stdin (NUL-separated, ./-relative): those the host didn't
-	// copy.
+	// copy. A macOS remote's tar would add an AppleDouble ._ entry for
+	// each path with extended attributes, which is no file of the run's
+	// (COPYFILE_DISABLE stops it; other tars ignore it).
 	scriptDownload = `d="$D/$1"; shift
 [ -f "$d/stamp" ] || { echo "no upload stamp" >&2; exit 3; }
 cd "$R/" || exit 3
-{ for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" \( -type d -o -newer "$d/stamp" -o -cnewer "$d/stamp" \) -print0 || exit 3; done; cat; } | tar --null --no-recursion -T - -cf -`
+{ for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" \( -type d -o -newer "$d/stamp" -o -cnewer "$d/stamp" \) -print0 || exit 3; done; cat; } | COPYFILE_DISABLE=1 tar --null --no-recursion -T - -cf -`
 	// scriptHealth: what a run needs of the remote, one line each.
 	scriptHealth = `for c in sh setsid ps tar find env; do command -v "$c" >/dev/null 2>&1 || echo "missing $c"; done
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; command -v os >/dev/null 2>&1 || echo "no-os"

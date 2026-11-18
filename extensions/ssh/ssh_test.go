@@ -236,6 +236,29 @@ func TestRunOnRemote(t *testing.T) {
 	}
 }
 
+// A file the run gave an extended attribute comes back as itself: a macOS
+// remote's tar adds no AppleDouble ._ entry, which the host would take for
+// a file of the run's and the next upload would send back.
+func TestDownloadHasNoAppleDouble(t *testing.T) {
+	if _, err := exec.LookPath("xattr"); err != nil {
+		t.Skip("no xattr(1): the remote's tar keeps no AppleDouble files")
+	}
+	f := newFakeRemote(t)
+	plan, err := f.bind(nil).Launch(context.Background(), f.needs(), f.launch(`echo x > tagged.txt && xattr -w com.example.tag yes tagged.txt`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := f.helper(plan.Argv, nil); code != 0 {
+		t.Fatalf("the helper exited %d: %s", code, out)
+	}
+	if got := read(t, filepath.Join(f.ws, "tagged.txt")); got != "x\n" {
+		t.Fatalf("tagged.txt is %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(f.ws, "._tagged.txt")); !os.IsNotExist(err) {
+		t.Fatalf("an AppleDouble file came back with the run's: %v", err)
+	}
+}
+
 func TestStopAndRecover(t *testing.T) {
 	f := newFakeRemote(t)
 	ctx := context.Background()
