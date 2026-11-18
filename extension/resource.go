@@ -57,11 +57,18 @@ type ResourceOwner struct {
 // anything, a resource that shares writable state outside its directory or
 // runs code from it outside the sandbox (ErrUnsupported), and describes what
 // a sandbox needs to use the one it hands out (Resource.Sandbox).
+//
+// Files are paths relative to the resource's directory an executor wants
+// read at acquisition (a project's playbook additions, say). A provider
+// that makes the resource at a site (Resource.Site) returns their contents
+// in Resource.Files, since the executor can't read them on the host; one
+// on the host's disk may leave them for the executor to read itself.
 type ResourceRequest struct {
 	Mode      string
 	Params    domain.Payload
 	Log       io.Writer
 	Sandboxed bool
+	Files     []string
 }
 
 // Resource is an acquired, provider-defined resource. Ref is the opaque lease
@@ -74,6 +81,11 @@ type ResourceRequest struct {
 // sandbox must allow and deny for the resource to be used in it (its
 // directory writable, its own control files read-only); nil means it can't
 // be used in one.
+//
+// Site, when set, is the ID of the site the resource was made at
+// (ResourceAcquisition.Site): Dir is a path there, not on the host, and
+// only a launch placed at that site may use it. Files holds the contents
+// of the request's Files that exist there, by the requested path.
 type Resource struct {
 	Kind    string
 	Ref     string
@@ -82,6 +94,8 @@ type Resource struct {
 	Data    domain.Payload
 	Summary string
 	Sandbox *SandboxNeeds
+	Site    string
+	Files   map[string]string
 }
 
 // ResourceAcquisition is the trusted request a provider receives: the bound
@@ -99,6 +113,14 @@ type ResourceAcquisition struct {
 	// reach the agent. The operator names them and the host resolves them;
 	// a provider never chooses them.
 	HostEnv map[string]string
+	// Site is where the attempt's launch will run, when its container
+	// provider places launches off the host (ContainerPlacer); nil means
+	// the host. Only the host binds it (BindResourcesAt), never an
+	// executor. A provider that can make the resource there does, and says
+	// so in Resource.Site; one that can't ignores it and makes the resource
+	// on the host as before. Commands run through it reach the execution's
+	// toolbelt.
+	Site Site
 }
 
 // ResourceOwnerStatus is durable runtime state reported by the host for a
@@ -237,15 +259,23 @@ func BindResourcesEnv(p ResourceProvider, owner ResourceOwner, config domain.Pay
 	return boundResources{p: p, owner: owner, config: config, hostEnv: hostEnv}
 }
 
+// BindResourcesAt is BindResourcesEnv with the site the attempt's launch
+// is placed at (ResourceAcquisition.Site), for a container binding to use
+// once it has placed the execution (ContainerBinding.AtSite).
+func BindResourcesAt(p ResourceProvider, owner ResourceOwner, config domain.Payload, hostEnv map[string]string, site Site) ResourceBroker {
+	return boundResources{p: p, owner: owner, config: config, hostEnv: hostEnv, site: site}
+}
+
 type boundResources struct {
 	p       ResourceProvider
 	owner   ResourceOwner
 	config  domain.Payload
 	hostEnv map[string]string
+	site    Site
 }
 
 func (b boundResources) Acquire(ctx context.Context, r ResourceRequest) (Resource, error) {
-	return b.p.Acquire(ctx, ResourceAcquisition{Owner: b.owner, Config: b.config, Request: r, HostEnv: b.hostEnv})
+	return b.p.Acquire(ctx, ResourceAcquisition{Owner: b.owner, Config: b.config, Request: r, HostEnv: b.hostEnv, Site: b.site})
 }
 func (b boundResources) Lookup(ctx context.Context, ref string) (Resource, error) {
 	return b.p.Lookup(ctx, b.owner, ref)

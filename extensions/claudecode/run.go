@@ -108,6 +108,11 @@ type workspaceRecord struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 	Kind    string          `json:"kind,omitempty"`
 	Summary string          `json:"summary,omitempty"`
+	// Site and Files are the resource's (extension.Resource): a workspace
+	// at a site has no host directory, so a resumed segment takes the
+	// files its acquisition read.
+	Site  string            `json:"site,omitempty"`
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // historyWorkspace is the generic history record of the segment's resource
@@ -190,6 +195,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// directory stable for the Work.
 	workdir := filepath.Join(e.o.StateDir, "work", hashKey(string(r.Work.ID)))
 	var layer map[string]string
+	// A workspace at the launch's site isn't on the host: the provider
+	// reads the files the turn needs from it.
+	var site string
+	var siteFiles map[string]string
 	if cfg.Dir != "" && r.Context.Resources != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "invalid_config", "a binding with a resource cannot also set dir; remove one", nil)
 	}
@@ -201,7 +210,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	} else if r.Context.Resources != nil {
 		res, err := e.workspace(ctx, r, cfg, prev, errLog)
 		if res.Ref != "" {
-			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Dir: res.Dir, Schema: res.Data.Schema, Data: res.Data.Data, Kind: res.Kind, Summary: res.Summary})
+			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Dir: res.Dir, Schema: res.Data.Schema, Data: res.Data.Data, Kind: res.Kind, Summary: res.Summary, Site: res.Site, Files: res.Files})
 		}
 		switch {
 		case errors.Is(err, extension.ErrResourceSetup):
@@ -217,7 +226,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		case err != nil || res.Dir == "":
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", unavailable(err), nil)
 		}
-		workdir, layer = res.Dir, res.Env
+		workdir, layer, site, siteFiles = res.Dir, res.Env, res.Site, res.Files
 	} else if err = os.MkdirAll(workdir, 0o700); err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
 	}
@@ -275,7 +284,11 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		inputs = []domain.Event{r.Trigger}
 	}
 	args, text := body(d.Kind, expand(cfg.Args, r.Work), rec.Handoff, e.o.Render(inputs))
-	text = withAdditions(text, projectAdditions(workdir, cfg.Playbook))
+	additions := projectAdditions(workdir, cfg.Playbook)
+	if site != "" {
+		additions = siteAdditions(siteFiles, cfg.Playbook)
+	}
+	text = withAdditions(text, additions)
 	first := prompt(cfg.Playbook, args, text)
 	model := cfg.model(r.Work)
 	if e.o.DryRun {
@@ -372,6 +385,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	argv, env = plan.Argv, plan.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, out, errLog
+	if plan.Dir != "" {
+		cmd.Dir = plan.Dir
+	}
 	detach(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -410,10 +426,22 @@ func (e *Executor) workspace(ctx context.Context, r extension.RunRequest, cfg Co
 	if prevDir, _, ok := e.segmentDir(r.Execution.ID, prev); ok {
 		var ws workspaceRecord
 		if readJSON(filepath.Join(prevDir, "workspace.json"), &ws) == nil && ws.Ref != "" {
-			return r.Context.Resources.Lookup(ctx, ws.Ref)
+			res, err := r.Context.Resources.Lookup(ctx, ws.Ref)
+			if err == nil && res.Site != "" && res.Site == ws.Site && res.Files == nil {
+				res.Files = ws.Files
+			}
+			// A workspace at a site the launch can no longer be placed at
+			// (its machine is gone) can't be used: acquire again, where
+			// the execution is placed now.
+			if ws.Site == "" || !errors.Is(err, extension.ErrSandboxUnavailable) {
+				return res, err
+			}
 		}
 	}
 	req := extension.ResourceRequest{Mode: cfg.WorkspaceMode, Log: log}
+	if cfg.Playbook != "" && cfg.Playbook != "-" {
+		req.Files = []string{additionsFile(cfg.Playbook)}
+	}
 	if cfg.Branch != "" {
 		params, _ := json.Marshal(map[string]string{"branch": expand(cfg.Branch, r.Work)})
 		req.Params = domain.Payload{Schema: "open-conduit.git.request.v1", Data: params}
@@ -498,7 +526,7 @@ func (e *Executor) presetWith(ctx context.Context, rn *run, schema, reason, summ
 	}
 	var ws workspaceRecord
 	if readJSON(filepath.Join(rn.dir, "workspace.json"), &ws) == nil && ws.Ref != "" {
-		ws.Dir = ""
+		ws.Dir, ws.Files = "", nil
 		f.Workspace = &ws
 	}
 	res := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary, Data: resultData(schema, f)}, RetryHint: hint, Permanent: permanent, Workspace: historyWorkspace(rn.dir)}
@@ -1365,7 +1393,7 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 	}
 	var ws workspaceRecord
 	if readJSON(filepath.Join(rn.dir, "workspace.json"), &ws) == nil && ws.Ref != "" {
-		ws.Dir = ""
+		ws.Dir, ws.Files = "", nil
 		f.Workspace = &ws
 	}
 	f.TasksUnwatched = e.unwatchedTasks(ctx, domain.ID(turn.WorkID), rn.id, rn.epoch)

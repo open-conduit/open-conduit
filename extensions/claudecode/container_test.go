@@ -307,3 +307,134 @@ func TestRunEnvironmentLayer(t *testing.T) {
 		}
 	}
 }
+
+// siteContainer is a fakeContainer whose workspace is at its site: its
+// plan's wrapper runs in the run directory.
+type siteContainer struct{ fakeContainer }
+
+func (b *siteContainer) Launch(ctx context.Context, n extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	p, err := b.fakeContainer.Launch(ctx, n, l)
+	p.Dir = l.RunDir
+	return p, err
+}
+
+// siteWorkspace is a workspace at a site: its directory isn't on the host,
+// and the files the run asked for come back read there.
+type siteWorkspace struct {
+	dir   string
+	asked *[]string
+}
+
+func (w siteWorkspace) Acquire(_ context.Context, r extension.ResourceRequest) (extension.Resource, error) {
+	*w.asked = r.Files
+	return extension.Resource{Kind: "workspace", Ref: "lease", Dir: w.dir, Site: "ssh/runner", Files: map[string]string{
+		".open-conduit/playbooks/work-issue.md": "---\nx: 1\n---\n- Read at the site.\n"}}, nil
+}
+func (w siteWorkspace) Lookup(context.Context, string) (extension.Resource, error) {
+	return extension.Resource{Kind: "workspace", Ref: "lease", Dir: w.dir, Site: "ssh/runner"}, nil
+}
+
+// TestContainerWorkspaceAtSite: a workspace at the container's site has no
+// host directory, so the turn asks the provider for the playbook's
+// additions and takes them from what it read there (a resumed segment from
+// what its acquisition read), the launch names the workspace as the
+// provider gave it, and the wrapper runs where the plan says.
+func TestContainerWorkspaceAtSite(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	home := filepath.Join(h.root, "homes", "w")
+	_ = os.MkdirAll(home, 0o700)
+	remote := filepath.Join(h.root, "at-site", "ws")
+	var asked []string
+	b := &siteContainer{}
+	r, _ := h.request("work/site", "exec-site", 1, nil)
+	r.Context.Container, r.Context.ContainerHome, r.Context.Resources = b, home, siteWorkspace{dir: remote, asked: &asked}
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	res := h.run(e, r)
+	if res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("turn failed: %+v", res.Outcome)
+	}
+	if strings.Contains(string(res.Outcome.Data.Data), "Read at the site") {
+		t.Errorf("the files read at the site are in the turn's data: %s", res.Outcome.Data.Data)
+	}
+	if !slices.Equal(asked, []string{".open-conduit/playbooks/work-issue.md"}) {
+		t.Errorf("asked for %v, want the playbook's additions", asked)
+	}
+	if _, err := os.Stat(remote); err == nil {
+		t.Errorf("the workspace was made on the host")
+	}
+	if l := b.launches[0]; l.Dir != remote {
+		t.Errorf("launch dir %q, want the site's %q", l.Dir, remote)
+	}
+	if p := h.prompts(); len(p) == 0 || !strings.Contains(p[0], "- Read at the site.") || strings.Contains(p[0], "x: 1") {
+		t.Errorf("prompts %q, want the site's additions without frontmatter", p)
+	}
+}
+
+// goneSite is a workspace at a site whose machine is gone by the time a
+// resumed segment looks its lease up: the container broker refuses the
+// lease (lookupErr), and acquiring again makes a new one where the
+// execution is placed now.
+type goneSite struct {
+	dir       string
+	lookupErr error
+	acquired  int
+	looked    int
+}
+
+func (g *goneSite) Acquire(context.Context, extension.ResourceRequest) (extension.Resource, error) {
+	g.acquired++
+	return extension.Resource{Kind: "workspace", Ref: "lease", Dir: g.dir, Site: "ssh/node-" + string(rune('0'+g.acquired))}, nil
+}
+func (g *goneSite) Lookup(context.Context, string) (extension.Resource, error) {
+	g.looked++
+	return extension.Resource{}, g.lookupErr
+}
+
+// TestResumeAfterTheSiteIsGone: a resumed segment whose workspace was at a
+// site the launch can no longer be placed at acquires again in the same
+// segment, rather than failing it; any other refusal of the lease fails
+// the segment as before.
+func TestResumeAfterTheSiteIsGone(t *testing.T) {
+	for name, c := range map[string]struct {
+		err     error
+		reacq   bool
+		failure bool
+	}{
+		"machine_gone":  {extension.ErrSandboxUnavailable, true, false},
+		"lease_refused": {extension.ErrResourceNotFound, false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.mode("review")
+			e := h.executor()
+			home := filepath.Join(h.root, "homes", "w")
+			_ = os.MkdirAll(home, 0o700)
+			g := &goneSite{dir: filepath.Join(h.root, "at-site", "ws"), lookupErr: c.err}
+			b := &siteContainer{}
+			r, saved := h.request("work/gone", "exec-gone", 1, nil)
+			r.Context.Container, r.Context.ContainerHome, r.Context.Resources = b, home, g
+			r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+			if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+				t.Fatalf("first segment failed: %+v", res.Outcome)
+			}
+			wake := domain.Event{ID: "ev-wake", Type: "github.checks.passed", Data: domain.Payload{Data: json.RawMessage(`{"number":7,"state":"passed"}`)}}
+			r.Trigger, r.Inputs = wake, []domain.Event{wake}
+			r.Execution.Lease.Epoch = 2
+			handle, err := e.Resume(context.Background(), r, *saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := h.wait(handle)
+			if g.looked != 1 {
+				t.Fatalf("looked up %d times, want once", g.looked)
+			}
+			if got := g.acquired == 2; got != c.reacq {
+				t.Fatalf("acquired %d times, want reacquire %v", g.acquired, c.reacq)
+			}
+			if failed := res.Outcome.Kind == domain.OutcomeFailed; failed != c.failure {
+				t.Fatalf("outcome %+v, want failed %v", res.Outcome, c.failure)
+			}
+		})
+	}
+}

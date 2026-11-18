@@ -194,11 +194,35 @@ func projectAdditions(root, playbook string) string {
 	if playbook == "" || playbook == "-" || root == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(root, AdditionsDir, playbook+".md"))
+	data, err := os.ReadFile(filepath.Join(root, additionsFile(playbook)))
 	if err != nil {
 		return ""
 	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	return parseAdditions(string(data))
+}
+
+// additionsFile is a playbook's additions, relative to the checkout.
+func additionsFile(playbook string) string {
+	return filepath.ToSlash(filepath.Join(AdditionsDir, playbook+".md"))
+}
+
+// siteAdditions are a playbook's additions as the provider read them from
+// a workspace at a site (extension.Resource.Files), which the host can't
+// read itself.
+func siteAdditions(files map[string]string, playbook string) string {
+	if playbook == "" || playbook == "-" {
+		return ""
+	}
+	data, ok := files[additionsFile(playbook)]
+	if !ok {
+		return ""
+	}
+	return parseAdditions(data)
+}
+
+// parseAdditions drops an additions file's frontmatter.
+func parseAdditions(data string) string {
+	text := strings.ReplaceAll(data, "\r\n", "\n")
 	if strings.HasPrefix(text, "---\n") {
 		if i := strings.Index(text[4:], "\n---\n"); i >= 0 {
 			text = text[4+i+5:]

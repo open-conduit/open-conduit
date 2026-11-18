@@ -85,9 +85,13 @@ type SandboxLaunch struct {
 // Records is a host-owned directory, readable but never writable inside the
 // sandbox, where the provider keeps the files its plan refers to. Home, for a
 // container only, is the Work's own home (ExecutionContext.ContainerHome),
-// mounted read-write at the same path.
+// mounted read-write at the same path. Site, for a container only, is set
+// when the workspace is already at the launch's placement
+// (Resource.Site): it is not on the host, so a provider that copies the
+// host's paths to the site leaves it out.
 type SandboxPaths struct {
 	Workspace, Run, Toolbelt, Records, Home string
+	Site                                    string
 }
 
 // SandboxPolicy is the operator's policy for one launch: the binding's
@@ -102,10 +106,15 @@ type SandboxPolicy struct {
 // a one-line Summary and Data, the effective policy, for history. Digest pins
 // the plan: the host computes it from Argv and Data and records it with the
 // segment before the plan reaches the executor.
+//
+// Dir, when set, is the directory the executor's wrapper runs the plan's
+// argv in, in place of the launch's Dir: a container whose workspace is at
+// its site has none on the host.
 type SandboxPlan struct {
 	Argv, Env                []string
 	Digest, Signals, Summary string
 	Data                     domain.Payload
+	Dir                      string
 }
 
 // SandboxProvider is an optional extension that wraps launches in a process

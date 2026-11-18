@@ -944,7 +944,7 @@ type broker struct {
 
 func (b *broker) Acquire(ctx context.Context, r extension.ResourceRequest) (extension.Resource, error) {
 	var out protocol.ResourceResult
-	err := b.conn.Call(ctx, "resource.acquire", protocol.ResourceAcquireParams{RunID: b.run, Mode: r.Mode, Params: protocol.FromPayload(r.Params)}, &out)
+	err := b.conn.Call(ctx, "resource.acquire", protocol.ResourceAcquireParams{RunID: b.run, Mode: r.Mode, Params: protocol.FromPayload(r.Params), Files: r.Files}, &out)
 	if r.Log != nil && out.Log != "" {
 		_, _ = io.WriteString(r.Log, out.Log)
 	}

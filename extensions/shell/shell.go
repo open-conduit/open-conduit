@@ -322,6 +322,11 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	argv, env = plan.Argv, plan.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, log, log
+	// A workspace at the container's site isn't on the host: the wrapper
+	// runs where the plan says.
+	if plan.Dir != "" {
+		cmd.Dir = plan.Dir
+	}
 	detach(cmd)
 	if err = cmd.Start(); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not start shell process")

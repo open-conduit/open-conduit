@@ -386,6 +386,8 @@ type ResourceAcquireParams struct {
 	RunID  string  `json:"run_id"`
 	Mode   string  `json:"mode,omitempty"`
 	Params Payload `json:"params"`
+	// Files is extension.ResourceRequest.Files.
+	Files []string `json:"files,omitempty"`
 }
 type ResourceLookupParams struct {
 	RunID string `json:"run_id"`

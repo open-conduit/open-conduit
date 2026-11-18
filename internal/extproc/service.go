@@ -1156,7 +1156,7 @@ func (s *Service) resource(ctx context.Context, method string, raw json.RawMessa
 		return nil, err
 	}
 	var log strings.Builder
-	res, err := r.resources.Acquire(ctx, extension.ResourceRequest{Mode: ap.Mode, Params: ap.Params.Domain(), Log: &log})
+	res, err := r.resources.Acquire(ctx, extension.ResourceRequest{Mode: ap.Mode, Params: ap.Params.Domain(), Log: &log, Files: ap.Files})
 	out := protocol.ResourceResult{Resource: protocol.FromResource(res), Log: log.String()}
 	if errors.Is(err, extension.ErrResourceSetup) {
 		out.SetupFailed = true

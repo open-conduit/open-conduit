@@ -265,6 +265,24 @@ There is no `Signal` call: `Interrupt` sends TERM to the executor's group as it 
 
 `ContainerProvider` has `Plan(owner, policy, needs, launch)`, `Create(plan, labels)`, `Signal`, `Stop(ref, grace)`, `Inspect(ref)`, `List(owner)` and `Remove(ref)`, all keyed on a `ContainerRef` (the container's ID and its labels). `Inspect` names the container daemon that answered, and says `Gone` when that daemon holds no such container; an error means it couldn't be asked. `List` fails as an error, never as an empty list. Every container carries four labels: the host (a hash of the daemon's state directory), the execution, the segment and the plan's digest.
 
+### Placement
+
+A provider that chooses the machine a launch runs on implements `ContainerPlacer` ([`extension/site.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/site.go)), so a workspace can be made where the run executes rather than on the host's disk and copied there ([workspaces at the launch's site](../workspaces/#workspaces-at-the-launchs-site)):
+
+- **`Place(owner, policy, prefer)`** chooses the machine before anything is acquired for the execution, so the policy has no paths yet. `prefer` is where the Work last ran. The host keeps it beside the Work's home, in `<state>/homes/<key>.site`, which is never mounted and is removed with the home. A provider places there when it still can, and elsewhere when it can't. A `Placement` has an `ID`, a `Daemon` and a `Summary`. The ID must not hold a `/`, since the host names the placement's site `<provider>/<ID>` (`SiteID`). A provider that can't place refuses as `sandbox_unavailable`.
+- **`SiteRun(placement, command)`** runs a command at a placement for the resource provider, during an acquisition with the execution's toolbelt (`SiteCommand.Toolbelt`), and later without it. A command that ran and failed is its exit code. A placement the provider can't name or reach is `ErrSiteUnavailable`.
+
+The container broker places once per segment. The host records the placement as a `container place` step in the launch's history, and plans at it (`ContainerPolicy.Placement`). It refuses a container `Create` reports on a daemon other than the placement's, so `Adopt`'s proof of the pinned daemon also covers where the workspace was made.
+
+With the workspace at the site, the launch's checks treat it as the site's:
+
+- the policy says so (`SandboxPaths.Site`), so a provider that copies the host's paths leaves it out;
+- its path, and every path in it the launch's argv, environment and needs name, is taken as the resource provider wrote it, neither resolved on the host nor walked for hard links;
+- a read-only need inside it is the site's to hold;
+- the plan's `Dir` puts the executor's wrapper in the run directory.
+
+Neither bundled provider places yet: Docker runs on the host's own engine, and the SSH provider's placement follows (#726). `CheckContainerPlacer` in the container conformance suite checks the contract, and each of its negative controls fails it: a failed command reported as an error, `prefer` ignored, a container created elsewhere than placed, a command run at a placement the provider never gave, and a command's directory ignored.
+
 ### Pinned per segment
 
 Before the argv reaches the executor, the host pins the container with the open segment (`Segment.Container`): the provider, the plan's digest and summary, the image digest, the container daemon's ID, the container's ID, the run directory and the time. The digest is `sha256` of the image and the plan's `Data`. A recovered segment carries its pin. History shows each segment's container: its plan, image and daemon.
@@ -448,3 +466,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#365** added the SSH provider, a remote machine as a container provider, and the container conformance suite.
 - **#664** let a config entry name a sandbox for the processes its package runs for it (manifest `extensions[].sandbox`, `sandbox.entry_plan`), so the MCP bridge could confine the stdio servers it starts. Only process sandbox providers confine an entry's processes; containers don't yet.
 - **#492** moved the Docker and SSH providers out of process, as bundled packages, over a container provider surface of the protocol (`container_provider.*`, manifest `containers`, certification's `containers.policy`), and moved the ssh provider's pinned keys to `<state>/containers/ssh`.
+- **#726** added placement to the container contract (`ContainerPlacer`, `Site`, `SandboxPlan.Dir`), the host's place-then-acquire and its refusals, and `CheckContainerPlacer`, tested against fakes ahead of the SSH provider's placement.

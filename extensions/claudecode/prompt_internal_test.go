@@ -103,3 +103,14 @@ func TestRenderUnknownPayload(t *testing.T) {
 		t.Fatalf("an empty payload rendered as %q", got)
 	}
 }
+
+// Additions read at a site are the playbook's file, without frontmatter.
+func TestSiteAdditions(t *testing.T) {
+	files := map[string]string{".open-conduit/playbooks/work-issue.md": "---\nreplace: true\n---\n\n- At the site.\n", "other.md": "- no"}
+	if got := siteAdditions(files, "work-issue"); got != "- At the site." {
+		t.Fatalf("additions %q", got)
+	}
+	if siteAdditions(files, "triage") != "" || siteAdditions(files, "-") != "" || siteAdditions(nil, "work-issue") != "" {
+		t.Fatal("additions without a file or a playbook")
+	}
+}

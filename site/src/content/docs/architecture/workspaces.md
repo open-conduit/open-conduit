@@ -18,8 +18,9 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceProvider` | Implemented by an extension: `Acquire`, `Lookup`, `Reconcile`. |
 | `ResourceBroker` | What an executor sees: `Acquire(ResourceRequest)`, `Lookup(ref)`. `BindResources(provider, owner, config)` creates it. Only the host binds, so an executor cannot act for another owner. |
 | `ResourceOwner` | Trusted `{ScopeID, WorkID, ExecutionID}` taken from the attempt, never from the executor. |
-| `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, and an optional `Log` writer for human-readable progress. |
-| `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). |
+| `ResourceAcquisition` | What the provider receives: the trusted `Owner`, the binding's `Config`, the executor's `Request`, the provider's `HostEnv` grant and, for a launch placed off the host, its `Site` (see [workspaces at the launch's site](#workspaces-at-the-launchs-site)). Only the host binds the trusted fields. |
+| `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, an optional `Log` writer for human-readable progress, and `Files`: paths relative to the resource's directory that the executor wants read at acquisition. The host sets `Sandboxed` itself. |
+| `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). `Site` names the site `Dir` is at, empty for the host, and `Files` holds the requested files read there. |
 | `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept. |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
 
@@ -64,6 +65,23 @@ A worktree commits through the main checkout's common `.git`: its index lock und
 A binding whose executor runs in a sandbox ([B09](../sandboxes/)) may only take a git workspace in `clone` mode, and without `setup`: `work` and `fresh` are worktrees, `shared` is the checkout itself, and setup runs on the host, outside the sandbox, in files the agent wrote in an earlier attempt (its hooks, its package scripts). The check is `git.ValidateSandbox(config, mode)`, where `mode` is what the executor requests (Claude Code's `workspace_mode`, through the optional `config.ResourceModer`) and empty means the resource config's `mode`. It is registered as `config.Registry.ResourceSandbox`, and the validator turns a refusal into a `sandbox_workspace` diagnostic at `…/resource/config` naming the fix, for every binding that declares a sandbox. An installed provider declaring `resources[].sandbox` fills the same hook through `validate` with kind `resource_sandbox`, its refusal's reason shown in the diagnostic ([extension protocol](../extension-protocol/#manifest)).
 
 The provider checks it again at acquisition: the host marks a sandboxed binding's request `Sandboxed`, and the provider refuses anything else (`ErrUnsupported`) before it makes or runs anything. A clone's `Resource.Sandbox` (`git.CloneSandboxNeeds`) has the clone writable and its `.git/config`, `.git/hooks` and `.git/info` read-only, so the agent can't give the host-side git a hook, fsmonitor or filter to run or an include to follow. The provider makes `hooks` and `info` before handing a clone out, because bubblewrap can't protect a path that doesn't exist. A worktree's `Resource.Sandbox` is nil, so a sandbox refuses it even if validation was bypassed.
+
+## Workspaces at the launch's site
+
+A container provider can place launches on a machine of its own choosing (`extension.ContainerPlacer`, [sandboxes](../sandboxes/#placement)). When it does, the host places the execution before anything is acquired for it. It then hands the placement to the resource provider as the acquisition's `Site`, by binding the provider again with it (`BindResourcesAt`, through the container binding's `AtSite`). `Site` is in the trusted half of the acquisition, beside `Owner`, so an executor has no way to supply one. Nil means the host.
+
+`Site` has an `ID` and `Run`. `Run` runs one command at the site, within the launch's boundary and grant, with the execution's toolbelt reachable as it is for the launch. So git there signs in through the toolbelt's transport, and no credential crosses to the site. A provider that can make the resource there does, and says so in `Resource.Site`. Its `Dir` is then a path at the site, not on the host, and it returns the requested `Files` read there. A provider that can't make the resource there ignores `Site` and makes it on the host as before. The container provider learns nothing of what is run at its site, and the resource provider nothing of how the site is reached.
+
+The host refuses (`sandbox_unavailable`) a resource at a site other than the execution's placement. On `Lookup`, it places the execution where the lease's resource is. When the provider places it elsewhere, because that machine is gone, `Lookup` is refused as `sandbox_unavailable`. Claude Code then acquires again in the same segment, at the new placement. Any other refusal of the lease fails the segment as before.
+
+A provider has a `Site` only during an acquisition. Reaching a site again from `Reconcile` and `Sweep` comes with the Git provider's workspaces at a site.
+
+Executors take two things from a workspace at a site:
+
+- **The playbook's additions.** Claude Code asks for its playbook's additions as `Files`, and a resumed segment uses what its acquisition read.
+- **The wrapper's directory.** The wrapper runs in the plan's `Dir`, the run directory, since the workspace has no host directory.
+
+No bundled resource provider makes workspaces at a site yet. The Git provider still makes every workspace on the host and ignores `Site` (#726).
 
 ## Lease ownership, recovery and cleanup
 
@@ -192,3 +210,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **08-02** added worktree disk safety: full-disk refusal, partial-failure cleanup, `ResourceSweeper` and the spare-workspace sweep, with the disk safety tests and drill.
 - **#163** added the `clone` mode and the sandboxed-binding refusal, the second prerequisite of the B09 sandbox (#160, with evidence from the #161 spike).
 - **#164** (B09) made the sandboxed-binding check run for every binding that declares a sandbox, added the refusal of `setup` and the provider's own refusal of a sandboxed request, the clone's sandbox needs, the pinned git directories and a new branch's upstream.
+- **#726** added workspaces at the launch's site to the contract: the host-bound `ResourceAcquisition.Site` (`BindResourcesAt`), `ResourceRequest.Files`, and `Resource.Site` and `Files`, with the host's place-then-acquire and the executors' side, tested against fakes. The Git and SSH providers' halves follow.

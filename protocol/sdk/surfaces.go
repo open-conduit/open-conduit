@@ -97,7 +97,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, notFound(method)
 		}
 		var log bytes.Buffer
-		res, err := prov.Acquire(ctx, extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log}, HostEnv: p.HostEnv})
+		res, err := prov.Acquire(ctx, extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log, Files: p.Files}, HostEnv: p.HostEnv})
 		out := protocol.ResourceResult{Resource: protocol.FromResource(res), Log: log.String()}
 		if err != nil {
 			if !isSetup(err) {

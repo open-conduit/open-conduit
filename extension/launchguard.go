@@ -33,6 +33,10 @@ type LaunchGuard struct {
 	// MaxScan bounds the hard-link walk of the workspace (default
 	// 1,000,000 entries).
 	MaxScan int
+	// AtSite says the workspace is not on the host but at the launch's
+	// site (Resource.Site): its path is taken as written, since nothing
+	// on the host resolves it, and there is no host directory to walk.
+	AtSite bool
 }
 
 // GuardedLaunch is a launch that passed GuardLaunch: its canonical
@@ -59,6 +63,9 @@ func GuardLaunch(g LaunchGuard) (GuardedLaunch, error) {
 	protected := sandboxAliases(g.Protected)
 	inside := func(p string) bool { return Within(p, protected) }
 	workspace, run := CanonicalPath(g.Dir), CanonicalPath(g.RunDir)
+	if g.AtSite {
+		workspace = filepath.Clean(g.Dir)
+	}
 	out := GuardedLaunch{Workspace: workspace, Run: run, Protected: protected}
 	own := []string{workspace, run}
 	if g.Home != "" {
@@ -66,7 +73,11 @@ func GuardLaunch(g LaunchGuard) (GuardedLaunch, error) {
 		own = append(own, out.Home)
 	}
 	if res := g.Resource; res != nil {
-		if CanonicalPath(res.Dir) != workspace {
+		dir := CanonicalPath(res.Dir)
+		if g.AtSite {
+			dir = filepath.Clean(res.Dir)
+		}
+		if dir != workspace {
 			return GuardedLaunch{}, fmt.Errorf("%w: the launch is not in the acquired workspace", ErrSandboxUnavailable)
 		}
 		if res.Sandbox == nil {
@@ -112,6 +123,9 @@ func GuardLaunch(g LaunchGuard) (GuardedLaunch, error) {
 	}
 	if len(denied) > 0 {
 		return GuardedLaunch{}, fmt.Errorf("%w: inside Open Conduit's state: %s", ErrSandboxDenied, strings.Join(denied, ", "))
+	}
+	if g.AtSite {
+		return out, nil
 	}
 	if err := hardLinks(workspace, g.MaxScan); err != nil {
 		return GuardedLaunch{}, err
@@ -169,6 +183,34 @@ func canonical(paths []string) []string {
 func canonicalNeeds(n SandboxNeeds) SandboxNeeds {
 	n.Read, n.Write, n.ReadOnly, n.Deny = canonical(n.Read), canonical(n.Write), canonical(n.ReadOnly), sandboxAliases(n.Deny)
 	return n
+}
+
+// canonicalNeedsAt is canonicalNeeds, except that a path in site (a
+// workspace at the launch's site, "" for none) is only cleaned: nothing
+// on the host resolves it.
+func canonicalNeedsAt(n SandboxNeeds, site string) SandboxNeeds {
+	if site == "" {
+		return canonicalNeeds(n)
+	}
+	split := func(paths []string) (at, host []string) {
+		for _, p := range paths {
+			if c := filepath.Clean(p); Within(c, []string{site}) {
+				at = append(at, c)
+			} else {
+				host = append(host, p)
+			}
+		}
+		return at, host
+	}
+	var out SandboxNeeds = n
+	for _, f := range []struct {
+		dst  *[]string
+		conv func([]string) []string
+	}{{&out.Read, canonical}, {&out.Write, canonical}, {&out.ReadOnly, canonical}, {&out.Deny, sandboxAliases}} {
+		at, host := split(*f.dst)
+		*f.dst = append(at, f.conv(host)...)
+	}
+	return out
 }
 
 // sandboxAliases are paths canonicalised, with every other path the same

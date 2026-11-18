@@ -84,9 +84,14 @@ type ContainerState struct {
 // ContainerPolicy is the operator's policy for one launch: the binding's
 // container config (ContainerConfigSchema, the grant) and this attempt's
 // paths.
+//
+// Placement is the placement the provider gave the execution
+// (ContainerPlacer.Place), "" when it places nothing: the provider plans
+// and creates there.
 type ContainerPolicy struct {
-	Config domain.Payload
-	Paths  SandboxPaths
+	Config    domain.Payload
+	Paths     SandboxPaths
+	Placement string
 }
 
 // ContainerPlan is what a provider will create: the image pinned by digest,
