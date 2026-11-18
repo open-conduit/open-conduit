@@ -177,10 +177,13 @@ type ContainerBroker interface {
 // ContainerPin is what the host records with a segment for its container:
 // the provider, the plan's digest and summary, the image digest, the
 // container daemon's ID, the container's ID, the run directory and when it
-// was pinned. The container must start after At.
+// was pinned. The container must start after At. A segment whose workspace
+// was at its site (Resource.Site) also records the workspace's path there
+// and the site, so an attach to the Work's session goes back to it.
 type ContainerPin struct {
 	Provider, Digest, Summary, Image, Daemon, ID, Run string
 	At                                                time.Time
+	Workspace, Site                                   string `json:",omitempty"`
 }
 
 // ContainerConfigSchema labels a binding's container config.

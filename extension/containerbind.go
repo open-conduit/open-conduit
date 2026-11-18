@@ -49,6 +49,13 @@ type ContainerBinding struct {
 	// a segment's: labelled ContainerSegmentAttach, and never pinned to a
 	// segment (Pin records it in the attempt's history instead).
 	Attach bool
+	// Workspace, for an attach, is the workspace the attempt's last
+	// segment had at its site, from that segment's pin (Workspace and
+	// Site): an attach acquires nothing, so the host names it. The launch
+	// must be placed at that site and be in that workspace, as a
+	// segment's must be in the one it acquired. Nil for a workspace on
+	// the host.
+	Workspace *Resource
 	// Pin records a container with the attempt's open segment, durably,
 	// before its argv is returned. An error removes the container and
 	// fails the launch.
@@ -260,6 +267,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	c.mu.Lock()
 	res := c.resource
 	c.mu.Unlock()
+	if res == nil && b.Attach && b.Workspace != nil {
+		res = b.Workspace
+	}
 	atSite := res != nil && res.Site != ""
 	if atSite {
 		if err := c.sameSite(*res); err != nil {
@@ -375,6 +385,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		return SandboxPlan{}, fmt.Errorf("%w: the container was created on %s, not at its placement %s", ErrSandboxUnavailable, created.Daemon, placement.Daemon)
 	}
 	pin := ContainerPin{Digest: plan.Digest, Summary: plan.Summary, Image: plan.Image, Daemon: created.Daemon, ID: created.Ref.ID, Run: g.Run, At: b.Now()}
+	if atSite {
+		pin.Workspace, pin.Site = g.Workspace, res.Site
+	}
 	// A marker left by an earlier container would read as this one's.
 	_ = os.Remove(filepath.Join(g.Run, ContainerTermMarker))
 	if err := b.Pin(pin); err != nil {
@@ -391,6 +404,25 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		out.Dir = g.Run
 	}
 	return out, nil
+}
+
+// AttachWorkspace is where an attach to the Work's session goes under
+// container provider provider, from pin, the attempt's last segment's
+// container: when that segment's workspace was at a site, the placement
+// to prefer and the workspace there (ContainerBinding.Workspace), with
+// no needs of its own, as an attach on the host has none. Otherwise it is
+// fallback (the Work's last placement) and no workspace. A workspace at
+// another provider's site is refused as ErrSandboxUnavailable: the
+// binding's provider can't place the attach there.
+func AttachWorkspace(pin *ContainerPin, provider, fallback string) (string, *Resource, error) {
+	if pin == nil || pin.Site == "" {
+		return fallback, nil, nil
+	}
+	p, at, ok := SplitSiteID(pin.Site)
+	if !ok || p != provider || pin.Workspace == "" {
+		return "", nil, fmt.Errorf("%w: the Work's workspace is at %s, which the binding's container provider no longer places at", ErrSandboxUnavailable, pin.Site)
+	}
+	return at, &Resource{Kind: "workspace", Dir: pin.Workspace, Site: pin.Site, Sandbox: &SandboxNeeds{}}, nil
 }
 
 // siteRoot is the workspace at a site, whose paths canonicalNeeds leaves

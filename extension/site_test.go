@@ -157,8 +157,88 @@ func TestPlacedWorkspace(t *testing.T) {
 	if plan.Dir != h.run {
 		t.Fatalf("plan dir %q, want the run directory %q", plan.Dir, h.run)
 	}
-	if len(h.pins) != 1 || h.pins[0].Daemon != "daemon-node-1" {
-		t.Fatalf("pins %+v, want the placement's daemon", h.pins)
+	if len(h.pins) != 1 || h.pins[0].Daemon != "daemon-node-1" || h.pins[0].Workspace != remote || h.pins[0].Site != "fake/node-1" {
+		t.Fatalf("pins %+v, want the placement's daemon, and the workspace and its site", h.pins)
+	}
+}
+
+// An attach goes back to the site the last segment's workspace was at,
+// under the same provider, and is launched in it; with no workspace at a
+// site it prefers the Work's last placement; and a workspace at another
+// provider's site, or a pin without its workspace, is refused.
+func TestAttachWorkspace(t *testing.T) {
+	prefer, ws, err := extension.AttachWorkspace(&extension.ContainerPin{Workspace: "/w", Site: "ssh/oc@b:22"}, "ssh", "oc@a:22")
+	if err != nil || prefer != "oc@b:22" || ws == nil || ws.Dir != "/w" || ws.Site != "ssh/oc@b:22" || ws.Sandbox == nil {
+		t.Fatalf("prefer %q, workspace %+v, err %v; want the pin's site and workspace", prefer, ws, err)
+	}
+	for _, pin := range []*extension.ContainerPin{nil, {ID: "c"}} {
+		prefer, ws, err := extension.AttachWorkspace(pin, "ssh", "oc@a:22")
+		if err != nil || prefer != "oc@a:22" || ws != nil {
+			t.Fatalf("pin %+v: prefer %q, workspace %+v, err %v; want the fallback and none", pin, prefer, ws, err)
+		}
+	}
+	for _, pin := range []extension.ContainerPin{{Workspace: "/w", Site: "pool/n1"}, {Workspace: "/w", Site: "ssh"}, {Site: "ssh/oc@b:22"}} {
+		if _, ws, err := extension.AttachWorkspace(&pin, "ssh", "oc@a:22"); !errors.Is(err, extension.ErrSandboxUnavailable) || ws != nil {
+			t.Fatalf("pin %+v: workspace %+v, err %v; want sandbox_unavailable", pin, ws, err)
+		}
+	}
+}
+
+// An attach acquires nothing: the host names the workspace the last
+// segment had at its site (its pin), and the attach is launched in it,
+// there, with no host directory for it. Placed anywhere else, or launched
+// outside it, the attach is refused with nothing created.
+func TestAttachAtSite(t *testing.T) {
+	cases := []struct {
+		name string
+		node string // where the provider places the attach
+		dir  string // the attach's working directory, "" for the workspace
+		ok   bool
+	}{
+		{"at_its_site", "node-1", "", true},
+		{"placed_elsewhere", "node-2", "", false},
+		{"outside_the_workspace", "node-1", "elsewhere", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newContainerHost(t)
+			f := newFakePlacer()
+			f.node = c.node
+			remote := filepath.Join(h.state, "resources", "git", "workspaces", "at-site")
+			b := extension.BindContainer(extension.ContainerBinding{Provider: f, Name: "fake", Prefer: "node-1", Owner: siteOwner, Attach: true,
+				Workspace: &extension.Resource{Kind: "workspace", Dir: remote, Site: "fake/node-1", Sandbox: &extension.SandboxNeeds{}},
+				Config:    containerConfig(testImage, ""), Host: "host-a", Protected: []string{h.state}, RunRoot: h.runRoot, Records: h.records, Home: h.home,
+				Now: func() time.Time { return h.now },
+				Pin: func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil }})
+			l := h.launch()
+			l.Dir = remote
+			if c.dir != "" {
+				l.Dir = filepath.Join(h.state, c.dir)
+			}
+			plan, err := b.Launch(context.Background(), extension.SandboxNeeds{Write: []string{l.Dir}}, l)
+			if !c.ok {
+				if !errors.Is(err, extension.ErrSandboxUnavailable) {
+					t.Fatalf("err %v, want sandbox_unavailable", err)
+				}
+				if len(f.containers) != 0 || len(h.pins) != 0 {
+					t.Fatalf("containers %v, pins %v, want none", f.containers, h.pins)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(remote); !os.IsNotExist(err) {
+				t.Fatalf("the workspace is on the host: %v", err)
+			}
+			pol := f.planned.policy
+			if pol.Placement != "node-1" || pol.Paths.Site != "fake/node-1" || pol.Paths.Workspace != remote || plan.Dir != h.run {
+				t.Fatalf("policy %+v, plan dir %q, want the attach at the workspace's site, in it", pol, plan.Dir)
+			}
+			if len(h.pins) != 1 || h.pins[0].Site != "fake/node-1" {
+				t.Fatalf("pins %+v, want the attach pinned at the site", h.pins)
+			}
+		})
 	}
 }
 

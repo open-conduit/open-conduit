@@ -333,10 +333,14 @@ func newLease(ref, mode string, cfg Config, checkout string, o extension.Resourc
 func resource(l lease, w workspace) extension.Resource {
 	w.Mode, w.Dir, w.Remote, w.Base, w.Branch = l.Mode, l.Path, l.Remote, l.Base, l.Branch
 	data, _ := json.Marshal(w)
-	res := extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w), Sandbox: sandboxNeeds(l)}
+	res := extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w)}
+	// The host-side needs make directories in the clone, which for one at
+	// a site would put them on the host.
 	if l.Site != "" {
 		res.Site, res.Sandbox = l.Site, siteSandboxNeeds(l.Path)
 		res.Summary += " at " + l.Site
+	} else {
+		res.Sandbox = sandboxNeeds(l)
 	}
 	return res
 }

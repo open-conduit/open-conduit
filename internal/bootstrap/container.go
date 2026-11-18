@@ -461,6 +461,12 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 	if err != nil {
 		return management.ContainerAttachment{}, err
 	}
+	// A workspace the last segment had at its site is where the attach
+	// goes, and what it is launched in.
+	prefer, workspace, err := extension.AttachWorkspace(state.ContainerPin(), desc.Provider, workPlacement(workHome, desc.Provider))
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
 	home, _ := os.UserHomeDir()
 	var pinned extension.ContainerPin
 	b := extension.BindContainer(extension.ContainerBinding{
@@ -471,7 +477,8 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 		Attach:   true,
 		// An attach goes where the Work last ran, and never moves it.
 		Name:      desc.Provider,
-		Prefer:    workPlacement(workHome, desc.Provider),
+		Prefer:    prefer,
+		Workspace: workspace,
 		Protected: d.protectedPaths(),
 		Shared:    []string{d.pluginDir()},
 		RunRoot:   filepath.Join(d.o.StateDir, "executors", executor, "runs"),
