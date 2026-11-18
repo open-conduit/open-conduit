@@ -1142,10 +1142,6 @@ type ContainerList struct {
 	Containers []ContainerState `json:"containers"`
 }
 
-// ContainerProviderForwardParams asks a provider declared with forward for
-// the address the host serves an execution's toolbelt on for a container
-// config, before each launch and recovery (container_provider.forward). An
-// empty Address means its containers reach the toolbelt's socket itself.
 // ContainerProviderPlaceParams asks a provider declared with place where
 // an execution runs, before anything is acquired for it
 // (container_provider.place; extension.ContainerPlacer.Place). Prefer is
@@ -1215,6 +1211,10 @@ type ContainerProviderSiteRunParams struct {
 	Command   SiteCommand `json:"command"`
 }
 
+// ContainerProviderForwardParams asks a provider declared with forward for
+// the address the host serves an execution's toolbelt on for a container
+// config, before each launch and recovery (container_provider.forward). An
+// empty Address means its containers reach the toolbelt's socket itself.
 type ContainerProviderForwardParams struct {
 	Type   string  `json:"type"`
 	Config Payload `json:"config"`

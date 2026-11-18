@@ -51,6 +51,10 @@ func (p *Provider) Place(ctx context.Context, _ extension.ResourceOwner, policy 
 	if err != nil {
 		return extension.Placement{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
+	if _, err := p.remote(s.Endpoint()); err != nil {
+		// A placement must name one pin for its site commands to use.
+		return extension.Placement{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+	}
 	if h := p.Health(ctx, s, "", true); h.Status == "fail" {
 		return extension.Placement{}, fmt.Errorf("%w: remote %s: %s", extension.ErrSandboxUnavailable, s.Endpoint(), h.Detail)
 	}
@@ -62,9 +66,9 @@ func (p *Provider) Place(ctx context.Context, _ extension.ResourceOwner, policy 
 // forwarded to the same path, as for a run. The command's environment is
 // its own, with HOME and a PATH unless it sets one.
 func (p *Provider) SiteRun(ctx context.Context, placement string, cmd extension.SiteCommand) (extension.SiteResult, error) {
-	s, ok := p.remote(placement)
-	if !ok {
-		return extension.SiteResult{}, fmt.Errorf("%w: no binding runs on %s", extension.ErrSiteUnavailable, placement)
+	s, err := p.remote(placement)
+	if err != nil {
+		return extension.SiteResult{}, err
 	}
 	if len(cmd.Argv) == 0 || strings.Contains(cmd.Argv[0], "=") {
 		return extension.SiteResult{}, errors.New("site command: an argv is needed, and its first word can't hold =")
@@ -105,7 +109,7 @@ func (p *Provider) SiteRun(ctx context.Context, placement string, cmd extension.
 	c.Stdin = bytes.NewReader(cmd.Stdin)
 	stdout, stderr := &bounded{max: siteOutput}, &bounded{max: siteOutput}
 	c.Stdout, c.Stderr = stdout, stderr
-	err := c.Run()
+	err = c.Run()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
@@ -118,14 +122,25 @@ func (p *Provider) SiteRun(ctx context.Context, placement string, cmd extension.
 }
 
 // remote is the settings of the remote a placement names, among those the
-// config's bindings use.
-func (p *Provider) remote(placement string) (Settings, bool) {
+// config's bindings use. Bindings that pin it to different host keys
+// leave the placement without one pin, so it is unavailable, as splitRef
+// refuses a run reference.
+func (p *Provider) remote(placement string) (Settings, error) {
+	var found *Settings
 	for _, s := range p.o.Remotes() {
-		if s.Endpoint() == placement {
-			return s, true
+		if s.Endpoint() != placement {
+			continue
 		}
+		if found != nil && found.HostKey != s.HostKey {
+			return Settings{}, fmt.Errorf("%w: bindings pin %s to different host keys", extension.ErrSiteUnavailable, placement)
+		}
+		s := s
+		found = &s
 	}
-	return Settings{}, false
+	if found == nil {
+		return Settings{}, fmt.Errorf("%w: no binding runs on %s", extension.ErrSiteUnavailable, placement)
+	}
+	return *found, nil
 }
 
 // bounded keeps the first max bytes written to it.

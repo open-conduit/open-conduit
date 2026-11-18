@@ -36,9 +36,8 @@ func TestPlacerConformance(t *testing.T) {
 // siteMaker is a resource provider that makes its workspace at the
 // acquisition's site, through the site, as a git provider would clone.
 type siteMaker struct {
-	dir  string
-	seen extension.SiteCommand
-	env  string
+	dir string
+	env string
 }
 
 func (m *siteMaker) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
@@ -163,5 +162,15 @@ func TestSiteRefusals(t *testing.T) {
 	p, err := f.p.Place(ctx, extension.ResourceOwner{ExecutionID: "x"}, extension.ContainerPolicy{Config: f.config}, "oc@other:22")
 	if err != nil || p.ID != at || p.Daemon != f.settings.Daemon() {
 		t.Errorf("placement %+v, %v, want the remote", p, err)
+	}
+	// Bindings that pin the remote to different keys leave it no one pin.
+	rekeyed := f.settings
+	rekeyed.HostKey += "x"
+	f.p.o.Remotes = func() []Settings { return []Settings{f.settings, rekeyed} }
+	if _, err := f.p.SiteRun(ctx, at, extension.SiteCommand{Argv: []string{"true"}}); !errors.Is(err, extension.ErrSiteUnavailable) {
+		t.Errorf("a remote with two pins: %v, want ErrSiteUnavailable", err)
+	}
+	if _, err := f.p.Place(ctx, extension.ResourceOwner{ExecutionID: "x"}, extension.ContainerPolicy{Config: f.config}, ""); !errors.Is(err, extension.ErrSandboxUnavailable) {
+		t.Errorf("placing on a remote with two pins: %v, want sandbox_unavailable", err)
 	}
 }
