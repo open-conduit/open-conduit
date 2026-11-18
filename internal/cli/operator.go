@@ -804,8 +804,63 @@ func (o *operator) auth(args []string) int {
 			added["expires_at"] = file.ExpiresAt
 		}
 		return o.emit(added, nil)
+	case "issuers":
+		if len(args) != 1 {
+			return usageError(o.errOut, "auth issuers takes no arguments")
+		}
+		c, _, err := o.client()
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		return o.emit(c.Issuers(cx))
+	case "issuer":
+		if len(args) < 2 {
+			return usageError(o.errOut, "expected auth issuer set|remove ID")
+		}
+		switch args[1] {
+		case "set":
+			f := newFlags("issuer set", "type", "config", "groups")
+			pos, err := f.parse(args[2:])
+			if err != nil || len(pos) != 1 || f.get("type") == "" {
+				return usageError(o.errOut, "expected auth issuer set ID --type TYPE [--config JSON] [--groups JSON]")
+			}
+			config := json.RawMessage(`{}`)
+			if v := f.get("config"); v != "" {
+				if !json.Valid([]byte(v)) {
+					return usageError(o.errOut, "--config must be a JSON object")
+				}
+				config = json.RawMessage(v)
+			}
+			groups := map[string]string{}
+			if v := f.get("groups"); v != "" {
+				if json.Unmarshal([]byte(v), &groups) != nil {
+					return usageError(o.errOut, `--groups must be a JSON object of group to role, for example {"platform":"admin"}`)
+				}
+			}
+			c, _, err := o.client()
+			if err != nil {
+				return o.emit(nil, err)
+			}
+			cx, cancel := ctx()
+			defer cancel()
+			return o.emit(c.SetIssuer(cx, pos[0], f.get("type"), config, groups))
+		case "remove":
+			if len(args) != 3 {
+				return usageError(o.errOut, "expected auth issuer remove ID")
+			}
+			c, _, err := o.client()
+			if err != nil {
+				return o.emit(nil, err)
+			}
+			cx, cancel := ctx()
+			defer cancel()
+			return o.emit(map[string]string{"id": args[2]}, c.DeleteIssuer(cx, args[2]))
+		}
+		return usageError(o.errOut, "expected auth issuer set|remove ID")
 	}
-	return usageError(o.errOut, "expected auth rotate|revoke|recover|operators|add")
+	return usageError(o.errOut, "expected auth rotate|revoke|recover|operators|add|issuers|issuer")
 }
 
 func writePrivateJSON(path string, v any) error {

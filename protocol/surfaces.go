@@ -96,6 +96,11 @@ const (
 	// Type is the tunnel type, Config its config as the operator wrote it,
 	// which the host passes to tunnel.run unchanged.
 	ValidateTunnel = "tunnel"
+	// ValidateVerifier checks a trusted issuer's config for a credential
+	// verifier type declared in verifiers. Type is the verifier type,
+	// Config the issuer's config as the admin gave it, which the host
+	// passes to credential.verify unchanged.
+	ValidateVerifier = "verifier"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -1017,6 +1022,28 @@ type TunnelRunParams struct {
 type TunnelURLParams struct {
 	Run string `json:"run"`
 	URL string `json:"url"`
+}
+
+// CredentialVerifyParams asks a verifier about one bearer credential
+// (credential.verify; extension.CredentialVerifier.Verify): Issuer is the
+// host's ID for the trusted issuer, Config its config (schema
+// extension.IssuerConfigSchema) and Token the credential as the request
+// carried it. Any refusal (unauthorized for a credential that isn't
+// valid, or any other code) is the host's 401.
+type CredentialVerifyParams struct {
+	Type   string  `json:"type"`
+	Issuer string  `json:"issuer"`
+	Config Payload `json:"config"`
+	Token  string  `json:"token"`
+}
+
+// CredentialVerifyResult is who an accepted credential names
+// (extension.VerifiedCredential): the issuer's subject, its groups, and
+// when it expires (RFC 3339, required).
+type CredentialVerifyResult struct {
+	Subject   string   `json:"subject"`
+	Groups    []string `json:"groups,omitempty"`
+	ExpiresAt string   `json:"expires_at"`
 }
 
 // LaunchParams plans one launch (sandbox.plan) or creates its container

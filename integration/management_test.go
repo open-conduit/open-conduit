@@ -87,6 +87,9 @@ type managementHarness struct {
 	// gitUpstream, when set, is how the toolbelt's git transport reaches
 	// repositories (a test's TLS server).
 	gitUpstream http.RoundTripper
+	// verifiers are the credential verifier types trusted issuers name,
+	// as the running packages' declared verifiers are.
+	verifiers map[string]management.Verifier
 }
 
 // upstreamFunc is a function as an http.RoundTripper.
@@ -212,7 +215,11 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 		Secrets:  &config.SecretStore{File: secretsFile, Keyring: h.keyring},
 		Resolver: &config.Resolver{SecretsFile: secretsFile, Keyring: h.keyring, LookupEnv: func(string) (string, bool) { return "", false }},
 		Observer: h.observed,
-		Actions:  func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		Verifiers: func(typ string) (management.Verifier, bool) {
+			v, ok := h.verifiers[typ]
+			return v, ok
+		},
+		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
 		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
 			if h.attach == nil {
 				return management.AttachSpec{}, management.ErrAttachUnsupported

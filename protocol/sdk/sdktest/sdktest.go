@@ -294,6 +294,15 @@ func (h *Host) Tunnel(ctx context.Context, typ, addr string, config domain.Paylo
 	return err
 }
 
+// Verify asks the extension's credential verifier of type typ about token,
+// as the host does for a bearer credential it didn't issue, offered to the
+// trusted issuer issuer with config.
+func (h *Host) Verify(ctx context.Context, typ, issuer string, config domain.Payload, token string) (protocol.CredentialVerifyResult, error) {
+	var out protocol.CredentialVerifyResult
+	err := h.conn.Call(ctx, "credential.verify", protocol.CredentialVerifyParams{Type: typ, Issuer: issuer, Config: protocol.FromPayload(config), Token: token}, &out)
+	return out, err
+}
+
 // Configure applies a configuration generation. With p.KV unset it sends
 // the recorded KV version and the manifest's, so a WithKVVersion below the
 // manifest's runs Migrate first. Each entry's scope becomes configured, and

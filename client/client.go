@@ -360,6 +360,9 @@ type TokenFile struct {
 }
 
 // ReadTokenFile refuses group/world-readable or non-regular credential files.
+// The file is the JSON the daemon writes ({"token_id", "token"}), or a
+// bearer credential on its own: one a trusted identity provider issued
+// (an ID token, say), which has no token ID and is written as it came.
 func ReadTokenFile(path string) (TokenFile, error) {
 	var f TokenFile
 	info, err := os.Lstat(path)
@@ -372,6 +375,12 @@ func ReadTokenFile(path string) (TokenFile, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return f, fmt.Errorf("operator token file unreadable")
+	}
+	if raw := bytes.TrimSpace(b); len(raw) > 0 && raw[0] != '{' {
+		if bytes.ContainsAny(raw, " \t\r\n") {
+			return TokenFile{}, fmt.Errorf("operator token file is malformed")
+		}
+		return TokenFile{Token: string(raw)}, nil
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
@@ -1244,6 +1253,41 @@ func (c *Client) AddExpiringOperator(ctx context.Context, name, role, ttl string
 	}
 	err = c.Do(ctx, "POST", "auth/operators", nil, body, "", &out)
 	return
+}
+
+// Issuer is a trusted identity provider issuer: the credential verifier
+// type that checks its credentials, that verifier's config, and the table
+// mapping its groups to roles (admin, operate or view). Its credentials
+// are recorded as operator:<id>:<subject>.
+type Issuer struct {
+	ID        string            `json:"id"`
+	Type      string            `json:"type"`
+	Config    json.RawMessage   `json:"config"`
+	Groups    map[string]string `json:"groups"`
+	CreatedAt string            `json:"created_at,omitempty"`
+	UpdatedAt string            `json:"updated_at,omitempty"`
+}
+
+// Issuers lists the trusted issuers.
+func (c *Client) Issuers(ctx context.Context) ([]Issuer, error) {
+	var out struct {
+		Issuers []Issuer `json:"issuers"`
+	}
+	err := c.Do(ctx, "GET", "auth/issuers", nil, nil, "", &out)
+	return out.Issuers, err
+}
+
+// SetIssuer trusts an issuer, or replaces its type, config and group
+// table (admin).
+func (c *Client) SetIssuer(ctx context.Context, id, typ string, config json.RawMessage, groups map[string]string) (out Issuer, err error) {
+	body := map[string]any{"type": typ, "config": config, "groups": groups}
+	err = c.Do(ctx, "PUT", "auth/issuers/"+esc(id), nil, body, "", &out)
+	return
+}
+
+// DeleteIssuer stops trusting an issuer (admin).
+func (c *Client) DeleteIssuer(ctx context.Context, id string) error {
+	return c.Do(ctx, "DELETE", "auth/issuers/"+esc(id), nil, nil, "", nil)
 }
 
 // Secret is one name in the daemon's secret store: where it is stored, the

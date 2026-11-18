@@ -1141,6 +1141,9 @@ func (s *Server) rotate(c *call) (int, any, error) {
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
 	}
+	if c.who.issuer != "" {
+		return 0, nil, fail(409, "not_rotatable", "this credential was issued by "+c.who.issuer+"; get a new one from it")
+	}
 	if in.ExpectedTokenID != c.who.tokenID {
 		return 0, nil, fail(409, "token_conflict", "expected_token_id is not the calling credential")
 	}

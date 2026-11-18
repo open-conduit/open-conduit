@@ -75,6 +75,10 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 			{Type: Relay, Config: json.RawMessage(`{"region":"eu"}`)},
 			{Type: Relay, Config: json.RawMessage(`{"domain":"hooks.example.com"}`), Refused: true},
 		},
+		Verifiers: []protocol.VerifierCase{
+			{Type: Badge, Config: json.RawMessage(`{"badges":{"badge-alice":{"subject":"alice","groups":["staff"]}}}`), RefusedTokens: []string{"badge-bob", "BADGE-ALICE"}},
+			{Type: Badge, Config: json.RawMessage(`{"badges":{}}`), Refused: true},
+		},
 	}, nil
 }
 

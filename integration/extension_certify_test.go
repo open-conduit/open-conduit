@@ -224,7 +224,10 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// tunnel.run, which needs the provider's own program).
 		{"ngrok", "", []string{"tunnels.policy", "surfaces.served"}},
 		{"cloudflared", "", []string{"tunnels.policy", "surfaces.served"}},
-		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy", "containers.policy", "tunnels.policy"}},
+		// The OIDC credential verifier: its issuer config cases, and forged
+		// and unsigned tokens refused.
+		{"oidc", "", []string{"verifiers.policy"}},
+		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy", "containers.policy", "tunnels.policy", "verifiers.policy"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -33,6 +33,7 @@ This page records decision B01: the ownership and import rules for every Go pack
 | `extensions/docker`, `extensions/ssh` | Optional container providers: Docker containers behind a gateway, and runs on a remote over SSH; `extensions/docker/pkg` and `extensions/ssh/pkg` serve them as bundled packages | Public packages and process/filesystem utilities |
 | `extensions/aws` | Optional AWS role credentials for a run: an STS client (`extensions/aws/sigv4` signs its requests), the run's AWS profiles and the `aws.credentials` operation, on `protocol/sdk`; `extensions/aws/awstest` is its fake STS | Public packages, `protocol/sdk` and the standard library |
 | `extensions/tunnel` | Optional webhook tunnel providers (ngrok, cloudflared); `extensions/tunnel/pkg` serves each as a bundled package of that name | Public packages and process utilities |
+| `extensions/oidc` | Optional OpenID Connect credential verifier (`extension.CredentialVerifier`): JWT signatures against the issuer's cached keys, and its claims; `extensions/oidc/pkg` serves it as the bundled package `oidc` | Public packages and the standard library |
 | `extensions/{schedule,introspection,observe,posthog,human}` | Scheduling rules, reporting/sweep/triage and the host watch (`extensions/introspection/host`), observed sources, telemetry export and human asks | Public packages and service libraries; `client` if calling management |
 | `extensions/shell`, `extensions/claudecode`, `extensions/codex` (executors) | Execution processes, adoption and executor-private continuity; CLI/MCP toolbelt presentation | Public packages, `client`, generic process helpers; no runtime/SQLite imports |
 | `protocol` | The third-party subprocess protocol: version, manifest validation, method catalogue and error codes; wire types, error mapping and payload schema evolution | Public packages only |
@@ -103,6 +104,8 @@ Composition may depend on the public `conformance` checks, because the certifica
 **Git workspaces.** `extensions/git` ([B07](../workspaces/)) imports only public contracts plus process/filesystem utilities. `extensions/git/pkg` serves it as a bundled package over `protocol/sdk`.
 
 **Webhook exposure.** `extensions/tunnel` provides the ngrok and cloudflared tunnel types (`extension.TunnelProvider`), using the standard library only, and `extensions/tunnel/pkg` serves each as a bundled package of that name over `tunnel.run`. A static public URL needs no provider.
+
+**Operator identity.** `extensions/oidc` provides the `oidc` credential verifier type (`extension.CredentialVerifier`), using the standard library only, and `extensions/oidc/pkg` serves it as a bundled package over `credential.verify`. The host keeps the actor, the expiry and the role; the package only says who a token names ([trusted issuers](../toolbelt-management/#local-management-api)).
 
 **Slack.** `extensions/slack` ([Slack extension](../slack-extension/)) uses public contracts plus the standard library, including its own minimal WebSocket client for Socket Mode, so it adds no module. Its `extensions/slack/slacktest` fake is test support only. `extensions/slack/playbooks` holds the `slack-thread` playbook, which bootstrap writes into the Claude Code plugin beside the GitHub playbooks. `extensions/slack/pkg` serves it as a bundled package; no Git or workspace code is involved.
 

@@ -276,6 +276,7 @@ func Run(ctx context.Context, o Options) (rep Report, err error) {
 	r.sandboxes(ctx, remote)
 	r.containers(ctx, remote)
 	r.tunnels(remote)
+	r.verifiers(ctx, remote)
 	r.surfaces(ctx, remote)
 	r.restart(ctx, remote)
 	if n := remote.Service().Refused(); n > 0 {
@@ -1166,6 +1167,62 @@ func (r *runner) tunnels(remote *extproc.Remote) {
 		}
 	}
 	r.pass("tunnels.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Tunnels)))
+}
+
+// notACredential is the credential verifiers.policy offers under every
+// accepted config besides the fixture's own: no verifier may accept it.
+const notACredential = "not-a-credential"
+
+// verifiers runs verifiers.policy: each verifier case's validate verdict,
+// asked twice, with an accepted and a refused case for every declared
+// verifier type, and under each accepted config, credential.verify refusing
+// the case's refused credentials and one that is no credential at all.
+func (r *runner) verifiers(ctx context.Context, remote *extproc.Remote) {
+	if len(r.m.Provides.Verifiers) == 0 {
+		r.skip("verifiers.policy", "no credential verifier type")
+		return
+	}
+	declared := map[string]bool{}
+	for _, d := range r.m.Provides.Verifiers {
+		declared[d.Type] = true
+	}
+	accepted, refused := map[string]bool{}, map[string]bool{}
+	for i, c := range r.fixture.Verifiers {
+		if !declared[c.Type] {
+			r.fail("verifiers.policy", "case %d: %q is not a declared verifier type", i, c.Type)
+			return
+		}
+		check := remote.Validator(protocol.ValidateVerifier, c.Type)
+		first, second := check(c.Config, nil), check(c.Config, nil)
+		if (first == nil) != (second == nil) {
+			r.fail("verifiers.policy", "case %d: %s answered validate verifier differently twice", i, c.Type)
+			return
+		}
+		if got := first != nil; got != c.Refused {
+			r.fail("verifiers.policy", "case %d: %s validate verifier refused=%t, want %t", i, c.Type, got, c.Refused)
+			return
+		}
+		if c.Refused {
+			refused[c.Type] = true
+			continue
+		}
+		accepted[c.Type] = true
+		v, _ := remote.Verifier(c.Type)
+		for j, token := range append(append([]string(nil), c.RefusedTokens...), notACredential) {
+			got, err := v.Verify(ctx, extension.CredentialCheck{Issuer: "certify", Config: domain.Payload{Schema: extension.IssuerConfigSchema, Data: c.Config}, Token: token})
+			if err == nil {
+				r.fail("verifiers.policy", "case %d: %s accepted refused credential %d as %q", i, c.Type, j, got.Subject)
+				return
+			}
+		}
+	}
+	for typ := range declared {
+		if !accepted[typ] || !refused[typ] {
+			r.fail("verifiers.policy", "the fixture needs an accepted and a refused verifier case for %s", typ)
+			return
+		}
+	}
+	r.pass("verifiers.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Verifiers)))
 }
 
 // containers runs containers.policy: each container case's validate

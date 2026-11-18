@@ -113,6 +113,13 @@ func manifestAdapters(m protocol.Manifest) []cli.Adapter {
 			}
 		})
 	}
+	for _, v := range p.Verifiers {
+		add("verifier", v.Type, v.Fields, func(a *cli.Adapter, f []cli.Field) {
+			if len(f) > 0 || a.Issuer == nil {
+				a.Issuer = f
+			}
+		})
+	}
 	if len(own.Kinds) == 0 && len(others) == 0 {
 		return nil
 	}

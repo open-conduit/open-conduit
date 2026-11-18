@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -520,6 +521,35 @@ func (r *Remote) Tunnel(typ string) (extension.TunnelProvider, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Verifier returns the credential verifier adapter of a declared type.
+// Each Verify is one credential.verify call; any refusal, or the package
+// being down, is an error the host turns into a 401.
+func (r *Remote) Verifier(typ string) (extension.CredentialVerifier, bool) {
+	for _, d := range r.m.Provides.Verifiers {
+		if d.Type == typ {
+			return &remoteVerifier{r: r, typ: typ}, true
+		}
+	}
+	return nil, false
+}
+
+type remoteVerifier struct {
+	r   *Remote
+	typ string
+}
+
+func (v *remoteVerifier) Verify(ctx context.Context, c extension.CredentialCheck) (extension.VerifiedCredential, error) {
+	var out protocol.CredentialVerifyResult
+	if err := v.r.p.Call(ctx, "credential.verify", protocol.CredentialVerifyParams{Type: v.typ, Issuer: c.Issuer, Config: protocol.FromPayload(c.Config), Token: c.Token}, &out); err != nil {
+		return extension.VerifiedCredential{}, err
+	}
+	at, err := time.Parse(time.RFC3339Nano, out.ExpiresAt)
+	if err != nil {
+		return extension.VerifiedCredential{}, fmt.Errorf("credential verifier %s answered without a valid expires_at", v.typ)
+	}
+	return extension.VerifiedCredential{Subject: out.Subject, Groups: out.Groups, ExpiresAt: at}, nil
 }
 
 type remoteContainer struct {

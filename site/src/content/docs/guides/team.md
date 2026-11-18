@@ -72,6 +72,22 @@ Each connection the CLI makes opens one SSH session. `work attach` and `containe
 
 To take someone's access away, revoke their credentials (`auth revoke`, with each ID from `auth operators`) and remove their key. A credential with a TTL also lapses on its own at its expiry.
 
+### Or let your identity provider decide
+
+A company that runs joiners, movers and leavers through an identity provider (Okta, Entra ID, Google, Keycloak, anything that speaks OpenID Connect) can let it be the source of who may reach the daemon. Open Conduit doesn't run a sign-in flow or keep passwords: people get a token from the identity provider the way they already do, and the daemon checks it on every call. Trust the issuer once, with the groups that may do something:
+
+```sh
+open-conduit auth issuer set corp --type oidc \
+  --config '{"issuer": "https://login.example.com/", "audience": "open-conduit"}' \
+  --groups '{"platform-admins": "admin", "engineering": "operate", "everyone": "view"}'
+```
+
+The `oidc` package, bundled with the release, checks each token's signature against the keys the issuer publishes, and that it was issued by that issuer, for that audience, and hasn't expired. `open-conduit adapters oidc` lists its other settings: `jwks_url`, inline `keys`, which claims carry the person (`subject_claim`, default `sub`) and their groups (`groups_claim`, default `groups`), and the clock `leeway`.
+
+Someone in `engineering` then calls with their token in place of a credential file. `OPEN_CONDUIT_TOKEN_FILE` may point at a private (0600) file holding just the token. Everything they do is recorded as `operator:corp:<subject>`, and their role is the highest one their groups map to. Someone whose groups map to none gets in but may do nothing. Leaving the company, or leaving the group, takes effect when their token expires, and removing a group from the table takes effect on the next call. The daemon checks the token on its first use and then until it expires, without asking the identity provider again, and it keeps working through a short outage of the identity provider. Your own credential never depends on the issuer, so you can still get in when the identity provider is down.
+
+Only an admin can trust an issuer or change its groups (`auth issuers` lists them, `auth issuer remove corp` stops trusting it), and each change is recorded in the daemon's log. The table lives in the daemon's own store, not in the config file, so applying a config can't grant anyone a role. To let someone answer an agent's questions, add `operator:corp:<subject>` to the `human` entry's `responders`.
+
 ## 4. The web view behind your own sign-in
 
 The web view only listens on loopback, so it is never reachable from another machine on its own. To reach it from a browser, put a reverse proxy on the same server that serves HTTPS, signs people in (with your identity provider, GitHub or Google through [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/), say, or your tailnet) and forwards to `127.0.0.1:7420`.
