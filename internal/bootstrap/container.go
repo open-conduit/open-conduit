@@ -169,6 +169,14 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Name:   desc.Provider,
 		Prefer: workPlacement(workHome, desc.Provider),
 		Placed: func(at extension.Placement) { placeWork(workHome, desc.Provider, at) },
+		// Bound again with the site, so the resource can be made there;
+		// a binding that can't be bound again keeps the host's.
+		AtSite: func(site extension.Site) extension.ResourceBroker {
+			if r, err := d.bindResourcesAt(ctx, state, site); err == nil && r != nil {
+				return r
+			}
+			return resources
+		},
 	})
 	// The segment's end is the end of what extensions issued for it.
 	settle := func(r extension.Result) extension.Result {

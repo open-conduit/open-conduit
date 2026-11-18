@@ -87,6 +87,12 @@ func (d *daemon) sweepResources(c *components) {
 // attempt's trusted owner. A binding without a resource gets none; core never
 // sees what the provider supplies.
 func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) (extension.ResourceBroker, error) {
+	return d.bindResourcesAt(ctx, state, nil)
+}
+
+// bindResourcesAt is bindResources with the site the attempt's container
+// placed it at (extension.ResourceAcquisition.Site), nil for the host.
+func (d *daemon) bindResourcesAt(ctx context.Context, state runtime.AttemptState, site extension.Site) (extension.ResourceBroker, error) {
 	desc, err := d.configs.Resource(state)
 	if err != nil {
 		return nil, err
@@ -99,7 +105,7 @@ func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) 
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
-	broker := extension.BindResourcesEnv(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, resourceEnv(desc.PassEnv, os.LookupEnv))
+	broker := extension.BindResourcesAt(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, resourceEnv(desc.PassEnv, os.LookupEnv), site)
 	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil
 }
 

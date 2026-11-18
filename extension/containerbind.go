@@ -69,6 +69,11 @@ type ContainerBinding struct {
 	// Placed, when set, is told each placement Place gives, before
 	// anything is acquired there, so the host can prefer it next time.
 	Placed func(Placement)
+	// AtSite binds the attempt's resource provider again with the site
+	// the execution was placed at (BindResourcesAt), so its acquisition
+	// can make the workspace there. Nil: the resource is always made on
+	// the host.
+	AtSite func(Site) ResourceBroker
 }
 
 // BoundContainer is a ContainerBroker bound to one attempt. Its Resources
@@ -99,30 +104,34 @@ func (c *BoundContainer) Resources(r ResourceBroker) ResourceBroker {
 	if r == nil {
 		return nil
 	}
-	return placedResources{c: c, r: sandboxedResources{r, func(res *Resource) {
-		c.mu.Lock()
-		c.resource = res
-		c.mu.Unlock()
-	}}}
+	return placedResources{c: c, r: r}
 }
 
 // placedResources places the execution before the resource broker it
-// wraps is called.
+// wraps is called, and marks every request Sandboxed.
 type placedResources struct {
 	c *BoundContainer
 	r ResourceBroker
 }
 
+func (p placedResources) sandboxed(r ResourceBroker) ResourceBroker {
+	return sandboxedResources{r, func(res *Resource) {
+		p.c.mu.Lock()
+		p.c.resource = res
+		p.c.mu.Unlock()
+	}}
+}
+
 func (p placedResources) Acquire(ctx context.Context, req ResourceRequest) (Resource, error) {
-	req.Site = nil
 	site, err := p.c.site(ctx, p.c.b.Prefer)
 	if err != nil {
 		return Resource{}, err
 	}
-	if site != nil {
-		req.Site = site
+	broker := p.r
+	if site != nil && p.c.b.AtSite != nil {
+		broker = p.c.b.AtSite(site)
 	}
-	res, err := p.r.Acquire(ctx, req)
+	res, err := p.sandboxed(broker).Acquire(ctx, req)
 	if err == nil {
 		err = p.c.sameSite(res)
 	}
@@ -133,7 +142,7 @@ func (p placedResources) Acquire(ctx context.Context, req ResourceRequest) (Reso
 // is: a resource at a site the provider no longer places at can't be
 // used, and the executor acquires again.
 func (p placedResources) Lookup(ctx context.Context, ref string) (Resource, error) {
-	res, err := p.r.Lookup(ctx, ref)
+	res, err := p.sandboxed(p.r).Lookup(ctx, ref)
 	if err != nil {
 		return res, err
 	}
@@ -302,7 +311,14 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		roots = append(roots, l.Dir)
 	}
 	for _, list := range [][]string{needs.Read, needs.Write, needs.ReadOnly} {
-		roots = append(roots, list...)
+		for _, p := range list {
+			// A need in a workspace at the site names a path there,
+			// which nothing on the host resolves.
+			if atSite && Within(filepath.Clean(p), []string{g.Workspace}) {
+				continue
+			}
+			roots = append(roots, p)
+		}
 	}
 	l = canonicalLaunch(l, roots)
 	l.Dir, l.RunDir = g.Workspace, g.Run

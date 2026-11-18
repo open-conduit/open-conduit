@@ -430,7 +430,12 @@ func (e *Executor) workspace(ctx context.Context, r extension.RunRequest, cfg Co
 			if err == nil && res.Site != "" && res.Site == ws.Site && res.Files == nil {
 				res.Files = ws.Files
 			}
-			return res, err
+			// A workspace at a site the launch can no longer be placed at
+			// (its machine is gone) can't be used: acquire again, where
+			// the execution is placed now.
+			if ws.Site == "" || !errors.Is(err, extension.ErrSandboxUnavailable) {
+				return res, err
+			}
 		}
 	}
 	req := extension.ResourceRequest{Mode: cfg.WorkspaceMode, Log: log}

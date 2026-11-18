@@ -277,7 +277,7 @@ The container broker places once per segment. The host records the placement as 
 With the workspace at the site, the launch's checks treat it as the site's:
 
 - the policy says so (`SandboxPaths.Site`), so a provider that copies the host's paths leaves it out;
-- its path is taken as the resource provider wrote it, neither resolved on the host nor walked for hard links;
+- its path, and every path in it the launch's argv, environment and needs name, is taken as the resource provider wrote it, neither resolved on the host nor walked for hard links;
 - a read-only need inside it is the site's to hold;
 - the plan's `Dir` puts the executor's wrapper in the run directory.
 

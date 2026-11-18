@@ -3,11 +3,13 @@ package extension_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 )
 
@@ -56,25 +58,25 @@ func (f *fakePlacer) Create(ctx context.Context, p extension.ContainerPlan, labe
 	return c, err
 }
 
-// siteResources makes its workspace at the request's site when it has
-// one, at a path nothing on the host holds.
+// siteResources is a resource provider that makes its workspace at the
+// acquisition's site when it has one, at a path nothing on the host holds.
 type siteResources struct {
 	dir   string
-	seen  *extension.ResourceRequest
+	seen  *extension.ResourceAcquisition
 	site  string // overrides the site the resource reports
 	first string // the output of the first command run at the site
 }
 
-func (s *siteResources) Acquire(ctx context.Context, r extension.ResourceRequest) (extension.Resource, error) {
-	*s.seen = r
+func (s *siteResources) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
+	*s.seen = a
 	res := extension.Resource{Kind: "workspace", Ref: "r", Dir: s.dir, Sandbox: &extension.SandboxNeeds{Write: []string{s.dir}, ReadOnly: []string{filepath.Join(s.dir, ".git", "config")}}}
-	if r.Site != nil {
-		out, err := r.Site.Run(ctx, extension.SiteCommand{Argv: []string{"git", "clone", "repo", s.dir}})
+	if a.Site != nil {
+		out, err := a.Site.Run(ctx, extension.SiteCommand{Argv: []string{"git", "clone", "repo", s.dir}})
 		if err != nil {
 			return extension.Resource{}, err
 		}
 		s.first = string(out.Stdout)
-		res.Site = r.Site.ID()
+		res.Site = a.Site.ID()
 	}
 	if s.site != "" {
 		res.Site = s.site
@@ -82,16 +84,28 @@ func (s *siteResources) Acquire(ctx context.Context, r extension.ResourceRequest
 	return res, nil
 }
 
-func (s *siteResources) Lookup(_ context.Context, ref string) (extension.Resource, error) {
+func (s *siteResources) Lookup(_ context.Context, _ extension.ResourceOwner, ref string) (extension.Resource, error) {
 	return extension.Resource{Kind: "workspace", Ref: ref, Dir: s.dir, Site: s.site, Sandbox: &extension.SandboxNeeds{Write: []string{s.dir}}}, nil
 }
 
-func (h *containerHost) bindPlaced(p extension.ContainerProvider, prefer string, placed *[]extension.Placement) *extension.BoundContainer {
-	return extension.BindContainer(extension.ContainerBinding{Provider: p, Name: "fake", Prefer: prefer, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
+func (s *siteResources) Reconcile(context.Context, extension.ResourceStatusFunc) (extension.ResourceReport, error) {
+	return extension.ResourceReport{}, nil
+}
+
+var siteOwner = extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"}
+
+// bindPlaced binds a container provider as the host does, with prov as
+// the attempt's resource provider, bound again at the placement (AtSite).
+func (h *containerHost) bindPlaced(p extension.ContainerProvider, prov extension.ResourceProvider, prefer string, placed *[]extension.Placement) (*extension.BoundContainer, extension.ResourceBroker) {
+	b := extension.BindContainer(extension.ContainerBinding{Provider: p, Name: "fake", Prefer: prefer, Owner: siteOwner,
 		Config: containerConfig(testImage, ""), Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
 		Toolbelt: h.toolbelt, Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
 		Pin:    func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil },
-		Placed: func(p extension.Placement) { *placed = append(*placed, p) }})
+		Placed: func(p extension.Placement) { *placed = append(*placed, p) },
+		AtSite: func(site extension.Site) extension.ResourceBroker {
+			return extension.BindResourcesAt(prov, siteOwner, domain.Payload{}, nil, site)
+		}})
+	return b, b.Resources(extension.BindResources(prov, siteOwner, domain.Payload{}))
 }
 
 // A placing provider places the execution before anything is acquired;
@@ -102,17 +116,17 @@ func TestPlacedWorkspace(t *testing.T) {
 	h := newContainerHost(t)
 	f := newFakePlacer()
 	var placed []extension.Placement
-	b := h.bindPlaced(f, "node-1", &placed)
 	// A path at the site that nothing on the host holds.
 	remote := filepath.Join(h.state, "resources", "git", "workspaces", "at-site")
-	var seen extension.ResourceRequest
+	var seen extension.ResourceAcquisition
 	r := &siteResources{dir: remote, seen: &seen}
-	res, err := b.Resources(r).Acquire(context.Background(), extension.ResourceRequest{Mode: "clone"})
+	b, broker := h.bindPlaced(f, r, "node-1", &placed)
+	res, err := broker.Acquire(context.Background(), extension.ResourceRequest{Mode: "clone"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seen.Site == nil || seen.Site.ID() != "fake/node-1" || !seen.Sandboxed {
-		t.Fatalf("request %+v, want it sandboxed and at fake/node-1", seen)
+	if seen.Site == nil || seen.Site.ID() != "fake/node-1" || !seen.Request.Sandboxed || seen.Owner != siteOwner {
+		t.Fatalf("acquisition %+v, want it sandboxed, for the owner and at fake/node-1", seen)
 	}
 	if res.Site != "fake/node-1" || r.first != "git clone repo "+remote {
 		t.Fatalf("resource %+v, first command %q", res, r.first)
@@ -145,15 +159,14 @@ func TestPlacedWorkspace(t *testing.T) {
 	}
 }
 
-// Without a placing provider, nothing is placed and an executor's own Site
-// never reaches the resource provider.
+// Without a placing provider, nothing is placed and the acquisition has no
+// site.
 func TestUnplacedWorkspace(t *testing.T) {
 	h := newContainerHost(t)
-	var seen extension.ResourceRequest
+	var seen extension.ResourceAcquisition
 	r := &siteResources{dir: h.ws, seen: &seen}
 	b := h.bind(newFakeContainers(), containerConfig(testImage, ""), nil)
-	forged := extension.PlacedSite{Provider: "fake", Placer: newFakePlacer(), At: extension.Placement{ID: "node-1", Daemon: "d"}}
-	res, err := b.Resources(r).Acquire(context.Background(), extension.ResourceRequest{Site: forged})
+	res, err := b.Resources(extension.BindResources(r, siteOwner, domain.Payload{})).Acquire(context.Background(), extension.ResourceRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,12 +203,12 @@ func TestPlacedWorkspaceRefuses(t *testing.T) {
 			h := newContainerHost(t)
 			f := newFakePlacer()
 			var placed []extension.Placement
-			b := h.bindPlaced(f, "", &placed)
 			remote := filepath.Join(h.state, "resources", "git", "workspaces", "at-site")
-			var seen extension.ResourceRequest
+			var seen extension.ResourceAcquisition
 			r := &siteResources{dir: remote, seen: &seen}
 			c.setup(f, r)
-			_, err := b.Resources(r).Acquire(context.Background(), extension.ResourceRequest{})
+			b, broker := h.bindPlaced(f, r, "", &placed)
+			_, err := broker.Acquire(context.Background(), extension.ResourceRequest{})
 			if c.at == "acquire" {
 				if !errors.Is(err, extension.ErrSandboxUnavailable) {
 					t.Fatalf("acquire: err %v, want sandbox_unavailable", err)
@@ -225,9 +238,9 @@ func TestPlacedLookup(t *testing.T) {
 	f := newFakePlacer()
 	f.node = "node-2"
 	var placed []extension.Placement
-	b := h.bindPlaced(f, "node-1", &placed)
-	r := &siteResources{dir: filepath.Join(h.state, "ws"), seen: new(extension.ResourceRequest), site: "fake/node-2"}
-	if _, err := b.Resources(r).Lookup(context.Background(), "r"); err != nil {
+	r := &siteResources{dir: filepath.Join(h.state, "ws"), seen: new(extension.ResourceAcquisition), site: "fake/node-2"}
+	_, broker := h.bindPlaced(f, r, "node-1", &placed)
+	if _, err := broker.Lookup(context.Background(), "r"); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(f.prefers, ",") != "node-2" {
@@ -237,8 +250,8 @@ func TestPlacedLookup(t *testing.T) {
 	// can't be used and the executor acquires again.
 	g := newFakePlacer()
 	g.node = "node-3"
-	b = h.bindPlaced(g, "", &placed)
-	if _, err := b.Resources(r).Lookup(context.Background(), "r"); !errors.Is(err, extension.ErrSandboxUnavailable) {
+	_, broker = h.bindPlaced(g, r, "", &placed)
+	if _, err := broker.Lookup(context.Background(), "r"); !errors.Is(err, extension.ErrSandboxUnavailable) {
 		t.Fatalf("err %v, want sandbox_unavailable", err)
 	}
 }
@@ -254,5 +267,70 @@ func TestSiteID(t *testing.T) {
 		if _, _, ok := extension.SplitSiteID(bad); ok {
 			t.Fatalf("%q split", bad)
 		}
+	}
+}
+
+// recordingPlacer keeps the launch it was asked to plan.
+type recordingPlacer struct {
+	*fakePlacer
+	launch extension.SandboxLaunch
+}
+
+func (r *recordingPlacer) Plan(ctx context.Context, o extension.ResourceOwner, p extension.ContainerPolicy, n extension.SandboxNeeds, l extension.SandboxLaunch) (extension.ContainerPlan, error) {
+	r.launch = l
+	return r.fakePlacer.Plan(ctx, o, p, n, l)
+}
+
+// A workspace at the site is named in the launch's argv and environment as
+// its provider wrote it, even where a prefix of its path is a symbolic
+// link on the host (macOS's /var and /tmp), which the host would resolve
+// to a path the site doesn't have.
+func TestPlacedWorkspaceKeepsItsPath(t *testing.T) {
+	h := newContainerHost(t)
+	real := filepath.Join(filepath.Dir(h.state), "real")
+	link := filepath.Join(filepath.Dir(h.state), "link")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(link, "ws")
+	f := &recordingPlacer{fakePlacer: newFakePlacer()}
+	var placed []extension.Placement
+	r := &siteResources{dir: remote, seen: new(extension.ResourceAcquisition)}
+	b, broker := h.bindPlaced(f, r, "", &placed)
+	if _, err := broker.Acquire(context.Background(), extension.ResourceRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	l := h.launch()
+	l.Dir = remote
+	l.Argv = []string{"/bin/echo", remote, filepath.Join(remote, "file")}
+	l.Env = []string{"WS=" + remote}
+	needs := extension.SandboxNeeds{Write: []string{remote}}
+	if _, err := b.Launch(context.Background(), needs, l); err != nil {
+		t.Fatal(err)
+	}
+	got := f.launch
+	if got.Dir != remote || got.Argv[1] != remote || got.Argv[2] != filepath.Join(remote, "file") || got.Env[0] != "WS="+remote {
+		t.Fatalf("launch %+v, want the site's path %s as written", got, remote)
+	}
+}
+
+// A placing provider without a host that binds the resource provider again
+// (AtSite) makes the resource on the host: the acquisition has no site.
+func TestPlacedWithoutAtSite(t *testing.T) {
+	h := newContainerHost(t)
+	var seen extension.ResourceAcquisition
+	r := &siteResources{dir: h.ws, seen: &seen}
+	b := extension.BindContainer(extension.ContainerBinding{Provider: newFakePlacer(), Name: "fake", Owner: siteOwner,
+		Config: containerConfig(testImage, ""), Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
+		Toolbelt: h.toolbelt, Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
+		Pin: func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil }})
+	if _, err := b.Resources(extension.BindResources(r, siteOwner, domain.Payload{})).Acquire(context.Background(), extension.ResourceRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Site != nil {
+		t.Fatalf("acquisition site %v, want none", seen.Site.ID())
 	}
 }

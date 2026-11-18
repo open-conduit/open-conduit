@@ -18,7 +18,8 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceProvider` | Implemented by an extension: `Acquire`, `Lookup`, `Reconcile`. |
 | `ResourceBroker` | What an executor sees: `Acquire(ResourceRequest)`, `Lookup(ref)`. `BindResources(provider, owner, config)` creates it. Only the host binds, so an executor cannot act for another owner. |
 | `ResourceOwner` | Trusted `{ScopeID, WorkID, ExecutionID}` taken from the attempt, never from the executor. |
-| `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, an optional `Log` writer for human-readable progress, and `Files`: paths relative to the resource's directory that the executor wants read at acquisition. The host sets `Sandboxed` and `Site` itself (see [workspaces at the launch's site](#workspaces-at-the-launchs-site)). |
+| `ResourceAcquisition` | What the provider receives: the trusted `Owner`, the binding's `Config`, the executor's `Request`, the provider's `HostEnv` grant and, for a launch placed off the host, its `Site` (see [workspaces at the launch's site](#workspaces-at-the-launchs-site)). Only the host binds the trusted fields. |
+| `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, an optional `Log` writer for human-readable progress, and `Files`: paths relative to the resource's directory that the executor wants read at acquisition. The host sets `Sandboxed` itself. |
 | `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). `Site` names the site `Dir` is at, empty for the host, and `Files` holds the requested files read there. |
 | `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept. |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
@@ -67,13 +68,13 @@ The provider checks it again at acquisition: the host marks a sandboxed binding'
 
 ## Workspaces at the launch's site
 
-A container provider can place launches on a machine of its own choosing (`extension.ContainerPlacer`, [sandboxes](../sandboxes/#placement)). When it does, the host places the execution before anything is acquired for it. It then hands the placement to the resource provider as the request's `Site`. A container binding's broker sets `Site`, and overwrites any `Site` the executor gave. Nil means the host.
+A container provider can place launches on a machine of its own choosing (`extension.ContainerPlacer`, [sandboxes](../sandboxes/#placement)). When it does, the host places the execution before anything is acquired for it. It then hands the placement to the resource provider as the acquisition's `Site`, by binding the provider again with it (`BindResourcesAt`, through the container binding's `AtSite`). `Site` is in the trusted half of the acquisition, beside `Owner`, so an executor has no way to supply one. Nil means the host.
 
 `Site` has an `ID` and `Run`. `Run` runs one command at the site, within the launch's boundary and grant, with the execution's toolbelt reachable as it is for the launch. So git there signs in through the toolbelt's transport, and no credential crosses to the site. A provider that can make the resource there does, and says so in `Resource.Site`. Its `Dir` is then a path at the site, not on the host, and it returns the requested `Files` read there. A provider that can't make the resource there ignores `Site` and makes it on the host as before. The container provider learns nothing of what is run at its site, and the resource provider nothing of how the site is reached.
 
-The host refuses (`sandbox_unavailable`) a resource at a site other than the execution's placement. On `Lookup`, it places the execution where the lease's resource is. When the provider places it elsewhere, because that machine is gone, the lease can't be used and the executor acquires again.
+The host refuses (`sandbox_unavailable`) a resource at a site other than the execution's placement. On `Lookup`, it places the execution where the lease's resource is. When the provider places it elsewhere, because that machine is gone, `Lookup` is refused as `sandbox_unavailable`. Claude Code then acquires again in the same segment, at the new placement. Any other refusal of the lease fails the segment as before.
 
-A provider that keeps resources at sites implements `extension.ResourceSiteUser`. The host gives it a `SiteResolver`, which `Reconcile` and `Sweep` use to reach a site again by the ID the lease recorded.
+A provider has a `Site` only during an acquisition. Reaching a site again from `Reconcile` and `Sweep` comes with the Git provider's workspaces at a site.
 
 Executors take two things from a workspace at a site:
 
@@ -209,4 +210,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **08-02** added worktree disk safety: full-disk refusal, partial-failure cleanup, `ResourceSweeper` and the spare-workspace sweep, with the disk safety tests and drill.
 - **#163** added the `clone` mode and the sandboxed-binding refusal, the second prerequisite of the B09 sandbox (#160, with evidence from the #161 spike).
 - **#164** (B09) made the sandboxed-binding check run for every binding that declares a sandbox, added the refusal of `setup` and the provider's own refusal of a sandboxed request, the clone's sandbox needs, the pinned git directories and a new branch's upstream.
-- **#726** added workspaces at the launch's site to the contract: the host-set `ResourceRequest.Site`, `Resource.Site` and `Files`, and `ResourceSiteUser`, with the host's place-then-acquire and the executors' side, tested against fakes. The Git and SSH providers' halves follow.
+- **#726** added workspaces at the launch's site to the contract: the host-bound `ResourceAcquisition.Site` (`BindResourcesAt`), `ResourceRequest.Files`, and `Resource.Site` and `Files`, with the host's place-then-acquire and the executors' side, tested against fakes. The Git and SSH providers' halves follow.

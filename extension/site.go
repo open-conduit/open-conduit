@@ -12,7 +12,7 @@ import (
 // runs (one remote, a pool of them) implements ContainerPlacer: it places
 // an execution before anything is acquired for it, and runs commands at
 // the placement. The host hands the placement to the attempt's resource
-// provider as a Site (ResourceRequest.Site), so a workspace can be made
+// provider as a Site (ResourceAcquisition.Site), so a workspace can be made
 // where the run executes rather than on the host's disk and copied there.
 //
 // The two providers never learn each other's business: the container
@@ -51,26 +51,12 @@ type SiteResult struct {
 }
 
 // Site is a placement a resource provider may act at. ID names it stably,
-// for the provider's own records: a lease kept at a site records its ID,
-// and a later Reconcile or Sweep reaches it again through a SiteResolver.
-// Run runs one command there, within the same boundary and grant as a
-// launch at that site.
+// for the provider's own records (a lease kept at a site records it). Run
+// runs one command there, within the same boundary and grant as a launch
+// at that site.
 type Site interface {
 	ID() string
 	Run(ctx context.Context, cmd SiteCommand) (SiteResult, error)
-}
-
-// SiteResolver reaches a site by the ID a Site gave. It fails with
-// ErrSiteUnavailable when the site's provider can't reach or name it, and
-// with ErrUnauthorized when the caller may not act there.
-type SiteResolver func(ctx context.Context, id string) (Site, error)
-
-// ResourceSiteUser is optionally implemented by a ResourceProvider that
-// keeps resources at sites: the host gives it, once, the resolver its
-// Reconcile and Sweep reach them through. A provider without it is only
-// ever given a Site during an acquisition.
-type ResourceSiteUser interface {
-	UseSites(SiteResolver)
 }
 
 // Placement is where a container provider placed an execution: its ID,
