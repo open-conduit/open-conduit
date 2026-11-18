@@ -155,7 +155,7 @@ Reads:
 Operator controls go through `runtime.Control`:
 
 - **Manual events**: `core.manual` root, or a derived event when a readable parent is supplied. Routed immediately when possible.
-- **Manual Work**: atomic ready Work, root `core.work.created` and explicitly bound queued input. Nothing is launched directly.
+- **Manual Work**: atomic ready Work, root `core.work.created` (carrying the Work's `Kind` and `Context`, so its first turn reads the task) and explicitly bound queued input. Nothing is launched directly.
 - **Work cancel**: a control Event plus full fencing in one transaction.
 - **Execution cancel**: fences one attempt and holds scheduling (`BlockedReason=operator_cancelled`) until a manual retry. Physical stop still needs trusted `ConfirmStopped`.
 - **Retry**: `core.manual.retry` processed by retry policy.

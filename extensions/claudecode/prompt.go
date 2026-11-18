@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // PluginName is the plugin the playbooks are loaded as, and so the prefix of
@@ -258,29 +259,46 @@ func renderChildReported(e domain.Event) string {
 	return out + "\n\nIts result:\n\n" + strings.TrimSpace(text)
 }
 
-// renderAsked shows child Work's first turn what it was asked: its kind
-// and the task its context carries. ok is false for Work nobody asked for.
+// renderAsked shows Work's first turn what it was asked: its kind and the
+// task its creation's context carries, from whoever started it (an operator,
+// for Work made through the management API, else the agent that asked for a
+// child). ok is false for Work nobody asked for, such as a successor.
 func renderAsked(e domain.Event) (string, bool) {
 	var c struct {
 		ParentID domain.ID
 		Kind     string
 		Context  *domain.Payload
 	}
-	if json.Unmarshal(e.Data.Data, &c) != nil || c.ParentID == "" {
+	if json.Unmarshal(e.Data.Data, &c) != nil {
 		return "", false
 	}
-	out := "### Another agent asked for this " + c.Kind + " Work"
+	var out string
+	switch {
+	case e.Source == extension.ManualSource && c.Kind != "":
+		out = "### An operator started this " + c.Kind + " Work"
+	case c.ParentID != "":
+		out = "### Another agent asked for this " + c.Kind + " Work"
+	default:
+		return "", false
+	}
 	if c.Context == nil || len(c.Context.Data) == 0 {
 		return out + "\n\nIt gave no task.", true
 	}
-	var task struct {
-		Task string `json:"task"`
+	return out + ". The task:\n\n" + askedTask(c.Context.Data), true
+}
+
+// askedTask is the task a creation's context carries: its task, else its
+// body or text, else the context as it is.
+func askedTask(data []byte) string {
+	var fields map[string]any
+	if json.Unmarshal(data, &fields) == nil {
+		for _, k := range []string{"task", "body", "text"} {
+			if v, ok := fields[k].(string); ok && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
 	}
-	text := string(c.Context.Data)
-	if json.Unmarshal(c.Context.Data, &task) == nil && strings.TrimSpace(task.Task) != "" {
-		text = strings.TrimSpace(task.Task)
-	}
-	return out + ". The task:\n\n" + text, true
+	return strings.TrimSpace(string(data))
 }
 
 // renderTurnLimit tells the agent its last turn was cut off at its time

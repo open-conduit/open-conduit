@@ -25,6 +25,10 @@ import (
 // ActionSource is the source of every Event an action produces.
 const ActionSource = "core.action"
 
+// ManualSource is the source of every Event an operator submits through the
+// management API, including the creation of Work an operator starts.
+const ManualSource = "core.manual"
+
 // CallerOperator is the kind of the local operator: the owner of the
 // management socket.
 const CallerOperator = "operator"

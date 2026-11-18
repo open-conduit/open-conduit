@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -58,7 +59,8 @@ type ManualEvent struct {
 	CorrelationKey               *domain.CorrelationKey
 }
 
-const ManualSource = "core.manual"
+// ManualSource is the source of every Event an operator submits.
+const ManualSource = extension.ManualSource
 
 func manualEventID(delivery string) domain.ID {
 	return domain.ID("manual/" + identity(delivery))
@@ -200,7 +202,19 @@ func (c *Control) CreateWork(ctx context.Context, m ManualWork) (work domain.Wor
 		if e := tx.PutWork(w, 0); e != nil {
 			return e
 		}
-		data, e := json.Marshal(struct{ WorkID, ParentID domain.ID }{id, m.ParentID})
+		// The creation carries what the operator asked for, its kind and
+		// context, as a child's does, so the turn it starts reads the task
+		// and the Event history shows it.
+		payload := struct {
+			WorkID, ParentID domain.ID
+			Kind             string
+			Context          *domain.Payload `json:",omitempty"`
+		}{WorkID: id, ParentID: m.ParentID, Kind: m.Kind}
+		if m.Context.Schema != "" || len(m.Context.Data) > 0 {
+			asked := m.Context
+			payload.Context = &asked
+		}
+		data, e := json.Marshal(payload)
 		if e != nil {
 			return e
 		}
