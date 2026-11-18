@@ -354,10 +354,15 @@ echo resumed >> `+shQuote(b.root+transcript))
 	if last.Site != b.site() {
 		t.Fatalf("the last pin %+v, want runner-b", last)
 	}
-	attach := h.bind(b, "x2", b.settings.Endpoint(), &extension.Resource{Kind: "workspace", Dir: last.Workspace, Site: last.Site, Sandbox: &extension.SandboxNeeds{}})
+	// The host's step: the attach's placement and workspace from the pin.
+	prefer, ws, err := extension.AttachWorkspace(&last, ssh.Type, a.settings.Endpoint())
+	if err != nil || prefer != b.settings.Endpoint() || ws == nil {
+		t.Fatalf("attach at %q in %+v, %v; want runner-b's workspace", prefer, ws, err)
+	}
+	attach := h.bind(b, "x2", prefer, ws)
 	h.run(attach, last.Workspace, `test "$(git log -1 --format=%s)" = "the agent's change"`)
 	// Placed elsewhere, the attach is refused.
-	moved := h.bind(a, "x2", a.settings.Endpoint(), &extension.Resource{Kind: "workspace", Dir: last.Workspace, Site: last.Site, Sandbox: &extension.SandboxNeeds{}})
+	moved := h.bind(a, "x2", prefer, ws)
 	runDir, _ := os.MkdirTemp(h.runRoot, "run-")
 	if _, err := moved.Launch(ctx, extension.SandboxNeeds{Write: []string{last.Workspace}}, extension.SandboxLaunch{Argv: []string{"true"}, Dir: last.Workspace, RunDir: runDir}); err == nil {
 		t.Fatal("an attach placed away from the workspace's site was launched")

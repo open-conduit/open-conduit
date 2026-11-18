@@ -81,7 +81,7 @@ Executors take two things from a workspace at a site:
 - **The playbook's additions.** Claude Code asks for its playbook's additions as `Files`, and a resumed segment uses what its acquisition read.
 - **The wrapper's directory.** The wrapper runs in the plan's `Dir`, the run directory, since the workspace has no host directory.
 
-The segment's container pin records the workspace's path and its site (`ContainerPin.Workspace` and `Site`). An attach acquires nothing, so the host takes the workspace from the last segment's pin and gives it to the attach's container binding (`ContainerBinding.Workspace`). The attach is placed at that site and launched in that workspace there, with nothing of it on the host. A placement elsewhere, because the binding's container provider no longer places at that site or the remote is gone, refuses the attach as `container_unavailable` ([attach in a container](../sandboxes/#attach-in-a-container)).
+The segment's container pin records the workspace's path and its site (`ContainerPin.Workspace` and `Site`). An attach acquires nothing, so the host takes the workspace from the last segment's pin (`extension.AttachWorkspace`) and gives it to the attach's container binding (`ContainerBinding.Workspace`). The attach is placed at that site and launched in that workspace there, with nothing of it on the host. A placement elsewhere, because the binding's container provider no longer places at that site or the remote is gone, refuses the attach as `container_unavailable` ([attach in a container](../sandboxes/#attach-in-a-container)).
 
 ### The Git provider at a site
 

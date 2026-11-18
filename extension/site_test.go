@@ -162,6 +162,28 @@ func TestPlacedWorkspace(t *testing.T) {
 	}
 }
 
+// An attach goes back to the site the last segment's workspace was at,
+// under the same provider, and is launched in it; with no workspace at a
+// site it prefers the Work's last placement; and a workspace at another
+// provider's site, or a pin without its workspace, is refused.
+func TestAttachWorkspace(t *testing.T) {
+	prefer, ws, err := extension.AttachWorkspace(&extension.ContainerPin{Workspace: "/w", Site: "ssh/oc@b:22"}, "ssh", "oc@a:22")
+	if err != nil || prefer != "oc@b:22" || ws == nil || ws.Dir != "/w" || ws.Site != "ssh/oc@b:22" || ws.Sandbox == nil {
+		t.Fatalf("prefer %q, workspace %+v, err %v; want the pin's site and workspace", prefer, ws, err)
+	}
+	for _, pin := range []*extension.ContainerPin{nil, {ID: "c"}} {
+		prefer, ws, err := extension.AttachWorkspace(pin, "ssh", "oc@a:22")
+		if err != nil || prefer != "oc@a:22" || ws != nil {
+			t.Fatalf("pin %+v: prefer %q, workspace %+v, err %v; want the fallback and none", pin, prefer, ws, err)
+		}
+	}
+	for _, pin := range []extension.ContainerPin{{Workspace: "/w", Site: "pool/n1"}, {Workspace: "/w", Site: "ssh"}, {Site: "ssh/oc@b:22"}} {
+		if _, ws, err := extension.AttachWorkspace(&pin, "ssh", "oc@a:22"); !errors.Is(err, extension.ErrSandboxUnavailable) || ws != nil {
+			t.Fatalf("pin %+v: workspace %+v, err %v; want sandbox_unavailable", pin, ws, err)
+		}
+	}
+}
+
 // An attach acquires nothing: the host names the workspace the last
 // segment had at its site (its pin), and the attach is launched in it,
 // there, with no host directory for it. Placed anywhere else, or launched
