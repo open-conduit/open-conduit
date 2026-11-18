@@ -82,7 +82,7 @@ func newLaunchRig(t *testing.T) *launchRig {
 	r := &launchRig{f: f, executor: executor, contained: true}
 	n := 0
 	r.o = schedulerDefaultOptions(f, executor)
-	r.o.Container = func(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+	r.o.Container = func(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, _ map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
 		if !r.contained {
 			return runtime.ContainerBinding{}, nil
 		}
@@ -312,7 +312,7 @@ func TestProductionSchedulerRecordsLaunchPhases(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := seedSchedulerWork(t, r.f, "phases-broken")
-	r.o.Container = func(context.Context, runtime.AttemptState, extension.ResourceBroker, func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+	r.o.Container = func(context.Context, runtime.AttemptState, extension.ResourceBroker, map[string]string, func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
 		return runtime.ContainerBinding{}, errors.New("docker missing")
 	}
 	b, err := r.scheduler(t, "host-a").Start(context.Background(), broken)

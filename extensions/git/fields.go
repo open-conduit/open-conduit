@@ -7,7 +7,8 @@ import "github.com/open-conduit/open-conduit/protocol"
 // also declare takes its default from there.
 func ResourceFields() []protocol.FieldDecl {
 	return []protocol.FieldDecl{
-		{Name: "checkout", Help: "the main checkout", Required: true},
+		{Name: "checkout", Help: "the main checkout; or name a repository"},
+		{Name: "repository", Help: "a repository URL cloned where the run executes, in place of a checkout"},
 		{Name: "mode", Help: "the mode when an executor requests none", Options: []string{"shared", "work", "fresh", "clone"}},
 		{Name: "remote"},
 		{Name: "base_branch", Help: "where new branches and fresh checkouts start; the remote's HEAD by default"},

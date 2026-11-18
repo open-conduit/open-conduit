@@ -411,7 +411,7 @@ func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 	if agent.Resource != gitws.Type || !agent.Requires.Workspace {
 		t.Fatalf("agent: %+v", agent)
 	}
-	if s := settings(agent.ResourceSettings); s != `checkout="./checkout" mode="work" remote="origin" base_branch="" branch_template="agent/work-{work}" sign=false setup set` {
+	if s := settings(agent.ResourceSettings); s != `checkout="./checkout" repository="" mode="work" remote="origin" base_branch="" branch_template="agent/work-{work}" sign=false setup set` {
 		t.Fatalf("git settings: %s", s)
 	}
 	if s := settings(sc.Extensions[0].Settings); s != `repository="acme/widgets" labels=["bug","agent"] limit=30 enabled=true auth_header set base_url set key set pass set webhook_url set` {

@@ -229,6 +229,15 @@ func NewServer(ext *Extension, r io.Reader, w io.Writer) *Server {
 		fmt.Fprintf(os.Stderr, "open-conduit extension: %s failed: %v\n", method, err)
 	}})
 	s.host = &Host{conn: s.conn, srv: s}
+	// A provider that makes resources at sites reaches them later through
+	// the host (site.run naming the site).
+	for typ, p := range ext.Providers {
+		if u, ok := p.(extension.ResourceSiteUser); ok {
+			u.UseSites(func(_ context.Context, id string) (extension.Site, error) {
+				return &site{conn: s.conn, typ: typ, id: id}, nil
+			})
+		}
+	}
 	close(built)
 	return s
 }
@@ -963,6 +972,25 @@ func (b *broker) Lookup(ctx context.Context, ref string) (extension.Resource, er
 		return extension.Resource{}, err
 	}
 	return out.Resource.Extension(), nil
+}
+
+// site is a site a resource provider runs commands at through site.run:
+// its acquisition's, under the call the host gave it, or one the host
+// resolves by ID.
+type site struct {
+	conn    *jsonrpc.Conn
+	typ, id string
+	call    string
+}
+
+func (s *site) ID() string { return s.id }
+
+func (s *site) Run(ctx context.Context, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	var out protocol.SiteResult
+	if err := s.conn.Call(ctx, "site.run", protocol.SiteRunParams{Type: s.typ, Call: s.call, Site: s.id, Command: protocol.FromSiteCommand(cmd)}, &out); err != nil {
+		return extension.SiteResult{}, err
+	}
+	return out.Extension(), nil
 }
 
 // sandboxBroker is the run's extension.SandboxBroker over sandbox.plan

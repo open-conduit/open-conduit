@@ -347,7 +347,8 @@ Resource `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `checkout` |  | Required. the main checkout |
+| `checkout` |  | the main checkout; or name a repository |
+| `repository` |  | a repository URL cloned where the run executes, in place of a checkout |
 | `mode` | `shared` | the mode when an executor requests none One of shared, work, fresh, clone. |
 | `remote` | `origin` |  |
 | `base_branch` |  | where new branches and fresh checkouts start; the remote's HEAD by default |

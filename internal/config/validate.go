@@ -44,6 +44,14 @@ type Registry struct {
 	// sandbox could only use by writing outside it. Its error is a fixed,
 	// secret-free reason, shown in the diagnostic.
 	ResourceSandbox map[string]func(config json.RawMessage, mode string) error
+	// ResourceSite optionally says a provider's resource config can only be
+	// made at the site its binding's launch is placed at
+	// (extension.ResourceSiteUser.NeedsSite), so the binding needs a
+	// container provider in Placers.
+	ResourceSite map[string]func(config json.RawMessage) bool
+	// Placers are the registered container providers that place launches
+	// (extension.ContainerPlacer).
+	Placers map[string]bool
 	// ResourceModeDefault optionally names the mode a provider's resource
 	// config sets as its default, "" for none. An executor that requests a
 	// mode of its own (ResourceModer) overrides it, and config check warns
@@ -715,6 +723,7 @@ func (v *validator) registration(p string, b Binding) {
 		}
 		v.contained(p, b)
 	}
+	v.placed(p, b)
 	if r.Toolbelt != "" && r.Toolbelt != c.Toolbelt {
 		v.fail(p+"/requires/toolbelt", "unsupported_capability", fmt.Sprintf("executor %s uses toolbelt %s; select a matching executor or change requires.toolbelt", b.Executor, c.Toolbelt))
 	}
@@ -850,6 +859,22 @@ func (v *validator) sandboxed(p string, b Binding) {
 	if err := check(b.Resource.Config, mode); err != nil {
 		v.fail(p+"/resource/config", "sandbox_workspace", err.Error())
 	}
+}
+
+// placed refuses a binding whose resource can only be made where its
+// launch is placed when its container provider doesn't place launches.
+func (v *validator) placed(p string, b Binding) {
+	if b.Resource == nil {
+		return
+	}
+	needs := v.reg.ResourceSite[b.Resource.Provider]
+	if needs == nil || !needs(b.Resource.Config) {
+		return
+	}
+	if b.Container != nil && v.reg.Placers[b.Container.Provider] {
+		return
+	}
+	v.fail(p+"/resource/config", "site_required", "this workspace is made on the machine the run executes on, not on the host; give the binding a container whose provider places launches, or a resource config made on the host")
 }
 
 // contained checks a binding that declares a container: the shared config

@@ -221,6 +221,12 @@ func (x *installed) providerTypes(reg *config.Registry) {
 			v = func(json.RawMessage, []string) error { return nil }
 		}
 		reg.Containers[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+		if c.Place {
+			if reg.Placers == nil {
+				reg.Placers = map[string]bool{}
+			}
+			reg.Placers[c.Type] = true
+		}
 	}
 	if len(x.m.Provides.Sandboxes) > 0 && reg.Sandboxes == nil {
 		reg.Sandboxes = map[string]func(json.RawMessage) error{}
@@ -272,6 +278,18 @@ func (x *installed) providerTypes(reg *config.Registry) {
 					return ""
 				}
 				return p.ResourceModeDefault(typ)(raw)
+			}
+		}
+		if r.Sites {
+			if reg.ResourceSite == nil {
+				reg.ResourceSite = map[string]func(json.RawMessage) bool{}
+			}
+			reg.ResourceSite[typ] = func(raw json.RawMessage) bool {
+				p, err := x.remote()
+				if err != nil {
+					return true
+				}
+				return p.ResourceSite(typ)(raw)
 			}
 		}
 		if r.Sandbox {

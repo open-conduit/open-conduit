@@ -104,6 +104,13 @@ func (d *daemon) bindResourcesAt(ctx context.Context, state runtime.AttemptState
 	if p == nil {
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
+	if site != nil {
+		// Recorded before anything is acquired there, so the provider can
+		// reach what it makes again (resolveSite), and only that.
+		if err := d.sites.give(desc.Provider, site.ID()); err != nil {
+			return nil, fmt.Errorf("%w: recording the site: %v", extension.ErrSandboxUnavailable, err)
+		}
+	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
 	broker := extension.BindResourcesAt(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, resourceEnv(desc.PassEnv, os.LookupEnv), site)
 	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil

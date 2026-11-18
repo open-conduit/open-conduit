@@ -43,7 +43,13 @@ const (
 type Config struct {
 	// Checkout is the scope's main checkout. A relative path resolves against
 	// the provider's base directory (the config file's directory).
-	Checkout string `json:"checkout"`
+	Checkout string `json:"checkout,omitempty"`
+	// Repository, in place of Checkout, is the URL of the repository to
+	// clone where the run executes: the site its binding's container
+	// provider places the launch at (extension.ResourceAcquisition.Site).
+	// Nothing of it is on the host. Its mode is clone, and copy and dotenv,
+	// which read the checkout, can't be used.
+	Repository string `json:"repository,omitempty"`
 	// Mode is the default when an executor requests none: shared (default),
 	// work, fresh or clone.
 	Mode string `json:"mode,omitempty"`
@@ -105,8 +111,23 @@ func ParseConfig(data []byte) (Config, error) {
 	if err := strictDecode(data, &c); err != nil {
 		return Config{}, configError("malformed config or unknown field")
 	}
-	if c.Checkout == "" || strings.ContainsRune(c.Checkout, 0) {
-		return Config{}, configError("checkout is required")
+	switch {
+	case c.Checkout != "" && c.Repository != "":
+		return Config{}, configError("name a checkout or a repository, not both")
+	case c.Repository != "":
+		if !validRepository(c.Repository) {
+			return Config{}, configError("repository must be a URL or scp-style address, without credentials")
+		}
+		if c.Mode == "" {
+			c.Mode = ModeClone
+		} else if c.Mode != ModeClone {
+			return Config{}, configError("a repository is cloned where the run executes, so its mode is clone")
+		}
+		if len(c.Copy) > 0 || c.DotEnv {
+			return Config{}, configError("copy and dotenv read the checkout, and a repository config has none")
+		}
+	case c.Checkout == "" || strings.ContainsRune(c.Checkout, 0):
+		return Config{}, configError("checkout or repository is required")
 	}
 	switch c.Mode {
 	case "":
@@ -195,10 +216,41 @@ func ValidateSandbox(raw json.RawMessage, mode string) error {
 	if mode != ModeClone {
 		return ErrSandboxMode
 	}
-	if c.Setup != "" {
+	// Setup at the site runs where the agent runs, inside its boundary.
+	if c.Setup != "" && c.Repository == "" {
 		return ErrSandboxSetup
 	}
 	return nil
+}
+
+// NeedsSite reports whether a resource config can only be made at the
+// site its binding's launch is placed at: it names a repository, not a
+// checkout.
+func NeedsSite(raw json.RawMessage) bool {
+	c, err := ParseConfig(raw)
+	return err == nil && c.Repository != ""
+}
+
+// validRepository accepts a URL or an scp-style address git can clone,
+// with no credentials in an http(s) URL (an ssh user is not one) and
+// nothing git would take as an option.
+func validRepository(s string) bool {
+	if s == "" || len(s) > 2048 || strings.HasPrefix(s, "-") || strings.ContainsAny(s, "\x00\n\r\t ") {
+		return false
+	}
+	if scheme, rest, ok := strings.Cut(s, "://"); ok {
+		switch scheme {
+		case "https", "http":
+			return rest != "" && !credentialURL.MatchString(s)
+		case "ssh", "git", "file":
+			user, _, hasUser := strings.Cut(strings.SplitN(rest, "/", 2)[0], "@")
+			return rest != "" && !(hasUser && strings.Contains(user, ":"))
+		}
+		return false
+	}
+	// user@host:path
+	host, path, ok := strings.Cut(s, ":")
+	return ok && host != "" && path != "" && !strings.Contains(host, "/")
 }
 
 // ModeDefault is the mode a git resource config names as its default when
@@ -208,8 +260,12 @@ func ModeDefault(raw json.RawMessage) string {
 	var named struct {
 		Mode string `json:"mode"`
 	}
-	if _, err := ParseConfig(raw); err != nil || json.Unmarshal(raw, &named) != nil {
+	c, err := ParseConfig(raw)
+	if err != nil || json.Unmarshal(raw, &named) != nil {
 		return ""
+	}
+	if named.Mode == "" && c.Repository != "" {
+		return ModeClone
 	}
 	return named.Mode
 }
@@ -285,6 +341,7 @@ func Settings(raw json.RawMessage) []extension.Setting {
 	}
 	return []extension.Setting{
 		{Name: "checkout", Value: c.Checkout},
+		{Name: "repository", Value: c.Repository},
 		{Name: "mode", Value: c.Mode},
 		{Name: "remote", Value: c.Remote},
 		{Name: "base_branch", Value: c.BaseBranch},

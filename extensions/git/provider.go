@@ -68,6 +68,8 @@ type Provider struct {
 	o     Options
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// sites resolves the sites leases are at (UseSites).
+	sites extension.SiteResolver
 }
 
 var refName = regexp.MustCompile(`^(shared|work|fresh|clone)-[0-9a-f]{32}$`)
@@ -115,25 +117,34 @@ func (p *Provider) lock(key string) func() {
 
 // lease is one ledger record. Env values are never stored.
 type lease struct {
-	Ref           string                  `json:"ref"`
-	Mode          string                  `json:"mode"`
-	State         string                  `json:"state"`
-	Owner         extension.ResourceOwner `json:"owner"`
-	Holders       []domain.ID             `json:"holders,omitempty"`
-	Checkout      string                  `json:"checkout"`
-	Path          string                  `json:"path"`
-	Remote        string                  `json:"remote"`
-	Base          string                  `json:"base,omitempty"`
-	Branch        string                  `json:"branch,omitempty"`
-	Sign          bool                    `json:"sign,omitempty"`
-	DotEnv        bool                    `json:"dotenv,omitempty"`
-	Copy          []string                `json:"copy,omitempty"`
-	RetainSeconds int64                   `json:"retain_seconds"`
-	Code          string                  `json:"code,omitempty"`
-	Attempts      int                     `json:"cleanup_attempts,omitempty"`
-	CreatedAt     time.Time               `json:"created_at"`
-	UpdatedAt     time.Time               `json:"updated_at"`
-	RetainUntil   time.Time               `json:"retain_until,omitempty"`
+	Ref        string                  `json:"ref"`
+	Mode       string                  `json:"mode"`
+	State      string                  `json:"state"`
+	Owner      extension.ResourceOwner `json:"owner"`
+	Holders    []domain.ID             `json:"holders,omitempty"`
+	Checkout   string                  `json:"checkout"`
+	Repository string                  `json:"repository,omitempty"`
+	// Site is the site the workspace is at (Resource.Site), "" for the
+	// host: Path is a path there.
+	Site          string   `json:"site,omitempty"`
+	Path          string   `json:"path"`
+	Remote        string   `json:"remote"`
+	Base          string   `json:"base,omitempty"`
+	Branch        string   `json:"branch,omitempty"`
+	Sign          bool     `json:"sign,omitempty"`
+	DotEnv        bool     `json:"dotenv,omitempty"`
+	Copy          []string `json:"copy,omitempty"`
+	RetainSeconds int64    `json:"retain_seconds"`
+	Code          string   `json:"code,omitempty"`
+	Attempts      int      `json:"cleanup_attempts,omitempty"`
+	// NextAttempt is when a site lease whose cleanup failed is tried
+	// again (siteBackoff), and RetentionOver that its removal is retention
+	// ending, so it goes whatever it holds.
+	NextAttempt   time.Time `json:"next_attempt,omitempty"`
+	RetentionOver bool      `json:"retention_over,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	RetainUntil   time.Time `json:"retain_until,omitempty"`
 }
 
 // workspace is Resource.Data (WorkspaceSchema).
@@ -291,6 +302,15 @@ func (p *Provider) Acquire(ctx context.Context, a extension.ResourceAcquisition)
 			return extension.Resource{}, fmt.Errorf("%w: %v", extension.ErrUnsupported, err)
 		}
 	}
+	if cfg.Repository != "" {
+		switch {
+		case a.Site == nil:
+			return extension.Resource{}, fmt.Errorf("%w: a git resource with a repository is cloned on the machine the run executes on, so its binding needs a container whose provider places launches", extension.ErrUnsupported)
+		case mode != ModeClone:
+			return extension.Resource{}, fmt.Errorf("%w: a repository is cloned where the run executes, so its mode is clone", extension.ErrUnsupported)
+		}
+		return p.atSite(ctx, cfg, prm, a)
+	}
 	checkout, err := p.checkout(ctx, cfg)
 	if err != nil {
 		return extension.Resource{}, err
@@ -313,7 +333,12 @@ func newLease(ref, mode string, cfg Config, checkout string, o extension.Resourc
 func resource(l lease, w workspace) extension.Resource {
 	w.Mode, w.Dir, w.Remote, w.Base, w.Branch = l.Mode, l.Path, l.Remote, l.Base, l.Branch
 	data, _ := json.Marshal(w)
-	return extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w), Sandbox: sandboxNeeds(l)}
+	res := extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w), Sandbox: sandboxNeeds(l)}
+	if l.Site != "" {
+		res.Site, res.Sandbox = l.Site, siteSandboxNeeds(l.Path)
+		res.Summary += " at " + l.Site
+	}
+	return res
 }
 
 // sandboxNeeds is what a sandbox must allow for a clone (B09): the clone
@@ -739,10 +764,14 @@ func (p *Provider) Lookup(ctx context.Context, o extension.ResourceOwner, ref st
 		return extension.Resource{}, err
 	}
 	owned := ok && l.Owner.ScopeID == o.ScopeID && l.Owner.WorkID == o.WorkID && (perWork(l.Mode) || l.Owner.ExecutionID == o.ExecutionID)
-	if !owned || (l.State != stateActive && l.State != stateSetupFailed) || !exists(l.Path) {
+	// A workspace at a site is checked there by the launch placed at it.
+	if !owned || (l.State != stateActive && l.State != stateSetupFailed) || (l.Site == "" && !exists(l.Path)) {
 		return extension.Resource{}, extension.ErrResourceNotFound
 	}
-	w := workspace{Reused: true, Head: p.head(ctx, l.Path)}
+	w := workspace{Reused: true}
+	if l.Site == "" {
+		w.Head = p.head(ctx, l.Path)
+	}
 	if perWork(l.Mode) && !slices.Contains(l.Holders, o.ExecutionID) {
 		l.Owner = o
 		l.Holders = append(l.Holders, o.ExecutionID)
@@ -790,6 +819,9 @@ func (p *Provider) reconcileOne(ctx context.Context, ref string, status extensio
 		return p.save(&l)
 	}
 	remove := func() error {
+		if l.Site != "" {
+			return p.reconcileAtSite(ctx, &l, retain, report)
+		}
 		if err := p.removeWorkspace(ctx, l); err != nil {
 			l.State, l.Code = stateCleanupFailed, "cleanup_failed"
 			l.Attempts++
@@ -802,11 +834,24 @@ func (p *Provider) reconcileOne(ctx context.Context, ref string, status extensio
 	switch l.State {
 	case stateRetained:
 		if !now.Before(l.RetainUntil) {
+			if l.Site != "" {
+				// Retention is over: what the workspace kept goes with it,
+				// as a retained clone's would but for its branch, which no
+				// checkout is there to take.
+				return p.removeLeaseAtSite(ctx, &l, true, retain, report)
+			}
 			return remove()
 		}
 		report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: l.Code, RetainUntil: l.RetainUntil})
 		return nil
 	case stateCleanupFailed:
+		if l.Site != "" {
+			if now.Before(l.NextAttempt) {
+				report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: l.Code})
+				return nil
+			}
+			return p.removeLeaseAtSite(ctx, &l, l.RetentionOver, retain, report)
+		}
 		return remove()
 	}
 	st, err := status(ctx, l.Owner)

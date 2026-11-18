@@ -299,6 +299,33 @@ func (r *Remote) mode(p protocol.ValidateParams) string {
 	return out.Mode
 }
 
+// sites reports whether the package declares typ with sites.
+func (r *Remote) sites(typ string) bool {
+	for _, d := range r.m.Provides.Resources {
+		if d.Type == typ {
+			return d.Sites
+		}
+	}
+	return false
+}
+
+// ResourceSite returns the site check of a resource type declared with
+// sites: validate with kind resource_site, whether a resource config can
+// only be made at a site. A failed call says it can't be made anywhere
+// else either, so a binding that doesn't place is refused rather than
+// passed.
+func (r *Remote) ResourceSite(typ string) func(json.RawMessage) bool {
+	return func(config json.RawMessage) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		var out protocol.ValidateResult
+		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateResourceSite, Type: typ, Config: config}, &out); err != nil {
+			return true
+		}
+		return out.Site
+	}
+}
+
 // ResourceSandbox returns the sandbox check of a resource type declared
 // with sandbox: validate with kind resource_sandbox. A refusal's message is
 // the package's reason, capped, which the sandbox_workspace diagnostic
@@ -651,7 +678,22 @@ func sandboxErr(err error) error {
 
 func (p *remoteProvider) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
 	var out protocol.ResourceResult
-	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params), HostEnv: a.HostEnv, Files: a.Request.Files}, &out)
+	params := protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params), HostEnv: a.HostEnv, Files: a.Request.Files}
+	// Only a provider declared with sites is given the site, under a call
+	// ID site.run quotes while this acquisition runs.
+	if a.Site != nil && p.r.sites(p.typ) {
+		id := newID()
+		p.r.s.mu.Lock()
+		p.r.s.sites[id] = acquireSite{typ: p.typ, site: a.Site}
+		p.r.s.mu.Unlock()
+		defer func() {
+			p.r.s.mu.Lock()
+			delete(p.r.s.sites, id)
+			p.r.s.mu.Unlock()
+		}()
+		params.Site = &protocol.AcquireSite{ID: a.Site.ID(), Call: id}
+	}
+	err := p.r.p.Call(ctx, "provider.acquire", params, &out)
 	if a.Request.Log != nil && out.Log != "" {
 		_, _ = io.WriteString(a.Request.Log, out.Log)
 	}

@@ -138,10 +138,13 @@ type SchedulerOptions struct {
 	// the executor. Core never inspects either broker.
 	Sandbox func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error)
 	// Container binds the attempt's optional container after Resources,
-	// as Sandbox does (a binding declares one or the other). pin records a
-	// container with the open segment, fenced by the lease, before its
-	// argv reaches the executor. Core never inspects the binding.
-	Container func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (ContainerBinding, error)
+	// as Sandbox does (a binding declares one or the other). env is the
+	// run's environment layer (Environment), nil when recovering, for
+	// what the binding runs on the run's behalf before it starts. pin
+	// records a container with the open segment, fenced by the lease,
+	// before its argv reaches the executor. Core never inspects the
+	// binding.
+	Container func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, env map[string]string, pin func(extension.ContainerPin) error) (ContainerBinding, error)
 	// Signalled is told, before the host asks an executor to interrupt an
 	// execution, so a container's records hold every TERM the host sends.
 	Signalled func(ctx context.Context, execution domain.ID, kind string)
@@ -1500,7 +1503,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		}
 		var c ContainerBinding
 		containerErr := trail.phase("container", func() (e error) {
-			c, e = s.options.Container(ctx, bound, attempt.Request.Context.Resources, pin)
+			c, e = s.options.Container(ctx, bound, attempt.Request.Context.Resources, attempt.Request.Context.Env, pin)
 			return e
 		})
 		if containerErr != nil {

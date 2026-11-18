@@ -27,7 +27,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		switch p.Kind {
-		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorProbe, protocol.ValidateExecutorFolder:
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateResourceSite, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorProbe, protocol.ValidateExecutorFolder:
 			return s.workspaceCheck(p)
 		}
 		if s.ext.Validate != nil {
@@ -97,7 +97,11 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, notFound(method)
 		}
 		var log bytes.Buffer
-		res, err := prov.Acquire(ctx, extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log, Files: p.Files}, HostEnv: p.HostEnv})
+		a := extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log, Files: p.Files}, HostEnv: p.HostEnv}
+		if p.Site != nil {
+			a.Site = &site{conn: s.conn, typ: p.Type, id: p.Site.ID, call: p.Site.Call}
+		}
+		res, err := prov.Acquire(ctx, a)
 		out := protocol.ResourceResult{Resource: protocol.FromResource(res), Log: log.String()}
 		if err != nil {
 			if !isSetup(err) {
@@ -604,6 +608,10 @@ func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 				// The reason is what the operator reads.
 				return nil, protocol.Errorf(protocol.CodeInvalid, err.Error())
 			}
+		}
+	case protocol.ValidateResourceSite:
+		if u, ok := s.ext.Providers[p.Type].(extension.ResourceSiteUser); ok {
+			return protocol.ValidateResult{Site: u.NeedsSite(p.Config)}, nil
 		}
 	case protocol.ValidateExecutorMode:
 		if m, ok := s.ext.Executors[p.Type].(extension.ResourceModer); ok {
