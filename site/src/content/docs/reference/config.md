@@ -578,6 +578,10 @@ Route `config`:
 | --- | --- | --- |
 | `source` |  | Required. the source whose threads the route takes |
 
+### OpenID Connect (`oidc`)
+
+Verifies the signed tokens an OpenID Connect identity provider issues, so the company's directory decides who can reach the management API. Registers: verifier.
+
 ### PostHog (`posthog`)
 
 Sends an agent_turn event per finished execution, the lifecycle records an entry selects and the host's telemetry events to PostHog. Registers: connection, extension.

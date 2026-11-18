@@ -147,7 +147,9 @@ func Manifest(o Options) protocol.Manifest {
 			// A container provider whose containers are records only.
 			Containers: []protocol.ContainerDecl{{Type: Pod}},
 			// A tunnel type that reports no URL, with a real config check.
-			Tunnels:   []protocol.TunnelDecl{{Type: Relay, Fields: []protocol.FieldDecl{{Name: "region", Help: "where the relay runs"}}}},
+			Tunnels: []protocol.TunnelDecl{{Type: Relay, Fields: []protocol.FieldDecl{{Name: "region", Help: "where the relay runs"}}}},
+			// A credential verifier whose issuer config lists its tokens.
+			Verifiers: []protocol.VerifierDecl{{Type: Badge, Fields: []protocol.FieldDecl{{Name: "badges", Help: "each badge token, by the subject and groups it names", Required: true}}}},
 			Exporters: true,
 			Annotate:  true,
 			// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,

@@ -22,7 +22,7 @@ import (
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
-	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true,
+	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true, "oidc": true,
 	"mcp": true,
 }
 
@@ -88,6 +88,7 @@ var useCases = map[string][]string{
 	"site.run":                    {"git"},
 	"tunnel.run":                  {"ngrok", "cloudflared"},
 	"tunnel.url":                  {"ngrok", "cloudflared"},
+	"credential.verify":           {"oidc"},
 	"kv.get":                      {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"kv.list":                     {"github", "slack", "linear", "jira", "introspection", "claude-code"},
 	"kv.commit":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -241,6 +242,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.SandboxBroker":           reflect.TypeFor[extension.SandboxBroker](),
 		"extension.SandboxProvider":         reflect.TypeFor[extension.SandboxProvider](),
 		"extension.TunnelProvider":          reflect.TypeFor[extension.TunnelProvider](),
+		"extension.CredentialVerifier":      reflect.TypeFor[extension.CredentialVerifier](),
 		"extension.ContainerBroker":         reflect.TypeFor[extension.ContainerBroker](),
 		"extension.SetupHost":               reflect.TypeFor[extension.SetupHost](),
 		"observability.Exporter":            reflect.TypeFor[observability.Exporter](),
@@ -343,6 +345,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Extensions[0].Sandbox = protocol.EntrySandboxOptional
 	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true, Place: true}}
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
+	m.Provides.Verifiers = []protocol.VerifierDecl{{Type: "chat-idp"}}
 	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Sites = true, true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {

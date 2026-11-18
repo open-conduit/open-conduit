@@ -118,11 +118,17 @@ type Options struct {
 	// provider's call starting or stopping to time out, and the operator.*
 	// records of administrative calls (optional).
 	Observer observability.Observer
+	// Verifiers finds the credential verifier of a type, which the
+	// trusted issuers (/auth/issuers) name: the packages' declared
+	// verifiers (optional: without it no issuer can be trusted, and only
+	// the credentials the host issued authenticate).
+	Verifiers func(typ string) (Verifier, bool)
 }
 
 type Server struct {
-	o       Options
-	failing *providerHealth
+	o        Options
+	failing  *providerHealth
+	verified verifiedCache
 }
 
 func NewServer(o Options) (*Server, error) {
@@ -231,14 +237,22 @@ type principal struct {
 	// name is the operator's name (LocalOperatorName for the owner's own
 	// credential); empty for an execution token.
 	name string
-	// role is the operator's role (RoleAdmin for the owner).
+	// role is the operator's role (RoleAdmin for the owner). An operator
+	// a trusted issuer names has the role its groups map to, "" (which may
+	// nothing) when none does.
 	role string
+	// issuer is the trusted issuer that verified the credential, "" for
+	// one the host issued. The operator's name is then issuer:subject.
+	issuer string
 }
 
 // may reports whether the operator's role is at least role.
 func (p principal) may(role string) bool { return roleRank[p.role] >= roleRank[role] }
 
 func forbiddenRole(p principal, role string) error {
+	if p.role == "" {
+		return fail(403, "forbidden_role", "operator "+p.name+" has no role: none of its groups maps to one in issuer "+p.issuer+"'s group table; this needs "+role)
+	}
 	return fail(403, "forbidden_role", "operator "+p.name+" has role "+p.role+"; this needs "+role)
 }
 
@@ -248,6 +262,21 @@ func (p principal) actor() string { return p.caller().String() }
 // caller is the operator as an action caller.
 func (p principal) caller() extension.Caller {
 	return extension.Caller{Kind: extension.CallerOperator, ID: p.name}
+}
+
+// keyPrefix namespaces the operator's Idempotency-Keys, which handlers
+// turn into durable delivery identities. A named operator's is its actor,
+// whose name holds no "/". An issuer's operator's subject may hold any
+// printable character and be 256 long, so its prefix carries the
+// subject's digest instead: fixed-length hex, so no subject and key can
+// make another's prefixed key, and the prefixed key stays within a
+// delivery ID's 256 characters.
+func (p principal) keyPrefix() string {
+	if p.issuer == "" {
+		return p.actor()
+	}
+	sum := sha256.Sum256([]byte(strings.TrimPrefix(p.name, p.issuer+":")))
+	return extension.CallerOperator + ":" + p.issuer + ":" + hex.EncodeToString(sum[:])
 }
 
 // local is the owner's own credential, which keeps the request keys and
@@ -305,7 +334,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, error) {
 	header := r.Header.Get("Authorization")
 	token, ok := strings.CutPrefix(header, "Bearer ")
-	if !ok || token == "" || len(token) > 256 {
+	if !ok || token == "" || len(token) > maxBearer {
 		return principal{}, fail(401, "unauthenticated", "missing or invalid bearer token")
 	}
 	digest := runtime.TokenDigest(token)
@@ -338,11 +367,17 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 	if err != nil {
 		return principal{}, err
 	}
-	if !known {
-		return principal{}, fail(401, "unauthenticated", "missing or invalid bearer token")
+	if known {
+		return principal{token: token}, nil
 	}
-	return principal{token: token}, nil
+	// Not a credential the host issued: a trusted issuer's, or none.
+	return s.verifyIssued(ctx, token)
 }
+
+// maxBearer is the longest bearer credential the host reads: room for an
+// identity provider's signed token, which is far longer than the host's
+// own.
+const maxBearer = 16 << 10
 
 type route struct {
 	method   string
@@ -423,6 +458,9 @@ var routes = []route{
 	{"GET", []string{"auth", "operators"}, false, false, (*Server).listOperators},
 	{"POST", []string{"auth", "operators"}, true, false, (*Server).addOperator},
 	{"POST", []string{"auth", "revoke"}, true, true, (*Server).revoke},
+	{"GET", []string{"auth", "issuers"}, false, false, (*Server).listIssuersRoute},
+	{"PUT", []string{"auth", "issuers", "*"}, true, false, (*Server).putIssuer},
+	{"DELETE", []string{"auth", "issuers", "*"}, true, false, (*Server).deleteIssuer},
 	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
 	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
 	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
@@ -499,8 +537,8 @@ func APIRoutes() []APIRoute {
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
 // applying config, exporting it (it carries secret reference text),
-// issuing operators' credentials and every secrets route, listing included,
-// need admin; every other control needs operate. Revoking another
+// issuing operators' credentials, trusting an issuer or changing its group
+// table, and every secrets route, listing included, need admin; every other control needs operate. Revoking another
 // operator's credential needs admin too, which revoke checks itself.
 func requiredRole(rt *route, parts []string) string {
 	path := strings.Join(rt.pattern, "/")
@@ -513,7 +551,7 @@ func requiredRole(rt *route, parts []string) string {
 	switch path {
 	case "scopes/*/route/trace", "config/validate":
 		return RoleView
-	case "config/apply", "auth/operators":
+	case "config/apply", "auth/operators", "auth/issuers/*":
 		return RoleAdmin
 	}
 	return RoleOperate
@@ -639,7 +677,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		// A named operator's keys are their own: the same key from two
 		// operators is two requests, never one replayed to the other.
 		if c.key != "" && who.operator && !who.local() {
-			c.key = who.actor() + "/" + c.key
+			c.key = who.keyPrefix() + "/" + c.key
 		}
 		if matched.idem {
 			if c.key == "" {

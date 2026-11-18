@@ -119,6 +119,7 @@ var Methods = []Method{
 	{Name: "container_provider.site_run", Direction: HostToExtension, Provides: "containers.place", Contract: []string{"extension.ContainerPlacer.SiteRun", "extension.SiteCommand", "extension.SiteResult"}},
 	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfigSchema"}},
 	{Name: "tunnel.url", Direction: ExtensionToHost, Provides: "tunnels", Contract: []string{"host:extension.TunnelProvider.Run publish"}},
+	{Name: "credential.verify", Direction: HostToExtension, Provides: "verifiers", Contract: []string{"extension.CredentialVerifier.Verify", "extension.CredentialCheck", "extension.VerifiedCredential", "extension.IssuerConfigSchema"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.
 	{Name: "kv.get", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Get"}},

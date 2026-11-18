@@ -19,6 +19,15 @@ func TestValidateOperatorRecord(t *testing.T) {
 	if Validate(unanchored) == nil {
 		t.Fatal("operator record without its operator accepted")
 	}
+	// A credential record is anchored by its issuer.
+	auth := Record{Name: "auth.credential_refused", At: at, Correlation: Correlation{TraceID: "trace"}, Attributes: map[string]string{"auth.issuer": "corp"}}
+	if err := Validate(auth); err != nil {
+		t.Fatalf("anchored credential record refused: %v", err)
+	}
+	auth.Attributes = map[string]string{}
+	if Validate(auth) == nil {
+		t.Fatal("credential record without its issuer accepted")
+	}
 	other := rec
 	other.Name = "provider.timing_out"
 	other.Attributes = map[string]string{"provider.name": "x", "operator.actor": "operator:local"}

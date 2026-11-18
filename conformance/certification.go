@@ -11,14 +11,14 @@ package conformance
 // CriteriaVersion versions the certification criteria. A report states it;
 // a package certified under one version is not implied certified under a
 // later one.
-const CriteriaVersion = 6
+const CriteriaVersion = 7
 
 // Criterion is one certification check.
 type Criterion struct {
 	ID string
 	// Surface is the manifest surface the criterion certifies: lifecycle,
 	// storage, ingress, routes, operations, executors, resources,
-	// sandboxes, containers or tunnels.
+	// sandboxes, containers, tunnels or verifiers.
 	Surface string
 	// Applies says when the criterion is required ("always" or the manifest
 	// declaration that makes it apply).
@@ -52,5 +52,6 @@ var Criteria = []Criterion{
 	{"sandboxes.policy", "sandboxes", "a sandbox provider type", "Each sandbox fixture case answers validate sandbox as it expects, twice identically, with an accepted and a refused case for every declared sandbox type, and sandbox_provider.adopt of a plan the provider never made is refused, so a restarted host adopts only a segment it can prove is confined."},
 	{"containers.policy", "containers", "a container provider type", "Each container fixture case answers validate container as it expects, twice identically, with an accepted and a refused case for every declared container type; container_provider.inspect never reports a container the provider never made as running, and container_provider.list for an execution it never saw lists nothing, so the host never stops, adopts or removes a container that isn't the owner's on the provider's say-so."},
 	{"tunnels.policy", "tunnels", "a tunnel provider type", "Each tunnel fixture case answers validate tunnel as it expects, twice identically, with an accepted and a refused case for every declared tunnel type, so the operator's settings.webhooks.tunnel config is checked by its package before serve ever runs it."},
+	{"verifiers.policy", "verifiers", "a credential verifier type", "Each verifier fixture case answers validate verifier as it expects, twice identically, with an accepted and a refused case for every declared verifier type, and under every accepted config credential.verify refuses the case's refused credentials and one that is no credential at all, so a trusted issuer's verifier never lets in a credential its issuer didn't sign."},
 	{"surfaces.served", "lifecycle", "checks or tasks", "Every declared check answers check.run and every declared task is served by task.run."},
 }

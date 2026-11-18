@@ -54,6 +54,23 @@ type Fixture struct {
 	// whether validate tunnel refuses them: each declared tunnel type needs
 	// an accepted and a refused one.
 	Tunnels []TunnelCase `json:"tunnels,omitempty"`
+	// Verifiers are trusted issuers' configs and whether validate verifier
+	// refuses them, with credentials credential.verify must refuse under
+	// an accepted one: each declared verifier type needs an accepted and a
+	// refused config.
+	Verifiers []VerifierCase `json:"verifiers,omitempty"`
+}
+
+// VerifierCase is one issuer config of a declared credential verifier type
+// and whether validate with kind verifier must refuse it. RefusedTokens
+// are credentials credential.verify must refuse under an accepted config
+// (a forged signature, an unsigned token); the runner adds one that is no
+// credential at all.
+type VerifierCase struct {
+	Type          string          `json:"type"`
+	Config        json.RawMessage `json:"config,omitempty"`
+	Refused       bool            `json:"refused,omitempty"`
+	RefusedTokens []string        `json:"refused_tokens,omitempty"`
 }
 
 // TunnelCase is one tunnel config of a declared tunnel type and whether

@@ -771,3 +771,32 @@ func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []config.E
 		return out
 	}
 }
+
+// verifier finds the credential verifier of a type among the running
+// packages (manifest verifiers), with its check of a trusted issuer's
+// config (validate, kind verifier). A type no running package provides is
+// not found, so its issuer's credentials are refused.
+func (d *daemon) verifier(typ string) (management.Verifier, bool) {
+	for _, x := range d.extensionPackages() {
+		if x.r == nil {
+			continue
+		}
+		for _, decl := range x.m.Provides.Verifiers {
+			if decl.Type != typ {
+				continue
+			}
+			v, ok := x.r.Verifier(typ)
+			if !ok {
+				return management.Verifier{}, false
+			}
+			check := x.validator(protocol.ValidateVerifier, typ)
+			return management.Verifier{Verifier: v, Validate: func(raw json.RawMessage) error {
+				if check == nil {
+					return nil
+				}
+				return check(raw, nil)
+			}}, true
+		}
+	}
+	return management.Verifier{}, false
+}

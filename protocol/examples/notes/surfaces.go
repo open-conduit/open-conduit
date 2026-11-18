@@ -561,6 +561,50 @@ func (relay) Run(ctx context.Context, r extension.TunnelRun, _ func(string)) err
 	return nil
 }
 
+// Badge is the example credential verifier type: its issuer config lists
+// the badge tokens it accepts, each naming a subject and its groups.
+const Badge = "notes-badge"
+
+type badge struct {
+	Subject string   `json:"subject"`
+	Groups  []string `json:"groups,omitempty"`
+}
+
+// parseBadges checks a notes-badge issuer config: at least one badge, each
+// naming a subject.
+func parseBadges(raw json.RawMessage) (map[string]badge, error) {
+	var c struct {
+		Badges map[string]badge `json:"badges"`
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&c); err != nil || len(c.Badges) == 0 {
+		return nil, fmt.Errorf("%w: a notes-badge config lists its badges", extension.ErrInvalid)
+	}
+	for _, b := range c.Badges {
+		if b.Subject == "" {
+			return nil, fmt.Errorf("%w: every badge names a subject", extension.ErrInvalid)
+		}
+	}
+	return c.Badges, nil
+}
+
+// badges is the example credential verifier: a badge the issuer config
+// lists is valid for an hour from when it is shown.
+type badges struct{ now func() time.Time }
+
+func (b badges) Verify(_ context.Context, c extension.CredentialCheck) (extension.VerifiedCredential, error) {
+	known, err := parseBadges(c.Config.Data)
+	if err != nil {
+		return extension.VerifiedCredential{}, err
+	}
+	got, ok := known[c.Token]
+	if !ok {
+		return extension.VerifiedCredential{}, extension.ErrUnauthorized
+	}
+	return extension.VerifiedCredential{Subject: got.Subject, Groups: got.Groups, ExpiresAt: b.now().Add(time.Hour)}, nil
+}
+
 // jail is the example sandbox provider.
 type jail struct{}
 

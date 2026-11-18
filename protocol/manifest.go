@@ -222,6 +222,13 @@ type Provides struct {
 	// daemon's life, and the package reports each public URL back through
 	// tunnel.url.
 	Tunnels []TunnelDecl `json:"tunnels,omitempty"`
+	// Verifiers are credential verifier types (extension.CredentialVerifier)
+	// that check bearer credentials an identity provider issued: an admin
+	// trusts an issuer of one of these types (PUT /v1/auth/issuers/{id}),
+	// the package checks the issuer's config through validate with kind
+	// verifier, and the host asks it through credential.verify about each
+	// credential it didn't issue itself.
+	Verifiers []VerifierDecl `json:"verifiers,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
 	Tasks []TaskDecl `json:"tasks,omitempty"`
@@ -795,6 +802,13 @@ type TunnelDecl struct {
 	// (settings.webhooks.tunnel.config, FieldDecl).
 	Fields []FieldDecl `json:"fields,omitempty"`
 }
+
+// VerifierDecl declares a credential verifier type (a trusted issuer's
+// type). Fields describe the issuer config's fields (FieldDecl).
+type VerifierDecl struct {
+	Type   string      `json:"type"`
+	Fields []FieldDecl `json:"fields,omitempty"`
+}
 type TaskDecl struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
@@ -1158,6 +1172,15 @@ func (m Manifest) Validate() error {
 		}
 		tunnels[x.Type] = true
 	}
+	verifiers := map[string]bool{}
+	for _, x := range p.Verifiers {
+		ident("credential verifier", x.Type)
+		fieldDecls("credential verifier", x.Type, x.Fields, false)
+		if verifiers[x.Type] {
+			fail("credential verifier %q is declared twice", x.Type)
+		}
+		verifiers[x.Type] = true
+	}
 	for _, t := range p.Tasks {
 		ident("task", t.Name)
 		if t.IntervalSeconds < 1 {
@@ -1306,6 +1329,7 @@ func (m Manifest) Enabled() []string {
 		set("containers.place", c.Place)
 	}
 	set("tunnels", len(p.Tunnels) > 0)
+	set("verifiers", len(p.Verifiers) > 0)
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)
 	set("checks", len(p.Checks) > 0)

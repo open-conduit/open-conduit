@@ -128,4 +128,4 @@ Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN
   You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything. A credential added before roles existed is `view`. Revoke it and add it again with `--role` to restore its controls.
 - No one but you can revoke your own credential, not even an `admin`. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
 - The web view still signs browsers in with its one sign-in URL and acts as `operator:local`.
-- To reach the daemon from another machine, see [share it with a team](../team/#3-a-credential-and-a-role-for-each-person).
+- To reach the daemon from another machine, see [share it with a team](../team/#3-a-credential-and-a-role-for-each-person). To let your identity provider decide who may, see [let your identity provider decide](../team/#or-let-your-identity-provider-decide).

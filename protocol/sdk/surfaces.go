@@ -330,6 +330,20 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return struct{}{}, nil
+	case "credential.verify":
+		var p protocol.CredentialVerifyParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		v, ok := s.ext.Verifiers[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		got, err := v.Verify(ctx, extension.CredentialCheck{Issuer: p.Issuer, Config: p.Config.Domain(), Token: p.Token})
+		if err != nil {
+			return nil, err
+		}
+		return protocol.CredentialVerifyResult{Subject: got.Subject, Groups: got.Groups, ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano)}, nil
 	case "telemetry.export":
 		var p protocol.TelemetryExportParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

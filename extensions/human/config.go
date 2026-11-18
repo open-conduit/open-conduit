@@ -252,8 +252,10 @@ func gateTimeout(field, s string) (time.Duration, error) {
 
 func checkResponders(field string, responders []string) error {
 	for _, r := range responders {
-		kind, id, _ := strings.Cut(r, ":")
-		if !validPart(kind) || (strings.Contains(r, ":") && !validPart(id)) {
+		kind, id, scoped := strings.Cut(r, ":")
+		// The ID may hold a colon itself: an operator a trusted issuer
+		// names is operator:<issuer>:<subject>.
+		if !validPart(kind) || (scoped && slices.ContainsFunc(strings.Split(id, ":"), func(part string) bool { return !validPart(part) })) {
 			return fmt.Errorf("%s: %q is not kind:id (for example %s)", field, r, DefaultResponder)
 		}
 	}

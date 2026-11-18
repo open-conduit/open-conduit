@@ -53,6 +53,7 @@ var Modes = []Mode{
 	{"adopt-any", notes.Name, "sandboxes.policy", "adopts any recovered segment, even one it never planned"},
 	{"list-any", notes.Name, "containers.policy", "lists a running container for any execution, even one it never saw"},
 	{"tunnel-open", notes.Name, "tunnels.policy", "accepts any tunnel config, even one it can't run"},
+	{"verifier-open", notes.Name, "verifiers.policy", "accepts any credential as a person, signed or not"},
 }
 
 // Lookup returns a mode by name.
@@ -206,6 +207,8 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 		ext.Sandboxes[notes.Jail] = adoptAny{ext.Sandboxes[notes.Jail]}
 	case "list-any":
 		ext.Containers[notes.Pod] = listAny{ext.Containers[notes.Pod]}
+	case "verifier-open":
+		ext.Verifiers[notes.Badge] = openVerifier{}
 	case "tunnel-open":
 		base := ext.Validate
 		ext.Validate = func(ctx context.Context, p protocol.ValidateParams) error {
@@ -366,4 +369,11 @@ func (w *weakExecutor) Inject(ctx context.Context, id domain.ID, ev domain.Event
 		return nil
 	}
 	return err
+}
+
+// openVerifier accepts any credential as the same person.
+type openVerifier struct{}
+
+func (openVerifier) Verify(context.Context, extension.CredentialCheck) (extension.VerifiedCredential, error) {
+	return extension.VerifiedCredential{Subject: "anyone", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
