@@ -69,6 +69,9 @@ type ContainerBinding struct {
 	// Placed, when set, is told each placement Place gives, before
 	// anything is acquired there, so the host can prefer it next time.
 	Placed func(Placement)
+	// TokenFile is the execution's toolbelt token file, given with
+	// Toolbelt to commands run at its site (PlacedSite).
+	TokenFile string
 	// AtSite binds the attempt's resource provider again with the site
 	// the execution was placed at (BindResourcesAt), so its acquisition
 	// can make the workspace there. Nil: the resource is always made on
@@ -182,7 +185,11 @@ func (c *BoundContainer) site(ctx context.Context, prefer string) (Site, error) 
 	if err != nil {
 		return nil, err
 	}
-	return PlacedSite{Provider: c.b.Name, Placer: placer, At: at, Toolbelt: c.b.Toolbelt}, nil
+	site := PlacedSite{Provider: c.b.Name, Placer: placer, At: at}
+	if c.b.Toolbelt != "" && c.b.TokenFile != "" {
+		site.Toolbelt, site.TokenFile = c.b.Toolbelt, c.b.TokenFile
+	}
+	return site, nil
 }
 
 func (c *BoundContainer) place(ctx context.Context, placer ContainerPlacer, prefer string) (Placement, error) {

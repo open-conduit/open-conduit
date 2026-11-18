@@ -32,14 +32,19 @@ var ErrSiteUnavailable = errors.New("site unavailable")
 // the host for a command run on an execution's behalf, is that execution's
 // toolbelt socket, which the provider makes reachable at the same path for
 // the command, as it does for a launch, so git there signs in through the
-// toolbelt's transport and no credential crosses to the site.
+// toolbelt's transport and no credential crosses to the site. TokenFile,
+// set with it, is the host's file holding the execution's toolbelt token:
+// the provider puts a copy at the same path at the site, owner-only,
+// before the command runs, as a launch's copy of what the host shares
+// does.
 type SiteCommand struct {
-	Argv     []string
-	Dir      string
-	Env      []string
-	Stdin    []byte
-	Timeout  time.Duration
-	Toolbelt string
+	Argv      []string
+	Dir       string
+	Env       []string
+	Stdin     []byte
+	Timeout   time.Duration
+	Toolbelt  string
+	TokenFile string
 }
 
 // SiteResult is a command's exit code and output. A provider may bound
@@ -105,8 +110,11 @@ type PlacedSite struct {
 	Provider string
 	Placer   ContainerPlacer
 	At       Placement
-	// Toolbelt, when set, is given to every command (SiteCommand.Toolbelt).
-	Toolbelt string
+	// Toolbelt and TokenFile, when set, are given to every command
+	// (SiteCommand.Toolbelt and TokenFile), which also gets the toolbelt's
+	// OS_ENDPOINT and OS_TOKEN_FILE, after its own environment, so `os`
+	// there reaches the execution's toolbelt.
+	Toolbelt, TokenFile string
 }
 
 func (s PlacedSite) ID() string { return SiteID(s.Provider, s.At.ID) }
@@ -115,6 +123,9 @@ func (s PlacedSite) Run(ctx context.Context, cmd SiteCommand) (SiteResult, error
 	if len(cmd.Argv) == 0 {
 		return SiteResult{}, errors.New("site command: empty argv")
 	}
-	cmd.Toolbelt = s.Toolbelt
+	cmd.Toolbelt, cmd.TokenFile = s.Toolbelt, s.TokenFile
+	if s.Toolbelt != "" && s.TokenFile != "" {
+		cmd.Env = append(append([]string{}, cmd.Env...), "OS_ENDPOINT=unix://"+s.Toolbelt, "OS_TOKEN_FILE="+s.TokenFile)
+	}
 	return s.Placer.SiteRun(ctx, s.At.ID, cmd)
 }

@@ -128,7 +128,8 @@ type Extension struct {
 	Sandboxes map[string]extension.SandboxProvider
 	// Containers are container providers by declared type (manifest
 	// containers). One declared with forward implements
-	// extension.ContainerForwarder.
+	// extension.ContainerForwarder, and one declared with place
+	// extension.ContainerPlacer.
 	Containers map[string]extension.ContainerProvider
 	// Tunnels are tunnel providers by declared type (manifest tunnels),
 	// served through tunnel.run.
@@ -282,7 +283,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "tunnel.run", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "container_provider.place", "container_provider.site_run", "tunnel.run", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

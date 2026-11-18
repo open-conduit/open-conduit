@@ -773,6 +773,12 @@ type ContainerDecl struct {
 	// the executor's own check can leave those bindings to it
 	// (CheckBinding.Probed).
 	Probe bool `json:"probe,omitempty"`
+	// Place marks a provider that chooses the machine a launch runs on and
+	// runs commands there (extension.ContainerPlacer): the host asks
+	// container_provider.place before anything is acquired for an
+	// execution, and runs a resource provider's commands at the placement
+	// through container_provider.site_run.
+	Place bool `json:"place,omitempty"`
 }
 
 // TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).
@@ -1289,6 +1295,7 @@ func (m Manifest) Enabled() []string {
 	set("containers", len(p.Containers) > 0)
 	for _, c := range p.Containers {
 		set("containers.forward", c.Forward)
+		set("containers.place", c.Place)
 	}
 	set("tunnels", len(p.Tunnels) > 0)
 	set("tasks", len(p.Tasks) > 0)

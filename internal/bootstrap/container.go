@@ -154,6 +154,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Shared:    shared,
 		RunRoot:   filepath.Join(d.o.StateDir, "executors", state.Executor, "runs"),
 		Toolbelt:  socket,
+		TokenFile: tokenFile(socket, d.endpoints.TokenFile(state.ExecutionID)),
 		Records:   d.containerRecords(state.ExecutionID),
 		Home:      home,
 		WorkHome:  workHome,
@@ -546,4 +547,13 @@ func ignoreMissing(err error) error {
 		return nil
 	}
 	return err
+}
+
+// tokenFile is the execution's toolbelt token file, "" when it has no
+// toolbelt socket.
+func tokenFile(socket, file string) string {
+	if socket == "" {
+		return ""
+	}
+	return file
 }

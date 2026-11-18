@@ -154,6 +154,9 @@ type PlacerFixture struct {
 	Needs  extension.SandboxNeeds
 	Launch extension.SandboxLaunch
 	Dir    string
+	// Pwd is what a command run in Dir reports as its directory there; ""
+	// for Dir itself (a fake site that prefixes the host's paths differs).
+	Pwd string
 }
 
 // CheckContainerPlacer checks the placement contract the host relies on to
@@ -185,7 +188,11 @@ func CheckContainerPlacer(f PlacerFixture) error {
 	if err != nil {
 		return fmt.Errorf("site run: a command that ran and failed is an error: %v", err)
 	}
-	if want := f.Dir + "|site|in"; res.ExitCode != 3 || string(res.Stdout) != want {
+	pwd := f.Pwd
+	if pwd == "" {
+		pwd = f.Dir
+	}
+	if want := pwd + "|site|in"; res.ExitCode != 3 || string(res.Stdout) != want {
 		return fmt.Errorf("site run: exit %d, output %q; want 3 and %q", res.ExitCode, res.Stdout, want)
 	}
 	if _, err := p.SiteRun(ctx, at.ID+"-unknown", extension.SiteCommand{Argv: []string{"/bin/sh", "-c", "true"}}); !errors.Is(err, extension.ErrSiteUnavailable) {

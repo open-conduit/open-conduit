@@ -85,6 +85,12 @@ func endpointKey(id domain.ID) string {
 // Dir is the execution's run directory.
 func (e *Endpoints) Dir(id domain.ID) string { return filepath.Join(e.root, endpointKey(id)) }
 
+// TokenFile is the file Serve keeps the execution's current toolbelt
+// token in.
+func (e *Endpoints) TokenFile(id domain.ID) string {
+	return filepath.Join(e.Dir(id), endpointTokens, endpointToken)
+}
+
 // Socket is the path of the execution's served socket, "" while it is not
 // served.
 func (e *Endpoints) Socket(id domain.ID) string {

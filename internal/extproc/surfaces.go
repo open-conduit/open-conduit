@@ -462,13 +462,19 @@ func (p *remoteSandbox) Adopt(ctx context.Context, plan extension.SandboxPlan, p
 // the protected set into the needs, pins the plan's digest and the
 // container, and keeps stop, reconcile and removal, so the package only
 // plans, creates and reports containers. One declared with forward is an
-// extension.ContainerForwarder.
+// extension.ContainerForwarder, and one declared with place an
+// extension.ContainerPlacer.
 func (r *Remote) Container(typ string) (extension.ContainerProvider, bool) {
 	for _, d := range r.m.Provides.Containers {
 		if d.Type == typ {
 			p := &remoteContainer{r: r, typ: typ}
-			if d.Forward {
+			switch {
+			case d.Forward && d.Place:
+				return forwardingPlacingContainer{forwardingContainer{p}, placingContainer{p}}, true
+			case d.Forward:
 				return forwardingContainer{p}, true
+			case d.Place:
+				return placingContainer{p}, true
 			}
 			return p, true
 		}
@@ -502,6 +508,46 @@ type remoteTunnel struct {
 // forwardingContainer is a remote container provider declared with forward.
 type forwardingContainer struct{ *remoteContainer }
 
+// placingContainer is a remote container provider declared with place.
+type placingContainer struct{ *remoteContainer }
+
+// forwardingPlacingContainer is one declared with both.
+type forwardingPlacingContainer struct {
+	forwardingContainer
+	placing placingContainer
+}
+
+func (p forwardingPlacingContainer) Place(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, prefer string) (extension.Placement, error) {
+	return p.placing.Place(ctx, owner, policy, prefer)
+}
+
+func (p forwardingPlacingContainer) SiteRun(ctx context.Context, placement string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	return p.placing.SiteRun(ctx, placement, cmd)
+}
+
+// Place fails closed: anything but the provider's own refusal means
+// nothing may be acquired or run.
+func (p placingContainer) Place(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, prefer string) (extension.Placement, error) {
+	var out protocol.Placement
+	if err := p.r.p.Call(ctx, "container_provider.place", protocol.ContainerProviderPlaceParams{Type: p.typ, Owner: protocol.FromOwner(owner), Config: protocol.FromPayload(policy.Config), Prefer: prefer}, &out); err != nil {
+		return extension.Placement{}, sandboxErr(err)
+	}
+	return out.Extension(), nil
+}
+
+// SiteRun's failure to reach the package is the site's: the command
+// didn't run.
+func (p placingContainer) SiteRun(ctx context.Context, placement string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	var out protocol.SiteResult
+	if err := p.r.p.Call(ctx, "container_provider.site_run", protocol.ContainerProviderSiteRunParams{Type: p.typ, Placement: placement, Command: protocol.FromSiteCommand(cmd)}, &out); err != nil {
+		if errors.Is(err, extension.ErrSiteUnavailable) {
+			return extension.SiteResult{}, err
+		}
+		return extension.SiteResult{}, errors.Join(extension.ErrSiteUnavailable, err)
+	}
+	return out.Extension(), nil
+}
+
 func (p forwardingContainer) Forward(ctx context.Context, config domain.Payload) (string, error) {
 	var out protocol.ContainerForward
 	if err := p.r.p.Call(ctx, "container_provider.forward", protocol.ContainerProviderForwardParams{Type: p.typ, Config: protocol.FromPayload(config)}, &out); err != nil {
@@ -514,7 +560,7 @@ func (p forwardingContainer) Forward(ctx context.Context, config domain.Payload)
 // and anything else means nothing may run.
 func (p *remoteContainer) Plan(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (extension.ContainerPlan, error) {
 	var out protocol.ContainerPlan
-	err := p.r.p.Call(ctx, "container_provider.plan", protocol.ContainerProviderPlanParams{Type: p.typ, Owner: protocol.FromOwner(owner), Config: protocol.FromPayload(policy.Config), Paths: protocol.FromSandboxPaths(policy.Paths), Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	err := p.r.p.Call(ctx, "container_provider.plan", protocol.ContainerProviderPlanParams{Type: p.typ, Owner: protocol.FromOwner(owner), Config: protocol.FromPayload(policy.Config), Paths: protocol.FromSandboxPaths(policy.Paths), Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch), Placement: policy.Placement}, &out)
 	if err != nil {
 		return extension.ContainerPlan{}, sandboxErr(err)
 	}
