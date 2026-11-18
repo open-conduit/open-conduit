@@ -329,6 +329,9 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 		if record.Revoked {
 			return principal{}, fail(401, "unauthenticated", "credential revoked")
 		}
+		if record.expired(s.o.Now()) {
+			return principal{}, fail(401, "unauthenticated", "credential expired")
+		}
 		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role()}, nil
 	}
 	known, err := s.o.Toolbelt.Known(ctx, token)

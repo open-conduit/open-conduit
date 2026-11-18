@@ -34,7 +34,19 @@ type operatorRecord struct {
 	Revoked   bool
 	CreatedAt time.Time
 	RevokedAt time.Time
+	// ExpiresAt, when set, is when the credential stops authenticating.
+	// Zero never expires: the owner's own credential, and a named one
+	// issued without a TTL.
+	ExpiresAt time.Time `json:",omitempty"`
 }
+
+// expired reports whether the credential's expiry has come at now.
+func (r operatorRecord) expired(now time.Time) bool {
+	return !r.ExpiresAt.IsZero() && !now.Before(r.ExpiresAt)
+}
+
+// active reports whether the credential still authenticates at now.
+func (r operatorRecord) active(now time.Time) bool { return !r.Revoked && !r.expired(now) }
 
 // LocalOperatorName is the owner's own operator: the credential in the
 // state directory, recorded as operator:local.
@@ -94,8 +106,9 @@ func newTokenID(prefix string) (string, error) {
 	return prefix + b[:22], nil
 }
 
-// issueOperatorInTx stores only the digest of a fresh operator bearer.
-func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string) (TokenFile, error) {
+// issueOperatorInTx stores only the digest of a fresh operator bearer. A
+// non-zero expires is when it stops authenticating.
+func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, expires time.Time) (TokenFile, error) {
 	token, err := runtime.NewBearer()
 	if err != nil {
 		return TokenFile{}, err
@@ -105,7 +118,7 @@ func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string) (TokenFi
 		return TokenFile{}, err
 	}
 	digest := runtime.TokenDigest(token)
-	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, CreatedAt: now})
+	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, CreatedAt: now, ExpiresAt: expires})
 	if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 		return TokenFile{}, err
 	}
@@ -212,7 +225,7 @@ func BootstrapOperator(ctx context.Context, store storage.Store, now func() time
 				return ErrCredentialExists
 			}
 		}
-		file, err = issueOperatorInTx(tx, now(), "", "")
+		file, err = issueOperatorInTx(tx, now(), "", "", time.Time{})
 		return err
 	})
 	if err != nil {
@@ -231,7 +244,7 @@ func RecoverOperator(ctx context.Context, store storage.Store, now func() time.T
 			return err
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now(), "", "")
+		file, err = issueOperatorInTx(tx, now(), "", "", time.Time{})
 		return err
 	})
 	if err != nil {

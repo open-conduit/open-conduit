@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1154,15 +1155,17 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		if err = json.Unmarshal(b, &r); err != nil {
 			return err
 		}
-		if r.Revoked {
-			return fail(401, "unauthenticated", "credential revoked")
+		if !r.active(s.o.Now()) {
+			return fail(401, "unauthenticated", "credential revoked or expired")
 		}
 		r.Revoked, r.RevokedAt = true, s.o.Now()
 		b, _ = json.Marshal(r)
 		if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 			return err
 		}
-		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role)
+		// The replacement keeps the caller's expiry: rotating never
+		// extends how long a credential lasts.
+		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.ExpiresAt)
 		return err
 	})
 	if err != nil {
@@ -1239,6 +1242,7 @@ type wireOperator struct {
 	TokenID   string `json:"token_id"`
 	CreatedAt string `json:"created_at"`
 	RevokedAt string `json:"revoked_at,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 // listOperators is GET /auth/operators: every operator credential, active or
@@ -1259,6 +1263,9 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 			if r.Revoked {
 				o.RevokedAt = ts(r.RevokedAt)
 			}
+			if !r.ExpiresAt.IsZero() {
+				o.ExpiresAt = ts(r.ExpiresAt)
+			}
 			out = append(out, o)
 		}
 		return nil
@@ -1277,12 +1284,18 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 
 // addOperator is POST /auth/operators: a credential for a named operator,
 // whose every control is then recorded as operator:<name>. Like rotate, the
-// token is returned once and never kept in idempotency history. A name has
-// at most one active credential; revoke it to issue a new one.
+// token is returned once and never kept in idempotency history. An optional
+// ttl (a Go duration such as "8h") makes it expire; without one it lasts
+// until it is revoked. A name has at most one active credential that never
+// expires, but any number of expiring ones beside it, so a broker can give
+// one person a credential per session. Every credential of a name is the
+// same operator: its actor, its role checks against what it carries, and
+// its Idempotency-Keys, which are the operator's, not the session's.
 func (s *Server) addOperator(c *call) (int, any, error) {
 	var in struct {
 		Name string `json:"name"`
 		Role string `json:"role"`
+		TTL  string `json:"ttl"`
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
@@ -1293,29 +1306,88 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 	if !ValidOperatorName(in.Name) {
 		return 0, nil, fail(400, "malformed", "name must be 1-32 lower case letters, digits or dashes, start with a letter, and not be local")
 	}
-	var file TokenFile
-	err := s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
-		rows, err := tx.List(authNamespace, "operator/")
-		if err != nil {
-			return err
+	var ttl time.Duration
+	if in.TTL != "" {
+		var err error
+		if ttl, err = time.ParseDuration(in.TTL); err != nil || ttl <= 0 {
+			return 0, nil, fail(400, "malformed", "ttl must be a positive duration such as 30m or 8h")
 		}
-		for _, row := range rows {
-			var r operatorRecord
-			if err = json.Unmarshal(row.Value, &r); err != nil {
+	}
+	now := s.o.Now()
+	var expires time.Time
+	if ttl > 0 {
+		expires = now.Add(ttl)
+	}
+	var file TokenFile
+	err := s.o.Store.Transact(c.ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		if expires.IsZero() {
+			rows, err := tx.List(authNamespace, "operator/")
+			if err != nil {
 				return err
 			}
-			if !r.Revoked && r.Name == in.Name {
-				return fail(409, "operator_exists", "operator "+in.Name+" already has an active credential; revoke it first")
+			for _, row := range rows {
+				var r operatorRecord
+				if err = json.Unmarshal(row.Value, &r); err != nil {
+					return err
+				}
+				if r.Name == in.Name && r.ExpiresAt.IsZero() && !r.Revoked {
+					return fail(409, "operator_exists", "operator "+in.Name+" already has an active credential that never expires; revoke it first, or give this one a ttl")
+				}
 			}
 		}
-		file, err = issueOperatorInTx(tx, s.o.Now(), in.Name, in.Role)
+		var err error
+		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, expires)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	c.w.Header().Set("Cache-Control", "no-store")
-	return 201, map[string]any{"name": in.Name, "role": in.Role, "token_id": file.TokenID, "token": file.Token}, nil
+	out := map[string]any{"name": in.Name, "role": in.Role, "token_id": file.TokenID, "token": file.Token}
+	if !expires.IsZero() {
+		out["expires_at"] = ts(expires)
+	}
+	return 201, out, nil
+}
+
+// SweepOperators deletes the record of every operator credential whose
+// expiry passed more than grace ago, with its token ID index, up to limit
+// at a time, and reports how many it deleted. A deleted credential is
+// unknown, which authenticate refuses just as it refused the expired one.
+// Credentials that never expire are kept, revoked or not.
+func (s *Server) SweepOperators(ctx context.Context, grace time.Duration, limit int) (int, error) {
+	deleted := 0
+	err := s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+		rows, err := tx.List(authNamespace, "operator/")
+		if err != nil {
+			return err
+		}
+		cutoff := s.o.Now().Add(-grace)
+		for _, row := range rows {
+			if deleted >= limit {
+				break
+			}
+			var r operatorRecord
+			if err = json.Unmarshal(row.Value, &r); err != nil {
+				return err
+			}
+			if r.ExpiresAt.IsZero() || !r.ExpiresAt.Before(cutoff) {
+				continue
+			}
+			if err = tx.Delete(authNamespace, row.Key); err != nil {
+				return err
+			}
+			if err = tx.Delete(authNamespace, "operator_id/"+r.TokenID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // ---- toolbelt ----

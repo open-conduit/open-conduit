@@ -107,14 +107,16 @@ By default there is one operator: you, with the token the daemon writes to `priv
 
 ```sh
 open-conduit auth add alice --out /path/to/alice.token   # an owner-only token file for alice, role operate
+open-conduit auth add alice --ttl 8h --out alice.token   # one that stops working 8 hours from now
 open-conduit auth operators                              # every operator credential, active or revoked
 open-conduit auth revoke TOKEN_ID                        # revoke one (the IDs are in auth operators)
 ```
 
 Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN_FILE`, on a machine that can reach the management socket. Everything she does (an Event she sends, a hold, a cancel, a rebind, an action such as answering an approval) is recorded as `operator:alice`. The web view's **Events** tab shows who sent each Event, and `events get` and `--json` lists show it as `actor`. An Event a person sent from Slack or GitHub shows their identity there, such as `github:octocat`. **By default only you (`operator:local`) may answer asks and approvals.** To let others answer, add `operator:alice`, or a bare `operator` for any operator, to the `human` entry's `responders`.
 
-- A name is lower case letters, digits and dashes, up to 32 characters. A name has one active credential at a time; revoke it before you issue another.
-- `auth rotate` replaces the caller's own credential and keeps its name.
+- A name is lower case letters, digits and dashes, up to 32 characters. A name has at most one active credential without an expiry; revoke it before you issue another.
+- `--ttl` (a duration such as `30m`, `8h` or `720h`) makes a credential expire: after that it is refused as `unauthenticated`, as a revoked one is, and `auth operators` shows its `expires_at`. A name can hold any number of expiring credentials at once, beside its one that never expires, so each of alice's machines or sessions can have its own. They are all `operator:alice`: the same actor, and the same `Idempotency-Key`s. A day after an expiring credential expires, the daemon forgets it and it drops out of `auth operators`. A broker that already checks your identity provider can call `POST /v1/auth/operators` with a `ttl` to hand out short-lived credentials.
+- `auth rotate` replaces the caller's own credential and keeps its name, role and expiry.
 - Each credential has a role, set with `--role` when you add it (default `operate`). To change a role, revoke the credential and add it again.
 
   | Role | May |

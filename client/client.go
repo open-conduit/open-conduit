@@ -1203,6 +1203,9 @@ type Operator struct {
 	TokenID   string `json:"token_id"`
 	CreatedAt string `json:"created_at"`
 	RevokedAt string `json:"revoked_at,omitempty"`
+	// ExpiresAt is when an expiring credential stops authenticating;
+	// empty never expires.
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 // Operators lists every operator credential, active or revoked.
@@ -1215,9 +1218,31 @@ func (c *Client) Operators(ctx context.Context) ([]Operator, error) {
 }
 
 // AddOperator issues a credential for the named operator with role
-// (admin, operate or view), returned once.
-func (c *Client) AddOperator(ctx context.Context, name, role string) (out TokenFile, err error) {
-	err = c.Do(ctx, "POST", "auth/operators", nil, map[string]string{"name": name, "role": role}, "", &out)
+// (admin, operate or view), returned once. It never expires; see
+// AddExpiringOperator.
+func (c *Client) AddOperator(ctx context.Context, name, role string) (TokenFile, error) {
+	out, err := c.AddExpiringOperator(ctx, name, role, "")
+	return out.TokenFile, err
+}
+
+// IssuedOperator is a credential AddExpiringOperator issued: the token,
+// returned once, and when it expires (empty when it never does).
+type IssuedOperator struct {
+	TokenFile
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// AddExpiringOperator issues a credential for the named operator with role
+// that stops authenticating ttl (a Go duration such as "8h") after the
+// daemon issues it, returned once. An empty ttl never expires. A name may
+// hold any number of expiring credentials at once, beside at most one that
+// never expires.
+func (c *Client) AddExpiringOperator(ctx context.Context, name, role, ttl string) (out IssuedOperator, err error) {
+	body := map[string]string{"name": name, "role": role}
+	if ttl != "" {
+		body["ttl"] = ttl
+	}
+	err = c.Do(ctx, "POST", "auth/operators", nil, body, "", &out)
 	return
 }
 
