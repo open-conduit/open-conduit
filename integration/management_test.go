@@ -1100,6 +1100,121 @@ func TestManagementNamedOperators(t *testing.T) {
 	h.mustCLI(nil, "auth", "add", "alice", "--out", aliceFile+".new")
 }
 
+// TestManagementExpiringOperators issues credentials with a TTL: each stops
+// authenticating at its expiry, a name can hold several at once (a
+// session each) beside its one that never expires, rotation keeps the
+// expiry, and the retention sweep forgets one a day after it expired.
+func TestManagementExpiringOperators(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	owner := h.operatorClient()
+	dir := h.state
+
+	var added map[string]string
+	h.mustCLI(&added, "auth", "add", "dana", "--role", "operate", "--ttl", "1h", "--out", filepath.Join(dir, "dana-laptop.token"))
+	if want := h.clock.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano); added["expires_at"] == "" || added["expires_at"] != want {
+		t.Fatalf("auth add --ttl: expires_at %q, want %q", added["expires_at"], want)
+	}
+	if _, errOut, code := h.cli("auth", "add", "dana", "--ttl", "soon", "--out", filepath.Join(dir, "bad.token")); code == 0 || !strings.Contains(errOut, "malformed") {
+		t.Fatalf("an unparseable ttl was accepted: %d %s", code, errOut)
+	}
+	if _, err := owner.AddExpiringOperator(ctx, "dana", "operate", "-5m"); !isStatus(err, 400) {
+		t.Fatalf("a negative ttl was accepted: %v", err)
+	}
+	// A second session of the same person, and a credential that never
+	// expires, sit beside the first; a second that never expires doesn't.
+	browser, err := owner.AddExpiringOperator(ctx, "dana", "view", "3h")
+	if err != nil {
+		t.Fatalf("a second expiring credential for dana: %v", err)
+	}
+	if _, err = owner.AddOperator(ctx, "dana", "view"); err != nil {
+		t.Fatalf("a lasting credential beside expiring ones: %v", err)
+	}
+	if _, err = owner.AddOperator(ctx, "dana", "view"); !isStatus(err, 409) {
+		t.Fatalf("a second lasting credential for dana: %v", err)
+	}
+
+	f, err := client.ReadTokenFile(filepath.Join(dir, "dana-laptop.token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop, err := client.New(h.endpoint, f.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, err := client.New(h.endpoint, browser.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both sessions are dana: the same actor, and one Idempotency-Key
+	// namespace between them.
+	sent, err := laptop.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "dana-1"}, "dana-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Actor != "operator:dana" {
+		t.Fatalf("actor %q", sent.Actor)
+	}
+
+	// Rotating keeps the expiry rather than starting it again.
+	h.clock.Advance(30 * time.Minute)
+	rotated, err := laptop.Rotate(ctx, f.TokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop, err = client.New(h.endpoint, rotated.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operators, err := owner.Operators(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rotatedExpiry string
+	for _, o := range operators {
+		if o.TokenID == rotated.TokenID {
+			rotatedExpiry = o.ExpiresAt
+		}
+	}
+	if rotatedExpiry != added["expires_at"] {
+		t.Fatalf("rotated credential expires %q, want %q", rotatedExpiry, added["expires_at"])
+	}
+
+	// At its expiry the laptop's credential stops authenticating; the
+	// browser's, which lasts longer, still works.
+	h.clock.Advance(30 * time.Minute)
+	if _, err = laptop.Health(ctx); !isStatus(err, 401) {
+		t.Fatalf("an expired credential was accepted: %v", err)
+	}
+	if _, err = tab.Health(ctx); err != nil {
+		t.Fatalf("a live session was refused: %v", err)
+	}
+
+	// A day after its expiry the sweep forgets it; until then it is listed.
+	if n, err := h.server.SweepOperators(ctx, 24*time.Hour, 100); err != nil || n != 0 {
+		t.Fatalf("swept %d before the grace passed: %v", n, err)
+	}
+	h.clock.Advance(24*time.Hour + time.Minute)
+	if n, err := h.server.SweepOperators(ctx, 24*time.Hour, 100); err != nil || n != 2 {
+		t.Fatalf("swept %d, want the laptop's two (rotated away and its replacement): %v", n, err)
+	}
+	h.clock.Advance(2 * time.Hour)
+	if n, err := h.server.SweepOperators(ctx, 24*time.Hour, 100); err != nil || n != 1 {
+		t.Fatalf("swept %d, want the browser's: %v", n, err)
+	}
+	if operators, err = owner.Operators(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range operators {
+		if o.ExpiresAt != "" {
+			t.Fatalf("an expired credential outlived the sweep: %+v", o)
+		}
+	}
+	if _, err = tab.Health(ctx); !isStatus(err, 401) {
+		t.Fatalf("a swept credential was accepted: %v", err)
+	}
+}
+
 // TestManagementOperatorRoles checks each role at the routes it gates:
 // view only reads, operate also runs controls, and only admin applies
 // config or manages other operators. The owner is always admin.

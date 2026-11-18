@@ -48,7 +48,7 @@ Issue each person a credential with the role they need (see the [roles table](..
 open-conduit auth add alice --role operate --out alice.token
 ```
 
-Give alice the file over a channel you trust; it is the only copy. Everything she does is recorded as `operator:alice`, and anything her role doesn't allow is refused with `forbidden_role`. To let her answer an agent's questions and approvals too, add `operator:alice` to the `human` entry's `responders`.
+Give alice the file over a channel you trust; it is the only copy. Add `--ttl 720h` (or any duration) to make it expire, so access lapses unless you issue another. Everything she does is recorded as `operator:alice`, and anything her role doesn't allow is refused with `forbidden_role`. To let her answer an agent's questions and approvals too, add `operator:alice` to the `human` entry's `responders`.
 
 The management API is served only on a Unix socket, so alice reaches it over SSH. Her key goes in `~conduit/.ssh/authorized_keys` with a forced command that connects to the socket and does nothing else:
 
@@ -70,7 +70,7 @@ open-conduit tui
 
 Each connection the CLI makes opens one SSH session. `work attach` and `container attach` run on the daemon's machine and can't be used this way.
 
-To take someone's access away, revoke their credential (`auth revoke`, with the ID from `auth operators`) and remove their key.
+To take someone's access away, revoke their credentials (`auth revoke`, with each ID from `auth operators`) and remove their key. A credential with a TTL also lapses on its own at its expiry.
 
 ## 4. The web view behind your own sign-in
 

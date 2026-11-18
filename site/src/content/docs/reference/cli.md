@@ -216,7 +216,7 @@ claim [SCOPE#]N [--scope S] [--entry NAME]   claim an issue by hand (the scope's
 
 ```text
 auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
-auth operators | auth add NAME --out FILE [--role admin|operate|view]   list operator credentials; issue one for a named operator (default role operate), recorded as operator:NAME
+auth operators | auth add NAME --out FILE [--role admin|operate|view] [--ttl DURATION]   list operator credentials; issue one for a named operator (default role operate), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given
 auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
 ```
 

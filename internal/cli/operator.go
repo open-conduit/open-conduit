@@ -769,10 +769,10 @@ func (o *operator) auth(args []string) int {
 		defer cancel()
 		return o.emit(c.Operators(cx))
 	case "add":
-		f := newFlags("add", "out", "role")
+		f := newFlags("add", "out", "role", "ttl")
 		pos, err := f.parse(args[1:])
 		if err != nil || len(pos) != 1 || f.get("out") == "" {
-			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view]")
+			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--ttl DURATION]")
 		}
 		role := f.get("role")
 		if role == "" {
@@ -792,14 +792,18 @@ func (o *operator) auth(args []string) int {
 		}
 		cx, cancel := ctx()
 		defer cancel()
-		file, err := c.AddOperator(cx, pos[0], role)
+		file, err := c.AddExpiringOperator(cx, pos[0], role, f.get("ttl"))
 		if err != nil {
 			return o.emit(nil, err)
 		}
 		if err = writePrivateJSON(out, client.TokenFile{TokenID: file.TokenID, Token: file.Token}); err != nil {
 			return o.emit(nil, fmt.Errorf("operator %s was added but its token file could not be saved; revoke %s with auth revoke and add it again", pos[0], file.TokenID))
 		}
-		return o.emit(map[string]string{"name": pos[0], "role": role, "token_id": file.TokenID, "token_file": out}, nil)
+		added := map[string]string{"name": pos[0], "role": role, "token_id": file.TokenID, "token_file": out}
+		if file.ExpiresAt != "" {
+			added["expires_at"] = file.ExpiresAt
+		}
+		return o.emit(added, nil)
 	}
 	return usageError(o.errOut, "expected auth rotate|revoke|recover|operators|add")
 }

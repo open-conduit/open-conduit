@@ -123,11 +123,17 @@ func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *ti
 			d.report("toolbelt_sweep", "", errorCode(err))
 		}
 	}
+	if c.server != nil {
+		if _, err := c.server.SweepOperators(ctx, toolbeltGrace, passLimit); err != nil && ctx.Err() == nil {
+			d.report("operator_sweep", "", errorCode(err))
+		}
+	}
 	return true
 }
 
-// toolbeltGrace is how long a revoked or expired token, and a finished
-// execution's replay record, are kept before the retention pass deletes them.
+// toolbeltGrace is how long a revoked or expired token, a finished
+// execution's replay record and an expired operator credential are kept
+// before the retention pass deletes them.
 const toolbeltGrace = 24 * time.Hour
 
 // routePending routes every accepted but unrouted Event in acceptance order,
