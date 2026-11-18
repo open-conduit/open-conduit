@@ -461,6 +461,18 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 	if err != nil {
 		return management.ContainerAttachment{}, err
 	}
+	// A workspace the last segment had at its site is where the attach
+	// goes, and what it is launched in.
+	prefer := workPlacement(workHome, desc.Provider)
+	var workspace *extension.Resource
+	if last := state.ContainerPin(); last != nil && last.Site != "" {
+		provider, at, ok := extension.SplitSiteID(last.Site)
+		if !ok || provider != desc.Provider {
+			return management.ContainerAttachment{}, fmt.Errorf("%w: the Work's workspace is at %s, which the binding's container provider no longer places at", extension.ErrSandboxUnavailable, last.Site)
+		}
+		prefer = at
+		workspace = &extension.Resource{Kind: "workspace", Dir: last.Workspace, Site: last.Site, Sandbox: &extension.SandboxNeeds{}}
+	}
 	home, _ := os.UserHomeDir()
 	var pinned extension.ContainerPin
 	b := extension.BindContainer(extension.ContainerBinding{
@@ -471,7 +483,8 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 		Attach:   true,
 		// An attach goes where the Work last ran, and never moves it.
 		Name:      desc.Provider,
-		Prefer:    workPlacement(workHome, desc.Provider),
+		Prefer:    prefer,
+		Workspace: workspace,
 		Protected: d.protectedPaths(),
 		Shared:    []string{d.pluginDir()},
 		RunRoot:   filepath.Join(d.o.StateDir, "executors", executor, "runs"),
