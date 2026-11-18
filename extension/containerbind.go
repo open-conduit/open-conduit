@@ -72,6 +72,11 @@ type ContainerBinding struct {
 	// TokenFile is the execution's toolbelt token file, given with
 	// Toolbelt to commands run at its site (PlacedSite).
 	TokenFile string
+	// Env is the run's environment layer from the extensions
+	// (ExecutionContext.Env), given to commands run at its site
+	// (PlacedSite.Env), so git there reaches the repository as the run's
+	// does.
+	Env map[string]string
 	// AtSite binds the attempt's resource provider again with the site
 	// the execution was placed at (BindResourcesAt), so its acquisition
 	// can make the workspace there. Nil: the resource is always made on
@@ -185,7 +190,7 @@ func (c *BoundContainer) site(ctx context.Context, prefer string) (Site, error) 
 	if err != nil {
 		return nil, err
 	}
-	site := PlacedSite{Provider: c.b.Name, Placer: placer, At: at}
+	site := PlacedSite{Provider: c.b.Name, Placer: placer, At: at, Env: c.b.Env}
 	if c.b.Toolbelt != "" && c.b.TokenFile != "" {
 		site.Toolbelt, site.TokenFile = c.b.Toolbelt, c.b.TokenFile
 	}

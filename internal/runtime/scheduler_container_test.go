@@ -51,7 +51,9 @@ func TestProductionSchedulerContainerHook(t *testing.T) {
 	}
 	contained, broken := seedSchedulerWork(t, f, "contained"), seedSchedulerWork(t, f, "broken")
 	var recovering []runtime.AttemptState
-	hook := func(_ context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+	var envs []map[string]string
+	hook := func(_ context.Context, state runtime.AttemptState, resources extension.ResourceBroker, env map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+		envs = append(envs, env)
 		if state.LaunchState == "recovering" {
 			recovering = append(recovering, state)
 		}
@@ -66,6 +68,11 @@ func TestProductionSchedulerContainerHook(t *testing.T) {
 	}
 	o := schedulerDefaultOptions(f, executor)
 	o.Container = hook
+	// The run's environment layer reaches the binding, for what it runs on
+	// the run's behalf before the run starts.
+	o.Environment = func(context.Context, runtime.AttemptState) (map[string]string, error) {
+		return map[string]string{"GIT_CONFIG_COUNT": "0"}, nil
+	}
 	s := newTestScheduler(t, f, o)
 	a, err := s.Start(context.Background(), contained)
 	if err != nil {
@@ -86,6 +93,9 @@ func TestProductionSchedulerContainerHook(t *testing.T) {
 	}
 	if len(recovering) != 1 || recovering[0].ContainerPin() == nil || recovering[0].ContainerPin().ID != "c1" {
 		t.Fatalf("the container binding saw %+v while recovering, want the pin", recovering)
+	}
+	if len(envs) != 2 || envs[0]["GIT_CONFIG_COUNT"] != "0" || envs[1] != nil {
+		t.Fatalf("the container binding was given %v, want the run's layer, and none while recovering", envs)
 	}
 	if err = second.Observe(context.Background(), recovered); err != nil {
 		t.Fatal(err)

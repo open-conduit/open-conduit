@@ -85,6 +85,7 @@ var useCases = map[string][]string{
 	"container_provider.forward":  {"docker"},
 	"container_provider.place":    {"ssh"},
 	"container_provider.site_run": {"ssh"},
+	"site.run":                    {"git"},
 	"tunnel.run":                  {"ngrok", "cloudflared"},
 	"tunnel.url":                  {"ngrok", "cloudflared"},
 	"kv.get":                      {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -342,7 +343,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Extensions[0].Sandbox = protocol.EntrySandboxOptional
 	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true, Place: true}}
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
-	m.Provides.Resources[0].Sweep = true
+	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Sites = true, true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)

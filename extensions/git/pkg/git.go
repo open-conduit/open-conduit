@@ -49,9 +49,10 @@ func Manifest() protocol.Manifest {
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Resources: []protocol.ResourceDecl{{Type: git.Type,
 			Modes:       []string{extension.ResourceShared, extension.ResourceWork, extension.ResourceFresh},
-			ModeDefault: true, Sandbox: true, Sweep: true,
+			ModeDefault: true, Sandbox: true, Sweep: true, Sites: true,
 			Settings: []protocol.SettingDecl{
 				setting("checkout", protocol.SettingString, ""),
+				setting("repository", protocol.SettingString, ""),
 				setting("mode", protocol.SettingString, `"shared"`),
 				setting("remote", protocol.SettingString, `"origin"`),
 				setting("base_branch", protocol.SettingString, ""),
@@ -64,9 +65,11 @@ func Manifest() protocol.Manifest {
 // provider creates the git provider on first use, once the host has named
 // its directories (initialize).
 type provider struct {
-	once sync.Once
-	p    *git.Provider
-	err  error
+	once  sync.Once
+	p     *git.Provider
+	err   error
+	mu    sync.Mutex
+	sites extension.SiteResolver
 }
 
 func (x *provider) get(ctx context.Context) (*git.Provider, error) {
@@ -81,6 +84,11 @@ func (x *provider) get(ctx context.Context) (*git.Provider, error) {
 			return
 		}
 		x.p, x.err = git.New(git.Options{StateDir: dir, BaseDir: h.ConfigDir()})
+		x.mu.Lock()
+		if x.p != nil && x.sites != nil {
+			x.p.UseSites(x.sites)
+		}
+		x.mu.Unlock()
 	})
 	return x.p, x.err
 }
@@ -118,6 +126,19 @@ func (x *provider) Sweep(ctx context.Context, status extension.ResourceStatusFun
 }
 
 func (*provider) ModeDefault(raw json.RawMessage) string { return git.ModeDefault(raw) }
+
+// UseSites keeps the host's site resolver for the provider, made on first
+// use.
+func (x *provider) UseSites(sites extension.SiteResolver) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.sites = sites
+	if x.p != nil {
+		x.p.UseSites(sites)
+	}
+}
+
+func (*provider) NeedsSite(raw json.RawMessage) bool { return git.NeedsSite(raw) }
 func (*provider) SandboxWorkspace(raw json.RawMessage, mode string) error {
 	return git.ValidateSandbox(raw, mode)
 }
@@ -127,6 +148,7 @@ var _ interface {
 	extension.ResourceSweeper
 	extension.ResourceModeDefaulter
 	extension.ResourceSandboxChecker
+	extension.ResourceSiteUser
 } = (*provider)(nil)
 
 // Build returns the served extension.
@@ -151,6 +173,7 @@ func Certification() protocol.CertificationFile {
 		{Type: git.Type, Config: json.RawMessage(`{"checkout":"/srv/repo","mode":"clone"}`), ModeDefault: git.ModeClone},
 		{Type: git.Type, Config: json.RawMessage(`{"checkout":"/srv/repo","mode":"clone","setup":"make deps"}`), ModeDefault: git.ModeClone, SandboxRefused: true},
 		{Type: git.Type, Config: json.RawMessage(`{"checkout":"/srv/repo"}`), Mode: git.ModeClone},
+		{Type: git.Type, Config: json.RawMessage(`{"repository":"https://github.com/example/repo","setup":"make deps"}`), ModeDefault: git.ModeClone},
 	}}}
 }
 

@@ -77,6 +77,12 @@ const (
 	// is a ValidateResult whose Config is the adapted config the host
 	// validates and stores. A refusal rejects the binding config.
 	ValidateExecutorFolder = "executor_folder"
+	// ValidateResourceSite asks a provider declared with sites whether a
+	// resource config can only be made at the site a launch is placed at
+	// (extension.ResourceSiteUser.NeedsSite). Type is the resource type,
+	// Config the resource config; the answer is a ValidateResult whose
+	// Site says it can.
+	ValidateResourceSite = "resource_site"
 	// ValidateSandbox checks a binding's sandbox config for a provider
 	// declared in sandboxes. Type is the provider, Config its config.
 	ValidateSandbox = "sandbox"
@@ -157,6 +163,8 @@ type ValidateResult struct {
 	Bindings  []string        `json:"bindings,omitempty"`
 	// Operations are the entry operations a valid entry declares.
 	Operations []extension.EntryOperationDecl `json:"operations,omitempty"`
+	// Site answers ValidateResourceSite.
+	Site bool `json:"site,omitempty"`
 }
 
 // DescribeLine is one thing a config object sets up: a named element of
@@ -247,6 +255,32 @@ type ProviderAcquireParams struct {
 	HostEnv map[string]string `json:"host_env,omitempty"`
 	// Files is extension.ResourceRequest.Files.
 	Files []string `json:"files,omitempty"`
+	// Site is extension.ResourceAcquisition.Site, given only to a provider
+	// declared with sites: commands run there through site.run quoting
+	// Call, which the host answers while this provider.acquire runs.
+	Site *AcquireSite `json:"site,omitempty"`
+}
+
+// AcquireSite is the site of one acquisition: its ID (extension.Site.ID)
+// and the call ID site.run quotes to run a command there.
+type AcquireSite struct {
+	ID   string `json:"id"`
+	Call string `json:"call"`
+}
+
+// SiteRunParams asks the host to run a command at a site for a provider
+// declared with sites (site.run; extension.Site.Run). With Call, it runs
+// at the site of the provider.acquire that gave the call, with the
+// execution's toolbelt and run environment, and Site, when set, must be
+// that site's. Without, it runs at Site, a site the host resolves for
+// Type (extension.SiteResolver): one of a container provider a binding
+// pairs with the resource type, with no toolbelt. A site the host can't
+// run at is CodeSiteUnavailable.
+type SiteRunParams struct {
+	Type    string      `json:"type"`
+	Call    string      `json:"call,omitempty"`
+	Site    string      `json:"site,omitempty"`
+	Command SiteCommand `json:"command"`
 }
 type ProviderLookupParams struct {
 	Type  string        `json:"type"`

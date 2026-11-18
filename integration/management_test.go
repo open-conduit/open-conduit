@@ -184,7 +184,7 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 			}
 			return h.sandbox(ctx, st, r, pin)
 		},
-		Container: func(ctx context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+		Container: func(ctx context.Context, st runtime.AttemptState, r extension.ResourceBroker, _ map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
 			if h.container == nil {
 				return runtime.ContainerBinding{}, nil
 			}

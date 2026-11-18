@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -99,7 +100,7 @@ func (d *daemon) containerRecords(id domain.ID) string {
 
 // bindContainer gives an attempt its binding's container, bound as
 // bindSandbox binds a sandbox. A binding without one gets none.
-func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, env map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
 	desc, err := d.configs.Container(state)
 	if err != nil {
 		return runtime.ContainerBinding{}, err
@@ -155,6 +156,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		RunRoot:   filepath.Join(d.o.StateDir, "executors", state.Executor, "runs"),
 		Toolbelt:  socket,
 		TokenFile: tokenFile(socket, d.endpoints.TokenFile(state.ExecutionID)),
+		Env:       env,
 		Records:   d.containerRecords(state.ExecutionID),
 		Home:      home,
 		WorkHome:  workHome,
@@ -556,4 +558,43 @@ func tokenFile(socket, file string) string {
 		return ""
 	}
 	return file
+}
+
+// resolveSite is the host's SiteResolver for a resource type: the site id
+// names, as a Site with no toolbelt, when a binding of an enabled scope in
+// the current config pairs that resource type with the site's container
+// provider and the provider places launches. Anything else is
+// unavailable, so a resource provider reaches only sites its own
+// bindings put it at.
+func (d *daemon) resolveSite(_ context.Context, resourceType, id string) (extension.Site, error) {
+	current, _ := d.configs.Current()
+	return siteFor(current, d.containers.providers, resourceType, id)
+}
+
+func siteFor(current *config.Snapshot, providers map[string]extension.ContainerProvider, resourceType, id string) (extension.Site, error) {
+	provider, placement, ok := extension.SplitSiteID(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q is not a site", extension.ErrSiteUnavailable, id)
+	}
+	paired := false
+	if current != nil {
+		for _, s := range current.Scopes {
+			if !s.Enabled {
+				continue
+			}
+			for _, b := range s.Bindings {
+				if b.Resource != nil && b.Container != nil && b.Resource.Provider == resourceType && b.Container.Provider == provider {
+					paired = true
+				}
+			}
+		}
+	}
+	if !paired {
+		return nil, fmt.Errorf("%w: no binding pairs resource provider %s with container provider %s", extension.ErrSiteUnavailable, resourceType, provider)
+	}
+	placer, ok := providers[provider].(extension.ContainerPlacer)
+	if !ok {
+		return nil, fmt.Errorf("%w: container provider %s doesn't place launches", extension.ErrSiteUnavailable, provider)
+	}
+	return extension.PlacedSite{Provider: provider, Placer: placer, At: extension.Placement{ID: placement}}, nil
 }

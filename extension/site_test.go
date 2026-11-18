@@ -337,3 +337,27 @@ func TestPlacedWithoutAtSite(t *testing.T) {
 		t.Fatalf("acquisition site %v, want none", seen.Site.ID())
 	}
 }
+
+// A placed site's commands get the run's environment layer under their
+// own, git config extended rather than replaced, and the toolbelt after
+// both.
+func TestPlacedSiteEnv(t *testing.T) {
+	f := newFakePlacer()
+	layer := extension.GitTransportLayer("github.com")
+	layer["GIT_AUTHOR_NAME"] = "bot"
+	site := extension.PlacedSite{Provider: "fake", Placer: f, At: extension.Placement{ID: "node-1"}, Toolbelt: "/run/tb.sock", TokenFile: "/run/token", Env: layer}
+	if _, err := site.Run(context.Background(), extension.SiteCommand{Argv: []string{"git"}, Env: []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/dev/null", "GIT_AUTHOR_NAME=own", "OS_ENDPOINT=unix:///elsewhere"}}); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, kv := range f.ran[0].Env {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	if env["GIT_CONFIG_COUNT"] != "4" || env["GIT_CONFIG_KEY_0"] != "alias.remote-"+extension.GitTransport || env["GIT_CONFIG_KEY_3"] != "core.hooksPath" {
+		t.Fatalf("git config %v, want the layer's then the command's", f.ran[0].Env)
+	}
+	if env["GIT_AUTHOR_NAME"] != "own" || env["OS_ENDPOINT"] != "unix:///run/tb.sock" || env["OS_TOKEN_FILE"] != "/run/token" {
+		t.Fatalf("env %v: the command's own over the layer, the toolbelt's last", f.ran[0].Env)
+	}
+}

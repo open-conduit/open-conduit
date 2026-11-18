@@ -726,6 +726,36 @@ func TestSandboxedResource(t *testing.T) {
 	}
 }
 
+// TestPlacedResource: a binding whose resource can only be made where its
+// launch is placed is refused unless its container provider places
+// launches; any other resource, and one the provider can make anywhere,
+// is not.
+func TestPlacedResource(t *testing.T) {
+	reg := registry()
+	reg.ResourceSite = map[string]func(json.RawMessage) bool{"git": func(c json.RawMessage) bool { return strings.Contains(string(c), "repository") }}
+	reg.Placers = map[string]bool{"ssh": true}
+	site := &Resource{Provider: "git", Config: json.RawMessage(`{"repository":"https://example.com/r"}`)}
+	host := &Resource{Provider: "git", Config: json.RawMessage(`{"checkout":"/srv/r"}`)}
+	for _, tc := range []struct {
+		name    string
+		b       Binding
+		refused bool
+	}{
+		{"placing container", Binding{Resource: site, Container: &Container{Provider: "ssh"}}, false},
+		{"container that doesn't place", Binding{Resource: site, Container: &Container{Provider: "docker"}}, true},
+		{"no container", Binding{Resource: site}, true},
+		{"made on the host", Binding{Resource: host}, false},
+		{"another provider", Binding{Resource: &Resource{Provider: "scratch"}}, false},
+		{"no resource", Binding{}, false},
+	} {
+		v := &validator{reg: reg}
+		v.placed("p", tc.b)
+		if tc.refused != (len(v.diags) == 1) || tc.refused && (v.diags[0].Path != "p/resource/config" || v.diags[0].Code != "site_required") {
+			t.Errorf("%s: %+v", tc.name, v.diags)
+		}
+	}
+}
+
 // TestSandboxBinding: a binding's sandbox (B09) is parsed, kept in the
 // effective config and checked: a registered provider that accepts its
 // config, an executor that can run in one and a workspace a sandbox can use.

@@ -677,6 +677,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		},
 		Authorize:    d.authorize,
 		EntrySandbox: d.entrySandbox(m),
+		Sites:        d.resolveSite,
 	}
 }
 

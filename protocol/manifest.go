@@ -749,6 +749,13 @@ type ResourceDecl struct {
 	// the spare resources no lease release covers, through provider.sweep
 	// (extension.ResourceSweeper).
 	Sweep bool `json:"sweep,omitempty"`
+	// Sites marks a provider that makes resources at the site a launch is
+	// placed at (extension.ResourceSiteUser): provider.acquire hands it the
+	// site, it runs commands there and later at the sites its resources
+	// are at through site.run, and config check asks it, through validate
+	// with kind resource_site, whether a resource config can only be made
+	// at a site.
+	Sites bool `json:"sites,omitempty"`
 	// Settings are the resource config fields safe to show the operator
 	// (config.Registry.ResourceSettings), as an extension type's are.
 	Settings []SettingDecl `json:"settings,omitempty"`
@@ -1290,6 +1297,7 @@ func (m Manifest) Enabled() []string {
 	set("resources", len(p.Resources) > 0)
 	for _, r := range p.Resources {
 		set("resources.sweep", r.Sweep)
+		set("resources.sites", r.Sites)
 	}
 	set("sandboxes", len(p.Sandboxes) > 0)
 	set("containers", len(p.Containers) > 0)

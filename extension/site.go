@@ -2,7 +2,9 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 )
@@ -115,6 +117,11 @@ type PlacedSite struct {
 	// OS_ENDPOINT and OS_TOKEN_FILE, after its own environment, so `os`
 	// there reaches the execution's toolbelt.
 	Toolbelt, TokenFile string
+	// Env, when set, is the run's environment layer from the extensions
+	// (ExecutionContext.Env): every command gets it under its own
+	// environment (ApplyEnv), so git there reaches the repository as the
+	// run's git will, through the toolbelt's git transport.
+	Env map[string]string
 }
 
 func (s PlacedSite) ID() string { return SiteID(s.Provider, s.At.ID) }
@@ -124,8 +131,51 @@ func (s PlacedSite) Run(ctx context.Context, cmd SiteCommand) (SiteResult, error
 		return SiteResult{}, errors.New("site command: empty argv")
 	}
 	cmd.Toolbelt, cmd.TokenFile = s.Toolbelt, s.TokenFile
+	if len(s.Env) > 0 {
+		cmd.Env = layered(s.Env, cmd.Env)
+	}
 	if s.Toolbelt != "" && s.TokenFile != "" {
 		cmd.Env = append(append([]string{}, cmd.Env...), "OS_ENDPOINT=unix://"+s.Toolbelt, "OS_TOKEN_FILE="+s.TokenFile)
 	}
 	return s.Placer.SiteRun(ctx, s.At.ID, cmd)
+}
+
+// layered is a command's environment over the run's layer: the layer's
+// variables, then the command's own (ApplyEnv, so git config the command
+// sets extends the layer's), sorted.
+func layered(layer map[string]string, env []string) []string {
+	vars := map[string]string{}
+	ApplyEnv(vars, layer)
+	own := map[string]string{}
+	for _, kv := range env {
+		if name, value, ok := strings.Cut(kv, "="); ok {
+			own[name] = value
+		}
+	}
+	ApplyEnv(vars, own)
+	out := make([]string, 0, len(vars))
+	for name, value := range vars {
+		out = append(out, name+"="+value)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// SiteResolver gives the Site an ID names (Resource.Site), for a resource
+// provider to act on what it made there after the acquisition: a
+// reconcile or sweep removing a workspace. A command run through it gets
+// no toolbelt and no run environment. The host resolves only a site of a
+// container provider that a binding pairs with the resource provider's
+// type, and refuses any other with ErrSiteUnavailable, as it does a site
+// whose provider can't be reached.
+type SiteResolver func(ctx context.Context, id string) (Site, error)
+
+// ResourceSiteUser is an optional ResourceProvider capability: one that
+// makes resources at sites. The host gives it its SiteResolver once,
+// before it is first reconciled or swept, and asks it whether a resource
+// config can only be made at a site (NeedsSite), so config check can
+// refuse a binding whose container provider doesn't place launches.
+type ResourceSiteUser interface {
+	UseSites(SiteResolver)
+	NeedsSite(config json.RawMessage) bool
 }

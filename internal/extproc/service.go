@@ -98,6 +98,11 @@ type Deps struct {
 	// for its config entry in scope, with the entry's sandbox
 	// (sandbox.entry_plan, provides extensions.sandbox).
 	EntrySandbox extension.EntrySandbox
+	// Sites resolves a site for one of the extension's resource types
+	// declared with sites (site.run without a call;
+	// extension.SiteResolver). The host resolves only a site of a
+	// container provider a binding pairs with that resource type.
+	Sites func(ctx context.Context, resourceType, id string) (extension.Site, error)
 }
 
 // run is the host side of one executor call: the trusted, lease-fenced
@@ -130,6 +135,7 @@ type Service struct {
 	writers    map[string]storage.ArtifactWriter
 	sources    map[string]bool
 	reconciles map[string]extension.ResourceStatusFunc
+	sites      map[string]acquireSite
 	tunnels    map[string]func(string)
 	setups     map[string]extension.SetupHost
 	refused    int64
@@ -146,7 +152,7 @@ func NewService(m protocol.Manifest, deps Deps) (*Service, error) {
 	if deps.Scopes == nil {
 		deps.Scopes = func() []domain.ID { return nil }
 	}
-	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
+	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, sites: map[string]acquireSite{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
 	for _, method := range m.Enabled() {
 		s.enabled[method] = true
 	}
@@ -439,6 +445,23 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromOwnerStatus(st), nil
+	case "site.run":
+		var p protocol.SiteRunParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		site, err := s.site(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		res, err := site.Run(ctx, p.Command.Extension())
+		if err != nil {
+			if errors.Is(err, extension.ErrSiteUnavailable) {
+				return nil, err
+			}
+			return nil, errors.Join(extension.ErrSiteUnavailable, err)
+		}
+		return protocol.FromSiteResult(res), nil
 	case "tunnel.url":
 		var p protocol.TunnelURLParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -1259,4 +1282,43 @@ func (k LocalKV) Commit(ctx context.Context, b protocol.KVCommitParams) error {
 // CommitBatch is Commit answering each Emission's outcome.
 func (k LocalKV) CommitBatch(ctx context.Context, b protocol.KVCommitParams) (protocol.KVCommitResult, error) {
 	return k.S.kvCommit(ctx, b)
+}
+
+// acquireSite is the site one provider.acquire was given, for site.run
+// quoting its call while it runs.
+type acquireSite struct {
+	typ  string
+	site extension.Site
+}
+
+// site is the site a site.run names: its acquisition's, while that runs,
+// or one the host resolves for a resource type the extension declares
+// with sites. Anything else is refused.
+func (s *Service) site(ctx context.Context, p protocol.SiteRunParams) (extension.Site, error) {
+	declared := false
+	for _, r := range s.manifest.Provides.Resources {
+		declared = declared || (r.Type == p.Type && r.Sites)
+	}
+	if !declared {
+		return nil, unauthorized("the extension declares no resource type with sites by that name")
+	}
+	if p.Call != "" {
+		s.mu.Lock()
+		at, ok := s.sites[p.Call]
+		s.mu.Unlock()
+		if !ok || at.typ != p.Type {
+			return nil, protocol.Errorf(protocol.CodeConflict, "no provider.acquire in progress under that call")
+		}
+		if p.Site != "" && p.Site != at.site.ID() {
+			return nil, unauthorized("the call's acquisition is at another site")
+		}
+		return at.site, nil
+	}
+	if p.Site == "" {
+		return nil, invalid("site.run names no call and no site")
+	}
+	if s.deps.Sites == nil {
+		return nil, errors.Join(extension.ErrSiteUnavailable, errors.New("the host resolves no sites"))
+	}
+	return s.deps.Sites(ctx, p.Type, p.Site)
 }
