@@ -696,3 +696,47 @@ func TestRunToolbeltDirComesFirst(t *testing.T) {
 		t.Fatalf("PATH %q does not start with the run's toolbelt directory", got)
 	}
 }
+
+// siteContainer runs a launch on the host, with its wrapper in dir: the
+// workspace is at the container's site, not on the host.
+type siteContainer struct {
+	dir      string
+	launches []extension.SandboxLaunch
+}
+
+func (b *siteContainer) Launch(_ context.Context, _ extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	b.launches = append(b.launches, l)
+	return extension.SandboxPlan{Argv: l.Argv, Env: l.Env, Digest: "digest", Signals: extension.SandboxTerm, Dir: b.dir}, nil
+}
+func (b *siteContainer) Adopt(context.Context, bool) (extension.ContainerExit, error) {
+	return extension.ContainerExit{}, nil
+}
+
+type siteResource struct{ dir string }
+
+func (s siteResource) Acquire(context.Context, extension.ResourceRequest) (extension.Resource, error) {
+	return extension.Resource{Kind: "workspace", Ref: "lease", Dir: s.dir, Site: "ssh/runner"}, nil
+}
+func (s siteResource) Lookup(ctx context.Context, _ string) (extension.Resource, error) {
+	return s.Acquire(ctx, extension.ResourceRequest{})
+}
+
+// TestContainerWorkspaceAtSite: with the workspace at the container's
+// site, the launch names it as the provider gave it, and the wrapper runs
+// where the plan says, since the workspace has no host directory.
+func TestContainerWorkspaceAtSite(t *testing.T) {
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	e := newExecutor(t, stateDir(t), art, "PATH=/usr/bin:/bin")
+	remote := filepath.Join(t.TempDir(), "at-site", "ws")
+	wrapperDir, _ := filepath.EvalSymlinks(t.TempDir())
+	container := &siteContainer{dir: wrapperDir}
+	r, _ := request("exec-site", 1, `{"command":"pwd > \"$OS_OUTPUT_DIR/pwd.txt\""}`)
+	r.Context.Container, r.Context.Resources = container, siteResource{dir: remote}
+	res := run(t, e, r)
+	if got := strings.TrimSpace(art.content(data(t, res).Outputs["pwd.txt"])); got != wrapperDir {
+		t.Fatalf("ran in %q, want the plan's %q", got, wrapperDir)
+	}
+	if len(container.launches) != 1 || container.launches[0].Dir != remote {
+		t.Fatalf("launches %+v, want one in the site's workspace", container.launches)
+	}
+}

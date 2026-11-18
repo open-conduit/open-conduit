@@ -245,6 +245,8 @@ type ProviderAcquireParams struct {
 	Params Payload       `json:"params"`
 	// HostEnv is extension.ResourceAcquisition.HostEnv.
 	HostEnv map[string]string `json:"host_env,omitempty"`
+	// Files is extension.ResourceRequest.Files.
+	Files []string `json:"files,omitempty"`
 }
 type ProviderLookupParams struct {
 	Type  string        `json:"type"`
@@ -905,13 +907,16 @@ type SandboxPlan struct {
 	Signals string   `json:"signals,omitempty"`
 	Summary string   `json:"summary,omitempty"`
 	Data    Payload  `json:"data,omitempty"`
+	// Dir is extension.SandboxPlan.Dir: where the wrapper runs, when not
+	// the launch's directory.
+	Dir string `json:"dir,omitempty"`
 }
 
 func FromSandboxPlan(p extension.SandboxPlan) SandboxPlan {
-	return SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: FromPayload(p.Data)}
+	return SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: FromPayload(p.Data), Dir: p.Dir}
 }
 func (p SandboxPlan) Extension() extension.SandboxPlan {
-	return extension.SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: p.Data.Domain()}
+	return extension.SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: p.Data.Domain(), Dir: p.Dir}
 }
 
 // SandboxPaths are one attempt's host-set paths (extension.SandboxPaths).
@@ -921,13 +926,16 @@ type SandboxPaths struct {
 	Toolbelt  string `json:"toolbelt,omitempty"`
 	Records   string `json:"records,omitempty"`
 	Home      string `json:"home,omitempty"`
+	// Site is set when the workspace is at the launch's site, not on the
+	// host (extension.SandboxPaths.Site).
+	Site string `json:"site,omitempty"`
 }
 
 func FromSandboxPaths(p extension.SandboxPaths) SandboxPaths {
-	return SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home}
+	return SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home, Site: p.Site}
 }
 func (p SandboxPaths) Extension() extension.SandboxPaths {
-	return extension.SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home}
+	return extension.SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home, Site: p.Site}
 }
 
 // SandboxProviderPlanParams asks a sandbox provider to wrap one launch

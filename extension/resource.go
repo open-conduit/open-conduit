@@ -57,11 +57,27 @@ type ResourceOwner struct {
 // anything, a resource that shares writable state outside its directory or
 // runs code from it outside the sandbox (ErrUnsupported), and describes what
 // a sandbox needs to use the one it hands out (Resource.Sandbox).
+//
+// Files are paths relative to the resource's directory an executor wants
+// read at acquisition (a project's playbook additions, say). A provider
+// that makes the resource at a site (Resource.Site) returns their contents
+// in Resource.Files, since the executor can't read them on the host; one
+// on the host's disk may leave them for the executor to read itself.
+//
+// Site, like Sandboxed, is set only by the host (a container binding's
+// broker overwrites whatever an executor gave): it is where the attempt's
+// launch will run, when its container provider places launches off the
+// host (ContainerPlacer), and nil for the host. A provider that can make
+// the resource there does, and says so in Resource.Site; one that can't
+// ignores it and makes the resource on the host as before. Commands run
+// through it reach the execution's toolbelt.
 type ResourceRequest struct {
 	Mode      string
 	Params    domain.Payload
 	Log       io.Writer
 	Sandboxed bool
+	Files     []string
+	Site      Site
 }
 
 // Resource is an acquired, provider-defined resource. Ref is the opaque lease
@@ -74,6 +90,11 @@ type ResourceRequest struct {
 // sandbox must allow and deny for the resource to be used in it (its
 // directory writable, its own control files read-only); nil means it can't
 // be used in one.
+//
+// Site, when set, is the ID of the site the resource was made at
+// (ResourceRequest.Site): Dir is a path there, not on the host, and
+// only a launch placed at that site may use it. Files holds the contents
+// of the request's Files that exist there, by the requested path.
 type Resource struct {
 	Kind    string
 	Ref     string
@@ -82,6 +103,8 @@ type Resource struct {
 	Data    domain.Payload
 	Summary string
 	Sandbox *SandboxNeeds
+	Site    string
+	Files   map[string]string
 }
 
 // ResourceAcquisition is the trusted request a provider receives: the bound

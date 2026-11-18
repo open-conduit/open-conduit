@@ -60,6 +60,15 @@ type ContainerBinding struct {
 	// Phase, when set, records a step of the launch (the container's plan
 	// and its creation) for the attempt's history, as SandboxBinding's does.
 	Phase func(name string) func(error)
+	// Name is the binding's container provider's name, for the IDs of the
+	// sites it places at (SiteID).
+	Name string
+	// Prefer is the placement the Work last ran at, "" for none: passed to
+	// a ContainerPlacer's Place, so a Work goes back to its workspace.
+	Prefer string
+	// Placed, when set, is told each placement Place gives, before
+	// anything is acquired there, so the host can prefer it next time.
+	Placed func(Placement)
 }
 
 // BoundContainer is a ContainerBroker bound to one attempt. Its Resources
@@ -69,6 +78,7 @@ type BoundContainer struct {
 	mu       sync.Mutex
 	resource *Resource
 	launched *ContainerPin
+	placed   *Placement
 }
 
 // BindContainer binds a container provider to one attempt. Hosts call it;
@@ -81,16 +91,117 @@ func BindContainer(b ContainerBinding) *BoundContainer {
 }
 
 // Resources wraps the attempt's resource broker: every acquisition is
-// marked Sandboxed, and the resource acquired is kept for the launch.
+// marked Sandboxed, and the resource acquired is kept for the launch. When
+// the provider places launches (ContainerPlacer), the execution is placed
+// first and every acquisition is given the placement as its Site, so the
+// resource provider can make the workspace where the launch will run.
 func (c *BoundContainer) Resources(r ResourceBroker) ResourceBroker {
 	if r == nil {
 		return nil
 	}
-	return sandboxedResources{r, func(res *Resource) {
+	return placedResources{c: c, r: sandboxedResources{r, func(res *Resource) {
 		c.mu.Lock()
 		c.resource = res
 		c.mu.Unlock()
-	}}
+	}}}
+}
+
+// placedResources places the execution before the resource broker it
+// wraps is called.
+type placedResources struct {
+	c *BoundContainer
+	r ResourceBroker
+}
+
+func (p placedResources) Acquire(ctx context.Context, req ResourceRequest) (Resource, error) {
+	req.Site = nil
+	site, err := p.c.site(ctx, p.c.b.Prefer)
+	if err != nil {
+		return Resource{}, err
+	}
+	if site != nil {
+		req.Site = site
+	}
+	res, err := p.r.Acquire(ctx, req)
+	if err == nil {
+		err = p.c.sameSite(res)
+	}
+	return res, err
+}
+
+// Lookup finds the lease, then places the execution where its resource
+// is: a resource at a site the provider no longer places at can't be
+// used, and the executor acquires again.
+func (p placedResources) Lookup(ctx context.Context, ref string) (Resource, error) {
+	res, err := p.r.Lookup(ctx, ref)
+	if err != nil {
+		return res, err
+	}
+	prefer := p.c.b.Prefer
+	if _, placement, ok := SplitSiteID(res.Site); ok {
+		prefer = placement
+	}
+	if _, err := p.c.site(ctx, prefer); err != nil {
+		return Resource{}, err
+	}
+	return res, p.c.sameSite(res)
+}
+
+// sameSite refuses a resource made at another site than the execution is
+// placed at, or at a site when it is placed at none.
+func (c *BoundContainer) sameSite(res Resource) error {
+	if res.Site == "" {
+		return nil
+	}
+	c.mu.Lock()
+	at := c.placed
+	c.mu.Unlock()
+	if at == nil || SiteID(c.b.Name, at.ID) != res.Site {
+		return fmt.Errorf("%w: the workspace is at %s, where this launch isn't placed", ErrSandboxUnavailable, res.Site)
+	}
+	return nil
+}
+
+// site places the execution once, preferring prefer, and returns the
+// placement as a Site; nil when the provider doesn't place.
+func (c *BoundContainer) site(ctx context.Context, prefer string) (Site, error) {
+	placer, ok := c.b.Provider.(ContainerPlacer)
+	if !ok || c.b.Provider == nil {
+		return nil, nil
+	}
+	at, err := c.place(ctx, placer, prefer)
+	if err != nil {
+		return nil, err
+	}
+	return PlacedSite{Provider: c.b.Name, Placer: placer, At: at, Toolbelt: c.b.Toolbelt}, nil
+}
+
+func (c *BoundContainer) place(ctx context.Context, placer ContainerPlacer, prefer string) (Placement, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.placed != nil {
+		return *c.placed, nil
+	}
+	if c.b.Name == "" {
+		return Placement{}, fmt.Errorf("%w: the container binding has no provider name", ErrSandboxUnavailable)
+	}
+	end := phase(c.b.Phase, "container place")
+	at, err := placer.Place(ctx, c.b.Owner, ContainerPolicy{Config: c.b.Config}, prefer)
+	if err == nil && (at.ID == "" || at.Daemon == "" || strings.Contains(at.ID, "/")) {
+		err = fmt.Errorf("%w: the provider returned an incomplete placement", ErrSandboxUnavailable)
+	}
+	end(err)
+	if err != nil {
+		if errors.Is(err, ErrSandboxUnavailable) || errors.Is(err, ErrSandboxDenied) {
+			return Placement{}, err
+		}
+		return Placement{}, fmt.Errorf("%w: could not place the launch: %v", ErrSandboxUnavailable, err)
+	}
+	c.placed = &at
+	if c.b.Placed != nil {
+		c.b.Placed(at)
+	}
+	return at, nil
 }
 
 // ContainerDigest pins a container plan: its image and effective policy.
@@ -115,11 +226,27 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	if err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
 	}
+	// A provider that places launches places this one before it plans,
+	// if acquiring a workspace didn't already.
+	var placement *Placement
+	if placer, ok := b.Provider.(ContainerPlacer); ok {
+		at, err := c.place(ctx, placer, b.Prefer)
+		if err != nil {
+			return SandboxPlan{}, err
+		}
+		placement = &at
+	}
 	c.mu.Lock()
 	res := c.resource
 	c.mu.Unlock()
+	atSite := res != nil && res.Site != ""
+	if atSite {
+		if err := c.sameSite(*res); err != nil {
+			return SandboxPlan{}, err
+		}
+	}
 	g, err := GuardLaunch(LaunchGuard{Protected: b.Protected, Shared: b.Shared, RunRoot: b.RunRoot, Toolbelt: b.Toolbelt, Records: b.Records,
-		MaxScan: b.MaxScan, Dir: l.Dir, RunDir: l.RunDir, Home: b.WorkHome, Resource: res, Needs: needs})
+		MaxScan: b.MaxScan, Dir: l.Dir, RunDir: l.RunDir, Home: b.WorkHome, Resource: res, Needs: needs, AtSite: atSite})
 	if err != nil {
 		return SandboxPlan{}, err
 	}
@@ -147,29 +274,44 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	}
 	merged := needs.Merge(g.Resource)
 	// A read-only need is held by a mount over it, which a symlink would
-	// redirect: the link itself stays writable.
+	// redirect: the link itself stays writable. One in a workspace at the
+	// site is the site's to hold.
 	for _, r := range merged.ReadOnly {
+		if atSite && Within(r, []string{g.Workspace}) {
+			continue
+		}
 		if fi, err := os.Lstat(r); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			return SandboxPlan{}, fmt.Errorf("%w: %s must be held read-only but is a symlink", ErrSandboxUnavailable, r)
 		}
 	}
 	merged.Read = append(merged.Read, g.Shared...)
 	merged.Deny = append(merged.Deny, g.Protected...)
-	merged = canonicalNeeds(merged)
+	merged = canonicalNeedsAt(merged, siteRoot(atSite, g.Workspace))
 	if err := os.MkdirAll(b.Records, 0o700); err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
 	}
 	paths := SandboxPaths{Workspace: g.Workspace, Run: g.Run, Toolbelt: b.Toolbelt, Records: b.Records, Home: g.Home}
+	if atSite {
+		paths.Site = res.Site
+	}
 	// The container mounts canonical paths, so the launch names them too:
-	// a path through a symbolic link (macOS's /tmp) isn't there inside.
-	roots := append([]string{l.Dir, l.RunDir, b.WorkHome, b.Toolbelt}, b.Shared...)
+	// a path through a symbolic link (macOS's /tmp) isn't there inside. A
+	// workspace at the site is named as its provider wrote it.
+	roots := append([]string{l.RunDir, b.WorkHome, b.Toolbelt}, b.Shared...)
+	if !atSite {
+		roots = append(roots, l.Dir)
+	}
 	for _, list := range [][]string{needs.Read, needs.Write, needs.ReadOnly} {
 		roots = append(roots, list...)
 	}
 	l = canonicalLaunch(l, roots)
 	l.Dir, l.RunDir = g.Workspace, g.Run
 	end := phase(b.Phase, "container plan")
-	plan, err := b.Provider.Plan(ctx, b.Owner, ContainerPolicy{Config: b.Config, Paths: paths}, merged, l)
+	policy := ContainerPolicy{Config: b.Config, Paths: paths}
+	if placement != nil {
+		policy.Placement = placement.ID
+	}
+	plan, err := b.Provider.Plan(ctx, b.Owner, policy, merged, l)
 	end(err)
 	if err != nil {
 		return SandboxPlan{}, err
@@ -198,6 +340,12 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		_ = b.Provider.Remove(ctx, created.Ref)
 		return SandboxPlan{}, fmt.Errorf("%w: the provider returned an incomplete container", ErrSandboxUnavailable)
 	}
+	// The container must be where the execution was placed, which is
+	// where its workspace was made.
+	if placement != nil && created.Daemon != placement.Daemon {
+		_ = b.Provider.Remove(ctx, created.Ref)
+		return SandboxPlan{}, fmt.Errorf("%w: the container was created on %s, not at its placement %s", ErrSandboxUnavailable, created.Daemon, placement.Daemon)
+	}
 	pin := ContainerPin{Digest: plan.Digest, Summary: plan.Summary, Image: plan.Image, Daemon: created.Daemon, ID: created.Ref.ID, Run: g.Run, At: b.Now()}
 	// A marker left by an earlier container would read as this one's.
 	_ = os.Remove(filepath.Join(g.Run, ContainerTermMarker))
@@ -208,7 +356,22 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	c.mu.Lock()
 	c.launched = &pin
 	c.mu.Unlock()
-	return SandboxPlan{Argv: created.Argv, Env: created.Env, Digest: plan.Digest, Signals: SandboxTerm, Summary: plan.Summary, Data: plan.Data}, nil
+	out := SandboxPlan{Argv: created.Argv, Env: created.Env, Digest: plan.Digest, Signals: SandboxTerm, Summary: plan.Summary, Data: plan.Data}
+	// The workspace isn't on the host, so the wrapper runs in the run
+	// directory, which is.
+	if atSite {
+		out.Dir = g.Run
+	}
+	return out, nil
+}
+
+// siteRoot is the workspace at a site, whose paths canonicalNeeds leaves
+// as written; "" when the workspace is on the host.
+func siteRoot(atSite bool, workspace string) string {
+	if atSite {
+		return workspace
+	}
+	return ""
 }
 
 // canonicalLaunch rewrites each argv element and environment value that is

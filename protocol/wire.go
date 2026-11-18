@@ -865,10 +865,13 @@ type Resource struct {
 	// Sandbox is what a sandbox must allow to use the resource; absent, it
 	// can't be used in one (extension.Resource.Sandbox).
 	Sandbox *SandboxNeeds `json:"sandbox,omitempty"`
+	// Site and Files are extension.Resource.Site and Files.
+	Site  string            `json:"site,omitempty"`
+	Files map[string]string `json:"files,omitempty"`
 }
 
 func FromResource(r extension.Resource) Resource {
-	out := Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: FromPayload(r.Data), Summary: r.Summary}
+	out := Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: FromPayload(r.Data), Summary: r.Summary, Site: r.Site, Files: r.Files}
 	if r.Sandbox != nil {
 		n := FromSandboxNeeds(*r.Sandbox)
 		out.Sandbox = &n
@@ -876,7 +879,7 @@ func FromResource(r extension.Resource) Resource {
 	return out
 }
 func (r Resource) Extension() extension.Resource {
-	out := extension.Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: r.Data.Domain(), Summary: r.Summary}
+	out := extension.Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: r.Data.Domain(), Summary: r.Summary, Site: r.Site, Files: r.Files}
 	if r.Sandbox != nil {
 		n := r.Sandbox.Extension()
 		out.Sandbox = &n

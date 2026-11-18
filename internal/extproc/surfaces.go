@@ -605,7 +605,7 @@ func sandboxErr(err error) error {
 
 func (p *remoteProvider) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
 	var out protocol.ResourceResult
-	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params), HostEnv: a.HostEnv}, &out)
+	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params), HostEnv: a.HostEnv, Files: a.Request.Files}, &out)
 	if a.Request.Log != nil && out.Log != "" {
 		_, _ = io.WriteString(a.Request.Log, out.Log)
 	}

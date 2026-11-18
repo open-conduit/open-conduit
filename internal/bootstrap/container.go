@@ -164,6 +164,11 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Pinned: pinned,
 		Now:    d.now,
 		Phase:  runtime.LaunchPhases(ctx),
+		// A provider that places launches goes back to where the Work
+		// last ran, so its workspace there is reused.
+		Name:   desc.Provider,
+		Prefer: workPlacement(workHome, desc.Provider),
+		Placed: func(at extension.Placement) { placeWork(workHome, desc.Provider, at) },
 	})
 	// The segment's end is the end of what extensions issued for it.
 	settle := func(r extension.Result) extension.Result {
@@ -197,6 +202,29 @@ func (d *daemon) workHome(work domain.ID) (string, error) {
 		return "", fmt.Errorf("%s is not a directory", dir)
 	}
 	return dir, nil
+}
+
+// workPlacement is the placement the Work last ran at under provider,
+// kept in <key>.site beside its home (never mounted), "" for none.
+func workPlacement(home, provider string) string {
+	raw, err := os.ReadFile(home + ".site")
+	if err != nil {
+		return ""
+	}
+	p, at, ok := extension.SplitSiteID(strings.TrimSpace(string(raw)))
+	if !ok || p != provider {
+		return ""
+	}
+	return at
+}
+
+// placeWork records where the Work was placed, for its next launch. A
+// failure to record only loses the preference.
+func placeWork(home, provider string, at extension.Placement) {
+	tmp := home + ".site.tmp"
+	if os.WriteFile(tmp, []byte(extension.SiteID(provider, at.ID)+"\n"), 0o600) == nil {
+		_ = os.Rename(tmp, home+".site")
+	}
 }
 
 // sweepHomes removes the container home of each Work that is finished or
@@ -234,7 +262,7 @@ func (d *daemon) sweepHomes(ctx context.Context) error {
 	var errs []error
 	for name, id := range works {
 		if done[id] {
-			errs = append(errs, os.RemoveAll(strings.TrimSuffix(name, ".work")), os.Remove(name))
+			errs = append(errs, os.RemoveAll(strings.TrimSuffix(name, ".work")), os.Remove(name), ignoreMissing(os.Remove(strings.TrimSuffix(name, ".work")+".site")))
 		}
 	}
 	return errors.Join(errs...)
@@ -425,11 +453,14 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 	home, _ := os.UserHomeDir()
 	var pinned extension.ContainerPin
 	b := extension.BindContainer(extension.ContainerBinding{
-		Provider:  p,
-		Owner:     extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: execution},
-		Config:    domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
-		Host:      d.containerHost(),
-		Attach:    true,
+		Provider: p,
+		Owner:    extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: execution},
+		Config:   domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
+		Host:     d.containerHost(),
+		Attach:   true,
+		// An attach goes where the Work last ran, and never moves it.
+		Name:      desc.Provider,
+		Prefer:    workPlacement(workHome, desc.Provider),
 		Protected: d.protectedPaths(),
 		Shared:    []string{d.pluginDir()},
 		RunRoot:   filepath.Join(d.o.StateDir, "executors", executor, "runs"),
@@ -499,4 +530,12 @@ func forwardAddress(host string) error {
 		return fmt.Errorf("the provider named %q, not a loopback or private IP address", host)
 	}
 	return nil
+}
+
+// ignoreMissing is err, unless it says the file wasn't there.
+func ignoreMissing(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }

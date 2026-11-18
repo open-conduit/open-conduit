@@ -2,7 +2,9 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -135,6 +137,74 @@ func listed(ctx context.Context, p extension.ContainerProvider, owner extension.
 	}
 	if got != want {
 		return fmt.Errorf("the listing for execution %q has the container: %v, want %v", owner.ExecutionID, got, want)
+	}
+	return nil
+}
+
+// PlacerFixture is a container provider that places launches
+// (extension.ContainerPlacer) to check, with a launch it can plan at a
+// placement and a directory that exists at every site it places at. Its
+// sites must have a POSIX sh.
+type PlacerFixture struct {
+	Provider interface {
+		extension.ContainerProvider
+		extension.ContainerPlacer
+	}
+	Policy extension.ContainerPolicy
+	Needs  extension.SandboxNeeds
+	Launch extension.SandboxLaunch
+	Dir    string
+}
+
+// CheckContainerPlacer checks the placement contract the host relies on to
+// make a workspace where a launch runs: a placement has an ID (without a
+// slash, which SiteID uses) and a daemon; placing again preferring it
+// gives it back; a command runs there in its directory, with its
+// environment and stdin, and one that fails is its exit code, not an
+// error; a placement the provider can't name is ErrSiteUnavailable; and a
+// container planned at the placement is created on its daemon.
+func CheckContainerPlacer(f PlacerFixture) error {
+	ctx := context.Background()
+	p := f.Provider
+	owner := extension.ResourceOwner{ScopeID: "conformance-scope", WorkID: "conformance-work", ExecutionID: "conformance-placed"}
+	at, err := p.Place(ctx, owner, extension.ContainerPolicy{Config: f.Policy.Config}, "")
+	if err != nil {
+		return fmt.Errorf("place: %v", err)
+	}
+	if at.ID == "" || at.Daemon == "" || strings.Contains(at.ID, "/") {
+		return fmt.Errorf("place: incomplete placement %+v", at)
+	}
+	again, err := p.Place(ctx, owner, extension.ContainerPolicy{Config: f.Policy.Config}, at.ID)
+	if err != nil {
+		return fmt.Errorf("place again: %v", err)
+	}
+	if again.ID != at.ID || again.Daemon != at.Daemon {
+		return fmt.Errorf("placing again preferring %q gave %+v", at.ID, again)
+	}
+	res, err := p.SiteRun(ctx, at.ID, extension.SiteCommand{Argv: []string{"/bin/sh", "-c", `printf '%s|%s|' "$(pwd)" "$CONFORMANCE"; cat; exit 3`}, Dir: f.Dir, Env: []string{"CONFORMANCE=site"}, Stdin: []byte("in")})
+	if err != nil {
+		return fmt.Errorf("site run: a command that ran and failed is an error: %v", err)
+	}
+	if want := f.Dir + "|site|in"; res.ExitCode != 3 || string(res.Stdout) != want {
+		return fmt.Errorf("site run: exit %d, output %q; want 3 and %q", res.ExitCode, res.Stdout, want)
+	}
+	if _, err := p.SiteRun(ctx, at.ID+"-unknown", extension.SiteCommand{Argv: []string{"/bin/sh", "-c", "true"}}); !errors.Is(err, extension.ErrSiteUnavailable) {
+		return fmt.Errorf("site run at a placement the provider never gave: %v, want ErrSiteUnavailable", err)
+	}
+	policy := f.Policy
+	policy.Placement = at.ID
+	plan, err := p.Plan(ctx, owner, policy, f.Needs, f.Launch)
+	if err != nil {
+		return fmt.Errorf("plan at the placement: %v", err)
+	}
+	plan.Digest = extension.ContainerDigest(plan.Image, plan.Data)
+	created, err := p.Create(ctx, plan, map[string]string{extension.ContainerLabelExecution: string(owner.ExecutionID), extension.ContainerLabelSegment: "1", extension.ContainerLabelDigest: plan.Digest})
+	if err != nil {
+		return fmt.Errorf("create at the placement: %v", err)
+	}
+	defer func() { _ = p.Remove(ctx, created.Ref) }()
+	if created.Daemon != at.Daemon {
+		return fmt.Errorf("created on %q, not at the placement's %q", created.Daemon, at.Daemon)
 	}
 	return nil
 }

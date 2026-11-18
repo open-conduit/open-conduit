@@ -1,9 +1,12 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -123,6 +126,123 @@ func TestCheckContainerProvider(t *testing.T) {
 		m := &memContainers{containers: map[string]extension.ContainerState{}}
 		if err := CheckContainerProvider(fixture(broken(m), m)); err == nil {
 			t.Errorf("%s: the suite passed a provider that breaks the contract", name)
+		}
+	}
+}
+
+// memPlacer places launches on nodes and runs site commands on this
+// machine, keeping the placement contract; a base for its controls.
+type memPlacer struct {
+	*memContainers
+	placed    map[string]bool
+	plannedAt string
+}
+
+func newMemPlacer() *memPlacer {
+	return &memPlacer{memContainers: &memContainers{containers: map[string]extension.ContainerState{}}, placed: map[string]bool{}}
+}
+
+func (m *memPlacer) Place(_ context.Context, _ extension.ResourceOwner, _ extension.ContainerPolicy, prefer string) (extension.Placement, error) {
+	id := prefer
+	if !m.placed[id] {
+		id = "node-" + string(rune('a'+len(m.placed)))
+	}
+	m.placed[id] = true
+	return extension.Placement{ID: id, Daemon: "mem-" + id}, nil
+}
+
+func (m *memPlacer) SiteRun(ctx context.Context, placement string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	if !m.placed[placement] {
+		return extension.SiteResult{}, extension.ErrSiteUnavailable
+	}
+	c := exec.CommandContext(ctx, cmd.Argv[0], cmd.Argv[1:]...)
+	c.Dir, c.Env, c.Stdin = cmd.Dir, cmd.Env, bytes.NewReader(cmd.Stdin)
+	var out, errb bytes.Buffer
+	c.Stdout, c.Stderr = &out, &errb
+	err := c.Run()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		return extension.SiteResult{}, err
+	}
+	return extension.SiteResult{ExitCode: c.ProcessState.ExitCode(), Stdout: out.Bytes(), Stderr: errb.Bytes()}, nil
+}
+
+func (m *memPlacer) Plan(ctx context.Context, o extension.ResourceOwner, p extension.ContainerPolicy, n extension.SandboxNeeds, l extension.SandboxLaunch) (extension.ContainerPlan, error) {
+	m.plannedAt = p.Placement
+	return m.memContainers.Plan(ctx, o, p, n, l)
+}
+
+func (m *memPlacer) Create(ctx context.Context, p extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
+	c, err := m.memContainers.Create(ctx, p, labels)
+	c.Daemon = "mem-" + m.plannedAt
+	return c, err
+}
+
+type placer interface {
+	extension.ContainerProvider
+	extension.ContainerPlacer
+}
+
+// failureIsError reports a command that ran and failed as an error.
+type failureIsError struct{ *memPlacer }
+
+func (f failureIsError) SiteRun(ctx context.Context, at string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	r, err := f.memPlacer.SiteRun(ctx, at, cmd)
+	if err == nil && r.ExitCode != 0 {
+		return r, errors.New("command failed")
+	}
+	return r, err
+}
+
+// ignoresPrefer places each launch on a new node.
+type ignoresPrefer struct{ *memPlacer }
+
+func (i ignoresPrefer) Place(ctx context.Context, o extension.ResourceOwner, p extension.ContainerPolicy, _ string) (extension.Placement, error) {
+	return i.memPlacer.Place(ctx, o, p, "")
+}
+
+// createsElsewhere creates every container on one daemon, wherever placed.
+type createsElsewhere struct{ *memPlacer }
+
+func (c createsElsewhere) Create(ctx context.Context, p extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
+	out, err := c.memPlacer.Create(ctx, p, labels)
+	out.Daemon = "mem"
+	return out, err
+}
+
+// runsAnywhere runs a command at a placement it never gave.
+type runsAnywhere struct{ *memPlacer }
+
+func (r runsAnywhere) SiteRun(ctx context.Context, _ string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	for at := range r.placed {
+		return r.memPlacer.SiteRun(ctx, at, cmd)
+	}
+	return extension.SiteResult{}, extension.ErrSiteUnavailable
+}
+
+// ignoresDir runs every command in the site's home.
+type ignoresDir struct{ *memPlacer }
+
+func (i ignoresDir) SiteRun(ctx context.Context, at string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	cmd.Dir = ""
+	return i.memPlacer.SiteRun(ctx, at, cmd)
+}
+
+func TestCheckContainerPlacer(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	fixture := func(p placer) PlacerFixture { return PlacerFixture{Provider: p, Dir: dir} }
+	if err := CheckContainerPlacer(fixture(newMemPlacer())); err != nil {
+		t.Fatalf("a placer that keeps the contract fails: %v", err)
+	}
+	for name, broken := range map[string]func(*memPlacer) placer{
+		"a failed command is an error":       func(m *memPlacer) placer { return failureIsError{m} },
+		"prefer is ignored":                  func(m *memPlacer) placer { return ignoresPrefer{m} },
+		"created elsewhere than placed":      func(m *memPlacer) placer { return createsElsewhere{m} },
+		"runs at a placement it never gave":  func(m *memPlacer) placer { return runsAnywhere{m} },
+		"the command's directory is ignored": func(m *memPlacer) placer { return ignoresDir{m} },
+	} {
+		if err := CheckContainerPlacer(fixture(broken(newMemPlacer()))); err == nil {
+			t.Errorf("%s: the suite passed a placer that breaks the contract", name)
 		}
 	}
 }
