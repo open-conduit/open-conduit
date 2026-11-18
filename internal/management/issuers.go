@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -157,19 +158,74 @@ func (s *Server) verifyIssued(ctx context.Context, token string) (principal, err
 	for _, r := range issuers {
 		ver, ok := s.o.Verifiers(r.Type)
 		if !ok || ver.Verifier == nil {
+			s.observeCredential(ctx, r, digest, "", "no_verifier", "no running package provides the "+r.Type+" verifier", token)
 			continue
 		}
 		vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 		got, err := ver.Verifier.Verify(vctx, extension.CredentialCheck{Issuer: r.ID, Config: domain.Payload{Schema: extension.IssuerConfigSchema, Data: r.Config}, Token: token})
+		timedOut := vctx.Err() != nil && ctx.Err() == nil
 		cancel()
-		if err != nil || !validSubject(got.Subject) || got.ExpiresAt.IsZero() || !now.Before(got.ExpiresAt) {
+		var code, detail string
+		switch {
+		case timedOut:
+			code, detail = "timeout", "the verifier didn't answer within "+verifyTimeout.String()
+		case errors.Is(err, extension.ErrUnauthorized):
+			code, detail = "refused", err.Error()
+		case err != nil:
+			code, detail = "verifier_failed", err.Error()
+		case !validSubject(got.Subject):
+			code, detail = "invalid_subject", "the verifier named no subject of 1 to 256 printable characters without spaces"
+		case got.ExpiresAt.IsZero():
+			code, detail = "no_expiry", "the verifier gave no expiry"
+		case !now.Before(got.ExpiresAt):
+			code, detail = "expired", "the credential expired at "+ts(got.ExpiresAt)
+		}
+		if code != "" {
+			s.observeCredential(ctx, r, digest, "", code, detail, token)
 			continue
 		}
 		v := verified{issuer: r.ID, updatedAt: r.UpdatedAt, subject: got.Subject, groups: append([]string(nil), got.Groups...), expiresAt: got.ExpiresAt}
 		s.verified.put(digest, v, now)
-		return issuedPrincipal(r, v, token), nil
+		p := issuedPrincipal(r, v, token)
+		s.observeCredential(ctx, r, digest, p.actor(), "", "", token)
+		return p, nil
 	}
 	return principal{}, unverified
+}
+
+// maxCredentialDetail bounds the reason a credential record carries.
+const maxCredentialDetail = 300
+
+// observeCredential records one verification by a trusted issuer: who it
+// named (auth.credential_verified, with operator.actor and its expiry) or
+// why it refused (auth.credential_refused, with a code and the verifier's
+// reason, the token itself redacted). It is recorded each time a verifier
+// is asked, not for a credential the cache already holds. The response
+// stays a bare 401.
+func (s *Server) observeCredential(ctx context.Context, r issuerRecord, credential, actor, code, detail, token string) {
+	if s.o.Observer == nil {
+		return
+	}
+	at := s.o.Now()
+	trace := digest("auth", r.ID, credential, at.UTC().Format(time.RFC3339Nano))
+	attrs := map[string]string{"auth.issuer": r.ID, "auth.type": r.Type, "auth.credential": credential[:16], "record_id": trace}
+	name := "auth.credential_verified"
+	if code == "" {
+		attrs["operator.actor"] = actor
+	} else {
+		name = "auth.credential_refused"
+		attrs["auth.code"] = code
+		detail = strings.ReplaceAll(detail, token, "[REDACTED]")
+		if len(detail) > maxCredentialDetail {
+			detail = detail[:maxCredentialDetail]
+		}
+		attrs["auth.reason"] = detail
+	}
+	rec := observability.Record{Name: name, At: at, Correlation: observability.Correlation{TraceID: trace}, Attributes: attrs}
+	if observability.Validate(rec) != nil {
+		return
+	}
+	_ = s.o.Observer.Observe(context.WithoutCancel(ctx), observability.Redact(rec, []string{token}))
 }
 
 func issuedPrincipal(r issuerRecord, v verified, token string) principal {

@@ -47,10 +47,14 @@ type Exporter interface {
 // way, anchored by the action provider's name (provider.name). An operator
 // record ("operator." prefix) is a daemon-wide administrative call (a secret
 // stored, say): no Event or scope precedes it, so it is anchored by the
-// operator who made it (operator.actor) and needs no scope.
+// operator who made it (operator.actor) and needs no scope. A credential
+// record ("auth." prefix) is the host checking a bearer credential with a
+// trusted issuer: it precedes any operator, so it is anchored by the
+// issuer (auth.issuer) and needs no scope either.
 func Validate(r Record) error {
 	c := r.Correlation
-	operator := strings.HasPrefix(r.Name, "operator.") && r.Attributes["operator.actor"] != ""
+	operator := strings.HasPrefix(r.Name, "operator.") && r.Attributes["operator.actor"] != "" ||
+		strings.HasPrefix(r.Name, "auth.") && r.Attributes["auth.issuer"] != ""
 	anchored := c.EventID != "" || strings.HasPrefix(r.Name, "ingress.") && r.Attributes["ingress.source"] != "" ||
 		strings.HasPrefix(r.Name, "provider.") && r.Attributes["provider.name"] != "" || operator
 	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" && !operator || !anchored || c.TraceID == "" {

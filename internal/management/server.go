@@ -264,6 +264,21 @@ func (p principal) caller() extension.Caller {
 	return extension.Caller{Kind: extension.CallerOperator, ID: p.name}
 }
 
+// keyPrefix namespaces the operator's Idempotency-Keys, which handlers
+// turn into durable delivery identities. A named operator's is its actor,
+// whose name holds no "/". An issuer's operator's subject may hold any
+// printable character and be 256 long, so its prefix carries the
+// subject's digest instead: fixed-length hex, so no subject and key can
+// make another's prefixed key, and the prefixed key stays within a
+// delivery ID's 256 characters.
+func (p principal) keyPrefix() string {
+	if p.issuer == "" {
+		return p.actor()
+	}
+	sum := sha256.Sum256([]byte(strings.TrimPrefix(p.name, p.issuer+":")))
+	return extension.CallerOperator + ":" + p.issuer + ":" + hex.EncodeToString(sum[:])
+}
+
 // local is the owner's own credential, which keeps the request keys and
 // idempotency slots it always had.
 func (p principal) local() bool { return p.name == LocalOperatorName }
@@ -662,7 +677,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		// A named operator's keys are their own: the same key from two
 		// operators is two requests, never one replayed to the other.
 		if c.key != "" && who.operator && !who.local() {
-			c.key = who.actor() + "/" + c.key
+			c.key = who.keyPrefix() + "/" + c.key
 		}
 		if matched.idem {
 			if c.key == "" {

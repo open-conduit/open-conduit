@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -439,17 +440,17 @@ func parseJWKS(raw json.RawMessage) ([]jwk, error) {
 			}
 			key = &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}
 		case "EC":
-			curve := map[string]elliptic.Curve{"P-256": elliptic.P256(), "P-384": elliptic.P384(), "P-521": elliptic.P521()}[k.Crv]
+			c, ok := ecCurves[k.Crv]
 			x, err1 := b64(k.X)
 			y, err2 := b64(k.Y)
-			if curve == nil || err1 != nil || err2 != nil {
+			if !ok || err1 != nil || err2 != nil || len(x) != c.size || len(y) != c.size {
 				continue
 			}
-			pub := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-			if !curve.IsOnCurve(pub.X, pub.Y) {
+			// crypto/ecdh refuses a point that is not on the curve.
+			if _, err := c.ecdh.NewPublicKey(append(append([]byte{4}, x...), y...)); err != nil {
 				continue
 			}
-			key = pub
+			key = &ecdsa.PublicKey{Curve: c.curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
 		case "OKP":
 			x, err := b64(k.X)
 			if k.Crv != "Ed25519" || err != nil || len(x) != ed25519.PublicKeySize {
@@ -465,6 +466,17 @@ func parseJWKS(raw json.RawMessage) ([]jwk, error) {
 		return nil, errors.New("no usable signing keys")
 	}
 	return out, nil
+}
+
+// ecCurves are the EC curves a key may be on, with their coordinate size.
+var ecCurves = map[string]struct {
+	curve elliptic.Curve
+	ecdh  ecdh.Curve
+	size  int
+}{
+	"P-256": {elliptic.P256(), ecdh.P256(), 32},
+	"P-384": {elliptic.P384(), ecdh.P384(), 48},
+	"P-521": {elliptic.P521(), ecdh.P521(), 66},
 }
 
 func b64(s string) ([]byte, error) {

@@ -221,6 +221,23 @@ func TestManagementTrustedIssuers(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Each time a verifier is asked, the outcome is recorded: who it
+	// named, or why it refused, never the token.
+	verifications := map[string]int{}
+	for _, r := range h.observed.named("auth.") {
+		for _, v := range r.Attributes {
+			if strings.Contains(v, "tok-") {
+				t.Fatalf("a token reached the trail: %+v", r)
+			}
+		}
+		verifications[r.Name+" "+r.Attributes["auth.issuer"]+" "+r.Attributes["auth.code"]+r.Attributes["operator.actor"]]++
+	}
+	for _, want := range []string{"auth.credential_verified corp operator:corp:alice@example.com", "auth.credential_refused corp refused", "auth.credential_refused corp verifier_failed"} {
+		if verifications[want] == 0 {
+			t.Errorf("no %q record: %v", want, verifications)
+		}
+	}
+
 	// Each change is in the operator trail, refused or not.
 	outcomes := map[string]int{}
 	for _, r := range h.observed.named("operator.issuer") {
@@ -230,5 +247,63 @@ func TestManagementTrustedIssuers(t *testing.T) {
 		if outcomes[want] == 0 {
 			t.Errorf("trail lacks %q: %v", want, outcomes)
 		}
+	}
+}
+
+// TestManagementIssuerSubjectsKeepTheirKeysApart: a subject may hold "/",
+// so an issuer's operator's keys are namespaced by a digest of the
+// subject. Before, operator:corp:x sending key y/k and operator:corp:x/y
+// sending key k made the same delivery, and the second person's control
+// came back as the first's. A long subject still fits a delivery ID.
+func TestManagementIssuerSubjectsKeepTheirKeysApart(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	idp := &fakeIDP{now: h.clock.Now}
+	h.verifiers = map[string]management.Verifier{"fake": {Verifier: idp}}
+	long := strings.Repeat("s", 256)
+	people := `{"people": {"tok-x": {"subject": "x", "groups": ["ops"]}, "tok-xy": {"subject": "x/y", "groups": ["ops"]}, "tok-long": {"subject": "` + long + `", "groups": ["ops"]}}}`
+	owner := h.operatorClient()
+	if _, err := owner.SetIssuer(ctx, "corp", "fake", json.RawMessage(people), map[string]string{"ops": "operate"}); err != nil {
+		t.Fatal(err)
+	}
+	as := func(token string) *client.Client {
+		c, err := client.New(h.endpoint, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	work := func(delivery string) client.Work {
+		sent, err := owner.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: delivery}, delivery)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := owner.Work(ctx, sent.RoutedWorkID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	w1, w2, w3 := work("w1"), work("w2"), work("w3")
+	first, err := as("tok-x").HoldWork(ctx, w1.ID, w1.Revision, "mine", "y/k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := as("tok-xy").HoldWork(ctx, w2.ID, w2.Revision, "mine", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.EventID == first.EventID {
+		t.Fatal("x/y's hold came back as x's")
+	}
+	e, err := owner.Event(ctx, second.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Actor != "operator:corp:x/y" || e.WorkID != w2.ID {
+		t.Fatalf("x/y's hold: by %q on %s, want on %s", e.Actor, e.WorkID, w2.ID)
+	}
+	if _, err = as("tok-long").HoldWork(ctx, w3.ID, w3.Revision, "mine", strings.Repeat("k", 128)); err != nil {
+		t.Fatalf("a 256-character subject with a 128-character key: %v", err)
 	}
 }
