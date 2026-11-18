@@ -164,12 +164,12 @@ func dirSize(t *testing.T, dir string) int64 {
 // no git of its own and so no way to touch the repository on the host,
 // the Work's home and the executor's runs.
 type siteHost struct {
-	t                                    *testing.T
-	state, home, runRoot, records, other string
-	git                                  *git.Provider
-	machines                             map[string]*siteMachine
-	pins                                 []extension.ContainerPin
-	resource                             domain.Payload
+	t                             *testing.T
+	state, home, runRoot, records string
+	git                           *git.Provider
+	machines                      map[string]*siteMachine
+	pins                          []extension.ContainerPin
+	resource                      domain.Payload
 }
 
 // segment binds one attempt's container on machine m, preferring prefer,
