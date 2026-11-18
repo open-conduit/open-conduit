@@ -63,6 +63,7 @@ var confinement = []struct {
 	{CodeSandboxUnavailable, extension.ErrSandboxUnavailable},
 	{CodeContainerRunning, extension.ErrContainerRunning},
 	{CodeContainerUnknown, extension.ErrContainerUnconfirmed},
+	{CodeSiteUnavailable, extension.ErrSiteUnavailable},
 }
 
 // Unwrap returns the public sentinel the code carries, if any.
@@ -187,7 +188,7 @@ func DecodeWith(code, message string, resetAt *time.Time, diagnostics []ConfigDi
 // Known reports whether code is one of the protocol's own codes.
 func Known(code string) bool {
 	switch code {
-	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeNotLive, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
+	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeNotLive, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeSiteUnavailable, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
 		return true
 	}
 	return false

@@ -106,7 +106,7 @@ func write(t *testing.T, path, data string, mode os.FileMode) {
 }
 
 func (f *fakeRemote) bind(pinned *extension.ContainerPin) *extension.BoundContainer {
-	return extension.BindContainer(extension.ContainerBinding{Provider: f.p, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
+	return extension.BindContainer(extension.ContainerBinding{Provider: f.p, Name: Type, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
 		Config: f.config, Host: "host-a", Segment: 1, Protected: []string{f.state}, Shared: []string{filepath.Dir(f.tb)}, RunRoot: f.runRoot,
 		Toolbelt: f.tb, Records: f.records, Pinned: pinned,
 		Pin: func(p extension.ContainerPin) error { f.pins = append(f.pins, p); return nil }})

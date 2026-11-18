@@ -146,6 +146,9 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if err != nil {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
+	if policy.Placement != "" && policy.Placement != s.Endpoint() {
+		return extension.ContainerPlan{}, fmt.Errorf("%w: placed at %s, but the binding runs on %s", extension.ErrSandboxUnavailable, policy.Placement, s.Endpoint())
+	}
 	paths := policy.Paths
 	if !filepath.IsAbs(paths.Records) || !filepath.IsAbs(paths.Run) || !filepath.IsAbs(l.Dir) || owner.ExecutionID == "" || len(l.Argv) == 0 {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: incomplete launch", extension.ErrSandboxUnavailable)
@@ -175,7 +178,13 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if err != nil {
 		return extension.ContainerPlan{}, err
 	}
-	if h := p.Health(ctx, s, extension.CanonicalPath(paths.Workspace), true); h.Status == "fail" {
+	// A workspace at the site is the resource provider's there, not a
+	// mirrored host path to check.
+	healthDir := extension.CanonicalPath(paths.Workspace)
+	if paths.Site != "" {
+		healthDir = ""
+	}
+	if h := p.Health(ctx, s, healthDir, true); h.Status == "fail" {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: remote %s: %s", extension.ErrSandboxUnavailable, s.Endpoint(), h.Detail)
 	}
 	d.Remote, d.Daemon, d.Workdir, d.Argv, d.Records = s, s.Daemon(), l.Dir, l.Argv, paths.Records
@@ -217,14 +226,24 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 // directory and the Work's home copied there and back; the read grant,
 // the executor's read needs and what the host shares only there. What the
 // host denies inside them is never copied, and a read-only need inside a
-// write grant never comes back.
+// write grant never comes back. A workspace already at the site
+// (SandboxPaths.Site) is neither copied there nor back: it isn't on the
+// host.
 func (p *Provider) layout(cfg extension.ContainerConfig, paths extension.SandboxPaths, needs extension.SandboxNeeds) (Plan, error) {
+	atSite := func(string) bool { return false }
+	if paths.Site != "" {
+		ws := filepath.Clean(paths.Workspace)
+		atSite = func(path string) bool { return extension.Within(filepath.Clean(path), []string{ws}) }
+	}
 	expand := func(list []string) []string {
 		var out []string
 		for _, s := range list {
 			s = strings.NewReplacer("{workspace}", paths.Workspace, "{run}", paths.Run).Replace(s)
 			if s == "~" || strings.HasPrefix(s, "~/") {
 				s = p.o.Home + s[1:]
+			}
+			if atSite(s) {
+				continue
 			}
 			out = append(out, extension.CanonicalPath(s))
 		}
@@ -236,12 +255,18 @@ func (p *Provider) layout(cfg extension.ContainerConfig, paths extension.Sandbox
 	}
 	var rw, ro []string
 	for _, w := range append(expand(cfg.Write), own...) {
+		if atSite(w) {
+			continue
+		}
 		if fi, err := os.Stat(w); err != nil || !fi.IsDir() && !fi.Mode().IsRegular() {
 			return Plan{}, fmt.Errorf("%w: the write grant %s is not a file or directory here", extension.ErrSandboxUnavailable, w)
 		}
 		rw = append(rw, w)
 	}
 	for _, r := range append(expand(cfg.Read), needs.Read...) {
+		if atSite(r) {
+			continue
+		}
 		r = extension.CanonicalPath(r)
 		if _, err := os.Stat(r); err == nil {
 			ro = append(ro, r)
@@ -274,6 +299,9 @@ func (p *Provider) layout(cfg extension.ContainerConfig, paths extension.Sandbox
 		}
 	}
 	for _, r := range needs.ReadOnly {
+		if atSite(r) {
+			continue
+		}
 		r = extension.CanonicalPath(r)
 		if extension.Within(r, rw) {
 			d.Keep = append(d.Keep, r)

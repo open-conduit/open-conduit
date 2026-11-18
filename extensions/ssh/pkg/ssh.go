@@ -46,7 +46,7 @@ func Manifest() protocol.Manifest {
 		Summary: "Runs a container binding's launches on another machine over SSH, pinned by its host key, with the launch's granted paths copied there and back.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{
-			Containers: []protocol.ContainerDecl{{Type: ssh.Type}},
+			Containers: []protocol.ContainerDecl{{Type: ssh.Type, Place: true}},
 			Checks:     []protocol.CheckDecl{{Name: Name}},
 		}}
 }
@@ -160,7 +160,29 @@ func (x *provider) Remove(ctx context.Context, ref extension.ContainerRef) error
 	return p.Remove(ctx, ref)
 }
 
-var _ extension.ContainerProvider = (*provider)(nil)
+// Place and SiteRun place a launch on the binding's remote and run a
+// command there (extension.ContainerPlacer), so a workspace can be made
+// on the remote.
+func (x *provider) Place(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, prefer string) (extension.Placement, error) {
+	p, err := x.get(ctx)
+	if err != nil {
+		return extension.Placement{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+	}
+	return p.Place(ctx, owner, policy, prefer)
+}
+
+func (x *provider) SiteRun(ctx context.Context, placement string, cmd extension.SiteCommand) (extension.SiteResult, error) {
+	p, err := x.get(ctx)
+	if err != nil {
+		return extension.SiteResult{}, fmt.Errorf("%w: %v", extension.ErrSiteUnavailable, err)
+	}
+	return p.SiteRun(ctx, placement, cmd)
+}
+
+var (
+	_ extension.ContainerProvider = (*provider)(nil)
+	_ extension.ContainerPlacer   = (*provider)(nil)
+)
 
 // Build returns the served extension.
 func Build() *sdk.Extension {

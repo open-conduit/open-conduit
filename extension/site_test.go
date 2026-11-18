@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ var siteOwner = extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: 
 func (h *containerHost) bindPlaced(p extension.ContainerProvider, prov extension.ResourceProvider, prefer string, placed *[]extension.Placement) (*extension.BoundContainer, extension.ResourceBroker) {
 	b := extension.BindContainer(extension.ContainerBinding{Provider: p, Name: "fake", Prefer: prefer, Owner: siteOwner,
 		Config: containerConfig(testImage, ""), Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
-		Toolbelt: h.toolbelt, Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
+		Toolbelt: h.toolbelt, TokenFile: filepath.Join(filepath.Dir(h.toolbelt), "token"), Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
 		Pin:    func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil },
 		Placed: func(p extension.Placement) { *placed = append(*placed, p) },
 		AtSite: func(site extension.Site) extension.ResourceBroker {
@@ -131,8 +132,10 @@ func TestPlacedWorkspace(t *testing.T) {
 	if res.Site != "fake/node-1" || r.first != "git clone repo "+remote {
 		t.Fatalf("resource %+v, first command %q", res, r.first)
 	}
-	if len(f.ran) != 1 || f.ran[0].Toolbelt != h.toolbelt {
-		t.Fatalf("site commands %+v, want one with the execution's toolbelt", f.ran)
+	token := filepath.Join(filepath.Dir(h.toolbelt), "token")
+	if len(f.ran) != 1 || f.ran[0].Toolbelt != h.toolbelt || f.ran[0].TokenFile != token ||
+		!slices.Equal(f.ran[0].Env, []string{"OS_ENDPOINT=unix://" + h.toolbelt, "OS_TOKEN_FILE=" + token}) {
+		t.Fatalf("site commands %+v, want one with the execution's toolbelt, its token and their environment", f.ran)
 	}
 	if len(placed) != 1 || placed[0].ID != "node-1" || strings.Join(f.prefers, ",") != "node-1" {
 		t.Fatalf("placed %+v, prefers %v, want one placement preferring node-1", placed, f.prefers)

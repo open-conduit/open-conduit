@@ -25,6 +25,7 @@ export const Code = {
   SandboxUnavailable: "sandbox_unavailable",
   ContainerRunning: "container_running",
   ContainerUnconfirmed: "container_unconfirmed",
+  SiteUnavailable: "site_unavailable",
   RetryAfter: "retry_after",
   Reentrant: "reentrant_call",
   Overloaded: "overloaded",

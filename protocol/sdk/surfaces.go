@@ -194,7 +194,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if !ok {
 			return nil, notFound(method)
 		}
-		plan, err := prov.Plan(ctx, p.Owner.Extension(), extension.ContainerPolicy{Config: p.Config.Domain(), Paths: p.Paths.Extension()}, p.Needs.Extension(), p.Launch.Extension())
+		plan, err := prov.Plan(ctx, p.Owner.Extension(), extension.ContainerPolicy{Config: p.Config.Domain(), Paths: p.Paths.Extension(), Placement: p.Placement}, p.Needs.Extension(), p.Launch.Extension())
 		if err != nil {
 			return nil, err
 		}
@@ -274,6 +274,34 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.ContainerForward{Address: addr}, nil
+	case "container_provider.place":
+		var p protocol.ContainerProviderPlaceParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type].(extension.ContainerPlacer)
+		if !ok {
+			return nil, notFound(method)
+		}
+		at, err := prov.Place(ctx, p.Owner.Extension(), extension.ContainerPolicy{Config: p.Config.Domain()}, p.Prefer)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromPlacement(at), nil
+	case "container_provider.site_run":
+		var p protocol.ContainerProviderSiteRunParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type].(extension.ContainerPlacer)
+		if !ok {
+			return nil, notFound(method)
+		}
+		res, err := prov.SiteRun(ctx, p.Placement, p.Command.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromSiteResult(res), nil
 	case "tunnel.run":
 		var p protocol.TunnelRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -1108,6 +1108,9 @@ type ContainerProviderPlanParams struct {
 	Paths  SandboxPaths  `json:"paths"`
 	Needs  SandboxNeeds  `json:"needs"`
 	Launch SandboxLaunch `json:"launch"`
+	// Placement is extension.ContainerPolicy.Placement: where a provider
+	// declared with place placed the execution.
+	Placement string `json:"placement,omitempty"`
 }
 
 // ContainerProviderCreateParams asks a provider to create a plan's
@@ -1137,6 +1140,75 @@ type ContainerProviderListParams struct {
 }
 type ContainerList struct {
 	Containers []ContainerState `json:"containers"`
+}
+
+// ContainerProviderPlaceParams asks a provider declared with place where
+// an execution runs, before anything is acquired for it
+// (container_provider.place; extension.ContainerPlacer.Place). Prefer is
+// the placement the Work last ran at.
+type ContainerProviderPlaceParams struct {
+	Type   string        `json:"type"`
+	Owner  ResourceOwner `json:"owner"`
+	Config Payload       `json:"config"`
+	Prefer string        `json:"prefer,omitempty"`
+}
+
+// Placement is extension.Placement.
+type Placement struct {
+	ID      string `json:"id"`
+	Daemon  string `json:"daemon"`
+	Summary string `json:"summary,omitempty"`
+}
+
+func FromPlacement(p extension.Placement) Placement {
+	return Placement{ID: p.ID, Daemon: p.Daemon, Summary: p.Summary}
+}
+func (p Placement) Extension() extension.Placement {
+	return extension.Placement{ID: p.ID, Daemon: p.Daemon, Summary: p.Summary}
+}
+
+// SiteCommand is extension.SiteCommand. Stdin, like the result's output,
+// is base64 in JSON.
+type SiteCommand struct {
+	Argv          []string `json:"argv"`
+	Dir           string   `json:"dir,omitempty"`
+	Env           []string `json:"env,omitempty"`
+	Stdin         []byte   `json:"stdin,omitempty"`
+	TimeoutMillis int64    `json:"timeout_millis,omitempty"`
+	Toolbelt      string   `json:"toolbelt,omitempty"`
+	TokenFile     string   `json:"token_file,omitempty"`
+}
+
+func FromSiteCommand(c extension.SiteCommand) SiteCommand {
+	return SiteCommand{Argv: c.Argv, Dir: c.Dir, Env: c.Env, Stdin: c.Stdin, TimeoutMillis: c.Timeout.Milliseconds(), Toolbelt: c.Toolbelt, TokenFile: c.TokenFile}
+}
+func (c SiteCommand) Extension() extension.SiteCommand {
+	return extension.SiteCommand{Argv: c.Argv, Dir: c.Dir, Env: c.Env, Stdin: c.Stdin, Timeout: time.Duration(c.TimeoutMillis) * time.Millisecond, Toolbelt: c.Toolbelt, TokenFile: c.TokenFile}
+}
+
+// SiteResult is extension.SiteResult.
+type SiteResult struct {
+	ExitCode  int    `json:"exit_code"`
+	Stdout    []byte `json:"stdout,omitempty"`
+	Stderr    []byte `json:"stderr,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+func FromSiteResult(r extension.SiteResult) SiteResult {
+	return SiteResult{ExitCode: r.ExitCode, Stdout: r.Stdout, Stderr: r.Stderr, Truncated: r.Truncated}
+}
+func (r SiteResult) Extension() extension.SiteResult {
+	return extension.SiteResult{ExitCode: r.ExitCode, Stdout: r.Stdout, Stderr: r.Stderr, Truncated: r.Truncated}
+}
+
+// ContainerProviderSiteRunParams asks a provider declared with place to
+// run a command at one of its placements
+// (container_provider.site_run; extension.ContainerPlacer.SiteRun). A
+// placement it can't name or reach is CodeSiteUnavailable.
+type ContainerProviderSiteRunParams struct {
+	Type      string      `json:"type"`
+	Placement string      `json:"placement"`
+	Command   SiteCommand `json:"command"`
 }
 
 // ContainerProviderForwardParams asks a provider declared with forward for
