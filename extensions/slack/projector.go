@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -84,6 +86,39 @@ type ProjectorOptions struct {
 type Projector struct {
 	o  ProjectorOptions
 	ns string
+	// mu guards refused: what the host refused this pass when asked what
+	// is offered or requested on Work, as codes the pass reports.
+	mu      sync.Mutex
+	refused map[string]bool
+}
+
+// hostRefused notes that the host refused to list what (actions or
+// requests) for this pass, so the pass reports it instead of the thread
+// silently showing nothing. A host that doesn't serve the listing at all
+// (unsupported) offers nothing to show, which is no failure.
+func (p *Projector) hostRefused(what string, err error) {
+	if protocol.ErrorCode(err) == protocol.CodeUnsupported {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.refused == nil {
+		p.refused = map[string]bool{}
+	}
+	p.refused[what+":"+ErrorCode(err)] = true
+}
+
+// takeRefused returns and clears what the host refused since the last call.
+func (p *Projector) takeRefused() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, 0, len(p.refused))
+	for c := range p.refused {
+		out = append(out, c)
+	}
+	p.refused = nil
+	sort.Strings(out)
+	return out
 }
 
 // ProjectionResult reports one pass.
@@ -514,8 +549,16 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 // Converge runs one bounded pass: outcome replies, unfinished durable
 // (tool) intents, uploads whose share's answer was lost and request
 // messages (request_messages). Rate limits and credential failures stop the pass; other
-// per-item failures are reported as safe codes and retried next pass.
+// per-item failures are reported as safe codes and retried next pass, as
+// is a host's refusal to list a Work's actions or requests.
 func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, error) {
+	p.takeRefused()
+	res, err := p.converge(ctx, limit)
+	res.Codes = append(res.Codes, p.takeRefused()...)
+	return res, err
+}
+
+func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, error) {
 	var res ProjectionResult
 	if p.o.Settings.Projection.Disabled {
 		return res, nil
@@ -634,6 +677,10 @@ func ErrorCode(err error) string {
 		return "thread_too_long"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return "timeout"
+	case protocol.ErrorCode(err) != "":
+		// The host's refusal over the protocol (undeclared: a method the
+		// package's manifest doesn't enable).
+		return protocol.ErrorCode(err)
 	}
 	return "failed"
 }

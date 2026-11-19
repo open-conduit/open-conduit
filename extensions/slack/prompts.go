@@ -106,6 +106,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 	for _, w := range ws {
 		offers, err := p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), w.work)
 		if err != nil {
+			p.hostRefused("actions", err)
 			continue
 		}
 		for _, o := range offers {

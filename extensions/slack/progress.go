@@ -449,11 +449,13 @@ func (p *Projector) steps(ctx context.Context, v *runView, waits []domain.Wait) 
 	w := v.work
 	if !v.rec.Ended && !w.State.Terminal() {
 		if p.o.Actions != nil && (w.State == domain.WorkWaiting || w.State == domain.WorkReady) {
-			if offers, err := p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), w.ID); err == nil {
-				for _, o := range offers {
-					if o.Awaited {
-						add(stepID("action", o.Provider, o.ID, o.Label, o.Detail), o.Label)
-					}
+			offers, err := p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), w.ID)
+			if err != nil {
+				p.hostRefused("actions", err)
+			}
+			for _, o := range offers {
+				if o.Awaited {
+					add(stepID("action", o.Provider, o.ID, o.Label, o.Detail), o.Label)
 				}
 			}
 		}
