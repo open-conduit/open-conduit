@@ -688,6 +688,8 @@ Extension entry `config`:
 | `identities` |  | a binding's own name and icon: [{binding, username, icon_emoji or icon_url}] |
 | `request_messages` |  | {"enabled": true}: a direct message to each Slack person a request names as a responder, with its buttons, changed to the result once it settles |
 | `uploads` |  | turns slack.upload on: {max_bytes (default and at most 10 MB), media_types: ["image/png", "image/*" or "*/*"]}, checked before anything is sent |
+| `feedback` |  | {"enabled": true, "bindings": ["…"]}: thumbs up and down below replies, of the bindings listed or of every binding |
+| `child_requests` | `false` | true shows the requests of a conversation's child Work (an approval, a question) in its thread, with buttons when a Slack person may answer |
 
 ### srt sandbox (`srt`)
 

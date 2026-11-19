@@ -34,5 +34,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "identities", Help: "a binding's own name and icon: [{binding, username, icon_emoji or icon_url}]"},
 		{Name: "request_messages", Help: `{"enabled": true}: a direct message to each Slack person a request names as a responder, with its buttons, changed to the result once it settles`},
 		{Name: "uploads", Help: "turns slack.upload on: {max_bytes (default and at most 10 MB), media_types: [\"image/png\", \"image/*\" or \"*/*\"]}, checked before anything is sent"},
+		{Name: "feedback", Help: `{"enabled": true, "bindings": ["…"]}: thumbs up and down below replies, of the bindings listed or of every binding`},
+		{Name: "child_requests", Help: "true shows the requests of a conversation's child Work (an approval, a question) in its thread, with buttons when a Slack person may answer", Default: "false"},
 	}
 }
