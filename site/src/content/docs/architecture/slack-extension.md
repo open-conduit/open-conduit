@@ -333,6 +333,7 @@ A press arrives over Socket Mode as an `interactive` envelope, which is acknowle
 
 Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take interactivity, and an app created before this needs **Interactivity** turned on in its settings.
 
+
 ### Child requests
 
 A conversation hands tasks to child Work (`create_work`), and a child's gated call or question waits on a person the thread would otherwise not hear of, since the child isn't a conversation. With `child_requests` on, the projector also reads the requests reported on child Work (`Host.Requests`, which `human` answers with its asks): open or settled, with who may answer each (its responders) and how it ended. A child's request shows in the thread of its nearest ancestor that is a conversation of this entry, so a child of a child goes to the same thread, and a descendant that is a conversation itself keeps to its own thread.
@@ -413,6 +414,7 @@ These notes record how this part was built and the evidence gathered at each sta
 - Issue #364 added prompts and button answers: a waiting Work's actions with choices are posted as buttons, and a press answers through `Host.Act` as `slack:<user>`. The manifest turned Interactivity on. This has been exercised only against the `slacktest` fake. Later in the same issue, ready Work that hasn't started was prompted too, so a held start can be approved from the thread.
 - Issue #673 added progress messages: with `progress` enabled, a plan per run derived from durable state on each projection pass, with reactions on the person's message and a Stop button for the people `stop` lists, cancelling through `Host.CancelWork`.
 - Issue #681 added `child_requests`: a child Work's requests show in the conversation's thread, as progress tasks with their state and responders, and as prompts when a Slack person may answer, read from the new `Host.Requests`. The issue first asked for the buttons alone, and was narrowed to show the state everywhere and the buttons only when a Slack responder could press them.
+- Issue #759 found that none of the thread's buttons or child requests had shown since the extension moved out of process (#466): the package's manifest lacked the `action.submit` permission, so the host refused `action.list`, `action.submit` and `request.list`. The manifest now declares it, and `TestDaemonSlackShowsAChildsGatedCall` drives a child's gated call to the thread through the composed daemon.
 - Issue #675 added feedback buttons: with `feedback` enabled, the host puts Slack's feedback buttons below replies, and a press is recorded on the Work that posted the reply as `slack.feedback`, attached without being input.
 
 ### Real Slack run (04-03)
