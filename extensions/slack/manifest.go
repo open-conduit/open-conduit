@@ -17,9 +17,10 @@ import (
 // setup, users.conversations (channels:read, groups:read).
 // metadata.message:read lets history and replies return the reply marker
 // (message metadata) to this token, so marker recovery does not depend on the
-// bot-user/text fallback (04-02 decision; see the extension doc). users:read,
-// reactions:write and app_mentions:read are granted for names and
-// acknowledgements, and are not required by this extension's calls.
+// bot-user/text fallback (04-02 decision; see the extension doc). users:read
+// lets users.info name the people a plan's request tasks are for (best
+// effort: without it, they go unnamed). reactions:write and
+// app_mentions:read are granted for acknowledgements.
 // chat:write.customize (CustomizeScope) lets chat.postMessage post under a
 // binding's own name and icon (the entry's identities). files:write
 // (FilesScope) lets slack.upload reserve and share a file

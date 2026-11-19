@@ -101,6 +101,9 @@ func (p *Projector) subtree(tx storage.Tx, root domain.Work, children map[domain
 type childRequest struct {
 	asker
 	extension.RequestOffer
+	// names are the Slack names of the people it names, as the
+	// workspace shows them.
+	names []string
 }
 
 // requestsOf lists each asker's requests. A provider that fails now is
@@ -118,19 +121,33 @@ func (p *Projector) requestsOf(ctx context.Context, as []asker) []childRequest {
 		}
 		for _, r := range rs {
 			if strings.TrimSpace(r.Label) != "" {
-				out = append(out, childRequest{asker: a, RequestOffer: r})
+				c := childRequest{asker: a, RequestOffer: r}
+				if r.State == extension.RequestOpen {
+					for _, u := range namedSlackPeople(r.Responders) {
+						if name := p.o.Client.UserName(ctx, u); name != "" {
+							c.names = append(c.names, name)
+						}
+					}
+				}
+				out = append(out, c)
 			}
 		}
 	}
 	return out
 }
 
-// title is how a request reads in a plan or a prompt: who asks, for what,
-// and who may answer.
+// title is how a request reads as a plan task, which is plain text: who
+// asks, for what, and the Slack people it is for by name. Responders
+// outside Slack, or that Slack can't name, are left out.
 func (r childRequest) title() string {
 	t := r.who + " asks: " + r.Label
-	if len(r.Responders) > 0 {
-		t += " (for " + strings.Join(r.Responders, ", ") + ")"
+	if w := r.Wording; w != nil && w.Wants != "" {
+		t = r.who + " wants to " + strings.TrimSuffix(w.Wants, ".")
+	} else if w != nil && w.Question != "" {
+		t = r.who + " asks: " + w.Question
+	}
+	if len(r.names) > 0 {
+		t += " (for " + strings.Join(r.names, ", ") + ")"
 	}
 	return t
 }
@@ -235,19 +252,15 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 				if o.Provider != r.Provider || o.ID != r.Action {
 					continue
 				}
-				shown := o
-				shown.Label = h.who + " asks: " + o.Label
-				if len(r.Responders) > 0 {
-					shown.Detail = strings.TrimSpace(o.Detail + "\n\nWho can answer: " + strings.Join(r.Responders, ", "))
-				}
-				blocks, ok := promptBlocks(h.work.ID, shown)
+				req := r.Request
+				in, ok := asked{who: h.who, work: h.work.ID, offer: o, request: &req}.intent(h.channel, h.thread, h.binding)
 				if !ok {
 					continue
 				}
-				// Keyed by the request as well as what is offered, so each
-				// request is prompted once with its own responders.
-				id := "prompt/" + string(h.work.ID) + "/" + o.Provider + "/" + o.ID + "/" + digest(append([]string{r.ID, shown.Label, shown.Detail}, o.Choices...)...)[:16]
-				out = append(out, Intent{ID: id, Work: h.work.ID, Channel: h.channel, Thread: h.thread, Text: shown.Label, Blocks: blocks, Binding: h.binding})
+				// Keyed by the request as well as what is shown, so each
+				// request is prompted once.
+				in.ID += "/" + digest(r.ID)[:8]
+				out = append(out, in)
 			}
 		}
 	}

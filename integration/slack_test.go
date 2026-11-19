@@ -1100,7 +1100,7 @@ func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
 			prompt = m
 		}
 	}
-	if prompt.Text != "Approve or refuse fixture.deploy" || len(prompt.Blocks) != 2 {
+	if prompt.Text != "agent asks: Approve or refuse fixture.deploy" || len(prompt.Blocks) != 2 {
 		t.Fatalf("prompt message: %+v", prompt)
 	}
 	buttons, _ := prompt.Blocks[1]["elements"].([]any)
@@ -1183,13 +1183,15 @@ func TestSlackPromptShowsTheHumanQuestion(t *testing.T) {
 		return out
 	}
 	shown := prompts()[0]
-	text, _ := shown.Blocks[0]["text"].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
-		t.Fatalf("the prompt doesn't show the question: %q", text)
+	// Without a request's wording, the label leads and the detail follows
+	// as plain text.
+	text, _ := shown.Blocks[1]["text"].(map[string]any)["text"].(string)
+	if shown.Blocks[1]["text"].(map[string]any)["type"] != "plain_text" || !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
+		t.Fatalf("the prompt doesn't show the question: %+v", shown.Blocks)
 	}
-	buttons, _ := shown.Blocks[1]["elements"].([]any)
+	buttons, _ := shown.Blocks[2]["elements"].([]any)
 	if len(buttons) != 2 || buttons[0].(map[string]any)["text"].(map[string]any)["text"] != "yes" {
-		t.Fatalf("buttons: %+v", shown.Blocks[1])
+		t.Fatalf("buttons: %+v", shown.Blocks[2])
 	}
 	if res := e.converge(); res.Posted != 0 || len(prompts()) != 1 {
 		t.Fatalf("the same question was posted again: %+v", res)
@@ -1698,5 +1700,54 @@ func TestSlackIdentityWithoutScopeIsRefused(t *testing.T) {
 	pa := e.startAttempt(p.ID)
 	if out, err := e.slReplier(p.ID, pa)("r1", "hello"); err != nil || out["state"] != sl.IntentPosted {
 		t.Fatalf("a binding without an identity: %v %v", out, err)
+	}
+}
+
+// A prompt is laid out from its request or not posted at all (issue #762):
+// while the host can't list a Work's requests, nothing is posted for it,
+// rather than a copy without them that nothing would close; and an offer
+// whose request has settled since the actions were listed isn't prompted.
+func TestSlackPromptWaitsForItsRequest(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse deploy.run", Choices: []string{"approve", "refuse"}, Awaited: true}}}, nil
+	}
+	state, fail := extension.RequestAnswered, true
+	e.requests = func(context.Context, domain.ID, domain.ID) ([]extension.RequestOffer, error) {
+		if fail {
+			fail = false
+			return nil, errors.New("host busy")
+		}
+		action := ""
+		if state == extension.RequestOpen {
+			action = "answer"
+		}
+		return []extension.RequestOffer{{Provider: "decisions", Request: extension.Request{ID: "ask/1", Label: "Approve or refuse deploy.run", Action: action,
+			Responders: []string{"slack"}, State: state, Wording: &extension.Wording{Wants: "deploy 1.2"}}}}, nil
+	}
+	e.park(w.ID, "wait/1")
+	if res, err := e.projector.Converge(context.Background(), 50); err != nil || res.Posted != 0 {
+		t.Fatalf("prompted while the requests couldn't be listed: %+v %v", res, err)
+	}
+	if res := e.converge(); res.Posted != 0 {
+		t.Fatalf("prompted a settled request: %+v", res)
+	}
+	state = extension.RequestOpen
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	var prompts []sl.Message
+	for _, m := range e.fake.Thread(slChannel, root) {
+		if len(m.Blocks) > 0 {
+			prompts = append(prompts, m)
+		}
+	}
+	if len(prompts) != 1 || prompts[0].Text != "agent wants to deploy 1.2" {
+		t.Fatalf("prompts: %+v", prompts)
 	}
 }

@@ -56,7 +56,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Bindings: gateBindings, Fields: []protocol.FieldDecl{
 		{Name: "responders", Help: "who may answer, each kind:id or a bare kind", Default: `["operator:local"]`},
 		{Name: "surfaces", Help: "where the question is shown", Default: `["tui"]`},
-		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it`},
+		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "label": "Open a PR titled {title}", "confirm": "approve"}]: operations that need approval to run; for_bindings, input and valid_for narrow or lengthen it; label, fields and confirm say how the request reads`},
 	}}, {Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }}}
 }
 

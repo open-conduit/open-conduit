@@ -61,7 +61,7 @@ func (t *Tools) StartGate(ctx context.Context, c extension.StartCall) (*extensio
 		rec = Ask{ID: startAskID(c.Work.ID, now), Scope: c.Work.ScopeID, Work: c.Work.ID, Provider: entry.Name, Gate: gate, Start: true,
 			Question: "Allow " + gate + " to start?", Options: []string{OptionApprove, OptionRefuse}, Context: startContext(c),
 			Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces, AskedAt: now, Sequence: seq, State: StateOpen,
-			Binding: c.Binding, Announce: true}
+			Binding: c.Binding, Announce: true, Confirm: rule.Confirm, Wants: startWants(rule.Label, c), Fields: startFields(c)}
 		if e := rule.Escalate; e != nil {
 			rec.EscalateAt, rec.EscalateTo, rec.Deadline = rec.Deadline, e.Responders, rec.Deadline.Add(e.timeout)
 		}
@@ -196,4 +196,39 @@ func startDecision(a Ask) (admit bool, reason string) {
 		return false, a.Answer.Responder + " refused the start"
 	}
 	return false, "nobody approved the start by " + a.Deadline.UTC().Format(time.RFC3339)
+}
+
+// startWants is what a Work held to start wants to do: the gate's label,
+// else to start work on its title, else to start.
+func startWants(label string, c extension.StartCall) string {
+	if l := strings.TrimSpace(label); l != "" && len(placeholders(l)) == 0 {
+		return lowerFirst(oneLine(l))
+	}
+	if d := c.Work.Display; d != nil {
+		if t := strings.TrimSpace(d.Ref + " " + d.Title); t != "" {
+			return clipText("start work on "+oneLine(t), 300)
+		}
+	}
+	return "start"
+}
+
+// startFields are what a person needs to decide a start: who asked for
+// the Work, where it is, and the binding it would run on.
+func startFields(c extension.StartCall) []extension.WordingField {
+	var out []extension.WordingField
+	if d := c.Work.Display; d != nil {
+		if d.Requester != "" {
+			out = append(out, extension.WordingField{Name: "Asked by", Value: clipText(oneLine(d.Requester), maxFieldValue)})
+		}
+		for _, l := range d.Links {
+			if len(out) >= maxFields-1 {
+				break
+			}
+			out = append(out, extension.WordingField{Name: "Link", Value: clipText(oneLine(l.URL), maxFieldValue)})
+		}
+	}
+	if c.Binding != "" {
+		out = append(out, extension.WordingField{Name: "Runs on", Value: clipText(oneLine(c.Binding), maxFieldValue)})
+	}
+	return out
 }

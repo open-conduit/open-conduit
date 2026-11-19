@@ -95,6 +95,21 @@ type GateConfig struct {
 	// once Timeout passes, rather than refusing it; the call is refused
 	// only if nobody answers by the escalation's own timeout as well.
 	Escalate *EscalateConfig `json:"escalate,omitempty"`
+	// Label, when set, says what a held call does in the words of the
+	// person asked to approve it: a verb phrase that follows "wants to",
+	// with {field} for a top-level value of the call's input ("sign in to
+	// git for {path}"). It replaces the operation's own sentence; when a
+	// field it names is absent, that sentence is used instead. For a start
+	// gate, it says what the Work wants to do when it starts.
+	Label string `json:"label,omitempty"`
+	// Fields, when set, are the call's top-level input fields the person
+	// asked is shown, each with the name it is shown under ("" keeps the
+	// field's own: {"path": "Repository", "host": ""}). Unset, every
+	// top-level value is shown under its field's name.
+	Fields map[string]string `json:"fields,omitempty"`
+	// Confirm, when set, is the option (approve or refuse) a person
+	// confirms before it is sent, for a call where a slip would cost.
+	Confirm string `json:"confirm,omitempty"`
 	// timeout is Timeout parsed, and validFor ValidFor.
 	timeout, validFor time.Duration
 }
@@ -109,6 +124,12 @@ type EscalateConfig struct {
 	Timeout string `json:"timeout,omitempty"`
 	timeout time.Duration
 }
+
+// maxLabel bounds a gate's label, and maxFieldName a name its fields give.
+const (
+	maxLabel     = 200
+	maxFieldName = 100
+)
 
 // DefaultGateTimeout is how long an approval request waits by default.
 const DefaultGateTimeout = 24 * time.Hour
@@ -211,6 +232,20 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 				return c, fmt.Errorf("%s: valid_for: %q must be a duration from 1m to 24h, such as 15m", where, g.ValidFor)
 			}
 			g.validFor = d
+		}
+		if len(g.Label) > maxLabel || strings.ContainsAny(g.Label, "\r\n") {
+			return c, fmt.Errorf("%s: label: must be one line of at most %d bytes", where, maxLabel)
+		}
+		if len(g.Fields) > 0 && len(g.Operations) == 0 {
+			return c, fmt.Errorf("%s: fields: name the operations whose input it shows", where)
+		}
+		for field, name := range g.Fields {
+			if field == "" || len(name) > maxFieldName || strings.ContainsAny(name, "\r\n") {
+				return c, fmt.Errorf("%s: fields: %q needs a field name and a name of one line of at most %d bytes", where, field, maxFieldName)
+			}
+		}
+		if g.Confirm != "" && g.Confirm != OptionApprove && g.Confirm != OptionRefuse {
+			return c, fmt.Errorf("%s: confirm: %q must be %s or %s", where, g.Confirm, OptionApprove, OptionRefuse)
 		}
 		if e := g.Escalate; e != nil {
 			if len(e.Responders) == 0 {

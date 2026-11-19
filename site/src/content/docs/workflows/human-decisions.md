@@ -86,6 +86,9 @@ Only the entry's **answer** action counts, and only while the question is open a
 | `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused, unless the gate escalates. An approval also holds only this long. |
 | `valid_for` | none | A duration from `1m` to `24h`. With it, an approval is a grant: once the approved call goes through, the same call (the same operation and input) from the same Work passes without asking until `valid_for` has passed. See [Approving for a while](#approving-for-a-while). |
 | `escalate` | none | Who an unanswered request goes to next, rather than being refused at `timeout`: `{"responders": [...], "timeout": "24h"}`. See [Escalation](#escalation). |
+| `label` | the operation's own | What the call does, in the words the person asked reads: a phrase that follows "wants to", with `{field}` for a top-level value of the call's input, such as `"Sign in to git for {path}"`. See [How a request reads](#how-a-request-reads). |
+| `fields` | every top-level value | Which of the call's input fields the person is shown, and under what name: `{"path": "Repository", "host": ""}` shows `path` as **Repository** and `host` under its own name, and nothing else. |
+| `confirm` | none | `approve` or `refuse`: that choice asks "Are you sure?" before it is sent, for a call where a slip would cost. |
 
 The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants, unless `for_bindings` narrows it.
 
@@ -147,17 +150,28 @@ The GitHub extension hands the comment to Open Conduit as its author, `github:<l
 
 A taken answer gets a 👍 reaction on the comment, and a refused one (a login that isn't a responder, an answer that isn't an option, a question already answered) gets 😕. The extension can only vouch for GitHub logins: a comment can never answer as `operator:local` or as anyone on another surface. Editing a comment answers nothing.
 
+### How a request reads
+
+A request reads as one sentence: "**Steve** wants to sign in to git for acme/backend." What the call does comes from the gate's `label`, else from the operation itself (an extension can give each operation a sentence; GitHub's `github.git.credential` says "sign in to git for {path}"), else "call github.git.credential". The `{field}` names are filled with the call's input; when the input lacks one, the next of those is used. The input's top-level values are shown as named fields (**Host** github.com, **Repository** acme/backend), and the whole input only when a value is nested. The choices read **Approve** and **Refuse**. A question reads as the agent's question.
+
+```json
+{"operations": ["github.git.credential"], "responders": ["slack:U0123ABCD"],
+ "label": "Sign in to git for {path}", "fields": {"path": "Repository", "host": "Host"}, "confirm": "approve"}
+```
+
+Where the request is shown lays it out its own way: Slack as below; the TUI, the web view and the CLI show the request's label and its detail, the operation and its input, as before.
+
 ## Answering from Slack
 
-When the Work is a Slack conversation, the question (with its context) or the approval request (with the call and its input) is posted once in its thread, with a button per option, such as **approve** and **refuse**. Pressing one answers as `slack:<your user id>`, which the `human` entry checks against the responders, and Slack shows you, and only you, whether it was taken. List the Slack user IDs you trust (a member ID such as `U0123ABCD`, from a profile's **Copy member ID**):
+When the Work is a Slack conversation, the question or the approval request is posted once in its thread, [as it reads](#how-a-request-reads): "**Steve** wants to sign in to git for acme/backend. @Dana, do you approve?", the input's values as fields, and a button per option, **Approve** in green and **Refuse** in red. Each Slack person among the responders is mentioned, so Slack notifies them; anyone who may answer from outside Slack is only counted ("2 people outside Slack can answer too."), never shown by an ID. Once it is answered, wherever that happens, the buttons give way to one line: "✅ Approved by @Dana at 07:53". Pressing one answers as `slack:<your user id>`, which the `human` entry checks against the responders, and Slack shows you, and only you, whether it was taken. List the Slack user IDs you trust (a member ID such as `U0123ABCD`, from a profile's **Copy member ID**):
 
 ```json
 {"operations": ["deploy.*"], "responders": ["slack:U0123ABCD", "operator:local"]}
 ```
 
-When the Work was handed its task by a Slack conversation (`create_work`), at any depth, turn on `"child_requests": true` in the Slack entry to see its requests in that conversation's thread. Each shows in the thread's progress message as "Steve asks: Approve or refuse github.pr.create (for slack:U0123ABCD)", in progress until it is answered, and marked as an error if it is refused or times out. When a Slack person is among the responders, the request is also posted with its buttons, and a press answers the child's request. When only operators or GitHub users may answer, the thread shows only the state, and they answer where they are. Either way the conversation's agent isn't woken, and it can't answer for anyone.
+When the Work was handed its task by a Slack conversation (`create_work`), at any depth, turn on `"child_requests": true` in the Slack entry to see its requests in that conversation's thread. Each shows in the thread's progress message as "Steve wants to open a pull request (for Dana)", naming the Slack people it is for by their display names, in progress until it is answered, and marked as an error if it is refused or times out. When a Slack person is among the responders, the request is also posted with its buttons, and a press answers the child's request. When only operators or GitHub users may answer, the thread shows only the state, and they answer where they are. Either way the conversation's agent isn't woken, and it can't answer for anyone.
 
-An approver who isn't in the thread, or Work with no thread at all, such as a scheduled job's, needs telling. Turn on `"request_messages": {"enabled": true}` in the Slack entry, and each Slack person a request names (`slack:<member id>`) gets a direct message from the app: who asks and what, the call and its input, a link to the conversation it was asked in when there is one, and the buttons. A press answers as you, as in a thread. Once the request is answered, refused or times out, wherever that happens, the message says so and loses its buttons. A bare `slack` responder names nobody, so it is sent nothing. For any other way of telling people, see [Telling people about a request](#telling-people-about-a-request).
+An approver who isn't in the thread, or Work with no thread at all, such as a scheduled job's, needs telling. Turn on `"request_messages": {"enabled": true}` in the Slack entry, and each Slack person a request names (`slack:<member id>`) gets a direct message from the app, laid out as in a thread ("**Steve** wants to sign in to git for acme/backend. Do you approve?"), with a link to the conversation it was asked in when there is one. A press answers as you, as in a thread. Once the request is answered, refused or times out, wherever that happens, the message says so in the same one line and loses its buttons. A bare `slack` responder names nobody, so it is sent nothing. For any other way of telling people, see [Telling people about a request](#telling-people-about-a-request).
 
 A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
 
@@ -209,7 +223,7 @@ A gate with `escalate` doesn't refuse a request nobody answered by its `timeout`
 
 Here, nobody approving a deploy within 2 hours escalates it. For the next 4 hours, the escalation's responders can answer it as well as the gate's own. The call is refused with `approval_timed_out` only if that time passes too. The caller stays parked throughout, so escalating costs no agent turn. `escalate.responders` is required, and `escalate.timeout` defaults to `24h`. The two timeouts together may be at most `8760h`.
 
-Once it has escalated, the request is offered as **Approve or refuse … (escalated)**. Its text says nobody answered in time, who it now goes to and when it will be refused. Because the offer has changed, Slack posts it in the thread again. The panel lists the wider responders and the time it escalated. The escalation is recorded on the request and as a `human_gate_escalated` telemetry event, which carries the Work, the execution, the operation and who it went to.
+Once it has escalated, the request is offered as **Approve or refuse … (escalated)**. Its text says nobody answered in time, who it now goes to and when it will be refused; in Slack, it says more people are asked now and when it will be refused, without their IDs. Because the offer has changed, Slack posts it in the thread again. The panel lists the wider responders and the time it escalated. The escalation is recorded on the request and as a `human_gate_escalated` telemetry event, which carries the Work, the execution, the operation and who it went to.
 
 ## Approving a start
 

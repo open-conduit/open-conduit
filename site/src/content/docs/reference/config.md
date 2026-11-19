@@ -415,7 +415,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `responders` | `["operator:local"]` | who may answer, each kind:id or a bare kind |
 | `surfaces` | `["tui"]` | where the question is shown |
-| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it |
+| `gates` |  | [{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "label": "Open a PR titled {title}", "confirm": "approve"}]: operations that need approval to run; for_bindings, input and valid_for narrow or lengthen it; label, fields and confirm say how the request reads |
 
 ### Introspection (`introspection`)
 

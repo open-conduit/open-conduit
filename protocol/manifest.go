@@ -645,6 +645,10 @@ type OperationDecl struct {
 	Summary  string          `json:"summary,omitempty"`
 	Guidance string          `json:"guidance,omitempty"`
 	Input    json.RawMessage `json:"input,omitempty"`
+	// Wants says what a call does in a person's words, for whoever is
+	// asked to approve it (extension.Operation.Wants): a verb phrase after
+	// "wants to", with {field} for a top-level input value.
+	Wants string `json:"wants,omitempty"`
 	// Serves, on a handler, names a capability the operation answers
 	// (extension.Operation.Serves), such as git.credential.
 	Serves string `json:"serves,omitempty"`
@@ -1049,6 +1053,9 @@ func (m Manifest) Validate() error {
 			fail("operation %q: guidance is longer than %d bytes", o.Name, extension.MaxGuidance)
 		}
 		if err := extension.ValidateOperationDoc(o.Summary, o.Input); err != nil {
+			fail("operation %q: %s", o.Name, strings.TrimPrefix(err.Error(), extension.ErrInvalid.Error()+": "))
+		}
+		if err := extension.ValidateWants(o.Wants); err != nil {
 			fail("operation %q: %s", o.Name, strings.TrimPrefix(err.Error(), extension.ErrInvalid.Error()+": "))
 		}
 		if o.Serves != "" {

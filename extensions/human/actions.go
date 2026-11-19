@@ -141,9 +141,11 @@ func (a Actions) Requests(ctx context.Context, t extension.ActionTarget) ([]exte
 
 // request is rec as a request, settled as of now without writing it.
 func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
-	r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen}
+	r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen,
+		Wording: wording(rec, now)}
 	if rec.State != StateOpen {
 		r.State, r.By = rec.settled()
+		r.SettledAt = settledAt(rec)
 		return r, nil
 	}
 	// Open in its record: what settle would make of it now.
@@ -156,10 +158,11 @@ func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
 		answered := rec
 		answered.State, answered.Answer = StateAnswered, &first
 		r.State, r.By = answered.settled()
+		r.SettledAt = first.At
 		return r, nil
 	}
 	if rec.expired(now) {
-		r.State = extension.RequestExpired
+		r.State, r.SettledAt = extension.RequestExpired, rec.Deadline
 		return r, nil
 	}
 	gone, err := withdrawn(tx, rec)

@@ -518,6 +518,7 @@ export const OperationDecl = t.object(
     summary: t.optional(t.string()),
     guidance: t.optional(t.string()),
     input: t.optional(t.record(t.any())),
+    wants: t.optional(t.string()),
     serves: t.optional(t.string()),
   },
   open,

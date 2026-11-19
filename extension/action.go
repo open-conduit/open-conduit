@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -196,6 +197,72 @@ type Request struct {
 	Responders []string
 	State      string
 	By         string
+	// SettledAt is when it was settled, on a settled request (zero when
+	// the provider doesn't know).
+	SettledAt time.Time
+	// Wording, when set, is the same request in a person's words, in parts
+	// a surface lays out itself (a Slack message's sentence, fields and
+	// buttons). Label and Detail stay its plain-text form, for surfaces
+	// that show text.
+	Wording *Wording
+}
+
+// Wording is how a request reads to the person asked, in parts, so a
+// surface can lay it out in its own terms without knowing what it means.
+// Every string is plain text; a surface escapes it for its own markup.
+type Wording struct {
+	// Wants is what the asker wants to do, for an approval: a verb phrase
+	// that follows "wants to" ("sign in to git for acme/backend").
+	Wants string
+	// Question is the question asked, for a request that isn't an
+	// approval.
+	Question string
+	// Fields are the values the decision is about (an approval's call's
+	// top-level input), each with a name a person reads, in order.
+	Fields []WordingField
+	// Input is the whole input as indented JSON, set only when some value
+	// is nested and Fields can't show it.
+	Input string
+	// Note is anything else the person should know (that the request has
+	// escalated, say), one or two sentences.
+	Note string
+	// Choices say how each of the answering action's choices reads, by
+	// its value; a choice not listed reads as itself.
+	Choices []ChoiceWording
+}
+
+// WordingField is one named value of a Wording.
+type WordingField struct {
+	Name, Value string
+}
+
+// Choice tones: affirm says yes to what is asked (approve), and danger
+// turns it down or does something hard to undo.
+const (
+	ToneAffirm = "affirm"
+	ToneDanger = "danger"
+)
+
+// ChoiceWording is how one choice reads. Label is what its button says
+// ("Approve"); Tone is ToneAffirm, ToneDanger or ""; Confirm, when set,
+// asks the person to confirm before the choice is sent, in these words.
+type ChoiceWording struct {
+	Choice, Label, Tone, Confirm string
+}
+
+// ChoiceWording is how choice reads: its entry in Choices, else itself.
+func (w *Wording) ChoiceWording(choice string) ChoiceWording {
+	if w != nil {
+		for _, c := range w.Choices {
+			if c.Choice == choice {
+				if c.Label == "" {
+					c.Label = choice
+				}
+				return c
+			}
+		}
+	}
+	return ChoiceWording{Choice: choice, Label: choice}
 }
 
 // RequestProvider is an ActionProvider that also reports its requests on a

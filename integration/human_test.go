@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -90,7 +91,7 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 		}
 	}
 	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", Operations: []extension.Operation{
-		{Name: "fixture.deploy", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)},
+		{Name: "fixture.deploy", Wants: "deploy to {env}", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)},
 		// fixture.git.credential serves git.credential, so only the host's
 		// git transport calls it; its runs count as deploys.
 		{Name: "fixture.git.credential", Handler: ran(h.deploys), Serves: extension.CapabilityGitCredential}}}); err != nil {
@@ -791,6 +792,50 @@ func TestHumanGateRequestsSayHowEachEnded(t *testing.T) {
 	// Reported answered at once, before Sync settles the record.
 	if rs = states(); len(rs) != 3 || rs[1].State != extension.RequestExpired || rs[2].State != extension.RequestAnswered || rs[2].By != "operator:local" {
 		t.Fatalf("approved: %+v", rs)
+	}
+}
+
+// A gate's request reads in a person's words (issue #762): what the call
+// does in the operation's own sentence, else the gate's label, with the
+// input's values filled in; the input's top-level values as named fields;
+// approve and refuse with their tones, and a confirmation on the choice the
+// gate names; and once settled, when.
+func TestHumanGateRequestsAreWorded(t *testing.T) {
+	for _, tc := range []struct {
+		name, entry, wants string
+		fields             []extension.WordingField
+		confirm            string
+	}{
+		{"the operation's sentence", gated, "deploy to prod", []extension.WordingField{{Name: "Env", Value: "prod"}, {Name: "Version", Value: "1.2"}}, ""},
+		{"the gate's label", `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.deploy"],"label":"Ship {version} to {env}","fields":{"version":"Release"},"confirm":"approve"}]}}`,
+			"ship 1.2 to prod", []extension.WordingField{{Name: "Release", Value: "1.2"}}, hu.OptionApprove},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHumanHarness(t, "persistent", tc.entry)
+			out, err := h.deploy(t, `{"env":"prod","version":"1.2"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.park(t, out)
+			rs, err := h.actions.Requests(context.Background(), h.target(t))
+			if err != nil || len(rs) != 1 || rs[0].Wording == nil {
+				t.Fatalf("requests: %+v %v", rs, err)
+			}
+			w := rs[0].Wording
+			if w.Wants != tc.wants || !slices.Equal(w.Fields, tc.fields) || w.Input != "" || !rs[0].SettledAt.IsZero() {
+				t.Fatalf("wording: %+v", w)
+			}
+			approve, refuse := w.ChoiceWording(hu.OptionApprove), w.ChoiceWording(hu.OptionRefuse)
+			if approve.Tone != extension.ToneAffirm || refuse.Tone != extension.ToneDanger || (approve.Confirm != "") != (tc.confirm == hu.OptionApprove) || refuse.Confirm != "" {
+				t.Fatalf("choices: %+v %+v", approve, refuse)
+			}
+			if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+				t.Fatal(err)
+			}
+			if rs, _ = h.actions.Requests(context.Background(), h.target(t)); rs[0].State != extension.RequestAnswered || !rs[0].SettledAt.Equal(h.f.Clock.Now()) {
+				t.Fatalf("settled: %+v", rs[0])
+			}
+		})
 	}
 }
 

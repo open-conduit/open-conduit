@@ -129,9 +129,9 @@ func TestDaemonSlackShowsAChildsGatedCall(t *testing.T) {
 			for _, b := range m.Blocks {
 				raw, _ := json.Marshal(b)
 				switch {
-				case b["type"] == "plan" && strings.Contains(string(raw), "steve asks: Approve or refuse "+is.OpList):
+				case b["type"] == "plan" && strings.Contains(string(raw), "steve wants to call "+is.OpList):
 					task = true
-				case b["type"] == "actions" && strings.HasPrefix(m.Text, "steve asks:"):
+				case b["type"] == "actions" && strings.HasPrefix(m.Text, "steve wants to call "+is.OpList):
 					prompt = true
 				}
 			}

@@ -57,7 +57,7 @@ func main() {
 
 | Registration | Declares |
 | --- | --- |
-| `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `summary` (`sdk.Describe`), `guidance` (`sdk.Guidance`), `commit` (`sdk.Commit`, emit only), `serves` (`sdk.Serves`, handler only) and `input` |
+| `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `summary` (`sdk.Describe`), `guidance` (`sdk.Guidance`), `wants` (`sdk.Wants`, what a call does in a person's words), `commit` (`sdk.Commit`, emit only), `serves` (`sdk.Serves`, handler only) and `input` |
 | `Route(handler, h, opts…)` | `routes[]`, with `samples` when `h` is an `extension.RouteSampler`, `binding` (`sdk.RouteBinding`) and `config` (`sdk.RouteConfig`) |
 | `WorkKind(kind, opts…)` | `work_kinds[]`, `standing` (`sdk.Standing`), `trigger` (`sdk.Trigger(fn)`), `timed` (`sdk.Timed`: a dry run starts none of its Work) |
 | `Task(name, every, fn)`, `Check(name, fn, opts…)` | `tasks[]` with its interval, `checks[]` (`sdk.Deep`) |
@@ -159,7 +159,7 @@ Schemas are built with `t` (`string`, `enum`, `literal`, `integer`, `number`, `b
 
 | Registration | Declares |
 | --- | --- |
-| `operation(name, { input, summary, guidance, serves, output, handler })` | `operations[]`, kind `handler`, with `summary`, `guidance`, `serves` and `input` |
+| `operation(name, { input, summary, guidance, wants, serves, output, handler })` | `operations[]`, kind `handler`, with `summary`, `guidance`, `wants`, `serves` and `input` |
 | `entryType(type, { config, validate, configure })` | `extensions[]`: a scope entry type. A config that `config` refuses, or that `validate` throws on, is invalid before the daemon applies it. The host reports what `config` refuses at each field, and a `ConfigError` thrown from `validate` with its own diagnostics ([config diagnostics](../extension-protocol/#config-diagnostics)), and `configure` receives each generation's entries with their config typed |
 | `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
 | `task(name, intervalSeconds, fn)` | `tasks[]` |

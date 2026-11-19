@@ -60,6 +60,13 @@ export interface OperationSpec<S extends Type<unknown>, Out> {
   summary?: string;
   /** When an agent should call the operation, in Markdown. */
   guidance?: string;
+  /**
+   * What a call does in a person's words, for whoever is asked to approve
+   * it: a phrase that follows "wants to", with {field} for a top-level
+   * input value (e.g. "deploy {service} to {env}"; one line, at most 200
+   * bytes).
+   */
+  wants?: string;
   /** A capability the operation answers, routed by name (e.g. "git.credential"). */
   serves?: string;
   /** The payload schema the output is sent as (default "<operation>.v1"). */
@@ -190,6 +197,7 @@ export class Extension {
       ...(spec.summary === undefined ? {} : { summary: spec.summary }),
       ...(spec.guidance === undefined ? {} : { guidance: spec.guidance }),
       input: json(input),
+      ...(spec.wants === undefined ? {} : { wants: spec.wants }),
       ...(spec.serves === undefined ? {} : { serves: spec.serves }),
     };
     (this.manifest.provides.operations ??= []).push(decl);

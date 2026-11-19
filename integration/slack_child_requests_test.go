@@ -2,9 +2,12 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -38,7 +41,7 @@ func (e *slEnv) handOff(id, parent domain.ID, binding, title string, states ...d
 func (e *slEnv) prompts(root string) []sl.Message {
 	var out []sl.Message
 	for _, m := range e.fake.Thread(slChannel, root) {
-		if len(m.Blocks) == 2 && m.Blocks[1]["type"] == "actions" && m.Blocks[0]["type"] != "plan" {
+		if n := len(m.Blocks); n >= 2 && m.Blocks[n-1]["type"] == "actions" && m.Blocks[0]["type"] != "plan" {
 			out = append(out, m)
 		}
 	}
@@ -67,13 +70,17 @@ func TestSlackShowsChildRequestsInTheConversationsThread(t *testing.T) {
 	e.handOff("child/planner", w.ID, "planner", "Plan the fix", domain.WorkRunning, domain.WorkWaiting)
 	e.handOff("child/steve", "child/planner", "specialist", "Open the PR", domain.WorkRunning, domain.WorkWaiting)
 	states := map[domain.ID]string{"child/steve": extension.RequestOpen, "child/planner": extension.RequestOpen}
+	by, settled := "", time.Time{}
+	e.fake.SetUserName(slAlice, "Alice")
 	e.requests = func(_ context.Context, scope, work domain.ID) ([]extension.RequestOffer, error) {
 		switch {
 		case scope != slScope:
 			return nil, nil
 		case work == "child/steve":
 			return []extension.RequestOffer{{Provider: "decisions", Request: extension.Request{ID: "ask/1", Label: "Approve or refuse github.pr.create", Action: "answer",
-				Responders: []string{"slack:" + slAlice}, State: states[work]}}}, nil
+				Responders: []string{"slack:" + slAlice, "operator:local"}, State: states[work], By: by, SettledAt: settled, Wording: &extension.Wording{Wants: "open a pull request",
+					Fields:  []extension.WordingField{{Name: "Title", Value: "Fix checkout <now>"}},
+					Choices: []extension.ChoiceWording{{Choice: "approve", Label: "Approve", Tone: extension.ToneAffirm}, {Choice: "refuse", Label: "Refuse", Tone: extension.ToneDanger, Confirm: "Refuse it?"}}}}}}, nil
 		case work == "child/planner":
 			return []extension.RequestOffer{{Provider: "decisions", Request: extension.Request{ID: "ask/2", Label: "Approve or refuse git.sign_in", Action: "answer",
 				Responders: []string{"operator"}, State: states[work]}}}, nil
@@ -90,8 +97,9 @@ func TestSlackShowsChildRequestsInTheConversationsThread(t *testing.T) {
 	title, tasks, _ := planOf(t, e.progress(root)[0])
 	want := []shownTask{
 		{"Plan the fix", "in_progress"},
-		{"planner asks: Approve or refuse git.sign_in (for operator)", "in_progress"},
-		{"Steve asks: Approve or refuse github.pr.create (for slack:" + slAlice + ")", "in_progress"},
+		// Plain text: Slack people by name, nobody else by an ID.
+		{"planner asks: Approve or refuse git.sign_in", "in_progress"},
+		{"Steve wants to open a pull request (for Alice)", "in_progress"},
 	}
 	if title != "Working" || len(tasks) != len(want) {
 		t.Fatalf("plan: %q %+v", title, tasks)
@@ -104,12 +112,23 @@ func TestSlackShowsChildRequestsInTheConversationsThread(t *testing.T) {
 
 	// Only Steve's request has a Slack responder, so only it is prompted.
 	ps := e.prompts(root)
-	if len(ps) != 1 || ps[0].Text != "Steve asks: Approve or refuse" {
+	if len(ps) != 1 || ps[0].Text != "Steve wants to open a pull request" {
 		t.Fatalf("prompts: %+v", ps)
 	}
+	// One sentence that mentions Alice, so Slack notifies her; the input
+	// as fields, escaped; the operator only counted; styled buttons.
+	blocks, _ := json.Marshal(ps[0].Blocks)
 	section := ps[0].Blocks[0]["text"].(map[string]any)["text"].(string)
-	if !strings.Contains(section, "Fix checkout") || !strings.Contains(section, "Who can answer: slack:"+slAlice) {
+	if section != "*Steve* wants to open a pull request. <@"+slAlice+">, do you approve?" {
 		t.Fatalf("prompt text: %q", section)
+	}
+	for _, want := range []string{`"*Title*\nFix checkout \u0026lt;now\u0026gt;"`, "1 person outside Slack can answer too.", `"style":"primary"`, `"style":"danger"`, `"text":"Refuse it?"`} {
+		if !strings.Contains(string(blocks), want) {
+			t.Fatalf("prompt blocks lack %s: %s", want, blocks)
+		}
+	}
+	if strings.Contains(string(blocks), "operator:local") || strings.Contains(string(blocks), "Who can answer") {
+		t.Fatalf("prompt shows a responder's ID: %s", blocks)
 	}
 	if e.converge(); len(e.prompts(root)) != 1 {
 		t.Fatal("prompted twice")
@@ -119,7 +138,7 @@ func TestSlackShowsChildRequestsInTheConversationsThread(t *testing.T) {
 		got = append(got, r)
 		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
 	}
-	buttons, _ := ps[0].Blocks[1]["elements"].([]any)
+	buttons, _ := ps[0].Blocks[len(ps[0].Blocks)-1]["elements"].([]any)
 	refuse := buttons[1].(map[string]any)
 	if err := e.projector.Interact(context.Background(), e.fake.Press(slChannel, root, ps[0].TS, slAlice, refuse["action_id"].(string), refuse["value"].(string))); err != nil {
 		t.Fatal(err)
@@ -130,7 +149,17 @@ func TestSlackShowsChildRequestsInTheConversationsThread(t *testing.T) {
 
 	// Steve's request is refused and the planner's times out.
 	states["child/steve"], states["child/planner"] = extension.RequestRefused, extension.RequestExpired
+	by, settled = "slack:"+slAlice, time.Date(2026, 11, 19, 7, 53, 0, 0, time.UTC)
 	e.converge()
+	// The prompt loses its buttons for one line saying who refused it.
+	closed, _ := e.fake.Message(slChannel, ps[0].TS)
+	if hasButtons(closed) {
+		t.Fatalf("the settled prompt kept its buttons: %+v", closed)
+	}
+	line := closed.Blocks[len(closed.Blocks)-1]["elements"].([]any)[0].(map[string]any)["text"]
+	if line != "❌ Refused by <@"+slAlice+"> at <!date^"+strconv.FormatInt(settled.Unix(), 10)+"^{time}|07:53 UTC>" || closed.Text != "❌ Refused by <@"+slAlice+"> at 07:53 UTC" {
+		t.Fatalf("closed prompt: %q / %q", line, closed.Text)
+	}
 	_, tasks, _ = planOf(t, e.progress(root)[0])
 	if len(tasks) != 3 || tasks[1].Status != "error" || tasks[2].Status != "error" {
 		t.Fatalf("plan once refused and expired: %+v", tasks)

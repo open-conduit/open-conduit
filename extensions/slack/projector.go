@@ -180,6 +180,17 @@ type Intent struct {
 	// It is not part of the intent's identity: the buttons are the host's
 	// layout, not what the agent said.
 	Feedback bool
+	// Asks is the request a prompt asks, and Shown the prompt without its
+	// buttons: once the request settles, the prompt is changed to Shown
+	// and a line saying how it ended (issue #762). Nil for anything else.
+	Asks  *promptAsks
+	Shown []map[string]any
+}
+
+// promptAsks names the request a prompt asks: its provider and ID.
+type promptAsks struct {
+	Provider string `json:"provider"`
+	Request  string `json:"request"`
 }
 
 type intentRecord struct {
@@ -206,6 +217,11 @@ type intentRecord struct {
 	Cause       domain.ID `json:"cause,omitempty"`
 	Binding     string    `json:"binding,omitempty"`
 	Feedback    bool      `json:"feedback,omitempty"`
+	// Asks and Shown are a prompt's (Intent.Asks, Intent.Shown); Closed
+	// marks a prompt changed to say how its request ended.
+	Asks   *promptAsks       `json:"asks,omitempty"`
+	Shown  []json.RawMessage `json:"shown,omitempty"`
+	Closed bool              `json:"closed,omitempty"`
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -268,7 +284,8 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
-				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding, Feedback: in.Feedback}
+				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding, Feedback: in.Feedback,
+				Asks: in.Asks, Shown: raws(in.Shown)}
 			if in.Durable {
 				rec.Text, rec.Content = in.Text, in.Content
 			}
@@ -645,6 +662,15 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 			if errors.As(err, &rate) || errors.Is(err, ErrCredential) {
 				return res, err
 			}
+		}
+	}
+	if done < limit {
+		n, codes, err := p.closePrompts(ctx, limit-done)
+		done += n
+		res.Posted += n
+		res.Codes = append(res.Codes, codes...)
+		if err != nil {
+			return res, err
 		}
 	}
 	n, codes, err := p.Progress(ctx, limit)

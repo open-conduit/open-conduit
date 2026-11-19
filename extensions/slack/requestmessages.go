@@ -51,15 +51,19 @@ type requestMessage struct {
 	User     string    `json:"user"`
 	// Title is the message's first line (who asks, and what), kept to
 	// say how the request ended in the same words.
-	Title       string    `json:"title"`
-	Link        string    `json:"link,omitempty"`
-	Channel     string    `json:"channel,omitempty"`
-	TS          string    `json:"ts,omitempty"`
-	State       string    `json:"state"`
-	Code        string    `json:"code,omitempty"`
-	Attempts    int       `json:"attempts"`
-	CreatedAt   time.Time `json:"created_at"`
-	AttemptedAt time.Time `json:"attempted_at,omitzero"`
+	Title string `json:"title"`
+	// Shown is the message's blocks without its buttons, kept to change
+	// it to say how the request ended (empty for a message posted before
+	// they were kept, which is closed as text).
+	Shown       []json.RawMessage `json:"shown,omitempty"`
+	Link        string            `json:"link,omitempty"`
+	Channel     string            `json:"channel,omitempty"`
+	TS          string            `json:"ts,omitempty"`
+	State       string            `json:"state"`
+	Code        string            `json:"code,omitempty"`
+	Attempts    int               `json:"attempts"`
+	CreatedAt   time.Time         `json:"created_at"`
+	AttemptedAt time.Time         `json:"attempted_at,omitzero"`
 }
 
 func requestMessageKey(id string) string { return "dm/" + digest(id)[:40] }
@@ -252,17 +256,15 @@ func (p *Projector) wantedMessages(ctx context.Context) ([]wanted, error) {
 				if o.Provider != r.Provider || o.ID != r.Action {
 					continue
 				}
-				shown := o
-				shown.Label = a.who + " asks: " + o.Label
-				shown.Detail = strings.TrimSpace(o.Detail + "\n\nWho can answer: " + strings.Join(r.Responders, ", "))
-				blocks, ok := promptBlocks(a.work.ID, shown)
+				req := r.Request
+				l, ok := asked{who: a.who, work: a.work.ID, offer: o, request: &req, direct: true}.layout()
 				if !ok {
 					continue
 				}
 				for _, user := range people {
 					id := requestMessageID(a.work.ID, r.Provider, r.ID, user)
-					out = append(out, wanted{requestMessage: requestMessage{ID: id, Work: a.work.ID, Provider: r.Provider, Request: r.ID, User: user, Title: shown.Label},
-						text: shown.Label, blocks: blocks, channel: a.channel, thread: a.thread})
+					out = append(out, wanted{requestMessage: requestMessage{ID: id, Work: a.work.ID, Provider: r.Provider, Request: r.ID, User: user, Title: l.text, Shown: raws(l.shown)},
+						text: l.text, blocks: l.blocks, channel: a.channel, thread: a.thread})
 				}
 			}
 		}
@@ -436,7 +438,7 @@ func (p *Projector) recordRequestMessage(ctx context.Context, key string, rec re
 // open to say how it ended, without its buttons. wrote says it called
 // Slack.
 func (p *Projector) closeRequestMessage(ctx context.Context, rec requestMessage) (bool, error) {
-	ended := "This request is closed."
+	line := "This request is closed."
 	rs, err := p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), rec.Work)
 	if err != nil {
 		return false, err
@@ -452,20 +454,25 @@ func (p *Projector) closeRequestMessage(ctx context.Context, rec requestMessage)
 			if slices.Contains(namedSlackPeople(r.Responders), rec.User) {
 				return false, nil
 			}
-			ended = "You are no longer asked to answer this."
+			line = "You are no longer asked to answer this."
 			break
 		}
-		ended = requestEnded(r)
+		line = ended(r.Request)
 	}
 	if p.o.Settings.Projection.DryRun {
 		return false, nil
 	}
-	text := rec.Title + "\n\n" + ended
-	blocks := []map[string]any{{"type": "section", "text": map[string]any{"type": "plain_text", "text": truncate(text, 3000)}}}
-	if rec.Link != "" {
-		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "<" + rec.Link + "|Open the conversation it was asked in>"}}})
+	text := rec.Title + "\n\n" + plainLine(line)
+	var blocks []json.RawMessage
+	if len(rec.Shown) > 0 {
+		blocks = rec.Shown
+	} else {
+		blocks = []json.RawMessage{raw(map[string]any{"type": "section", "text": map[string]any{"type": "plain_text", "text": truncate(rec.Title, 3000)}})}
 	}
-	err = p.o.Client.UpdateMessage(ctx, Update{Channel: rec.Channel, TS: rec.TS, Text: truncate(text, 3000), Blocks: blocks})
+	if rec.Link != "" {
+		blocks = append(append([]json.RawMessage{}, blocks...), raw(map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "<" + rec.Link + "|Open the conversation it was asked in>"}}}))
+	}
+	err = p.o.Client.UpdateMessage(ctx, Update{Channel: rec.Channel, TS: rec.TS, Text: truncate(text, 3000), Blocks: closedBlocks(blocks, line)})
 	var refused *APIError
 	if errors.As(err, &refused) && (refused.Code == "message_not_found" || refused.Code == "channel_not_found") {
 		// Deleted in Slack: nothing is left to change.
@@ -475,25 +482,6 @@ func (p *Projector) closeRequestMessage(ctx context.Context, rec requestMessage)
 		return true, err
 	}
 	return true, p.recordRequestMessage(ctx, requestMessageKey(rec.ID), rec, messageClosed, "", "", "")
-}
-
-// requestEnded says how a settled request ended.
-func requestEnded(r extension.RequestOffer) string {
-	by := ""
-	if r.By != "" {
-		by = " by " + r.By
-	}
-	switch r.State {
-	case extension.RequestAnswered:
-		return "Answered" + by + "."
-	case extension.RequestRefused:
-		return "Refused" + by + "."
-	case extension.RequestExpired:
-		return "Nobody answered in time, so it expired."
-	case extension.RequestWithdrawn:
-		return "Withdrawn: the agent stopped waiting for an answer."
-	}
-	return "This request is closed."
 }
 
 func truncate(s string, n int) string {

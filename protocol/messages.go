@@ -238,6 +238,9 @@ type OperationGateParams struct {
 	Authority  Authority `json:"authority"`
 	Input      Payload   `json:"input"`
 	Capability string    `json:"capability,omitempty"`
+	// Wants is the called operation's sentence for a person
+	// (extension.GateCall.Wants), absent when it declares none.
+	Wants string `json:"wants,omitempty"`
 }
 
 // OperationGateResult is operation.gate's answer: no Wait lets the call

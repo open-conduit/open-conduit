@@ -307,7 +307,7 @@ func (r *Remote) Registration() extension.Registration {
 	}
 	for _, decl := range r.m.Provides.Operations {
 		name := decl.Name
-		op := extension.Operation{Name: name, Summary: decl.Summary, Input: decl.Input, Guidance: decl.Guidance, Serves: decl.Serves, SecretOutput: decl.SecretOutput}
+		op := extension.Operation{Name: name, Summary: decl.Summary, Input: decl.Input, Guidance: decl.Guidance, Wants: decl.Wants, Serves: decl.Serves, SecretOutput: decl.SecretOutput}
 		params := func(ctx context.Context, a extension.Authority, in domain.Payload) protocol.OperationParams {
 			return protocol.OperationParams{Operation: name, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(in), RequestID: extension.CallRequestID(ctx)}
 		}
@@ -389,7 +389,7 @@ func (r *Remote) Registration() extension.Registration {
 				return nil, nil
 			}
 			var out protocol.OperationGateResult
-			if err := r.p.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: c.Operation, Owner: c.Owner, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input), Capability: c.Capability}, &out); err != nil {
+			if err := r.p.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: c.Operation, Owner: c.Owner, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input), Capability: c.Capability, Wants: c.Wants}, &out); err != nil {
 				var oe *extension.OperationError
 				if errors.As(err, &oe) {
 					return nil, oe

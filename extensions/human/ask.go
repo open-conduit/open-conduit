@@ -98,6 +98,13 @@ type Ask struct {
 	// announced (see Announce).
 	Announce  bool   `json:"announce,omitempty"`
 	Announced string `json:"announced,omitempty"`
+	// Wants, Fields, Input and Confirm word an approval request for the
+	// person asked (see wording): what the call does, its input's values,
+	// the whole input when a value is nested, and the option to confirm.
+	Wants   string                   `json:"wants,omitempty"`
+	Fields  []extension.WordingField `json:"fields,omitempty"`
+	Input   string                   `json:"input,omitempty"`
+	Confirm string                   `json:"confirm,omitempty"`
 }
 
 // Given is an accepted answer.
