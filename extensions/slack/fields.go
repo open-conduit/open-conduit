@@ -32,6 +32,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "post"},
 		{Name: "progress", Help: `{"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed`},
 		{Name: "identities", Help: "a binding's own name and icon: [{binding, username, icon_emoji or icon_url}]"},
+		{Name: "request_messages", Help: `{"enabled": true}: a direct message to each Slack person a request names as a responder, with its buttons, changed to the result once it settles`},
 		{Name: "uploads", Help: "turns slack.upload on: {max_bytes (default and at most 10 MB), media_types: [\"image/png\", \"image/*\" or \"*/*\"]}, checked before anything is sent"},
 	}
 }

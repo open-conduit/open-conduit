@@ -194,6 +194,17 @@ type ExtensionConfig struct {
 	// run's progress message, and, when the request's responders include
 	// a Slack person, as a prompt with its buttons. Off by default.
 	ChildRequests bool `json:"child_requests,omitempty"`
+	// RequestMessages, when enabled, sends each Slack person a request
+	// names as a responder (slack:<member ID>) a direct message with the
+	// request and its buttons, for any Work in the scope, and changes it to
+	// how the request ended once it settles. Off by default.
+	RequestMessages *RequestMessagesConfig `json:"request_messages,omitempty"`
+}
+
+// RequestMessagesConfig turns on direct messages to a request's named
+// Slack responders.
+type RequestMessagesConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 // FeedbackConfig turns on feedback buttons below replies.
@@ -324,6 +335,9 @@ type Settings struct {
 	// ChildRequests shows child Work's requests in the conversation's
 	// thread.
 	ChildRequests bool
+	// RequestMessages sends a request's named Slack responders a direct
+	// message.
+	RequestMessages bool
 }
 
 // AsksFeedback reports whether a reply posted on binding carries feedback
@@ -509,6 +523,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		s.Feedback, s.FeedbackBindings = fc.Enabled, bindings
 	}
 	s.ChildRequests = c.ChildRequests
+	s.RequestMessages = c.RequestMessages != nil && c.RequestMessages.Enabled
 	if u := c.Uploads; u != nil {
 		s.Uploads, s.UploadMax = true, MaxUpload
 		if u.MaxBytes != 0 {

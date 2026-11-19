@@ -120,6 +120,72 @@ func TestDaemonHumanAskFromGitHubWork(t *testing.T) {
 	}
 }
 
+// TestDaemonHumanRequestReachesADeploymentsBinding drives the composed
+// daemon with the human package: a `human` route gives the asker's request
+// its own Work on a binding of the deployment's (here a script that keeps
+// what it is told), which hears the request open and, after the answer, how
+// it settled. The asker is not woken by either Event.
+func TestDaemonHumanRequestReachesADeploymentsBinding(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	defer fake.Close()
+	fake.OpenIssue("Migrate the orders table", "", githubtest.User{Login: "alice", Type: "User"}, "bug")
+	t.Setenv("OC_TEST_GITHUB_TOKEN", "tok")
+	d := newDrill(t)
+	var cfg map[string]any
+	if err := json.Unmarshal(humanDaemonConfig(fake.URL, d.root), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	scope := cfg["scopes"].([]any)[0].(map[string]any)
+	notify := `cat "$OS_INPUT_FILE" >> ` + d.root + `/told.jsonl && echo >> ` + d.root + `/told.jsonl && os outcome handoff --summary told --request-id "$OS_EXECUTION_ID" >/dev/null`
+	scope["bindings"] = append(scope["bindings"].([]any), map[string]any{"name": "notify", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"},
+		"operations": []string{"read_context", "declare_outcome"}, "secret_names": []any{}, "config": map[string]any{"command": notify}})
+	scope["routes"] = append(scope["routes"].([]any), map[string]any{"name": "requests", "handler": "human", "binding": "notify", "active_policy": "queue", "config": map[string]any{}})
+	raw, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.start("")
+	ctx := context.Background()
+	works := func(kind string) []client.Work {
+		page, err := d.c.Works(ctx, url.Values{"scope_id": {"eng"}})
+		if err != nil {
+			return nil
+		}
+		var out []client.Work
+		for _, w := range page.Items {
+			if w.Kind == kind {
+				out = append(out, w)
+			}
+		}
+		return out
+	}
+	told := func() string { b, _ := os.ReadFile(filepath.Join(d.root, "told.jsonl")); return string(b) }
+	d.until("the request's Work heard it open", 60*time.Second, func() bool {
+		return len(works("human.request")) == 1 && strings.Contains(told(), "human.request.opened")
+	})
+	asker := works("github.issue")
+	if len(asker) != 1 || asker[0].State != "waiting" {
+		t.Fatalf("asker: %+v", asker)
+	}
+	if _, err := d.c.InvokeAction(ctx, client.ActionTarget{WorkID: asker[0].ID}, "decisions", "answer", "1", "first"); err != nil {
+		t.Fatal(err)
+	}
+	d.until("the request's Work heard it settle", 60*time.Second, func() bool { return strings.Contains(told(), "human.request.settled") })
+	if !strings.Contains(told(), "operator:local") {
+		t.Fatalf("told: %s", told())
+	}
+	d.until("asker resumed and completed", 30*time.Second, func() bool {
+		ws := works("github.issue")
+		return len(ws) == 1 && ws[0].State == "completed"
+	})
+	if xs := d.executions(asker[0].ID); len(xs) != 2 {
+		t.Fatalf("the asker ran %d times", len(xs))
+	}
+	if ws := works("human.request"); len(ws) != 1 || len(d.executions(ws[0].ID)) != 2 {
+		t.Fatalf("request Work: %+v", ws)
+	}
+}
+
 // TestHumanGateBindingsValidateAtLoad: the documented one-agent gate
 // validates offline in a scope with those bindings, and config check
 // refuses a gate naming a binding the scope doesn't have, as for_bindings

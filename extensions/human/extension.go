@@ -2,6 +2,8 @@ package human
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +46,8 @@ var (
 	_ inproc.Annotator  = (*Extension)(nil)
 	_ inproc.Renderer   = (*Extension)(nil)
 	_ inproc.Tasker     = (*Extension)(nil)
+	_ inproc.Router     = (*Extension)(nil)
+	_ inproc.WorkKinder = (*Extension)(nil)
 )
 
 func (*Extension) Name() string { return Type }
@@ -53,7 +57,17 @@ func (*Extension) Types() []inproc.ConfigType {
 		{Name: "responders", Help: "who may answer, each kind:id or a bare kind", Default: `["operator:local"]`},
 		{Name: "surfaces", Help: "where the question is shown", Default: `["tui"]`},
 		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "for_bindings": ["newbie"], "input": {"role": "write"}, "valid_for": "15m", "timeout": "24h"}]: operations that need approval to run; for_bindings, input (top-level field values) and valid_for (how long an approval covers the same call) narrow or lengthen it`},
-	}}}
+	}}, {Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }}}
+}
+
+// Routes is the `human` route: each request's Events to its own Work.
+func (*Extension) Routes() map[string]extension.RouteHandler {
+	return map[string]extension.RouteHandler{Type: Route{}}
+}
+
+// WorkKinds declares the Work the route makes for a request.
+func (*Extension) WorkKinds() []inproc.WorkKind {
+	return []inproc.WorkKind{{Kind: WorkKindRequest}}
 }
 
 func (*Extension) Operations() []string { return Operations() }
@@ -132,7 +146,7 @@ func (x *Extension) Render(ctx context.Context, e domain.Event) (string, bool) {
 	return RenderEvent(e, Lookup(ctx, x.host.Store, x.host.Now))
 }
 
-// Tasks settles ask records.
+// Tasks settles ask records and announces their changes.
 func (x *Extension) Tasks() []inproc.Task {
 	return []inproc.Task{{Name: "asks", Pace: syncPace, Run: func(ctx context.Context) error {
 		res, err := Sync(ctx, x.host.Store, x.host.Now())
@@ -142,14 +156,23 @@ func (x *Extension) Tasks() []inproc.Task {
 		for _, a := range res.Escalated {
 			x.escalated(ctx, a)
 		}
-		if err != nil || x.host.SettleHold == nil {
+		if err != nil {
 			return err
+		}
+		// Announced once settled, so each change is announced as it
+		// stands; one that fails is announced on a later pass.
+		announced, announceErr := Announce(ctx, x.host.Store, x.host.Now(), x.host.AcceptInTx)
+		if announced > 0 && x.host.Nudge != nil {
+			x.host.Nudge()
+		}
+		if x.host.SettleHold == nil {
+			return announceErr
 		}
 		n, err := SettleStarts(ctx, x.host.Store, x.host.Now(), x.host.SettleHold)
 		if n > 0 && x.host.Log != nil {
 			x.host.Log.Info("start approvals settled", "settled", n)
 		}
-		return err
+		return errors.Join(announceErr, err)
 	}}}
 }
 

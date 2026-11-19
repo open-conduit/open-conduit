@@ -90,6 +90,14 @@ type Ask struct {
 	// Checked is the sequence through which answers have been audited.
 	Checked  uint64    `json:"checked,omitempty"`
 	ClosedAt time.Time `json:"closed_at,omitzero"`
+	// Binding is the binding a start approval's Work would start on (an
+	// asking run's is its Execution's).
+	Binding string `json:"binding,omitempty"`
+	// Announce marks an ask whose changes are announced as request Events
+	// (every ask since issue #758), and Announced the latest phase
+	// announced (see Announce).
+	Announce  bool   `json:"announce,omitempty"`
+	Announced string `json:"announced,omitempty"`
 }
 
 // Given is an accepted answer.

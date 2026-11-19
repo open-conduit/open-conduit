@@ -194,7 +194,10 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 	if json.Unmarshal(payload, &in) != nil || in.Type != "block_actions" {
 		return nil
 	}
-	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !p.o.Settings.Observes(in.Container.ChannelID) {
+	// A press in a DM is taken when the entry sends request messages
+	// there: the provider still decides whether the presser may answer.
+	where := p.o.Settings.Observes(in.Container.ChannelID) || p.o.Settings.RequestMessages && IsDirect(in.Container.ChannelID)
+	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !where {
 		return nil
 	}
 	for _, a := range in.Actions {

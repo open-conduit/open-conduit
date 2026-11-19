@@ -60,7 +60,8 @@ func (t *Tools) StartGate(ctx context.Context, c extension.StartCall) (*extensio
 		}
 		rec = Ask{ID: startAskID(c.Work.ID, now), Scope: c.Work.ScopeID, Work: c.Work.ID, Provider: entry.Name, Gate: gate, Start: true,
 			Question: "Allow " + gate + " to start?", Options: []string{OptionApprove, OptionRefuse}, Context: startContext(c),
-			Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces, AskedAt: now, Sequence: seq, State: StateOpen}
+			Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces, AskedAt: now, Sequence: seq, State: StateOpen,
+			Binding: c.Binding, Announce: true}
 		if e := rule.Escalate; e != nil {
 			rec.EscalateAt, rec.EscalateTo, rec.Deadline = rec.Deadline, e.Responders, rec.Deadline.Add(e.timeout)
 		}
