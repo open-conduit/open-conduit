@@ -145,7 +145,9 @@ func (p *Projector) requestMessages(ctx context.Context, limit int) (int, []stri
 		rows, err := tx.List(p.ns, "dm/")
 		for _, row := range rows {
 			var rec requestMessage
-			if json.Unmarshal(row.Value, &rec) == nil && rec.State == messagePosted {
+			// An attempted post is closed too: its request may have
+			// settled before the marker search found it.
+			if json.Unmarshal(row.Value, &rec) == nil && (rec.State == messagePosted || rec.State == messageAttempted) {
 				posted = append(posted, rec)
 			}
 		}
@@ -159,6 +161,16 @@ func (p *Projector) requestMessages(ctx context.Context, limit int) (int, []stri
 		}
 		if open[rec.ID] {
 			continue
+		}
+		if rec.State == messageAttempted {
+			found, err := p.resolveAttempted(ctx, rec)
+			if stop(err) {
+				return n, codes, err
+			}
+			if err != nil || found.State != messagePosted {
+				continue
+			}
+			rec = found
 		}
 		wrote, err := p.closeRequestMessage(ctx, rec)
 		if wrote {
@@ -357,6 +369,47 @@ func (p *Projector) findRequestMessage(ctx context.Context, rec requestMessage, 
 		}
 	}
 	return "", "", nil
+}
+
+// resolveAttempted settles an attempted post whose request no longer calls
+// for it: once the search delay has passed, the post found in the DM by its
+// marker is recorded as posted (and returned, to be closed), and one not
+// there is closed as never posted, unless the request is still open for
+// the person, when it is left to be sent once it is wanted again. Before
+// the delay it is returned as it was.
+func (p *Projector) resolveAttempted(ctx context.Context, rec requestMessage) (requestMessage, error) {
+	if p.o.Now().Sub(rec.AttemptedAt) < p.o.SearchDelay {
+		return rec, nil
+	}
+	key := requestMessageKey(rec.ID)
+	channel, ts, err := p.findRequestMessage(ctx, rec, MarkerID(rec.ID))
+	var refused *APIError
+	if errors.As(err, &refused) {
+		// Unreadable (no im:read or im:history, which doctor warns of):
+		// whether it was posted can't be told, and asking again each
+		// pass would never tell, so it is closed as it stands.
+		return rec, p.recordRequestMessage(ctx, key, rec, messageClosed, "", "", "dm_unreadable")
+	}
+	if err != nil {
+		return rec, err
+	}
+	if ts != "" {
+		if err := p.recordRequestMessage(ctx, key, rec, messagePosted, channel, ts, ""); err != nil {
+			return rec, err
+		}
+		rec.State, rec.Channel, rec.TS = messagePosted, channel, ts
+		return rec, nil
+	}
+	rs, err := p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), rec.Work)
+	if err != nil {
+		return rec, err
+	}
+	for _, r := range rs {
+		if r.Provider == rec.Provider && r.ID == rec.Request && r.State == extension.RequestOpen && slices.Contains(namedSlackPeople(r.Responders), rec.User) {
+			return rec, nil
+		}
+	}
+	return rec, p.recordRequestMessage(ctx, key, rec, messageClosed, "", "", "")
 }
 
 // recordRequestMessage moves the record from rec's state to state.

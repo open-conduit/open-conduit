@@ -190,6 +190,33 @@ func TestSlackRequestMessageRecoversALostPost(t *testing.T) {
 	}
 }
 
+// A post whose answer was lost, for a request that settles before the
+// marker search runs, is still found and closed, not left with live
+// buttons, and is not sent again.
+func TestSlackRequestMessageClosesALostPostOnceSettled(t *testing.T) {
+	e := newSlackEnv(t, `,"request_messages":{"enabled":true}`, sl.IngressOptions{})
+	e.scheduled("job/nightly", "deployer")
+	r := &requestFixture{state: extension.RequestOpen, responders: []string{"slack:" + slAlice}}
+	e.offerRequest("job/nightly", r)
+	e.fake.FailNextPost("lost")
+	e.converge()
+	r.state, r.by = extension.RequestAnswered, "operator:local"
+	e.converge()
+	e.clock.Add(31 * time.Second)
+	e.converge()
+	dm, ms := e.directMessages(slAlice)
+	if len(ms) != 1 {
+		t.Fatalf("messages: %+v", ms)
+	}
+	if m, _ := e.fake.Message(dm, ms[0].TS); hasButtons(m) || !strings.Contains(m.Text, "Answered by operator:local") {
+		t.Fatalf("the lost post was left open: %+v", m)
+	}
+	updates := e.fake.Updates()
+	if e.converge(); e.fake.Updates() != updates {
+		t.Fatal("closed twice")
+	}
+}
+
 // Off by default: without request_messages nobody is sent a DM.
 func TestSlackRequestMessagesAreOffByDefault(t *testing.T) {
 	e := newSlackEnv(t, ``, sl.IngressOptions{})
