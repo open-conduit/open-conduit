@@ -66,9 +66,12 @@ func base() protocol.Manifest {
 	for _, c := range []string{"github", "github-capability", "github-git-bot", "github-auth"} {
 		p.Checks = append(p.Checks, protocol.CheckDecl{Name: c})
 	}
+	// action.submit: an /answer comment answers an approval for the
+	// login that wrote it (inproc.Host.Act).
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "GitHub",
 		Summary: "Issues, pull requests, comments, reviews and checks of a repository; the engineering tools.",
-		Command: protocol.HostRunCommand(Name), Provides: p}
+		Command: protocol.HostRunCommand(Name), Provides: p,
+		Permissions: []string{protocol.PermissionActionSubmit}}
 }
 
 // PlaybooksDir is where the package's playbooks are, relative to its

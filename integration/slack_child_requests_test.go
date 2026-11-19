@@ -2,12 +2,14 @@ package integration_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -200,5 +202,34 @@ func TestSlackPromptsAChildRequestOnlyWhenItsActionIsItsOwn(t *testing.T) {
 	}
 	if _, tasks, _ := planOf(t, e.progress(root)[0]); len(tasks) != 5 {
 		t.Fatalf("plan: %+v", tasks)
+	}
+}
+
+// A host that refuses to list a child's requests or a Work's actions (a
+// package whose manifest lacks the action.submit permission, issue #759)
+// shows nothing in the thread, so the pass reports why rather than leaving
+// the thread silently empty. Once the host answers, the codes clear.
+func TestSlackReportsAHostRefusingToListRequests(t *testing.T) {
+	e := newSlackEnv(t, `,"progress":{"enabled":true},"child_requests":true`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Open a PR for the checkout fix")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.converge()
+	e.moveWork(w.ID, domain.WorkRunning)
+	e.handOff("child/steve", w.ID, "specialist", "Open the PR", domain.WorkRunning, domain.WorkWaiting)
+	undeclared := protocol.Errorf(protocol.CodeUndeclared, "method not enabled by the manifest")
+	e.moveWork(w.ID, domain.WorkWaiting)
+	e.requests = func(context.Context, domain.ID, domain.ID) ([]extension.RequestOffer, error) { return nil, undeclared }
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) { return nil, undeclared }
+	res := e.converge()
+	if !slices.Contains(res.Codes, "requests:"+protocol.CodeUndeclared) || !slices.Contains(res.Codes, "actions:"+protocol.CodeUndeclared) {
+		t.Fatalf("codes: %v", res.Codes)
+	}
+	e.requests = func(context.Context, domain.ID, domain.ID) ([]extension.RequestOffer, error) { return nil, nil }
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) { return nil, nil }
+	if res = e.converge(); len(res.Codes) != 0 {
+		t.Fatalf("codes once the host answers: %v", res.Codes)
 	}
 }

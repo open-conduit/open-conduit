@@ -113,6 +113,7 @@ func (p *Projector) requestsOf(ctx context.Context, as []asker) []childRequest {
 	for _, a := range as {
 		rs, err := p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), a.work.ID)
 		if err != nil {
+			p.hostRefused("requests", err)
 			continue
 		}
 		for _, r := range rs {
@@ -226,6 +227,7 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 			}
 			if offers == nil {
 				if offers, err = p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), h.work.ID); err != nil {
+					p.hostRefused("actions", err)
 					break
 				}
 			}

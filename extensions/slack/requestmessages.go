@@ -227,6 +227,7 @@ func (p *Projector) wantedMessages(ctx context.Context) ([]wanted, error) {
 	for _, a := range as {
 		rs, err := p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), a.work.ID)
 		if err != nil {
+			p.hostRefused("requests", err)
 			continue
 		}
 		named := map[string]int{}
@@ -243,6 +244,7 @@ func (p *Projector) wantedMessages(ctx context.Context) ([]wanted, error) {
 			}
 			if offers == nil {
 				if offers, err = p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), a.work.ID); err != nil {
+					p.hostRefused("actions", err)
 					break
 				}
 			}

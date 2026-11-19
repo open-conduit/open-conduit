@@ -48,9 +48,12 @@ func base() protocol.Manifest {
 	for _, op := range sl.Operations() {
 		p.Operations = append(p.Operations, protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler})
 	}
+	// action.submit: a thread's buttons list and answer the actions on its
+	// Work and its child Work (inproc.Host.Actions, Act and Requests).
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Slack",
 		Summary: "Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work.",
-		Command: protocol.HostRunCommand(Name), Provides: p}
+		Command: protocol.HostRunCommand(Name), Provides: p,
+		Permissions: []string{protocol.PermissionActionSubmit}}
 }
 
 // New returns the bridge serving a new Slack extension.
