@@ -421,16 +421,40 @@ type Post struct {
 
 // PostMessage posts and returns the new message's ts.
 func (c *Client) PostMessage(ctx context.Context, p Post) (string, error) {
+	_, ts, err := c.PostMessageIn(ctx, p)
+	return ts, err
+}
+
+// PostMessageIn posts and returns the channel the message is in and its
+// ts. Posted to a person's user ID, the message goes to the app's direct
+// message with them, and the channel is that DM's (D…).
+func (c *Client) PostMessageIn(ctx context.Context, p Post) (channel, ts string, err error) {
 	var out struct {
-		TS string `json:"ts"`
+		Channel string `json:"channel"`
+		TS      string `json:"ts"`
 	}
 	if err := c.call(ctx, "chat.postMessage", nil, p, &out); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if out.TS == "" {
-		return "", &APIError{Method: "chat.postMessage", Code: "no_ts"}
+		return "", "", &APIError{Method: "chat.postMessage", Code: "no_ts"}
 	}
-	return out.TS, nil
+	if out.Channel == "" {
+		out.Channel = p.Channel
+	}
+	return out.Channel, out.TS, nil
+}
+
+// Permalink is a link to a message (chat.getPermalink), for a person to
+// open it from elsewhere.
+func (c *Client) Permalink(ctx context.Context, channel, ts string) (string, error) {
+	var out struct {
+		Permalink string `json:"permalink"`
+	}
+	if err := c.call(ctx, "chat.getPermalink", url.Values{"channel": {channel}, "message_ts": {ts}}, nil, &out); err != nil {
+		return "", err
+	}
+	return out.Permalink, nil
 }
 
 // Update is a new text and layout for a message the app posted

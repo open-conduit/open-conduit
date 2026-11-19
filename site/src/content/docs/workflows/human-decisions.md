@@ -157,11 +157,13 @@ When the Work is a Slack conversation, the question (with its context) or the ap
 
 When the Work was handed its task by a Slack conversation (`create_work`), at any depth, turn on `"child_requests": true` in the Slack entry to see its requests in that conversation's thread. Each shows in the thread's progress message as "Steve asks: Approve or refuse github.pr.create (for slack:U0123ABCD)", in progress until it is answered, and marked as an error if it is refused or times out. When a Slack person is among the responders, the request is also posted with its buttons, and a press answers the child's request. When only operators or GitHub users may answer, the thread shows only the state, and they answer where they are. Either way the conversation's agent isn't woken, and it can't answer for anyone.
 
+An approver who isn't in the thread, or Work with no thread at all, such as a scheduled job's, needs telling. Turn on `"request_messages": {"enabled": true}` in the Slack entry, and each Slack person a request names (`slack:<member id>`) gets a direct message from the app: who asks and what, the call and its input, a link to the conversation it was asked in when there is one, and the buttons. A press answers as you, as in a thread. Once the request is answered, refused or times out, wherever that happens, the message says so and loses its buttons. A bare `slack` responder names nobody, so it is sent nothing. For any other way of telling people, see [Telling people about a request](#telling-people-about-a-request).
+
 A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
 
 ## Telling people about a request
 
-A request shows only where someone looks: the TUI, the web view, the CLI, a GitHub issue or a Slack thread. Its responder is often somewhere else, such as an approver who isn't in the conversation that asked, Work a schedule started with no thread at all, or someone who works in another tool. So Open Conduit records an Event for each change of a request, and your deployment can tell people however it likes:
+A request shows only where someone looks: the TUI, the web view, the CLI, a GitHub issue or a Slack thread. Its responder is often somewhere else, such as an approver who isn't in the conversation that asked, Work a schedule started with no thread at all, or someone who works in another tool. Slack can [message its people directly](#answering-from-slack). For everyone else, Open Conduit records an Event for each change of a request, and your deployment can tell people however it likes:
 
 | Event | When |
 | --- | --- |

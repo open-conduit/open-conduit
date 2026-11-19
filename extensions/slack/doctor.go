@@ -61,14 +61,18 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 		r.Item += "; identities need " + CustomizeScope + ", which the token lacks, so those bindings' messages are refused"
 	}
 	missing := MissingScopes(id.Scopes)
-	var direct []string
+	var direct, recovery []string
 	if s.DirectMessages {
 		direct = MissingDirectScopes(id.Scopes)
+	} else if s.RequestMessages {
+		// A request message is posted with chat:write alone; reading the
+		// DM is only how a post whose answer was lost is found again.
+		recovery = MissingDirectScopes(id.Scopes)
 	}
-	if len(missing) == 0 && len(direct) == 0 {
+	if len(missing) == 0 && len(direct) == 0 && len(recovery) == 0 {
 		return r
 	}
-	missing = append(missing, direct...)
+	missing = append(append(missing, direct...), recovery...)
 	have := map[string]bool{}
 	for _, g := range id.Scopes {
 		have[g] = true
@@ -92,6 +96,9 @@ func CheckAuth(ctx context.Context, c *Client, s Settings) AuthReport {
 	}
 	if len(direct) > 0 {
 		r.Item += " (direct_messages is on, so direct messages are neither read nor recovered)"
+	}
+	if len(recovery) > 0 {
+		r.Item += " (request_messages is on, so a request message whose post went unanswered is sent again rather than found)"
 	}
 	r.Item += ": reinstall the app from the manifest (open-conduit init slack prints its create-app URL)"
 	return r

@@ -179,6 +179,42 @@ func (s *Server) AddMember(channel, name string) {
 	s.members[channel] = name
 }
 
+// openDirect is the app's DM with user (D…), opened as a member listing
+// it with that user when there is none yet. The caller holds s.mu.
+func (s *Server) openDirect(user string) string {
+	for id, who := range s.members {
+		if who == user && slack.IsDirect(id) {
+			return id
+		}
+	}
+	id := "D" + strings.TrimPrefix(strings.TrimPrefix(user, "U"), "W")
+	if s.members == nil {
+		s.members = map[string]string{}
+	}
+	s.members[id] = user
+	if _, ok := s.channels[id]; !ok {
+		s.channels[id] = nil
+	}
+	return id
+}
+
+// Direct is the app's DM with user, if it has one.
+func (s *Server) Direct(user string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, who := range s.members {
+		if who == user && slack.IsDirect(id) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// PermalinkOf is the link the fake gives a message (chat.getPermalink).
+func PermalinkOf(channel, ts string) string {
+	return "https://fake.slack.com/archives/" + channel + "/p" + strings.ReplaceAll(ts, ".", "")
+}
+
 // Close stops the server and its sockets.
 func (s *Server) Close() { s.SocketDrop(); s.srv.Close() }
 
@@ -495,6 +531,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer, status = s.post(r)
 	case "chat.update":
 		answer = s.update(r)
+	case "chat.getPermalink":
+		_ = r.ParseForm()
+		channel, ts := r.Form.Get("channel"), r.Form.Get("message_ts")
+		if s.find(channel, ts) == nil {
+			answer = apiAnswer{"ok": false, "error": "message_not_found"}
+		} else {
+			answer = apiAnswer{"ok": true, "channel": channel, "permalink": PermalinkOf(channel, ts)}
+		}
 	case "reactions.add", "reactions.remove":
 		answer = s.react(r, method == "reactions.add")
 	case "files.getUploadURLExternal":
@@ -598,6 +642,11 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 	var p slack.Post
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil || strings.TrimSpace(p.Text) == "" {
 		return apiAnswer{"ok": false, "error": "no_text"}, http.StatusOK
+	}
+	if strings.HasPrefix(p.Channel, "U") || strings.HasPrefix(p.Channel, "W") {
+		// As Slack does for a user ID: the app's DM with that person,
+		// opened if it isn't yet.
+		p.Channel = s.openDirect(p.Channel)
 	}
 	if _, ok := s.channels[p.Channel]; !ok {
 		return apiAnswer{"ok": false, "error": "channel_not_found"}, http.StatusOK

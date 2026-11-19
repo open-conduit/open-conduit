@@ -55,6 +55,7 @@ var MethodScopes = map[string][]string{
 	"chat.postMessage":             {"chat:write"},
 	"chat.postEphemeral":           {"chat:write"},
 	"chat.update":                  {"chat:write"},
+	"chat.getPermalink":            {},
 	"reactions.add":                {"reactions:write"},
 	"reactions.remove":             {"reactions:write"},
 	"users.conversations":          {"channels:read", "groups:read", "im:read"},
