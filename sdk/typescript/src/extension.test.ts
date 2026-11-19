@@ -82,6 +82,15 @@ function weather(): Extension {
     .check("weather", () => "ok");
 }
 
+test("an operation says what a call does in a person's words", () => {
+  const ext = extension("acme", { version: "0.1.0" }).operation("acme.deploy", {
+    input: t.object({ env: t.string() }),
+    wants: "deploy to {env}",
+    handler: () => ({}),
+  });
+  assert.equal(ext.manifest.provides.operations?.[0]?.wants, "deploy to {env}");
+});
+
 test("an operation declares the capability it serves", () => {
   const ext = extension("acme", { version: "0.1.0" }).operation(
     "acme.git.credential",

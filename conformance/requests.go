@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,7 +35,11 @@ var requestStates = map[string]bool{
 // CheckRequests verifies, for a request provider, on every target:
 //   - each request has an ID unique on the target and a label;
 //   - its State is one of the Request states;
-//   - By is set only on a settled request;
+//   - By and SettledAt are set only on a settled request;
+//   - its Wording, if any, is for an approval (Wants) or a question
+//     (Question), not both; each choice it words is worded once, with a
+//     tone of affirm, danger or none, and on a request with an Action is
+//     one of that action's choices;
 //   - Action is set only on an open request, names an action offered on
 //     the target now, and no two requests name the same action, so a
 //     surface pairing a request with its action pairs the right one;
@@ -52,8 +57,10 @@ func CheckRequests(f RequestFixture) error {
 			return 0, err
 		}
 		offered := map[string]bool{}
+		choices := map[string][]string{}
 		for _, a := range actions {
 			offered[a.ID] = true
+			choices[a.ID] = a.Choices
 		}
 		ids, named := map[string]bool{}, map[string]bool{}
 		answerable := 0
@@ -67,6 +74,11 @@ func CheckRequests(f RequestFixture) error {
 				return 0, fmt.Errorf("request %q has state %q", r.ID, r.State)
 			case r.By != "" && r.State == extension.RequestOpen:
 				return 0, fmt.Errorf("open request %q says who settled it", r.ID)
+			case !r.SettledAt.IsZero() && r.State == extension.RequestOpen:
+				return 0, fmt.Errorf("open request %q says when it was settled", r.ID)
+			}
+			if err := checkWording(r, choices); err != nil {
+				return 0, err
 			}
 			ids[r.ID] = true
 			if r.Action == "" {
@@ -96,6 +108,31 @@ func CheckRequests(f RequestFixture) error {
 		if _, err := check(t); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkWording checks a request's Wording against the rules CheckRequests
+// lists; choices are each offered action's.
+func checkWording(r extension.Request, choices map[string][]string) error {
+	w := r.Wording
+	if w == nil {
+		return nil
+	}
+	if w.Wants != "" && w.Question != "" {
+		return fmt.Errorf("request %q is worded as an approval and a question", r.ID)
+	}
+	seen := map[string]bool{}
+	for _, c := range w.Choices {
+		switch {
+		case seen[c.Choice]:
+			return fmt.Errorf("request %q words choice %q twice", r.ID, c.Choice)
+		case c.Tone != "" && c.Tone != extension.ToneAffirm && c.Tone != extension.ToneDanger:
+			return fmt.Errorf("request %q gives choice %q the tone %q", r.ID, c.Choice, c.Tone)
+		case r.Action != "" && !slices.Contains(choices[r.Action], c.Choice):
+			return fmt.Errorf("request %q words choice %q, which action %q doesn't offer", r.ID, c.Choice, r.Action)
+		}
+		seen[c.Choice] = true
 	}
 	return nil
 }

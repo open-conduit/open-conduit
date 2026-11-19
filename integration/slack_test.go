@@ -1702,3 +1702,52 @@ func TestSlackIdentityWithoutScopeIsRefused(t *testing.T) {
 		t.Fatalf("a binding without an identity: %v %v", out, err)
 	}
 }
+
+// A prompt is laid out from its request or not posted at all (issue #762):
+// while the host can't list a Work's requests, nothing is posted for it,
+// rather than a copy without them that nothing would close; and an offer
+// whose request has settled since the actions were listed isn't prompted.
+func TestSlackPromptWaitsForItsRequest(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse deploy.run", Choices: []string{"approve", "refuse"}, Awaited: true}}}, nil
+	}
+	state, fail := extension.RequestAnswered, true
+	e.requests = func(context.Context, domain.ID, domain.ID) ([]extension.RequestOffer, error) {
+		if fail {
+			fail = false
+			return nil, errors.New("host busy")
+		}
+		action := ""
+		if state == extension.RequestOpen {
+			action = "answer"
+		}
+		return []extension.RequestOffer{{Provider: "decisions", Request: extension.Request{ID: "ask/1", Label: "Approve or refuse deploy.run", Action: action,
+			Responders: []string{"slack"}, State: state, Wording: &extension.Wording{Wants: "deploy 1.2"}}}}, nil
+	}
+	e.park(w.ID, "wait/1")
+	if res, err := e.projector.Converge(context.Background(), 50); err != nil || res.Posted != 0 {
+		t.Fatalf("prompted while the requests couldn't be listed: %+v %v", res, err)
+	}
+	if res := e.converge(); res.Posted != 0 {
+		t.Fatalf("prompted a settled request: %+v", res)
+	}
+	state = extension.RequestOpen
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	var prompts []sl.Message
+	for _, m := range e.fake.Thread(slChannel, root) {
+		if len(m.Blocks) > 0 {
+			prompts = append(prompts, m)
+		}
+	}
+	if len(prompts) != 1 || prompts[0].Text != "agent wants to deploy 1.2" {
+		t.Fatalf("prompts: %+v", prompts)
+	}
+}

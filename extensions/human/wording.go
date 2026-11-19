@@ -141,8 +141,10 @@ func fieldName(key string) string {
 
 // inputWording is an approval's call's input as named values: each
 // top-level value (only those the gate's fields list, when it lists any,
-// under the names it gives them), and the whole input as indented JSON
-// when a value it shows is nested or there are more than fit.
+// under the names it gives them), and the input as indented JSON when a
+// value it shows is nested or there are more than fit: the whole input, or
+// with fields listed, only those fields, so a field the gate leaves out is
+// never shown.
 func inputWording(input json.RawMessage, names map[string]string) ([]extension.WordingField, string) {
 	pairs, ok := topLevel(input)
 	if !ok {
@@ -153,6 +155,7 @@ func inputWording(input json.RawMessage, names map[string]string) ([]extension.W
 	}
 	var fields []extension.WordingField
 	whole := false
+	var shown []pair
 	for _, p := range pairs {
 		name := fieldName(p.key)
 		if len(names) > 0 {
@@ -164,6 +167,7 @@ func inputWording(input json.RawMessage, names map[string]string) ([]extension.W
 				name = given
 			}
 		}
+		shown = append(shown, p)
 		v, ok := scalar(p.value)
 		if !ok {
 			if t := strings.TrimSpace(string(p.value)); t != "null" {
@@ -179,10 +183,25 @@ func inputWording(input json.RawMessage, names map[string]string) ([]extension.W
 	if len(fields) > maxFields {
 		fields, whole = fields[:maxFields], true
 	}
-	if whole {
+	switch {
+	case !whole:
+		return fields, ""
+	case len(names) == 0:
 		return fields, indented(input)
 	}
-	return fields, ""
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i, p := range shown {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		k, _ := json.Marshal(p.key)
+		b.Write(k)
+		b.WriteByte(':')
+		b.Write(p.value)
+	}
+	b.WriteByte('}')
+	return fields, indented(b.Bytes())
 }
 
 // indented is input as indented JSON, clipped.

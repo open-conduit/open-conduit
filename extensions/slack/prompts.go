@@ -9,6 +9,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -106,15 +107,28 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 		// The requests the offers answer, for their wording and
 		// responders; a provider that reports none is prompted from its
 		// label and detail.
+		// A host that can't list them now leaves the Work for the next
+		// pass, rather than posting a copy laid out without them; one that
+		// doesn't serve listing at all reports none.
 		var rs []extension.RequestOffer
 		if p.o.Requests != nil && slices.ContainsFunc(offers, func(o extension.ActionOffer) bool { return len(o.Choices) > 0 }) {
 			if rs, err = p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), w.work); err != nil {
 				p.hostRefused("requests", err)
+				if protocol.ErrorCode(err) != protocol.CodeUnsupported {
+					continue
+				}
 				rs = nil
 			}
 		}
 		for _, o := range offers {
 			r := requestFor(rs, o)
+			// A provider that reports requests, none of them open for this
+			// action, has settled it since the actions were listed (or
+			// isn't asking through it): it is not prompted. Only an offer
+			// whose provider reports no requests is laid out from its label.
+			if r == nil && slices.ContainsFunc(rs, func(q extension.RequestOffer) bool { return q.Provider == o.Provider }) {
+				continue
+			}
 			in, ok := asked{who: w.who, work: w.work, offer: o, request: r}.intent(w.channel, w.thread, w.binding)
 			if !ok || seen[in.ID] {
 				continue

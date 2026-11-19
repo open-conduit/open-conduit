@@ -46,6 +46,12 @@ func TestInputWordingNamesTopLevelValues(t *testing.T) {
 	if len(fields) != 1 || !strings.Contains(whole, `"targets": [`) {
 		t.Fatalf("nested: %+v %q", fields, whole)
 	}
+	// With fields listed, the input shown holds only those, even when one
+	// of them is nested.
+	fields, whole = inputWording(json.RawMessage(`{"env":"prod","targets":["a"],"token":"s3cret"}`), map[string]string{"env": "", "targets": "Targets"})
+	if len(fields) != 1 || !strings.Contains(whole, `"targets": [`) || strings.Contains(whole, "s3cret") {
+		t.Fatalf("listed and nested: %+v %q", fields, whole)
+	}
 	if fields, whole := inputWording(nil, nil); fields != nil || whole != "" {
 		t.Fatalf("no input: %+v %q", fields, whole)
 	}
