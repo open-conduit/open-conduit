@@ -721,11 +721,18 @@ func TestDaemonKillWithDetachedProcess(t *testing.T) {
 
 // TestDaemonGracefulRestart covers SIGTERM: the daemon releases the live lease
 // so the next daemon adopts the running process at once.
+//
+// The lease here is far longer than a daemon takes to start, even a -race
+// build on a loaded runner, so adoption before it could have expired shows the
+// lease was released. Under the drills' short lease, a slow second start let
+// the lease expire first, and the test failed on startup time alone.
 func TestDaemonGracefulRestart(t *testing.T) {
 	if testing.Short() {
 		t.Skip("process drills")
 	}
+	const lease = time.Minute
 	d := newDrill(t)
+	d.extra = []string{"--lease-duration", lease.String()}
 	d.start("")
 	root, err := d.submit("drill.slow")
 	if err != nil {
@@ -747,8 +754,8 @@ func TestDaemonGracefulRestart(t *testing.T) {
 	d.start("")
 	w, _ := d.work()
 	first := d.executions(w.ID)[0]
-	d.until("adoption", 10*time.Second, func() bool { return len(d.recordsNamed("execution.recovered", first.ID)) == 1 })
-	if at := d.recordsNamed("execution.recovered", first.ID)[0].At; at.Sub(stopped) >= drillLease {
+	d.until("adoption", lease/2, func() bool { return len(d.recordsNamed("execution.recovered", first.ID)) == 1 })
+	if at := d.recordsNamed("execution.recovered", first.ID)[0].At; at.Sub(stopped) >= lease/2 {
 		t.Fatalf("released lease was not recovered before it would have expired: %s", at.Sub(stopped))
 	}
 	// The adopted process reads its rotated token file for its next call, so

@@ -282,6 +282,13 @@ func (d *daemon) attend(c *components, a runtime.Attempt, work domain.ID) {
 		defer func() {
 			d.mu.Lock()
 			delete(d.inflight, key)
+			// Attendance that ended with the shutdown leaves the attempt
+			// running for the next daemon; releaseAll releases its lease
+			// once every attendance has ended. One that had already
+			// finished is refused by the lease fence, harmlessly.
+			if d.ctx.Err() != nil {
+				d.leftForNext = append(d.leftForNext, a.Lease)
+			}
 			d.mu.Unlock()
 			d.poke()
 		}()
@@ -512,9 +519,13 @@ func (d *daemon) stopAttempt(ctx context.Context, c *components, id domain.ID, e
 	d.clear("stop", id)
 }
 
+// releaseAll releases, at shutdown and once every attendance has ended, the
+// leases of the attempts left running, so the next daemon recovers them at
+// once instead of when they would have expired.
 func (d *daemon) releaseAll(ctx context.Context) {
 	d.mu.Lock()
-	refs := make([]domain.LeaseRef, 0, len(d.inflight))
+	refs := append([]domain.LeaseRef(nil), d.leftForNext...)
+	d.leftForNext = nil
 	for _, ref := range d.inflight {
 		refs = append(refs, ref)
 	}

@@ -169,6 +169,10 @@ type daemon struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	inflight map[attemptKey]domain.LeaseRef
+	// leftForNext are the leases of attempts whose attendance ended with
+	// the daemon's shutdown, still running, for releaseAll to release so
+	// the next daemon adopts them at once.
+	leftForNext []domain.LeaseRef
 	// stopping are the attempts a stop follow-up is stopping, off the loop.
 	stopping map[attemptKey]bool
 	// from are the executable and toolbelt the daemon started from.
