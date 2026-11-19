@@ -1,6 +1,6 @@
 ---
 title: Human decisions
-description: Let agents ask a person for a private decision, and make named operations wait for a person's approval, answered from the TUI, without anything reaching the issue or thread.
+description: Let agents ask a person for a private decision, and make named operations wait for a person's approval, answered from the TUI, without anything reaching the issue or thread, and tell the people who decide wherever they are.
 ---
 
 An agent working a GitHub issue or a Slack thread sometimes needs a person's decision that shouldn't go on the public record: whether to spend money, which credential to use, whether to go ahead tonight. With a `human` entry in the scope, the agent asks through `human.ask`. Its Work parks, the question appears on the Work in the TUI and the web view, and the first valid answer resumes the agent.
@@ -158,6 +158,43 @@ When the Work is a Slack conversation, the question (with its context) or the ap
 When the Work was handed its task by a Slack conversation (`create_work`), at any depth, turn on `"child_requests": true` in the Slack entry to see its requests in that conversation's thread. Each shows in the thread's progress message as "Steve asks: Approve or refuse github.pr.create (for slack:U0123ABCD)", in progress until it is answered, and marked as an error if it is refused or times out. When a Slack person is among the responders, the request is also posted with its buttons, and a press answers the child's request. When only operators or GitHub users may answer, the thread shows only the state, and they answer where they are. Either way the conversation's agent isn't woken, and it can't answer for anyone.
 
 A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
+
+## Telling people about a request
+
+A request shows only where someone looks: the TUI, the web view, the CLI, a GitHub issue or a Slack thread. Its responder is often somewhere else, such as an approver who isn't in the conversation that asked, Work a schedule started with no thread at all, or someone who works in another tool. So Open Conduit records an Event for each change of a request, and your deployment can tell people however it likes:
+
+| Event | When |
+| --- | --- |
+| `human.request.opened` | A question is asked, or a call or a start needs approval. |
+| `human.request.escalated` | Nobody answered by the gate's `timeout`, and the request now goes to its `escalate` responders as well. |
+| `human.request.settled` | The request is answered, refused, expired (nobody answered in time) or withdrawn (the asker stopped waiting). |
+
+Every request has `opened` first and `settled` last, each once, with `escalated` between them if it escalates. They are recorded within a few seconds of the change. Each carries the request as it then stood (schema `human.request.v1`):
+
+| Field | Meaning |
+| --- | --- |
+| `request` | The request's ID. All of a request's Events share the correlation key `human`/`request/<request>`. |
+| `work`, `provider`, `action` | The Work that asked, the `human` entry and the action that answers it. To answer, call `POST /v1/work/{work}/actions/{provider}/{action}` with `{"input": "approve"}`, or run `open-conduit actions run <provider> answer --work <work> --input approve`. |
+| `execution`, `binding` | The run that asked and its binding (for a start, the binding the Work would start on). |
+| `kind` | `question`, `approval` (a gated call) or `start` (a gated start). |
+| `operation` | The gated operation, for an approval. |
+| `label`, `detail`, `options` | What the person is deciding, as the TUI and Slack show it: the question or the call and its input, and the choices. |
+| `responders` | Who may answer it now, each `kind:id` or a bare kind. |
+| `asked_at`, `expires_at`, `escalated_at` | When it was asked, when nobody answering ends it, and when it escalated. |
+| `state`, `by`, `settled_at` | `open` until it settles; then `answered`, `refused`, `expired` or `withdrawn`, who answered or refused it, and when. |
+
+The Events tell; they don't answer. An answer still goes through the entry's answer action, which checks who is answering, so recording or posting one of these Events gives nobody a way round a gate. They are on the request's own key, so they never wake the Work that asked. Only Open Conduit records them: an agent can't emit them, and a `human` route ignores one posted with `open-conduit events emit`.
+
+To act on them, add a `human` route. It gives each request its own `human.request` Work on the route's binding: `human.request.opened` starts it, and the request's later Events are its next input. The binding does what your deployment needs, such as sending an email or a page, or posting in your own app, through whatever operations you grant it. A shell script is enough:
+
+```json
+{"routes": [{"name": "requests", "handler": "human", "binding": "notify", "active_policy": "queue", "config": {}}],
+ "bindings": [{"name": "notify", "executor": "shell", "requires": {"toolbelt": "cli"},
+   "operations": ["read_context", "declare_outcome"], "secret_names": ["SMTP_PASSWORD"],
+   "config": {"command": "./notify-approver \"$OS_INPUT_FILE\" && os outcome handoff --summary told"}}]}
+```
+
+The script reads each Event from its input, tells the responders, and hands back, so the Work takes the next Event when it comes. The route takes no config. To read the Events without a route, list them with `GET /v1/events?type=human.request.opened`.
 
 ## Escalation
 

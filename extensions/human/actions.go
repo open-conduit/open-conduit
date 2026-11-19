@@ -142,25 +142,8 @@ func (a Actions) Requests(ctx context.Context, t extension.ActionTarget) ([]exte
 // request is rec as a request, settled as of now without writing it.
 func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
 	r := extension.Request{ID: rec.ID, Label: label(rec, now), Detail: detail(rec, now), Responders: slices.Clone(rec.responders(now)), State: extension.RequestOpen}
-	answered := func(g Given) {
-		r.State, r.By = extension.RequestAnswered, g.Responder
-		if (rec.Gate != "" || rec.Start) && g.Answer != OptionApprove {
-			r.State = extension.RequestRefused
-		}
-	}
-	switch rec.State {
-	case StateAnswered:
-		if rec.Answer != nil {
-			answered(*rec.Answer)
-		} else {
-			r.State = extension.RequestAnswered
-		}
-		return r, nil
-	case StateExpired:
-		r.State = extension.RequestExpired
-		return r, nil
-	case StateWithdrawn:
-		r.State = extension.RequestWithdrawn
+	if rec.State != StateOpen {
+		r.State, r.By = rec.settled()
 		return r, nil
 	}
 	// Open in its record: what settle would make of it now.
@@ -169,7 +152,10 @@ func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
 		return r, err
 	}
 	if len(given) > 0 {
-		answered(given[0])
+		first := given[0]
+		answered := rec
+		answered.State, answered.Answer = StateAnswered, &first
+		r.State, r.By = answered.settled()
 		return r, nil
 	}
 	if rec.expired(now) {

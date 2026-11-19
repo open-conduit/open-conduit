@@ -69,9 +69,13 @@ func NewTools(o Options) (*Tools, error) {
 }
 
 // Registration is the toolbelt registration. The extension emits no Events
-// through the toolbelt: answers come only through its action.
+// through the toolbelt: answers come only through its action, and request
+// Events only from its own records (Announce).
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type,
+		// The request Events are the extension's own account of its
+		// records: sealed, so no run can emit one with the builtin emit.
+		EventTypes: RequestTypes, SealedEventTypes: RequestTypes,
 		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask, Guidance: AskGuidance()}},
 		DependencyFilter: extension.PureFilter(DependencyFilter), Gate: t.Gate, StartGate: t.StartGate}
 }
@@ -195,7 +199,7 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 		}
 		rec = Ask{ID: id, Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Provider: entry.Name, Question: input.Question, Options: input.Options,
 			Context: input.Context, Deadline: deadline, Responders: entry.Config.Responders, Surfaces: entry.Config.Surfaces,
-			AskedAt: now, Sequence: seq, State: StateOpen}
+			AskedAt: now, Sequence: seq, State: StateOpen, Announce: true}
 		if err = putAsk(tx, rec); err != nil {
 			return err
 		}

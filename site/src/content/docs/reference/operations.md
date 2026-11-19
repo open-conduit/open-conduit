@@ -533,7 +533,7 @@ Start a workflow the repository's entry allows on a branch, with inputs; a retri
 
 ### Human (`human`)
 
-Lets an agent ask a person a question, or ask approval for a call or a start, and parks its Work until they answer.
+Lets an agent ask a person a question, or ask approval for a call or a start, parks its Work until they answer, and announces each request so the people who decide can be told.
 
 #### `human.ask`
 

@@ -407,7 +407,7 @@ Extension entry `config`:
 
 ### Human (`human`)
 
-Lets an agent ask a person a question, or ask approval for a call or a start, and parks its Work until they answer. Registers: extension.
+Lets an agent ask a person a question, or ask approval for a call or a start, parks its Work until they answer, and announces each request so the people who decide can be told. Registers: extension, route.
 
 Extension entry `config`:
 

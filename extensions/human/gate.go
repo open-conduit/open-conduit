@@ -154,7 +154,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 		rec = Ask{ID: gateAskID(a, request, now), Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Provider: entry.Name,
 			Gate: c.Operation, Request: request, Capability: c.Capability, Subject: words.capabilitySubject, Question: "Allow " + c.Operation + "?", Options: []string{OptionApprove, OptionRefuse},
 			Context: gateContext(c.Input), Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces,
-			AskedAt: now, Sequence: seq, State: StateOpen}
+			AskedAt: now, Sequence: seq, State: StateOpen, Announce: true}
 		if e := rule.Escalate; e != nil {
 			// The caller waits through both timeouts; settling widens
 			// who may answer once the first passes.
