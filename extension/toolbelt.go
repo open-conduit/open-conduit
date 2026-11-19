@@ -167,6 +167,11 @@ type Operation struct {
 	// (InputSchema derives it from the struct a handler decodes). The
 	// toolbelt serves it with Summary; it does not check calls against it.
 	Input json.RawMessage
+	// Wants optionally says what a call does in a person's words, for
+	// whoever is asked to approve it (GateCall.Wants): a short verb phrase
+	// that follows "wants to", with {field} for a top-level input value
+	// ("sign in to git for {path}"). One line of at most MaxWants bytes.
+	Wants string
 	// Handler receives validated authority, not a bearer token or secrets.
 	// It must be idempotent on the call's request ID (CallRequestID): the
 	// toolbelt records a result for replay only after Handler returns, so a
@@ -350,6 +355,18 @@ const MaxGuidance = 4096
 
 // MaxSummary bounds one operation's Summary.
 const MaxSummary = 200
+
+// MaxWants bounds an operation's Wants.
+const MaxWants = 200
+
+// ValidateWants checks an operation's Wants: one line of at most MaxWants
+// bytes ("" for none).
+func ValidateWants(wants string) error {
+	if len(wants) > MaxWants || strings.ContainsAny(wants, "\r\n") {
+		return fmt.Errorf("%w: wants must be one line of at most %d bytes", ErrInvalid, MaxWants)
+	}
+	return nil
+}
 
 // ValidateOperationDoc checks an operation's Summary and Input: a summary
 // of one line within MaxSummary, and an input that is empty or a JSON
@@ -579,6 +596,10 @@ type GateCall struct {
 	// Capability), "" for an agent's own call; DescribeCapabilityCall says
 	// what to tell the agent about it.
 	Capability string
+	// Wants is the called operation's Operation.Wants, as its owner
+	// declared it ("" when it declares none), for a gate to say what the
+	// call does to the person asked to approve it.
+	Wants string
 }
 
 // RegistrationName reports whether name may name a registration: a

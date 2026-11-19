@@ -83,6 +83,13 @@ func Describe(summary string) OperationOption {
 	return func(d *operationDecl) { d.Summary = summary }
 }
 
+// Wants says what a call does in a person's words, for whoever is asked to
+// approve it: a verb phrase after "wants to", with {field} for a top-level
+// input value ("deploy {service} to {env}"; extension.Operation.Wants).
+func Wants(phrase string) OperationOption {
+	return func(d *operationDecl) { d.Wants = phrase }
+}
+
 // Serves declares that a Handler answers a capability the host routes by
 // name, such as extension.CapabilityGitCredential.
 func Serves(capability string) OperationOption {
@@ -307,6 +314,7 @@ func (e *Extension) Operation(name string, op Op, opts ...OperationOption) *Exte
 	x.Summary = d.Summary
 	x.Input = d.Input
 	x.Guidance = d.Guidance
+	x.Wants = d.Wants
 	if len(d.SecretOutput) > 0 && op.kind != protocol.OperationHandler {
 		panic("sdk: operation " + name + ": only sdk.Handler operations have a secret output")
 	}

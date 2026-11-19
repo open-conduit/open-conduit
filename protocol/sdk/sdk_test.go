@@ -173,6 +173,9 @@ func TestOperationGateOverTheWire(t *testing.T) {
 		case "acme.read":
 			return nil, nil
 		case "acme.deploy":
+			if c.Wants != "deploy {env}" {
+				return nil, &extension.OperationError{Code: "no_wants", Message: "the operation's sentence was lost: " + c.Wants}
+			}
 			key := domain.CorrelationKey{Source: "chat", ExternalID: "approval/1"}
 			return &extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{"chat.approved"}}, Description: "an approval"},
 				Dependencies: []extension.Dependency{{ID: "approval", SourceKey: key, Types: []string{"chat.approval"}, AliasType: "chat.approved"}}}, nil
@@ -189,7 +192,7 @@ func TestOperationGateOverTheWire(t *testing.T) {
 	}
 	call := func(op string) (protocol.OperationGateResult, error) {
 		var out protocol.OperationGateResult
-		err := host.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: op, Owner: "acme", Authority: protocol.Authority{WorkID: "work/1"}, Input: protocol.Payload{Schema: "acme.in.v1", Data: json.RawMessage(`{}`)}}, &out)
+		err := host.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: op, Owner: "acme", Authority: protocol.Authority{WorkID: "work/1"}, Input: protocol.Payload{Schema: "acme.in.v1", Data: json.RawMessage(`{}`)}, Wants: "deploy {env}"}, &out)
 		return out, err
 	}
 	if out, err := call("acme.read"); err != nil || out.Wait != nil {

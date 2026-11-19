@@ -239,6 +239,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		if err := extension.ValidateOperationDoc(op.Summary, op.Input); err != nil {
 			return fmt.Errorf("operation %q: %w", op.Name, err)
 		}
+		if err := extension.ValidateWants(op.Wants); err != nil {
+			return fmt.Errorf("operation %q: %w", op.Name, err)
+		}
 		if op.Serves != "" && (op.Handler == nil || !extension.OperationName(op.Serves)) {
 			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
 		}
@@ -1101,7 +1104,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		handlerAuthority.Operations = append([]string(nil), a.Operations...)
 		handlerAuthority.EventTypes = append([]string(nil), a.EventTypes...)
 		hctx := extension.WithCallRequestID(ctx, requestID)
-		plan, gate, e := t.gate(hctx, owner, extension.GateCall{Operation: c.Operation, Owner: owner, Input: c.Input, Capability: c.Capability}, handlerAuthority)
+		plan, gate, e := t.gate(hctx, owner, extension.GateCall{Operation: c.Operation, Owner: owner, Input: c.Input, Capability: c.Capability, Wants: op.Wants}, handlerAuthority)
 		gatedBy = gate
 		if e != nil {
 			return out, e

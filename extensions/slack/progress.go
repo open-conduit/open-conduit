@@ -586,7 +586,7 @@ func (p *Projector) syncRun(ctx context.Context, v *runView) (int, error) {
 		}
 	}
 	if st.State == IntentPosted && rec.Digest != d {
-		if err := p.o.Client.UpdateMessage(ctx, Update{Channel: rec.Channel, TS: st.TS, Text: pl.title, Blocks: blocks}); err != nil {
+		if err := p.o.Client.UpdateMessage(ctx, Update{Channel: rec.Channel, TS: st.TS, Text: pl.title, Blocks: raws(blocks)}); err != nil {
 			return changed, err
 		}
 		rec.Digest, changed = d, changed+1

@@ -140,7 +140,7 @@ func Declared() []extension.Operation {
 		{Name: OpHold, Summary: "Keep this held issue waiting until what it was opened to wait for happens.",
 			Input: extension.InputSchema[noInput]()},
 		{Name: OpGitCredential, Summary: "Answer git's credential request with a short-lived token for this Work's code repository.",
-			Input: extension.InputSchema[gitCredentialInput]()},
+			Wants: "sign in to git for {path}", Input: extension.InputSchema[gitCredentialInput]()},
 	}
 }
 

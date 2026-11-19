@@ -657,16 +657,68 @@ type Request struct {
 	Responders []string `json:"responders,omitempty"`
 	State      string   `json:"state"`
 	By         string   `json:"by,omitempty"`
+	// SettledAt is when a settled request was settled
+	// (extension.Request.SettledAt).
+	SettledAt time.Time `json:"settled_at,omitzero"`
+	// Wording is the request in a person's words, in parts
+	// (extension.Wording).
+	Wording *Wording `json:"wording,omitempty"`
+}
+
+// Wording is how a request reads to the person asked (extension.Wording).
+type Wording struct {
+	Wants    string          `json:"wants,omitempty"`
+	Question string          `json:"question,omitempty"`
+	Fields   []WordingField  `json:"fields,omitempty"`
+	Input    string          `json:"input,omitempty"`
+	Note     string          `json:"note,omitempty"`
+	Choices  []ChoiceWording `json:"choices,omitempty"`
+}
+
+// WordingField is one named value of a Wording.
+type WordingField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ChoiceWording is how one choice reads (extension.ChoiceWording).
+type ChoiceWording struct {
+	Choice  string `json:"choice"`
+	Label   string `json:"label,omitempty"`
+	Tone    string `json:"tone,omitempty"`
+	Confirm string `json:"confirm,omitempty"`
 }
 
 // FromRequest is r on the wire.
 func FromRequest(r extension.Request) Request {
-	return Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By}
+	out := Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By, SettledAt: r.SettledAt}
+	if w := r.Wording; w != nil {
+		ww := Wording{Wants: w.Wants, Question: w.Question, Input: w.Input, Note: w.Note}
+		for _, f := range w.Fields {
+			ww.Fields = append(ww.Fields, WordingField{Name: f.Name, Value: f.Value})
+		}
+		for _, c := range w.Choices {
+			ww.Choices = append(ww.Choices, ChoiceWording{Choice: c.Choice, Label: c.Label, Tone: c.Tone, Confirm: c.Confirm})
+		}
+		out.Wording = &ww
+	}
+	return out
 }
 
 // Extension is r as the contract's.
 func (r Request) Extension() extension.Request {
-	return extension.Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By}
+	out := extension.Request{ID: r.ID, Label: r.Label, Detail: r.Detail, Action: r.Action, Responders: r.Responders, State: r.State, By: r.By, SettledAt: r.SettledAt}
+	if w := r.Wording; w != nil {
+		ww := extension.Wording{Wants: w.Wants, Question: w.Question, Input: w.Input, Note: w.Note}
+		for _, f := range w.Fields {
+			ww.Fields = append(ww.Fields, extension.WordingField{Name: f.Name, Value: f.Value})
+		}
+		for _, c := range w.Choices {
+			ww.Choices = append(ww.Choices, extension.ChoiceWording{Choice: c.Choice, Label: c.Label, Tone: c.Tone, Confirm: c.Confirm})
+		}
+		out.Wording = &ww
+	}
+	return out
 }
 
 type WorkRequestsParams struct {

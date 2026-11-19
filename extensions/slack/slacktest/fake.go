@@ -56,6 +56,9 @@ type Server struct {
 	reactions map[string][]string // channel/ts -> the app's reactions, in order added
 	updates   int
 
+	// names are users.info's display names, by user ID.
+	names map[string]string
+
 	files        map[string]*upload // reserved files by ID
 	fileSeq      int
 	completeMode string
@@ -102,6 +105,16 @@ func (s *Server) Reactions(channel, ts string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.reactions[channel+"/"+ts]...)
+}
+
+// SetUserName gives a user the display name users.info answers with.
+func (s *Server) SetUserName(user, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.names == nil {
+		s.names = map[string]string{}
+	}
+	s.names[user] = name
 }
 
 // Updates counts the chat.update calls that changed a message.
@@ -531,6 +544,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer, status = s.post(r)
 	case "chat.update":
 		answer = s.update(r)
+	case "users.info":
+		_ = r.ParseForm()
+		if name, ok := s.names[r.Form.Get("user")]; ok {
+			answer = apiAnswer{"ok": true, "user": map[string]any{"id": r.Form.Get("user"), "name": strings.ToLower(name), "profile": map[string]any{"display_name": name}}}
+		} else {
+			answer = apiAnswer{"ok": false, "error": "user_not_found"}
+		}
 	case "chat.getPermalink":
 		_ = r.ParseForm()
 		channel, ts := r.Form.Get("channel"), r.Form.Get("message_ts")
@@ -689,7 +709,12 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 }
 
 func (s *Server) update(r *http.Request) apiAnswer {
-	var u slack.Update
+	var u struct {
+		Channel string           `json:"channel"`
+		TS      string           `json:"ts"`
+		Text    string           `json:"text"`
+		Blocks  []map[string]any `json:"blocks"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
 		return apiAnswer{"ok": false, "error": "invalid_arguments"}
 	}

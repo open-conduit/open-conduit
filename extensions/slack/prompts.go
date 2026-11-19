@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -54,6 +54,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 		// binding is the Work's latest attempt's: its prompts post under
 		// that binding's identity.
 		binding string
+		who     string
 	}
 	var ws []waiting
 	err := p.transact(ctx, func(tx storage.Tx) error {
@@ -70,19 +71,12 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			if !ok {
 				continue
 			}
-			xs, err := tx.ListExecutions(w.ID)
+			binding, err := latestBinding(tx, w.ID)
 			if err != nil {
 				return err
 			}
-			binding := ""
-			var latest uint32
-			for _, x := range xs {
-				if x.Attempt >= latest {
-					latest, binding = x.Attempt, x.ExecutorBinding
-				}
-			}
 			if w.State == domain.WorkReady {
-				ws = append(ws, waiting{w.ID, channel, thread, binding})
+				ws = append(ws, waiting{w.ID, channel, thread, binding, p.who(w, binding)})
 				continue
 			}
 			waits, err := tx.ListWaits(w.ID)
@@ -91,7 +85,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			}
 			for _, wt := range waits {
 				if wt.State == domain.WaitActive {
-					ws = append(ws, waiting{w.ID, channel, thread, binding})
+					ws = append(ws, waiting{w.ID, channel, thread, binding, p.who(w, binding)})
 					break
 				}
 			}
@@ -109,58 +103,45 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			p.hostRefused("actions", err)
 			continue
 		}
+		// The requests the offers answer, for their wording and
+		// responders; a provider that reports none is prompted from its
+		// label and detail.
+		var rs []extension.RequestOffer
+		if p.o.Requests != nil && slices.ContainsFunc(offers, func(o extension.ActionOffer) bool { return len(o.Choices) > 0 }) {
+			if rs, err = p.o.Requests(ctx, domain.ID(p.o.Settings.Scope), w.work); err != nil {
+				p.hostRefused("requests", err)
+				rs = nil
+			}
+		}
 		for _, o := range offers {
-			blocks, ok := promptBlocks(w.work, o)
-			if !ok {
+			r := requestFor(rs, o)
+			in, ok := asked{who: w.who, work: w.work, offer: o, request: r}.intent(w.channel, w.thread, w.binding)
+			if !ok || seen[in.ID] {
 				continue
 			}
-			// Keyed by what is offered, not by the Wait: the same open
-			// question is prompted once however often the Work waits, and
-			// a new question (new text or options) is prompted afresh.
-			id := "prompt/" + string(w.work) + "/" + o.Provider + "/" + o.ID + "/" + digest(append([]string{o.Label, o.Detail}, o.Choices...)...)[:16]
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			out = append(out, Intent{ID: id, Work: w.work, Channel: w.channel, Thread: w.thread, Text: o.Label, Blocks: blocks, Binding: w.binding})
+			seen[in.ID] = true
+			out = append(out, in)
 		}
 	}
 	return out, nil
 }
 
-// promptBlocks is the message for one offered action: its label and a
-// button per choice. An action without choices takes free text, which a
-// button can't carry, so it is not prompted.
-func promptBlocks(work domain.ID, o extension.ActionOffer) ([]map[string]any, bool) {
-	if len(o.Choices) == 0 || len(o.Choices) > 20 || strings.TrimSpace(o.Label) == "" {
-		return nil, false
+// intent is a's prompt in a thread. It is keyed by what it shows, not by
+// the Wait: the same open question is prompted once however often the Work
+// waits, and a new question (new words, options or responders) is
+// prompted afresh.
+func (a asked) intent(channel, thread, binding string) (Intent, bool) {
+	l, ok := a.layout()
+	if !ok {
+		return Intent{}, false
 	}
-	var buttons []map[string]any
-	for i, c := range o.Choices {
-		v, _ := json.Marshal(buttonValue{Work: work, Provider: o.Provider, Action: o.ID, Input: c})
-		if len(v) > 2000 {
-			return nil, false
-		}
-		label := c
-		if len(label) > 75 {
-			label = strings.ToValidUTF8(label[:72], "") + "..."
-		}
-		buttons = append(buttons, map[string]any{"type": "button", "action_id": buttonPrefix + strconv.Itoa(i),
-			"text": map[string]any{"type": "plain_text", "text": label}, "value": string(v)})
+	shown, _ := json.Marshal(l.blocks)
+	in := Intent{ID: "prompt/" + string(a.work) + "/" + a.offer.Provider + "/" + a.offer.ID + "/" + digest(string(shown))[:16],
+		Work: a.work, Channel: channel, Thread: thread, Text: l.text, Blocks: l.blocks, Binding: binding, Shown: l.shown}
+	if a.request != nil {
+		in.Asks = &promptAsks{Provider: a.offer.Provider, Request: a.request.ID}
 	}
-	// The detail is what the person is deciding: the question, or the call
-	// an approval is for. The provider writes it; Slack only shows it.
-	text := o.Label
-	if d := strings.TrimSpace(o.Detail); d != "" {
-		text += "\n\n" + d
-	}
-	if len(text) > 3000 {
-		text = strings.ToValidUTF8(text[:3000], "")
-	}
-	return []map[string]any{
-		{"type": "section", "text": map[string]any{"type": "plain_text", "text": text}},
-		{"type": "actions", "elements": buttons},
-	}, true
+	return in, true
 }
 
 // interaction is the part of a block_actions payload this extension reads.

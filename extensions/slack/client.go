@@ -104,10 +104,24 @@ type Client struct {
 	// self is the last auth.test answer and when it was read (Self).
 	self   Identity
 	selfAt time.Time
+	// names are people's names as UserName last read them.
+	names map[string]userName
 }
 
 // selfTTL bounds how long Self answers from memory.
 const selfTTL = 10 * time.Minute
+
+// nameTTL bounds how long UserName answers from memory, and nameRetry how
+// long a failed lookup waits before it is tried again.
+const (
+	nameTTL   = time.Hour
+	nameRetry = 5 * time.Minute
+)
+
+type userName struct {
+	name string
+	at   time.Time
+}
 
 // NewClient binds connection config to a secret resolver.
 func NewClient(c ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Client, error) {
@@ -460,10 +474,10 @@ func (c *Client) Permalink(ctx context.Context, channel, ts string) (string, err
 // Update is a new text and layout for a message the app posted
 // (chat.update). Its metadata (the marker) is kept, since it is omitted.
 type Update struct {
-	Channel string           `json:"channel"`
-	TS      string           `json:"ts"`
-	Text    string           `json:"text"`
-	Blocks  []map[string]any `json:"blocks"`
+	Channel string            `json:"channel"`
+	TS      string            `json:"ts"`
+	Text    string            `json:"text"`
+	Blocks  []json.RawMessage `json:"blocks"`
 }
 
 // UpdateMessage replaces a posted message's text and blocks.
@@ -575,6 +589,45 @@ func (c *Client) Self(ctx context.Context) (Identity, error) {
 	c.self, c.selfAt = id, c.now()
 	c.mu.Unlock()
 	return id, nil
+}
+
+// UserName is the name a person goes by in the workspace (users.info, with
+// users:read): their display name, else their full name, else their user
+// name. It is kept for nameTTL; "" when it can't be read, which is kept
+// for nameRetry so a person nobody can name costs one call in a while.
+func (c *Client) UserName(ctx context.Context, user string) string {
+	c.mu.Lock()
+	if n, ok := c.names[user]; ok && (n.name != "" && c.now().Sub(n.at) < nameTTL || n.name == "" && c.now().Sub(n.at) < nameRetry) {
+		c.mu.Unlock()
+		return n.name
+	}
+	c.mu.Unlock()
+	var out struct {
+		User struct {
+			Name     string `json:"name"`
+			RealName string `json:"real_name"`
+			Profile  struct {
+				DisplayName string `json:"display_name"`
+				RealName    string `json:"real_name"`
+			} `json:"profile"`
+		} `json:"user"`
+	}
+	name := ""
+	if err := c.call(ctx, "users.info", url.Values{"user": {user}}, nil, &out); err == nil {
+		for _, n := range []string{out.User.Profile.DisplayName, out.User.Profile.RealName, out.User.RealName, out.User.Name} {
+			if n = strings.TrimSpace(n); n != "" {
+				name = n
+				break
+			}
+		}
+	}
+	c.mu.Lock()
+	if c.names == nil {
+		c.names = map[string]userName{}
+	}
+	c.names[user] = userName{name, c.now()}
+	c.mu.Unlock()
+	return name
 }
 
 // Grants reports whether the identity's token was granted scope. Scopes

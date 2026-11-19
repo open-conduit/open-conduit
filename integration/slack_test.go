@@ -1100,7 +1100,7 @@ func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
 			prompt = m
 		}
 	}
-	if prompt.Text != "Approve or refuse fixture.deploy" || len(prompt.Blocks) != 2 {
+	if prompt.Text != "agent asks: Approve or refuse fixture.deploy" || len(prompt.Blocks) != 2 {
 		t.Fatalf("prompt message: %+v", prompt)
 	}
 	buttons, _ := prompt.Blocks[1]["elements"].([]any)
@@ -1183,13 +1183,15 @@ func TestSlackPromptShowsTheHumanQuestion(t *testing.T) {
 		return out
 	}
 	shown := prompts()[0]
-	text, _ := shown.Blocks[0]["text"].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
-		t.Fatalf("the prompt doesn't show the question: %q", text)
+	// Without a request's wording, the label leads and the detail follows
+	// as plain text.
+	text, _ := shown.Blocks[1]["text"].(map[string]any)["text"].(string)
+	if shown.Blocks[1]["text"].(map[string]any)["type"] != "plain_text" || !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
+		t.Fatalf("the prompt doesn't show the question: %+v", shown.Blocks)
 	}
-	buttons, _ := shown.Blocks[1]["elements"].([]any)
+	buttons, _ := shown.Blocks[2]["elements"].([]any)
 	if len(buttons) != 2 || buttons[0].(map[string]any)["text"].(map[string]any)["text"] != "yes" {
-		t.Fatalf("buttons: %+v", shown.Blocks[1])
+		t.Fatalf("buttons: %+v", shown.Blocks[2])
 	}
 	if res := e.converge(); res.Posted != 0 || len(prompts()) != 1 {
 		t.Fatalf("the same question was posted again: %+v", res)

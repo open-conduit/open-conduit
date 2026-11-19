@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func (e *slEnv) offerRequest(work domain.ID, r *requestFixture) {
 			action = "answer"
 		}
 		return []extension.RequestOffer{{Provider: "decisions", Request: extension.Request{ID: "ask/1", Label: "Approve or refuse deploy.run", Action: action,
-			Responders: r.responders, State: r.state, By: r.by}}}, nil
+			Responders: r.responders, State: r.state, By: r.by, Wording: &extension.Wording{Wants: "deploy to prod", Fields: []extension.WordingField{{Name: "Env", Value: "prod"}}}}}}, nil
 	}
 	e.actions = func(_ context.Context, _, w domain.ID) ([]extension.ActionOffer, error) {
 		if w != work || r.state != extension.RequestOpen {
@@ -89,12 +90,15 @@ func TestSlackSendsANamedResponderTheRequest(t *testing.T) {
 	e.offerRequest("job/nightly", r)
 	e.converge()
 	dm, ms := e.directMessages(slAlice)
-	if len(ms) != 1 || ms[0].Text != "Deploy bot asks: Approve or refuse deploy.run" || !hasButtons(ms[0]) {
+	if len(ms) != 1 || ms[0].Text != "Deploy bot wants to deploy to prod" || !hasButtons(ms[0]) {
 		t.Fatalf("DM: %s %+v", dm, ms)
 	}
+	// Laid out as in a thread, for the one person it is sent to: they
+	// aren't mentioned, and nobody's ID is shown.
 	section := ms[0].Blocks[0]["text"].(map[string]any)["text"].(string)
-	if !strings.Contains(section, `{"env":"prod"}`) || !strings.Contains(section, "Who can answer: slack:"+slAlice+", slack, operator:local") {
-		t.Fatalf("DM text: %q", section)
+	blocks, _ := json.Marshal(ms[0].Blocks)
+	if section != "*Deploy bot* wants to deploy to prod. Do you approve?" || !strings.Contains(string(blocks), `"*Env*\nprod"`) || strings.Contains(string(blocks), "operator:local") {
+		t.Fatalf("DM blocks: %s", blocks)
 	}
 	if _, others := e.directMessages(slBob); len(others) != 0 {
 		t.Fatalf("a bare slack responder was sent a DM: %+v", others)
@@ -124,7 +128,7 @@ func TestSlackSendsANamedResponderTheRequest(t *testing.T) {
 	r.state, r.by = extension.RequestAnswered, "slack:"+slAlice
 	e.converge()
 	m, _ := e.fake.Message(dm, ms[0].TS)
-	if hasButtons(m) || !strings.Contains(m.Text, "Deploy bot asks: Approve or refuse deploy.run") || !strings.Contains(m.Text, "Answered by slack:"+slAlice) {
+	if hasButtons(m) || !strings.Contains(m.Text, "Deploy bot wants to deploy to prod") || !strings.Contains(m.Text, "Approved by <@"+slAlice+">") {
 		t.Fatalf("closed DM: %+v", m)
 	}
 	updates := e.fake.Updates()
@@ -149,7 +153,7 @@ func TestSlackRequestMessageLinksTheConversation(t *testing.T) {
 	e.offerRequest("child/deploy", r)
 	e.converge()
 	dm, ms := e.directMessages(slAlice)
-	if len(ms) != 1 || !strings.Contains(ms[0].Text, "deployer asks:") {
+	if len(ms) != 1 || !strings.Contains(ms[0].Text, "deployer wants to") {
 		t.Fatalf("DM: %+v", ms)
 	}
 	link := slacktest.PermalinkOf(slChannel, root)
@@ -208,7 +212,7 @@ func TestSlackRequestMessageClosesALostPostOnceSettled(t *testing.T) {
 	if len(ms) != 1 {
 		t.Fatalf("messages: %+v", ms)
 	}
-	if m, _ := e.fake.Message(dm, ms[0].TS); hasButtons(m) || !strings.Contains(m.Text, "Answered by operator:local") {
+	if m, _ := e.fake.Message(dm, ms[0].TS); hasButtons(m) || !strings.Contains(m.Text, "Approved by someone outside Slack") {
 		t.Fatalf("the lost post was left open: %+v", m)
 	}
 	updates := e.fake.Updates()
