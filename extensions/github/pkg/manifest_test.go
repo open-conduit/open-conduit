@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -113,5 +114,14 @@ func TestManifestDeclaresSchemasAtTheirVersion(t *testing.T) {
 		if got := m.PayloadStatus(protocol.Payload{Schema: s}.Domain()); got != protocol.SchemaCurrent {
 			t.Errorf("%s is %s in the manifest, not current", s, got)
 		}
+	}
+}
+
+// An /answer comment answers an approval for the login that wrote it
+// (inproc.Host.Act), which over the protocol is action.submit: the host
+// refuses it unless the manifest has the action.submit permission.
+func TestManifestEnablesActingForPeople(t *testing.T) {
+	if !slices.Contains(Manifest().Enabled(), "action.submit") {
+		t.Fatal("action.submit is not enabled by the manifest")
 	}
 }
