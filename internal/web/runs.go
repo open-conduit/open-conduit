@@ -633,6 +633,9 @@ const facetsTTL = 30 * time.Second
 // closedFacets is what closed Work can be filtered on, read at most
 // facetsTTL ago.
 func (s *Server) closedFacets(ctx context.Context) (client.WorkFacets, error) {
+	if !s.shared() {
+		return s.src.WorkFacets(ctx, url.Values{"state": {closedStates}})
+	}
 	s.fmu.Lock()
 	defer s.fmu.Unlock()
 	now := s.opts.Now()

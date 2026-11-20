@@ -74,7 +74,7 @@ func (s *Server) attentionPage(w http.ResponseWriter, r *http.Request) {
 	for _, x := range wd.Works {
 		names[x.ID] = workName(x)
 	}
-	for _, rc := range s.receipts.list() {
+	for _, rc := range s.receipts.list(sessionNonce(r.Context())) {
 		v := receiptView{receipt: rc}
 		if rc.WorkID != "" {
 			v.Href = workHref(rc.WorkID, 0)

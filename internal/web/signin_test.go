@@ -105,7 +105,10 @@ func TestSignOutEverywhere(t *testing.T) {
 	if w := withSession(h, "POST", "/signout", mine, url.Values{}); w.Code != http.StatusForbidden {
 		t.Fatalf("sign out without CSRF: %d", w.Code)
 	}
-	if w := withSession(h, "POST", "/signout", other, url.Values{"csrf": {s.csrf}}); w.Code != http.StatusOK {
+	if w := withSession(h, "POST", "/signout", other, url.Values{"csrf": {s.sessionToken(mine)}}); w.Code != http.StatusForbidden {
+		t.Fatalf("sign out with another session's form token: %d", w.Code)
+	}
+	if w := withSession(h, "POST", "/signout", other, url.Values{"csrf": {s.sessionToken(other)}}); w.Code != http.StatusOK {
 		t.Fatalf("sign out: %d %s", w.Code, w.Body)
 	}
 	for _, c := range []string{mine, other} {

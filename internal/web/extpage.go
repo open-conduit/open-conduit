@@ -449,7 +449,7 @@ func (s *Server) navPages(ctx context.Context) []navPage {
 	s.pmu.Lock()
 	defer s.pmu.Unlock()
 	now := s.opts.Now()
-	if s.pat.IsZero() || now.Sub(s.pat) > worldTTL || now.Before(s.pat) {
+	if !s.shared() || s.pat.IsZero() || now.Sub(s.pat) > worldTTL || now.Before(s.pat) {
 		s.pcache = nil
 		for _, p := range s.extensionPages(ctx) {
 			s.pcache = append(s.pcache, navPage{ID: p.ID, Title: p.Title, Href: pageHref(p.ID)})

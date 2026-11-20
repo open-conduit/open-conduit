@@ -94,7 +94,7 @@ func (s *Server) parse() error {
 // health and slots; when the daemon does not answer, the page is the
 // unreachable page with status 502.
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p *page, data any) {
-	p.CSRF, p.Back = s.csrf, r.URL.RequestURI()
+	p.CSRF, p.Back = s.formToken(r), r.URL.RequestURI()
 	p.Flash, p.FlashErr = takeFlash(w, r)
 	s.shell(r.Context(), p)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

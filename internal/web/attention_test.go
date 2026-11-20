@@ -30,7 +30,7 @@ func TestNeedsYouShowsWhatIsBlockedOnAPerson(t *testing.T) {
 	message := client.Action{Provider: "acme/assist", ID: "message", Label: "Send a message", Prompt: "your message"}
 	f.actions = map[string][]client.Action{"ask": {approve, note}, "old": {message}}
 	f.panels = map[string][]client.Panel{"ask": {{Provider: "acme/approvals", ID: "refund", Title: "Refund needs approval", Sections: []client.PanelSection{{Text: "Customer asks for €40 back.\n\nOrder shipped late."}, {Actions: []client.Action{approve}}}}}}
-	s.receipts.add(receipt{Summary: "Hold · “busy”", Call: "POST /v1/work/hld/hold", Event: "evt_9", WorkID: "hld"})
+	s.receipts.add(testNonce(s), receipt{Summary: "Hold · “busy”", Call: "POST /v1/work/hld/hold", Event: "evt_9", WorkID: "hld"})
 
 	body := do(h, "GET", "/attention", nil, s).Body.String()
 	for _, want := range []string{

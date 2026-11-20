@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -326,29 +327,43 @@ type receipt struct {
 	Work    string
 }
 
-// receiptLog keeps this session's receipts in the process, newest first,
-// at most maxReceipts; nothing is persisted. The view signs in one browser
-// session per process, so the process's log is the session's.
+// receiptLog keeps each signed-in session's receipts in the process,
+// newest first, at most maxReceipts a session and maxReceiptSessions
+// sessions (the least recently added to go first); nothing is persisted.
+// A browser sees only its own session's.
 type receiptLog struct {
-	mu    sync.Mutex
-	items []receipt
+	mu       sync.Mutex
+	sessions map[string][]receipt
+	order    []string
 }
 
-const maxReceipts = 50
+const (
+	maxReceipts        = 50
+	maxReceiptSessions = 100
+)
 
-func (l *receiptLog) add(r receipt) {
+func (l *receiptLog) add(session string, r receipt) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.items = append([]receipt{r}, l.items...)
-	if len(l.items) > maxReceipts {
-		l.items = l.items[:maxReceipts]
+	if l.sessions == nil {
+		l.sessions = map[string][]receipt{}
+	}
+	items := append([]receipt{r}, l.sessions[session]...)
+	if len(items) > maxReceipts {
+		items = items[:maxReceipts]
+	}
+	l.sessions[session] = items
+	l.order = append(slices.DeleteFunc(l.order, func(s string) bool { return s == session }), session)
+	if len(l.order) > maxReceiptSessions {
+		delete(l.sessions, l.order[0])
+		l.order = l.order[1:]
 	}
 }
 
-func (l *receiptLog) list() []receipt {
+func (l *receiptLog) list(session string) []receipt {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]receipt(nil), l.items...)
+	return append([]receipt(nil), l.sessions[session]...)
 }
 
 // record finishes a change: on success it logs the receipt and shows the
@@ -359,7 +374,7 @@ func (s *Server) record(w http.ResponseWriter, r *http.Request, text string, rc 
 		flashWith(w, flashNote{Text: errText(err), Call: rc.Call, Err: true})
 	} else {
 		rc.At = s.opts.Now()
-		s.receipts.add(rc)
+		s.receipts.add(sessionNonce(r.Context()), rc)
 		flashWith(w, flashNote{Text: text, Call: rc.Call, Event: rc.Event})
 	}
 	http.Redirect(w, r, back(r), http.StatusSeeOther)
@@ -614,7 +629,7 @@ func (s *Server) confirmPage(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(d.Back, "/") || strings.HasPrefix(d.Back, "//") || strings.HasPrefix(d.Back, "/\\") {
 		d.Back = "/"
 	}
-	p.CSRF = s.csrf
+	p.CSRF = s.formToken(r)
 	work, err := s.src.Work(ctx, q.Get("id"))
 	if err != nil {
 		if d.Part {

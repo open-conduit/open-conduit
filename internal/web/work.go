@@ -765,7 +765,11 @@ func (s *Server) holds(ctx context.Context, works []client.Work) {
 const worldTTL = 3 * time.Second
 
 // cachedWorld is the world read at most worldTTL ago; fresh reads it now.
+// Acting for each person signed in, every read is that person's own.
 func (s *Server) cachedWorld(ctx context.Context, fresh bool) world {
+	if !s.shared() {
+		return s.world(ctx)
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if fresh || s.wat.IsZero() || s.opts.Now().Sub(s.wat) > worldTTL || s.opts.Now().Before(s.wat) {

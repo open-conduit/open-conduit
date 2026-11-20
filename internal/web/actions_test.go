@@ -132,7 +132,7 @@ func TestControlsSendRevisionKeyReasonAndChoices(t *testing.T) {
 		t.Fatalf("typeless wake: %d %v", w.Code, f.controls)
 	}
 	// Each change is this session's receipt, newest first, with its call.
-	rs := s.receipts.list()
+	rs := s.receipts.list(testNonce(s))
 	if len(rs) != 4 || rs[0].Call != "POST /v1/work/wrk_1/rebind" || rs[0].Event != "evt_rebind:agent-opus" || rs[3].Summary != "Hold · “Waiting on a product decision”" {
 		t.Fatalf("receipts: %+v", rs)
 	}
@@ -164,10 +164,20 @@ func TestInterruptConfirmation(t *testing.T) {
 func TestReceiptsAreBounded(t *testing.T) {
 	var l receiptLog
 	for i := range maxReceipts + 5 {
-		l.add(receipt{Summary: itoa(i)})
+		l.add("one", receipt{Summary: itoa(i)})
 	}
-	if got := l.list(); len(got) != maxReceipts || got[0].Summary != itoa(maxReceipts+4) {
+	if got := l.list("one"); len(got) != maxReceipts || got[0].Summary != itoa(maxReceipts+4) {
 		t.Fatalf("receipts: %d, newest %q", len(got), got[0].Summary)
+	}
+	// A session sees only its own, and the oldest session goes first.
+	if got := l.list("two"); len(got) != 0 {
+		t.Fatalf("another session's receipts: %+v", got)
+	}
+	for i := range maxReceiptSessions {
+		l.add("s"+itoa(i), receipt{Summary: "x"})
+	}
+	if len(l.list("one")) != 0 || len(l.list("s0")) != 1 || len(l.sessions) != maxReceiptSessions {
+		t.Fatalf("sessions kept: %d", len(l.sessions))
 	}
 }
 

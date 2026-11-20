@@ -81,6 +81,9 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
       [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
                            also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
+      [--web-subject-header HEADER --web-token-file FILE]
+                           behind a sign-in proxy that passes each person's own credential in HEADER, act for
+                           that person, with FILE's credential (auth add … --act-for operator) in place of yours
       [--management-addr HOST:PORT --management-tls-cert FILE --management-tls-key FILE [--management-client-ca FILE]]
       [--management-addr 127.0.0.1:PORT --management-trusted-proxy]
                            also serve the management API over the network: TLS (mutual TLS with a client CA),
@@ -196,7 +199,7 @@ tui                        the run history in the terminal
 ### `open-conduit web`
 
 ```text
-web [--addr 127.0.0.1:7420] [--host open-conduit.localhost]   the same view in a browser on this machine (prints a sign-in URL)
+web [--addr 127.0.0.1:7420] [--host open-conduit.localhost] [--subject-header HEADER]   the same view in a browser on this machine (prints a sign-in URL); with --subject-header, it acts for the person a sign-in proxy passes the credential of in HEADER (its own credential needs --act-for operator)
 web url [--addr ADDR] [--host NAME]   print the web view's sign-in URL (it lasts across restarts)
 ```
 

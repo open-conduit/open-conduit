@@ -13,7 +13,10 @@ import (
 // The rest of the fake Source: lists over the fake's Work, Events and
 // configuration, and the controls the redesign added.
 
-func (f *fake) Health(context.Context) (client.Health, error) {
+func (f *fake) Health(ctx context.Context) (client.Health, error) {
+	if _, token := client.SubjectFrom(ctx); token != "" {
+		f.record("as " + token)
+	}
 	if f.health != nil {
 		return *f.health, f.healthErr
 	}

@@ -177,6 +177,10 @@ type WebRequest struct {
 	SignIn  string
 	URLOnly bool
 	Out     io.Writer
+	// SubjectHeader is the header a sign-in proxy passes each person's
+	// credential in, which the view then acts for
+	// (web.Options.SubjectHeader).
+	SubjectHeader string
 }
 
 // WebSignInPath is where the web view keeps its sign-in, beside the
@@ -188,11 +192,11 @@ func WebSignInPath(stateDir string) string {
 // web serves the browser view until interrupted; web url prints its
 // sign-in URLs.
 func (o *operator) web(args []string) int {
-	f := newFlags("web", "addr", "host")
+	f := newFlags("web", "addr", "host", "subject-header")
 	rest, err := f.parse(args)
 	urlOnly := len(rest) == 1 && rest[0] == "url"
 	if err != nil || (len(rest) != 0 && !urlOnly) {
-		return usageError(o.errOut, "web takes only url, --addr HOST:PORT and --host NAME")
+		return usageError(o.errOut, "web takes only url, --addr HOST:PORT, --host NAME and --subject-header HEADER")
 	}
 	addr, host := f.get("addr"), f.get("host")
 	if addr == "" {
@@ -205,7 +209,7 @@ func (o *operator) web(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: web is not available in this binary")
 		return 1
 	}
-	r := WebRequest{Addr: addr, Host: host, SignIn: WebSignInPath(o.stateDir()), URLOnly: urlOnly, Out: o.out}
+	r := WebRequest{Addr: addr, Host: host, SignIn: WebSignInPath(o.stateDir()), URLOnly: urlOnly, Out: o.out, SubjectHeader: f.get("subject-header")}
 	if !urlOnly {
 		c, _, err := o.client()
 		if err != nil {
