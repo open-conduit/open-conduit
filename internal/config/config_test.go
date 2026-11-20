@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -1108,6 +1109,10 @@ func TestWebhookSettings(t *testing.T) {
 		{"addr": ":8787", "tunnel": map[string]any{"provider": "tailscale-funnel", "config": map[string]any{"port": 443, "anything": []any{"x"}}}},
 		{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com"},
 		{"addr": "127.0.0.1:8787", "public_url": "http://box.tail.ts.net"},
+		{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com", "probe": false},
+		{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com", "probe": true},
+		{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge", "secret": "env:OC_FORWARDER"}},
+		{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge", "secret": "keyring:fwd", "max_age_seconds": 3600}},
 	} {
 		if _, err := with(ok); err != nil {
 			t.Fatalf("%v rejected: %v", ok, err)
@@ -1128,6 +1133,14 @@ func TestWebhookSettings(t *testing.T) {
 		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok"}, "public_url": "https://x"}, "settings/webhooks/public_url", "invalid_value"},
 		{map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://u:p@x"}, "settings/webhooks/public_url", "invalid_value"},
 		{map[string]any{"addr": "127.0.0.1:8787", "port": 8787}, "settings/webhooks/port", "unknown_field"},
+		// A tunnel's probe is how its restarts happen; only a static URL turns it off.
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok"}, "probe": false}, "settings/webhooks/probe", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "probe": false}, "settings/webhooks/probe", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://x.example.com", "probe": "no"}, "settings/webhooks/probe", "invalid_type"},
+		{map[string]any{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge"}}, "settings/webhooks/forwarder/secret", "missing_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge", "secret": "hunter2"}}, "settings/webhooks/forwarder/secret", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge", "secret": "env:F", "max_age_seconds": 30}}, "settings/webhooks/forwarder/max_age_seconds", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "forwarder": map[string]any{"name": "edge", "secret": "env:F", "max_age_seconds": MaxForwarderMaxAgeSeconds + 1}}, "settings/webhooks/forwarder/max_age_seconds", "invalid_value"},
 		{"127.0.0.1:8787", "settings/webhooks", "invalid_type"},
 		// The old per-type form is refused, naming its replacement.
 		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}, "settings/webhooks/tunnel", "moved_field"},
@@ -1143,6 +1156,22 @@ func TestWebhookSettings(t *testing.T) {
 		if d := diagnostics(t, err); len(d) != 1 || d[0].Path != c.path || d[0].Code != c.code {
 			t.Fatalf("%v: %v", c.hooks, d)
 		}
+	}
+	// The probe and forwarder are part of the stored listener: they change
+	// its hash and survive the normalized form.
+	fw, err := with(map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com", "probe": false, "forwarder": map[string]any{"name": "edge", "secret": "env:OC_FORWARDER", "max_age_seconds": 3600}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFw := Webhooks{Addr: "127.0.0.1:8787", PublicURL: "https://hooks.example.com", NoProbe: true, Forwarder: &Forwarder{Name: "edge", Secret: "env:OC_FORWARDER", MaxAgeSeconds: 3600}}
+	if !fw.Settings.Webhooks.Equal(wantFw) || fw.Settings.Webhooks.Forwarder.MaxAge() != time.Hour {
+		t.Fatalf("forwarder %+v", fw.Settings.Webhooks)
+	}
+	if again, err := Validate(fw.Normalized, registry()); err != nil || !again.Settings.Webhooks.Equal(wantFw) || again.Hash != fw.Hash {
+		t.Fatalf("forwarder round trip %+v %v", again, err)
+	}
+	if (Forwarder{}).MaxAge() != DefaultForwarderMaxAgeSeconds*time.Second {
+		t.Fatal("default max age")
 	}
 	_, err = with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "https://x.example.com"})
 	if d := diagnostics(t, err); len(d) != 1 || !strings.Contains(d[0].Message, "drop tunnel and keep public_url") || strings.Contains(d[0].Message, `"provider"`) {

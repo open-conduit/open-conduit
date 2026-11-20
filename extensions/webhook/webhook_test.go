@@ -196,6 +196,60 @@ func TestReceiptNamesTheEvent(t *testing.T) {
 	}
 }
 
+// Behind a forwarder, a hook with no delivery key takes the forwarder's
+// delivery ID as the delivery's identity: its retry of one delivery is one
+// Event, answered as a duplicate, while another of its deliveries with the
+// same body is another Event. Straight from a sender each POST stays its
+// own delivery.
+func TestForwardIDIsTheIdentityOfAHookWithoutADeliveryKey(t *testing.T) {
+	h := harness(t)
+	forwarded := func(id string) webhook.Receipt {
+		t.Helper()
+		var out protocol.WebhookHandleResult
+		p := protocol.WebhookHandleParams{Path: url("forms"), Method: http.MethodPost, Header: map[string][]string{"Content-Type": {"text/plain"}}, Body: []byte("hello"), ReceivedAt: sdktest.Start, ForwardID: id}
+		if err := h.Call(context.Background(), "webhook.handle", p, &out); err != nil {
+			t.Fatal(err)
+		}
+		var r webhook.Receipt
+		if out.Status != http.StatusAccepted || json.Unmarshal(out.Body, &r) != nil {
+			t.Fatalf("forwarded %s: %d %q", id, out.Status, out.Body)
+		}
+		return r
+	}
+	first, retry, other := forwarded("fw-1"), forwarded("fw-1"), forwarded("fw-2")
+	if events := h.Events(); len(events) != 2 || first.Duplicate || !retry.Duplicate || event(t, retry) != event(t, first) || other.Duplicate {
+		t.Fatalf("%d events; receipts %+v %+v %+v", len(events), first, retry, other)
+	}
+	plain := http.Header{"Content-Type": {"text/plain"}}
+	if a, b := receipt(t, h, url("forms"), plain, "hello"), receipt(t, h, url("forms"), plain, "hello"); a.Duplicate || b.Duplicate || len(h.Events()) != 4 {
+		t.Fatalf("unforwarded: %+v %+v, %d events", a, b, len(h.Events()))
+	}
+}
+
+// A signed timestamp is judged at the receipt the host attests: a delivery
+// a forwarder held past the hook's tolerance is fresh at the time it first
+// arrived, and stale when the host says it arrived now.
+func TestSignedTimestampIsJudgedAtTheAttestedReceipt(t *testing.T) {
+	h := signed(t)
+	const body = `{"action":"opened"}`
+	sent := sdktest.Start.Add(-10 * time.Minute)
+	ts := strconv.FormatInt(sent.Unix(), 10)
+	header := map[string][]string{"X-Slack-Request-Timestamp": {ts}, "X-Slack-Signature": {"v0=" + hexMAC("sender-secret", "v0:"+ts+":"+body)}}
+	call := func(received time.Time) int {
+		var out protocol.WebhookHandleResult
+		if err := h.Call(context.Background(), "webhook.handle", protocol.WebhookHandleParams{Path: url("slack"), Method: http.MethodPost, Header: header, Body: []byte(body), ReceivedAt: received, ForwardID: "fw-1"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Status
+	}
+	if got := call(sdktest.Start); got != http.StatusUnauthorized {
+		t.Fatalf("received now: %d", got)
+	}
+	if got := call(sent.Add(time.Second)); got != http.StatusAccepted {
+		t.Fatalf("received when sent: %d", got)
+	}
+}
+
 // A hook that fans out answers with each target's Event, in target order,
 // and a retry is a duplicate for every target.
 func TestReceiptNamesEachTargetsEvent(t *testing.T) {

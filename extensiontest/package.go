@@ -25,7 +25,7 @@ const (
 const docs = devscope.Docs
 
 // Option configures Daemon: Options, Package, Secret, Entry, EntrySandbox,
-// Grant or UseFakeClaude.
+// Grant, Webhooks or UseFakeClaude.
 type Option interface{ apply(*settings) }
 
 type settings struct {
@@ -36,6 +36,7 @@ type settings struct {
 	sandbox  map[string]any
 	grants   []string
 	claude   bool
+	webhooks map[string]any
 }
 
 type secret struct{ name, value string }
@@ -110,6 +111,22 @@ func EntrySandbox(typ, provider string, config any) Option {
 // a toolset of them as @<name>.
 func Grant(operations ...string) Option {
 	return optionFunc(func(s *settings) { s.grants = append(s.grants, operations...) })
+}
+
+// Webhooks starts the daemon's webhook listener with the generated config's
+// settings.webhooks: the given fields (public_url, probe, forwarder, as in
+// the configuration reference) and, unless they name one, an addr on a free
+// local port. Instance.WebhookURL is where it listens, so a test can post a
+// package's webhook requests to it as its service, or a forwarder, would.
+func Webhooks(fields map[string]any) Option {
+	return optionFunc(func(s *settings) {
+		if s.webhooks == nil {
+			s.webhooks = map[string]any{}
+		}
+		for k, v := range fields {
+			s.webhooks[k] = v
+		}
+	})
 }
 
 // UseFakeClaude runs the generated scope's agent as a FakeClaude on a
@@ -225,6 +242,25 @@ func (d *Instance) generate(set *settings, manifests []protocol.Manifest) {
 		o.Sandboxes[typ] = b
 	}
 	o.Operations = set.grants
+	if set.webhooks != nil {
+		hooks := map[string]any{}
+		for k, v := range set.webhooks {
+			hooks[k] = v
+		}
+		if _, ok := hooks["addr"]; !ok {
+			addr, err := freeAddr()
+			if err != nil {
+				d.t.Fatalf("extensiontest: a port for the webhook listener: %v", err)
+			}
+			hooks["addr"] = addr
+		}
+		d.webhookAddr, _ = hooks["addr"].(string)
+		b, err := json.Marshal(hooks)
+		if err != nil {
+			d.t.Fatalf("extensiontest: Webhooks: %v", err)
+		}
+		o.Webhooks = b
+	}
 	cfg, env, err := devscope.Generate(manifests, o)
 	if err != nil {
 		d.t.Fatalf("extensiontest: %v", err)

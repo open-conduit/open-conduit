@@ -42,6 +42,8 @@ The webhook listener and tunnel serve starts with; serve flags override it for o
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `addr` | string | yes |  | Local address the listener binds, such as 127.0.0.1:8787. |
+| `forwarder` | object |  |  | A forwarder in front of the listener (a queue, an API gateway, an ingress tier) that receives deliveries, holds them while the daemon is down and forwards them with its MAC. When set, the listener accepts only requests the forwarder signed, judges each sender's freshness at the time the forwarder attests it received the delivery, and gives a package the forwarder's delivery ID. |
+| `probe` | boolean |  | `true` | Whether the host probes the public URL every minute to check it reaches the listener. false is only for a static public_url: the daemon then makes no request through it, and whatever routes it is the operator's to watch. |
 | `public_url` | string |  |  | A URL that already reaches the listener (no tunnel runs); services deliver webhooks to it. Can't be combined with tunnel. |
 | `tunnel` | object |  |  | A tunnel that exposes the listener: provider is a tunnel type an installed or bundled package declares (ngrok, cloudflared or another), and config is that package's tunnel config, which the package checks and runs as written. Can't be combined with public_url. |
 

@@ -42,7 +42,7 @@ func WebhookHandler(typ string, svc Service, secret func(context.Context) (strin
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		d, err := VerifyDelivery(typ, svc, key, r.Header, body, now())
+		d, err := VerifyDelivery(typ, svc, key, r.Header, body, extension.WebhookReceivedAt(r, now))
 		switch {
 		case errors.Is(err, ErrSignature):
 			http.Error(w, "signature rejected", http.StatusUnauthorized)

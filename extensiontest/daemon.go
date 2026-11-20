@@ -34,6 +34,7 @@ package extensiontest
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +93,8 @@ type Instance struct {
 	// nil when the test gave its own config.
 	scope *scope
 	seq   int
+	// webhookAddr is the listener's address when Webhooks gave one.
+	webhookAddr string
 }
 
 var (
@@ -229,6 +232,25 @@ func install(dir, extensions string) error {
 // Client is the operator's management client. It stays valid across
 // Restart.
 func (d *Instance) Client() *client.Client { return d.c }
+
+// WebhookURL is the base URL of the daemon's webhook listener, which
+// Webhooks starts; "" without it.
+func (d *Instance) WebhookURL() string {
+	if d.webhookAddr == "" {
+		return ""
+	}
+	return "http://" + d.webhookAddr
+}
+
+// freeAddr is a local address no listener holds now.
+func freeAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer ln.Close()
+	return ln.Addr().String(), nil
+}
 
 // Root is the daemon's directory.
 func (d *Instance) Root() string { return d.root }

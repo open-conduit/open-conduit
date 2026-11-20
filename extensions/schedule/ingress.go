@@ -174,13 +174,18 @@ func WebhookHandler(namespace string, secret func(context.Context) (string, erro
 			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		received := now()
+		received := extension.WebhookReceivedAt(r, now)
 		id := r.Header.Get("Idempotency-Key")
 		if id == "" {
 			id = r.Header.Get("X-Request-Id")
 		}
 		if !deliveryPattern.MatchString(id) {
+			// A forwarder's ID for the delivery is the same on each of its
+			// retries; straight from a sender, each POST is distinct.
 			id = newDeliveryID(received)
+			if fid := extension.WebhookForwardID(r); fid != "" {
+				id = "f-" + fid
+			}
 		}
 		envelope, _ := json.Marshal(webhookEnvelope{Job: name, ContentType: r.Header.Get("Content-Type"), Body: body})
 		if err := push(r.Context(), extension.Delivery{ID: id, ReceivedAt: received, ContentType: WebhookContentType, Body: envelope}); err != nil {
