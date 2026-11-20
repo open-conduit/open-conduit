@@ -9,11 +9,12 @@ import (
 )
 
 // ChangeLag is how far a change cursor (NextChangeCursor) stays behind the
-// latest change a reader has read. A Work's UpdatedAt is the time its
-// transaction ran, not when it committed, so a change committed just after
-// a read can carry a time before the latest one that read saw. Reading
-// again from ChangeLag before that time reads it, provided no
-// transaction takes longer than ChangeLag to commit.
+// latest change a reader has read. Storage never stamps a Work's change
+// before one already committed (Tx.PutWork), even when the clock steps
+// back, but a transaction stamps when it starts and commits later, so a
+// change committed just after a read can carry a time a little before the
+// latest that read saw. Reading again from ChangeLag before that time
+// reads it, provided no transaction takes longer than ChangeLag to commit.
 const ChangeLag = time.Minute
 
 var finishedWorkStates = []domain.WorkState{domain.WorkCompleted, domain.WorkFailed, domain.WorkCancelled}

@@ -165,6 +165,12 @@ type Tx interface {
 	WorkByCorrelation(domain.CorrelationKey) (domain.Work, error)
 	// Put methods require expected=0 for create, otherwise the exact current revision.
 	// Backend assigns revision/timestamps. Work correlations are exclusively owned.
+	// A Work's UpdatedAt (and a new Work's CreatedAt, equal to it) is the
+	// transaction's Now, or the latest UpdatedAt already committed when
+	// that is later (the clock stepped back): a Work written after another
+	// is never stamped before it, so a reader listing Work changed since
+	// the latest change it saw (LiveOrChanged) misses none. Claim stamps
+	// the Work it moves to running the same way.
 	PutWork(domain.Work, domain.Revision) error
 	// Empty work ID lists all attempts for recovery.
 	ListExecutions(domain.ID) ([]domain.Execution, error)

@@ -87,6 +87,7 @@ func StorageCases() []StorageCase {
 		{"lease_expiry_recovery_and_fencing", leaseFencing},
 		{"lease_renew_release", leaseRenew},
 		{"lease_renew_survives_clock_step_back", leaseRenewStepBack},
+		{"work_changes_stamped_in_order_across_clock_step_back", workStampStepBack},
 		{"terminal_work_cancellation_fences_worker", cancelFencing},
 		{"timer_fire_rearm_rollback", timerRollback},
 		{"one_shot_timer_and_duplicate_fire", oneShotTimer},
@@ -685,6 +686,55 @@ func leaseFencing(s storage.Store) error {
 // leaseRenewStepBack: a wall clock stepped back while the lease is held
 // (an NTP correction, a VM resume) neither fails the renewal nor shortens
 // the stored expiry, so the holder keeps its authority.
+// workStampStepBack: a Work written after the clock steps back carries an
+// UpdatedAt no earlier than any already stored, so a reader that lists
+// Work changed since the latest change it saw (storage.LiveOrChanged)
+// still finds it (#707). Claiming the Work stamps it the same way.
+func workStampStepBack(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	var seen time.Time
+	if err := transact(s, c, func(tx storage.Tx) error {
+		w, err := tx.Work("work")
+		seen = w.UpdatedAt
+		return err
+	}); err != nil {
+		return err
+	}
+	c.Advance(-time.Hour)
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "later", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		_, err := tx.Claim("execution", "worker", time.Minute)
+		return err
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		changed, err := tx.QueryWorks(storage.WorkQuery{UpdatedSince: seen})
+		if err != nil {
+			return err
+		}
+		got := map[domain.ID]bool{}
+		for _, w := range changed {
+			got[w.ID] = true
+			if w.UpdatedAt.Before(seen) {
+				return fmt.Errorf("work %s written after the clock stepped back is stamped %s, before %s already seen", w.ID, w.UpdatedAt, seen)
+			}
+		}
+		if !got["later"] || !got["work"] {
+			return fmt.Errorf("work changed after the clock stepped back is not listed as changed since %s: %v", seen, got)
+		}
+		if later, err := tx.Work("later"); err != nil || !later.CreatedAt.Equal(later.UpdatedAt) {
+			return fmt.Errorf("new work's creation and change differ: %+v %v", later, err)
+		}
+		return nil
+	})
+}
+
 func leaseRenewStepBack(s storage.Store) error {
 	c := NewClock()
 	if err := seed(s, c); err != nil {

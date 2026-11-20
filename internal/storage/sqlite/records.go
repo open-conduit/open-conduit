@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 	"slices"
@@ -397,11 +398,13 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 	}
 	w.Revision = expected + 1
 	w.LatestExecutor = old.LatestExecutor
+	if w.UpdatedAt, err = t.workStampInTx(); err != nil {
+		return err
+	}
 	w.CreatedAt = old.CreatedAt
 	if !exists {
-		w.CreatedAt = t.now
+		w.CreatedAt = w.UpdatedAt
 	}
-	w.UpdatedAt = t.now
 	b, err := encode(w)
 	if err != nil {
 		return err
@@ -421,6 +424,28 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 	}
 	return nil
 }
+
+// workStampInTx is the UpdatedAt a Work written in this transaction
+// carries: the transaction's now, or the latest UpdatedAt
+// already committed when the clock has stepped back. Transactions hold the
+// writer in turn, so every Work written later carries a later time than
+// any a reader has seen, which a change cursor (storage.LiveOrChanged)
+// depends on. It reads the latest from works_updated, once a transaction.
+func (t *transaction) workStampInTx() (time.Time, error) {
+	if !t.workStamp.IsZero() {
+		return t.workStamp, nil
+	}
+	var latest sql.NullInt64
+	if err := t.queryRow("SELECT max(" + workUpdated + ") FROM works").Scan(&latest); err != nil {
+		return time.Time{}, mapError(err)
+	}
+	t.workStamp = t.now
+	if floor := time.Unix(0, latest.Int64).UTC(); latest.Valid && t.workStamp.Before(floor) {
+		t.workStamp = floor
+	}
+	return t.workStamp, nil
+}
+
 func (t *transaction) Scope(id domain.ID) (domain.Scope, error) {
 	return read[domain.Scope](t, "SELECT record FROM scopes WHERE id=?", id)
 }
