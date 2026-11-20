@@ -26,15 +26,17 @@ type invoked struct {
 }
 
 type fake struct {
-	runs    []client.Run
-	work    map[string]client.Work
-	waits   []client.Wait
-	actions map[string][]client.Action
-	panels  map[string][]client.Panel
-	scopes  []client.Scope
-	config  *client.Config
-	live    map[string]client.LiveRun
-	content map[string]string
+	// recordScopes records every scope list, with the subject it was for.
+	recordScopes bool
+	runs         []client.Run
+	work         map[string]client.Work
+	waits        []client.Wait
+	actions      map[string][]client.Action
+	panels       map[string][]client.Panel
+	scopes       []client.Scope
+	config       *client.Config
+	live         map[string]client.LiveRun
+	content      map[string]string
 
 	events  []client.Event
 	health  *client.Health
@@ -134,7 +136,10 @@ func (f *fake) WorkRuntime(_ context.Context, id string) (client.Work, error) {
 func (f *fake) Waits(context.Context, url.Values) (client.Page[client.Wait], error) {
 	return client.Page[client.Wait]{Items: f.waits}, nil
 }
-func (f *fake) Scopes(context.Context, url.Values) (client.Page[client.Scope], error) {
+func (f *fake) Scopes(ctx context.Context, _ url.Values) (client.Page[client.Scope], error) {
+	if _, token := client.SubjectFrom(ctx); token != "" || f.recordScopes {
+		f.record("scopes as " + token)
+	}
 	return client.Page[client.Scope]{Items: f.scopes}, nil
 }
 func (f *fake) Config(context.Context) (client.Config, error) {
@@ -555,13 +560,18 @@ func TestActsForTheSignedInPerson(t *testing.T) {
 		t.Fatal("a subject header that isn't a header name was accepted")
 	}
 	f := newFake()
+	f.recordScopes = true
 	s, err := New(f, Options{Addr: addr, SubjectHeader: "X-Forwarded-Access-Token", Now: func() time.Time { return time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := s.Handler(addr)
-	as := func(token string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("GET", "/", nil)
+	as := func(token string, target ...string) *httptest.ResponseRecorder {
+		path := "/"
+		if len(target) > 0 {
+			path = target[0]
+		}
+		req := httptest.NewRequest("GET", path, nil)
 		req.Host = "open-conduit.localhost:7420"
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 		if token != "" {
@@ -582,6 +592,14 @@ func TestActsForTheSignedInPerson(t *testing.T) {
 		if w := as(token); w.Code != http.StatusOK {
 			t.Fatalf("%s: %d", token, w.Code)
 		}
+		// The Work page's controls read the scope's bindings, and the
+		// runs page labels sources, both as the person.
+		if w := as(token, "/work?id=wrk_1"); w.Code != http.StatusOK {
+			t.Fatalf("%s's Work page: %d", token, w.Code)
+		}
+		if !slices.Contains(f.calls, "scopes as "+token) {
+			t.Fatalf("%s's Work page never read the scope's bindings as them: %v", token, f.calls)
+		}
 		works := 0
 		for _, c := range f.calls {
 			if strings.HasPrefix(c, "as ") && c != "as "+token {
@@ -590,6 +608,14 @@ func TestActsForTheSignedInPerson(t *testing.T) {
 			if strings.HasPrefix(c, "works") {
 				works++
 			}
+		}
+		for _, c := range f.calls {
+			if (strings.HasPrefix(c, "extensions as") || strings.HasPrefix(c, "scopes as")) && !strings.HasSuffix(c, " as "+token) {
+				t.Fatalf("%s's page read the extensions as %q", token, c)
+			}
+		}
+		if !slices.Contains(f.calls, "extensions as "+token) {
+			t.Fatalf("%s's page never labelled a source as them: %v", token, f.calls)
 		}
 		if !slices.Contains(f.calls, "as "+token) || works == 0 {
 			t.Fatalf("%s's page: %v", token, f.calls)

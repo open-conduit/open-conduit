@@ -566,7 +566,7 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	cl, errs := s.closedFor(ctx, parseRunsQuery(q), wantClosed(q))
 	p.Err = strings.Join(slices.Concat(wd.Errs, errs), "\n")
-	d := runsView(wd, cl, q, p, s.opts.Now(), s.sourceLabel)
+	d := runsView(wd, cl, q, p, s.opts.Now(), s.labeler(ctx))
 	if d.Total == 0 && len(wd.Errs) == 0 {
 		if h, err := s.src.Health(ctx); err == nil {
 			g, _ := strconv.Atoi(h.ConfigGeneration)

@@ -118,7 +118,7 @@ func (s *Server) conversationPart(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Live", live)
-	if err := s.pages["work"].ExecuteTemplate(w, "conversation", t); err != nil {
+	if err := s.template("work", r).ExecuteTemplate(w, "conversation", t); err != nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 	}
 }

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -254,7 +255,7 @@ func TestSourceLabelFromTitles(t *testing.T) {
 	f.titles = []client.ExtensionTitle{{Name: "acme", Title: "Acme Tickets"}}
 	s := &Server{src: f, opts: Options{Now: func() time.Time { return runsNow }}}
 	for in, want := range map[string]string{"acme": "Acme Tickets", "core": "Core", "other": "other"} {
-		if got := s.sourceLabel(in); got != want {
+		if got := s.sourceLabel(context.Background(), in); got != want {
 			t.Errorf("sourceLabel(%q) = %q, want %q", in, got, want)
 		}
 	}

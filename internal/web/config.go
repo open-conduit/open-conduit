@@ -329,12 +329,13 @@ func (s *Server) configPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	label := s.labeler(ctx)
 	for _, sc := range cfg.Scopes {
 		var t *client.RouteTrace
 		if sc.ID == want {
 			t = trace
 		}
-		d.Scopes = append(d.Scopes, configScope{Flow: flow(sc, t), Open: open[sc.ID], Revision: revisions[sc.ID], label: s.sourceLabel})
+		d.Scopes = append(d.Scopes, configScope{Flow: flow(sc, t), Open: open[sc.ID], Revision: revisions[sc.ID], label: label})
 	}
 	s.offers(ctx, p, d.Scopes)
 	for i := range d.Scopes {

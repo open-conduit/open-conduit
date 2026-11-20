@@ -49,8 +49,8 @@ type ServeRequest struct {
 	// proxy that terminates TLS. Off unless ManagementAddr is set.
 	ManagementAddr, ManagementTLSCert, ManagementTLSKey, ManagementClientCA string
 	ManagementTrustedProxy                                                  bool
-	WebSubjectHeader            string
-	WebTokenFile                string
+	WebSubjectHeader                                                        string
+	WebTokenFile                                                            string
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.

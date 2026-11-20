@@ -267,10 +267,12 @@ func rowPrimary(w workView, pinned string) *control {
 	return nil
 }
 
-// actionFuncs are the template functions the action templates use.
-func (s *Server) actionFuncs() template.FuncMap {
+// actionFuncs are the template functions the action templates use, whose
+// daemon calls are made under ctx: the request's, so they act for the
+// person it is for (see Server.template).
+func (s *Server) actionFuncs(ctx context.Context) template.FuncMap {
 	bindings := func(scope string) []client.Binding {
-		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		ctx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()
 		return s.scopeBindings(ctx, scope)
 	}
@@ -721,7 +723,7 @@ func (s *Server) confirmPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Part {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := s.pages["confirm"].ExecuteTemplate(w, "action-dialog", d); err != nil {
+		if err := s.template("confirm", r).ExecuteTemplate(w, "action-dialog", d); err != nil {
 			http.Error(w, "render failed", http.StatusInternalServerError)
 		}
 		return
