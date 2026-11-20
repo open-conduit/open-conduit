@@ -181,7 +181,9 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 	if hash != m.DatabaseSHA256 {
 		return fmt.Errorf("backup: database digest mismatch")
 	}
-	input, err := artifacts.Open(filepath.Join(bundle, "artifacts"))
+	// Read-only: verifying or restoring a bundle never changes it, so a
+	// bundle taken by an older binary stays one that binary can restore.
+	input, err := artifacts.OpenReadOnly(filepath.Join(bundle, "artifacts"))
 	if err != nil {
 		return err
 	}

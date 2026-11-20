@@ -205,3 +205,121 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatalf("published partial backup: %v", err)
 	}
 }
+
+// treeOf fingerprints every path under root: its mode and, for a file,
+// its bytes.
+func treeOf(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		out[rel] = info.Mode().String()
+		if info.Mode().IsRegular() {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			out[rel] += " " + string(b)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestRestoreLeavesAFlatBundleUnchanged: a bundle whose artifacts are in
+// the flat layout an older binary wrote (objects/<ID>) restores, and
+// restoring it (as backup verify does on trial) changes nothing in it, so
+// the older binary can still restore it after a rollback.
+func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(root, "live.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	files, err := artifacts.Open(filepath.Join(root, "live-artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.Close()
+	w, err := files.Create(ctx, "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(w, "kept flat")
+	ref, err := w.Commit(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "scope", Name: "scope"}, 0); err != nil {
+			return err
+		}
+		if err := tx.PutWork(domain.Work{ID: "work", Kind: "fixture.work", State: domain.WorkReady, ScopeID: "scope"}, 0); err != nil {
+			return err
+		}
+		event := domain.Event{ID: "trigger", Type: "fixture.start", Source: "fixture", DeliveryID: "trigger", OccurredAt: now, ReceivedAt: now}
+		if _, _, err := tx.AcceptEvent(event); err != nil {
+			return err
+		}
+		return tx.PutExecution(domain.Execution{ID: "run", WorkID: "work", ExecutorBinding: "shell", State: domain.ExecutionPending, Attempt: 1, TriggerID: "trigger", Artifacts: []domain.ArtifactRef{ref}}, 0)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(root, "backup")
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err != nil {
+		t.Fatal(err)
+	}
+	objects := filepath.Join(bundle, "artifacts", "objects")
+	if err := os.Rename(filepath.Join(objects, ref.ID[:2], ref.ID), filepath.Join(objects, ref.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(objects, ref.ID[:2])); err != nil {
+		t.Fatal(err)
+	}
+	before := treeOf(t, bundle)
+	destination := filepath.Join(root, "restored")
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, nil); err != nil {
+		t.Fatal(err)
+	}
+	after := treeOf(t, bundle)
+	for path, was := range before {
+		if now, ok := after[path]; !ok || now != was {
+			t.Errorf("restore changed or removed %s in the bundle", path)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			t.Errorf("restore added %s to the bundle", path)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	restored, err := artifacts.Open(filepath.Join(destination, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	r, err := restored.Open(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(r)
+	r.Close()
+	if err != nil || string(data) != "kept flat" {
+		t.Fatalf("restored %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "artifacts", "objects", ref.ID[:2], ref.ID)); err != nil {
+		t.Fatalf("the restored store is not in the fan-out layout: %v", err)
+	}
+}

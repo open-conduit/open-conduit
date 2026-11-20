@@ -60,6 +60,8 @@ type Store struct {
 	active map[string]*writer
 	lock   *os.File
 	closed bool
+	// readOnly is a store OpenReadOnly opened: no lock, no writes.
+	readOnly bool
 	// fault is an internal test seam at flush/publication boundaries.
 	fault func(string) error
 }
@@ -83,6 +85,31 @@ func (backend) Open(ctx context.Context, location string) (storage.ArtifactStore
 		return nil, err
 	}
 	return Open(location)
+}
+
+// OpenReadOnly opens an existing store to read it without changing
+// anything in it: no directory is created, no object is moved to the
+// fan-out layout, no pending stream is removed and no lock is taken. It is
+// how a bundle's own artifacts are read (verify, restore), since a
+// published bundle is immutable and an older binary must still be able to
+// restore it. It finds an object in the fan-out layout or the flat one an
+// older store used. Create, Import and Delete return storage.ErrReadOnly;
+// List needs the fan-out layout.
+func OpenReadOnly(root string) (*Store, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{root, filepath.Join(root, "objects")} {
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+			return nil, fmt.Errorf("unsafe artifact directory permissions")
+		}
+	}
+	return &Store{root: root, readOnly: true, active: map[string]*writer{}}, nil
 }
 
 // Open creates private subdirectories and acquires an exclusive process
@@ -174,6 +201,19 @@ func (s *Store) objects() string { return filepath.Join(s.root, "objects") }
 // objectDir is where a valid ID's committed object lives.
 func (s *Store) objectDir(id string) string { return filepath.Join(s.objects(), id[:2], id) }
 
+// locate is where a valid ID's object is to be read: objectDir, or, in a
+// read-only store not yet fanned out, the flat objects/<ID>.
+func (s *Store) locate(id string) string {
+	dir := s.objectDir(id)
+	if !s.readOnly {
+		return dir
+	}
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return filepath.Join(s.objects(), id)
+	}
+	return dir
+}
+
 // prefixes lists the fan-out directories in name order, checking each.
 func (s *Store) prefixes() ([]string, error) {
 	entries, err := os.ReadDir(s.objects())
@@ -248,6 +288,14 @@ func (s *Store) available() error {
 	}
 	return nil
 }
+
+// writable is available, and refuses a read-only store.
+func (s *Store) writable() error {
+	if s.readOnly {
+		return storage.ErrReadOnly
+	}
+	return s.available()
+}
 func newID() (string, error) {
 	var b [32]byte
 	_, err := rand.Read(b[:])
@@ -269,7 +317,7 @@ func (s *Store) create(ctx context.Context, id, mediaType string) (*writer, erro
 	}
 	s.gate.RLock()
 	defer s.gate.RUnlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(s.root, "pending", id)
@@ -461,7 +509,7 @@ func (s *Store) readMetadata(id string) (metadata, error) {
 	if !idPattern.MatchString(id) {
 		return m, storage.ErrInvalid
 	}
-	dir := s.objectDir(id)
+	dir := s.locate(id)
 	info, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return m, storage.ErrNotFound
@@ -520,7 +568,7 @@ func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClose
 	if !m.matches(ref) {
 		return nil, storage.ErrInvalid
 	}
-	path := filepath.Join(s.objectDir(ref.ID), "data")
+	path := filepath.Join(s.locate(ref.ID), "data")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -572,7 +620,7 @@ func (s *Store) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	}
 	s.gate.Lock()
 	defer s.gate.Unlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return err
 	}
 	m, err := s.readMetadata(ref.ID)
@@ -632,6 +680,9 @@ func (p *Pinned) Close() error {
 // long source, a digest other than ref's, or a source read error publishes
 // nothing.
 func (s *Store) Import(ctx context.Context, ref storage.ArtifactRef, source io.Reader) error {
+	if s.readOnly {
+		return storage.ErrReadOnly
+	}
 	if ref.Size < 0 || ref.Size == int64(^uint64(0)>>1) || (ref.SHA256 != "" && !storage.ValidDigest(ref.SHA256)) {
 		return storage.ErrInvalid
 	}
@@ -726,7 +777,7 @@ func (s *Store) Collect(ctx context.Context, before time.Time, liveIDs map[strin
 func (s *Store) cleanup(ctx context.Context, before time.Time, live map[string]bool, recovery bool) error {
 	s.gate.Lock()
 	defer s.gate.Unlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return err
 	}
 	// Unpublished streams: any a dead process left (recovery), or aged
@@ -829,7 +880,9 @@ func (s *Store) Close() error {
 		}
 		w.mu.Unlock()
 	}
-	result = errors.Join(result, syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN), s.lock.Close())
+	if s.lock != nil {
+		result = errors.Join(result, syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN), s.lock.Close())
+	}
 	return result
 }
 

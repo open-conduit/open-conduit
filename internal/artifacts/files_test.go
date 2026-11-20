@@ -500,3 +500,51 @@ func TestListPagesAcrossPrefixes(t *testing.T) {
 		t.Fatalf("listed %d of %d", seen, len(want))
 	}
 }
+
+// TestOpenReadOnlyChangesNothing: a read-only store reads an object in the
+// flat layout where it is, leaving it there and leaving pending streams
+// alone, and refuses every write.
+func TestOpenReadOnlyChangesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "artifacts")
+	s, e := Open(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ref := publish(t, s, "bundled")
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	flat := filepath.Join(dir, "objects", ref.ID)
+	if e = os.Rename(filepath.Join(dir, "objects", ref.ID[:2], ref.ID), flat); e != nil {
+		t.Fatal(e)
+	}
+	stale := filepath.Join(dir, "pending", strings.Repeat("b", 64))
+	if e = os.Mkdir(stale, 0o700); e != nil {
+		t.Fatal(e)
+	}
+	r, e := OpenReadOnly(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer r.Close()
+	if content(t, r, ref) != "bundled" {
+		t.Fatal("read-only store read differently")
+	}
+	for _, path := range []string{flat, stale} {
+		if _, e = os.Stat(path); e != nil {
+			t.Fatalf("read-only open changed the store: %v", e)
+		}
+	}
+	if _, e = r.Create(ctx, "text/plain"); !errors.Is(e, storage.ErrReadOnly) {
+		t.Fatalf("create: %v", e)
+	}
+	if e = r.Delete(ctx, ref); !errors.Is(e, storage.ErrReadOnly) {
+		t.Fatalf("delete: %v", e)
+	}
+	if e = r.Import(ctx, storage.ArtifactRef{ID: strings.Repeat("c", 64), Size: 1, MediaType: "text/plain"}, strings.NewReader("x")); !errors.Is(e, storage.ErrReadOnly) {
+		t.Fatalf("import: %v", e)
+	}
+	if content(t, r, ref) != "bundled" {
+		t.Fatal("a refused delete removed content")
+	}
+}
