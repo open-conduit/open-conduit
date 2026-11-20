@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -49,12 +49,20 @@ lint:
 		$(STATICCHECK) ./...; \
 		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
-test: test-unit test-integration
+test: test-unit test-rerun test-integration
 
 # Both run under scripts/check-temp-dir.sh, which fails a run that leaves
 # anything in the temp directory (#445).
 test-unit:
 	scripts/check-temp-dir.sh $(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
+
+# test-rerun runs the unit tests with every transaction's first run aborted
+# (storage.ErrTransient) and rerun by storage.Retry, in the SQLite backend
+# and the reference store alike, so a callback that isn't safe to rerun
+# fails its own tests (internal/storage/sqlite/rerun.go). The storage
+# suites are left out: they hold a backend to running a callback once.
+test-rerun:
+	scripts/check-temp-dir.sh $(GO) test -tags rerun -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v -e '/integration$$' -e '/internal/storage/sqlite$$' -e '/conformance$$')
 
 test-integration:
 	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/check-temp-dir.sh scripts/test-integration.sh $(INTEGRATION_SHARDS) $(INTEGRATION_RUN)

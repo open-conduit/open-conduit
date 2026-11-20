@@ -67,6 +67,13 @@ func copyOf[T any](v T) T {
 func (m *Memory) SerialWriters() bool { return true }
 
 func (m *Memory) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	if rerun {
+		return storage.Retry(&abortFirst{transact: m.transact}, rerunPolicy).Transact(ctx, g, fn)
+	}
+	return m.transact(ctx, g, fn)
+}
+
+func (m *Memory) transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -100,6 +107,13 @@ func (m *Memory) Transact(ctx context.Context, g storage.Guard, fn func(storage.
 // read without it, so a View neither waits for nor sees a Transact still
 // running.
 func (m *Memory) View(ctx context.Context, fn func(storage.Tx) error) error {
+	if rerun {
+		return storage.Retry(&abortFirst{view: m.view}, rerunPolicy).(storage.Viewer).View(ctx, fn)
+	}
+	return m.view(ctx, fn)
+}
+
+func (m *Memory) view(ctx context.Context, fn func(storage.Tx) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
