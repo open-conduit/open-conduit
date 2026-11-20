@@ -61,21 +61,26 @@ func TestLiveOrChangedAndTheCursor(t *testing.T) {
 
 	since := at.Add(5 * time.Minute)
 	none := func(domain.Work) bool { return false }
-	if next := storage.NextChangeCursor(since, got, none); !next.Equal(at.Add(20*time.Minute - storage.ChangeLag)) {
+	if next := storage.NextChangeCursor(since, time.Time{}, got, none); !next.Equal(at.Add(20*time.Minute - storage.ChangeLag)) {
 		t.Fatalf("settled: %v, want a lag behind the latest change", next)
 	}
-	if next := storage.NextChangeCursor(since, got, func(w domain.Work) bool { return w.ID == "c-new" }); !next.Equal(at.Add(10 * time.Minute)) {
+	if next := storage.NextChangeCursor(since, time.Time{}, got, func(w domain.Work) bool { return w.ID == "c-new" }); !next.Equal(at.Add(10 * time.Minute)) {
 		t.Fatalf("c-new unsettled: %v, want its change", next)
 	}
 	// Unsettled live Work holds nothing back: it is read every pass.
-	if next := storage.NextChangeCursor(since, got, func(w domain.Work) bool { return w.ID == "b-live" }); !next.Equal(at.Add(20*time.Minute - storage.ChangeLag)) {
+	if next := storage.NextChangeCursor(since, time.Time{}, got, func(w domain.Work) bool { return w.ID == "b-live" }); !next.Equal(at.Add(20*time.Minute - storage.ChangeLag)) {
 		t.Fatalf("live unsettled: %v", next)
 	}
 	// Nothing read later than the cursor allows: it stays.
-	if next := storage.NextChangeCursor(at.Add(30*time.Minute), got, none); !next.Equal(at.Add(30 * time.Minute)) {
+	if next := storage.NextChangeCursor(at.Add(30*time.Minute), time.Time{}, got, none); !next.Equal(at.Add(30 * time.Minute)) {
 		t.Fatalf("moved back: %v", next)
 	}
-	if next := storage.NextChangeCursor(since, nil, none); !next.Equal(since) {
+	if next := storage.NextChangeCursor(since, time.Time{}, nil, none); !next.Equal(since) {
 		t.Fatalf("nothing read: %v", next)
+	}
+	// A reader on the runtime's clock moves a lag behind its read, even
+	// when nothing has changed since.
+	if next := storage.NextChangeCursor(since, at.Add(time.Hour), got, none); !next.Equal(at.Add(time.Hour - storage.ChangeLag)) {
+		t.Fatalf("read at an hour: %v", next)
 	}
 }

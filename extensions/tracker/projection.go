@@ -354,7 +354,7 @@ func supersedes(w, prev domain.Work) bool {
 // saveWorksCursor moves the change cursor past the finished Work the pass
 // settled (storage.NextChangeCursor).
 func (p *Projector) saveWorksCursor(ctx context.Context, read pass, unsettled map[domain.ID]bool) error {
-	next := storage.NextChangeCursor(read.since, read.works, func(w domain.Work) bool { return unsettled[w.ID] })
+	next := storage.NextChangeCursor(read.since, time.Time{}, read.works, func(w domain.Work) bool { return unsettled[w.ID] })
 	if next.Equal(read.since) {
 		return nil
 	}

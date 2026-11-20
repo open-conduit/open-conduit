@@ -58,13 +58,18 @@ func LiveOrChanged(tx Tx, q WorkQuery, since time.Time) ([]domain.Work, error) {
 // NextChangeCursor is the since of a reader's next LiveOrChanged pass,
 // after a pass from since read works and settled all of them except those
 // unsettled says it hasn't. It is ChangeLag before the latest change read,
-// and no later than the change of the earliest finished Work left
-// unsettled, so the next pass reads that Work again; live Work is read
-// every pass whatever the cursor. It never moves before since: every
-// change committed after the pass that chose since carries a later time.
-// A reader that stops a pass part way keeps since instead.
-func NextChangeCursor(since time.Time, works []domain.Work, unsettled func(domain.Work) bool) time.Time {
-	var latest time.Time
+// or before readAt when that is later: readAt is when the pass read, on
+// the clock that stamps UpdatedAt (the runtime's), and zero for a reader
+// that doesn't share that clock, such as one in another process. Without
+// it, a store where nothing changes keeps its last lag of changes read
+// until a later change comes. It is no later than the change of the
+// earliest finished Work left unsettled, so the next pass reads that Work
+// again; live Work is read every pass whatever the cursor. It never moves
+// before since: every change committed after the pass that chose since
+// carries a later time. A reader that stops a pass part way keeps since
+// instead.
+func NextChangeCursor(since, readAt time.Time, works []domain.Work, unsettled func(domain.Work) bool) time.Time {
+	latest := readAt
 	for _, w := range works {
 		if w.UpdatedAt.After(latest) {
 			latest = w.UpdatedAt
