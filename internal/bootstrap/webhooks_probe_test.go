@@ -115,7 +115,7 @@ func TestSuperviseTunnelRestartsARunWhoseURLStopsAnswering(t *testing.T) {
 		{urls: []string{"https://one.test"}, err: errHold},
 		{urls: []string{"https://two.test"}, err: errHold},
 	}}
-	d.hooks.addTunnel("cloudflared", f)
+	d.hooks.setTunnels(map[string]extension.TunnelProvider{"cloudflared": f})
 	d.hooks.listening, d.hooks.tunnel = "127.0.0.1:1", "cloudflared"
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

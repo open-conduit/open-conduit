@@ -41,7 +41,7 @@ func TestEndedTurnKeepsItsTranscript(t *testing.T) {
 			s := runtimetest.NewScheduler(t, f, runtime.SchedulerOptions{Owner: "daemon", LeaseDuration: lease, Generation: "fixture-generation", Executors: map[string]extension.Executor{"fixture": executor}})
 			d := &daemon{o: Options{LeaseDuration: lease}, coord: f.Store, now: f.Clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				reported: map[string]string{}, reportedAt: map[string]time.Time{}, inflight: map[attemptKey]domain.LeaseRef{}, ctx: ctx, nudge: make(chan struct{}, 1),
-				executors: map[string]extension.Executor{"fixture": executor}}
+				external: externalState{executors: map[string]extension.Executor{"fixture": executor}}}
 			c := &components{scheduler: s}
 			d.current.Store(c)
 
@@ -123,7 +123,7 @@ func TestFencedResultIsKeptFromTheHandlesOneAnswer(t *testing.T) {
 			s := runtimetest.NewScheduler(t, f, runtime.SchedulerOptions{Owner: "daemon", LeaseDuration: lease, Generation: "fixture-generation", Executors: map[string]extension.Executor{"fixture": executor}})
 			d := &daemon{o: Options{LeaseDuration: lease}, coord: f.Store, now: f.Clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				reported: map[string]string{}, reportedAt: map[string]time.Time{}, inflight: map[attemptKey]domain.LeaseRef{}, ctx: ctx, nudge: make(chan struct{}, 1),
-				executors: map[string]extension.Executor{"fixture": executor}}
+				external: externalState{executors: map[string]extension.Executor{"fixture": executor}}}
 			c := &components{scheduler: s}
 			d.current.Store(c)
 

@@ -1134,20 +1134,31 @@ func (s *Server) listPages(c *call) (int, any, error) {
 	return 200, map[string]any{"pages": out}, nil
 }
 
-// listExtensions lists the extensions' display names (Options.Titles), by
-// name, for the web view's source labels.
+// Extension is one installed extension package as GET /extensions lists
+// it: its name, display name (the manifest's title, "" for none) and
+// version, and whether the daemon is running it. The daemon runs the
+// packages its configuration uses; the rest are installed but not started.
+type Extension struct {
+	Name, Title, Version string
+	Running              bool
+}
+
+// listExtensions lists the installed extension packages (Options.Extensions)
+// by name: the web view's source labels, and which of them are running.
 func (s *Server) listExtensions(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err
 	}
 	type wireExtension struct {
-		Name  string `json:"name"`
-		Title string `json:"title"`
+		Name    string `json:"name"`
+		Title   string `json:"title"`
+		Version string `json:"version,omitempty"`
+		Running bool   `json:"running"`
 	}
 	out := []wireExtension{}
-	if s.o.Titles != nil {
-		for name, title := range s.o.Titles() {
-			out = append(out, wireExtension{Name: name, Title: title})
+	if s.o.Extensions != nil {
+		for _, x := range s.o.Extensions() {
+			out = append(out, wireExtension{Name: x.Name, Title: x.Title, Version: x.Version, Running: x.Running})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

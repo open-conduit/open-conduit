@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // setupProbes are the probes a setup session may run besides the setup
@@ -18,13 +22,17 @@ import (
 // HostProbeOwner.
 func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	out := map[string]extension.SetupProbe{}
-	d.external.mu.Lock()
-	for _, p := range d.external.packages {
-		for _, x := range p.r.Probes() {
-			out[p.m.Name+"."+x.Name] = x
+	for _, c := range d.catalogued() {
+		if r := d.runningRemote(c.Name()); r != nil {
+			for _, x := range r.Probes() {
+				out[c.Name()+"."+x.Name] = x
+			}
+			continue
+		}
+		for _, x := range d.dormantProbes(c.Name()) {
+			out[c.Name()+"."+x.Name] = x
 		}
 	}
-	d.external.mu.Unlock()
 	out[HostProbeOwner+".init"] = d.initProbe()
 	out[HostProbeOwner+".doctor"] = d.doctorProbe()
 	return out
@@ -53,14 +61,7 @@ const HostProbeOwner = "open-conduit"
 func (d *daemon) initProbe() extension.SetupProbe {
 	var types []string
 	setups := map[string]extension.Setup{}
-	var all []extension.Setup
-	d.external.mu.Lock()
-	for _, p := range d.external.packages {
-		if s, ok := p.r.Setup(); ok {
-			all = append(all, s)
-		}
-	}
-	d.external.mu.Unlock()
+	all := d.setups()
 	for _, s := range all {
 		info := s.SetupInfo()
 		if _, dup := setups[info.Type]; !info.FirstRun && !dup {
@@ -177,3 +178,62 @@ func (probeSetupHost) Cwd() string {
 }
 func (h probeSetupHost) StateDir() string { return h.state }
 func (probeSetupHost) DryRun() bool       { return true }
+
+// setups are the catalogued packages' setup flows: a running package's
+// through its process, and one that isn't running started for the flow
+// alone, as `init TYPE` starts it (packageSetup).
+func (d *daemon) setups() []extension.Setup {
+	var out []extension.Setup
+	for _, c := range d.catalogued() {
+		if r := d.runningRemote(c.Name()); r != nil {
+			if s, ok := r.Setup(); ok {
+				out = append(out, s)
+			}
+			continue
+		}
+		if decl := c.m.Provides.Setup; decl != nil {
+			d.external.mu.Lock()
+			f := d.external.found[c.Name()]
+			d.external.mu.Unlock()
+			out = append(out, packageSetup{f: f, configPath: d.o.ConfigPath, stateDir: d.o.StateDir, version: d.o.Version, info: extension.SetupInfo{Type: decl.Type, Summary: decl.Summary, Usage: decl.Usage, FirstRun: decl.FirstRun}})
+		}
+	}
+	return out
+}
+
+// dormantProbes are the setup probes of a catalogued package that isn't
+// running: each run starts the package for that probe alone and stops it
+// after, as packageSetup does for a setup flow.
+func (d *daemon) dormantProbes(name string) []extension.SetupProbe {
+	d.external.mu.Lock()
+	f, ok := d.external.found[name]
+	d.external.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	var out []extension.SetupProbe
+	for _, info := range f.Manifest.Provides.Probes {
+		probe := info.Name
+		p := extension.SetupProbe{Name: probe, Summary: info.Summary}
+		for _, a := range info.Args {
+			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+		}
+		p.Run = func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
+			paths := extproc.StatePaths(d.o.StateDir, name)
+			r, err := extproc.Load(ctx, f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
+				PassEnv: func() []string { return d.packagePassEnv(name) }})
+			if err != nil {
+				return extension.ProbeResult{}, diagnosed(name, err)
+			}
+			defer r.Process().Close()
+			for _, x := range r.Probes() {
+				if x.Name == probe {
+					return x.Run(ctx, args)
+				}
+			}
+			return extension.ProbeResult{}, errors.New("the package declares no probe " + probe)
+		}
+		out = append(out, p)
+	}
+	return out
+}

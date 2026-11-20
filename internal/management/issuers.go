@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -236,6 +237,24 @@ func issuedPrincipal(r issuerRecord, v verified, token string) principal {
 	return principal{operator: true, token: token, name: r.ID + ":" + v.subject, role: r.role(v.groups), grants: grantsOf(r.Grants, v.groups), issuer: r.ID}
 }
 
+// IssuerTypes are the verifier types the stored trusted issuers name, in
+// order and each once, so the host can start the packages that verify
+// their credentials.
+func IssuerTypes(ctx context.Context, store storage.Store, now func() time.Time) ([]string, error) {
+	var out []string
+	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		issuers, err := listIssuers(tx)
+		for _, r := range issuers {
+			if !slices.Contains(out, r.Type) {
+				out = append(out, r.Type)
+			}
+		}
+		return err
+	})
+	sort.Strings(out)
+	return out, err
+}
+
 func listIssuers(tx storage.Tx) ([]issuerRecord, error) {
 	rows, err := tx.List(authNamespace, "issuer/")
 	if err != nil {
@@ -343,6 +362,11 @@ func (s *Server) putIssuer(c *call) (int, any, error) {
 				return fail(400, "malformed", "grants are rows of {group, scope, role}: a group name (1-256 characters), a scope ID and view or operate, no group and scope twice; admin is only ever daemon-wide")
 			}
 			seen[key] = true
+		}
+		if s.o.StartVerifier != nil && s.o.Verifiers != nil {
+			if _, running := s.o.Verifiers(in.Type); !running {
+				s.o.StartVerifier(c.ctx, in.Type)
+			}
 		}
 		var ver Verifier
 		ok := false

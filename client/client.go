@@ -1183,13 +1183,17 @@ func (c *Client) Pages(ctx context.Context) ([]ExtensionPage, error) {
 	return out.Pages, err
 }
 
-// ExtensionTitle is an extension's display name.
+// ExtensionTitle is an installed extension package: its name, display
+// name and version, and whether the daemon is running it (it runs the
+// packages its configuration uses).
 type ExtensionTitle struct {
-	Name  string `json:"name"`
-	Title string `json:"title"`
+	Name    string `json:"name"`
+	Title   string `json:"title"`
+	Version string `json:"version,omitempty"`
+	Running bool   `json:"running"`
 }
 
-// Extensions lists the extensions' display names.
+// Extensions lists the installed extension packages.
 func (c *Client) Extensions(ctx context.Context) ([]ExtensionTitle, error) {
 	var out struct {
 		Extensions []ExtensionTitle `json:"extensions"`

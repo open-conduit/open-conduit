@@ -877,6 +877,31 @@ func held(tx storage.Tx, fn func(x domain.Execution, executor string) error) err
 // heldCandidates lists, in ID order, the attempts that can hold capacity:
 // the unfinished ones and those in the unexcluded index. Before the index is
 // complete it lists every attempt.
+// HeldExecutionsInTx are the attempts that still need their executor: live
+// or parked ones, and finished ones whose resource exclusion isn't yet
+// confirmed, which the stop follow-up asks the executor about. The host
+// keeps the extension package of each one's executor running for them.
+func HeldExecutionsInTx(tx storage.Tx) ([]domain.Execution, error) {
+	xs, err := heldCandidates(tx)
+	if err != nil {
+		return nil, err
+	}
+	out := xs[:0]
+	for _, x := range xs {
+		if x.State.Terminal() {
+			state, err := attemptState(tx, x.ID)
+			if errors.Is(err, storage.ErrNotFound) || err == nil && state.Excluded {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, x)
+	}
+	return out, nil
+}
+
 func heldCandidates(tx storage.Tx) ([]domain.Execution, error) {
 	if _, err := tx.Get(indexNamespace, unexcludedReady); errors.Is(err, storage.ErrNotFound) {
 		return tx.ListExecutions("")

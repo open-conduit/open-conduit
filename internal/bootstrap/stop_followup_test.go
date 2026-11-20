@@ -89,7 +89,7 @@ func TestUnconfirmedStopIsFollowedUp(t *testing.T) {
 			}
 			d := &daemon{o: Options{LeaseDuration: lease}, coord: f.Store, now: f.Clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				reported: map[string]string{}, reportedAt: map[string]time.Time{}, inflight: map[attemptKey]domain.LeaseRef{}, ctx: ctx, nudge: make(chan struct{}, 1),
-				executors: map[string]extension.Executor{"fixture": executor}}
+				external: externalState{executors: map[string]extension.Executor{"fixture": executor}}}
 			c := &components{scheduler: s, timers: timers}
 			d.current.Store(c)
 			// pass is the loop's poll step: recoveries and due stop follow-ups.
@@ -278,7 +278,7 @@ func TestStopFollowupRunsOffTheLoop(t *testing.T) {
 	}
 	d := &daemon{o: Options{LeaseDuration: o.LeaseDuration}, coord: f.Store, now: f.Clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		reported: map[string]string{}, reportedAt: map[string]time.Time{}, inflight: map[attemptKey]domain.LeaseRef{}, ctx: ctx, nudge: make(chan struct{}, 1),
-		executors: map[string]extension.Executor{"fixture": executor}}
+		external: externalState{executors: map[string]extension.Executor{"fixture": executor}}}
 	c := &components{scheduler: s}
 	due := runtime.StopDue{ExecutionID: a.Lease.ExecutionID, Epoch: a.Lease.Epoch, Attempt: 1}
 	returned := make(chan struct{})

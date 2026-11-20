@@ -20,7 +20,7 @@ import (
 func (d *daemon) runEnvironment(ctx context.Context, state runtime.AttemptState) (map[string]string, error) {
 	req := extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}, Connection: d.configs.Connection(state), Binding: state.Binding.Name}
 	env := map[string]string{}
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		req.FilesDir = ""
 		if d.endpoints != nil {
 			req.FilesDir = d.endpoints.FilesDir(state.ExecutionID, x.Name())

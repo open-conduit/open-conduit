@@ -109,7 +109,7 @@ func TestSuperviseTunnelRestartsAStoppedRun(t *testing.T) {
 		{urls: []string{"https://one.test/"}, err: errors.New("ngrok exited")},
 		{urls: []string{"https://two.test"}, err: errHold},
 	}}
-	d.hooks.addTunnel("ngrok", f)
+	d.hooks.setTunnels(map[string]extension.TunnelProvider{"ngrok": f})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	run := extension.TunnelRun{Addr: "127.0.0.1:8787", Config: tunnelConfig(TunnelOptions{Kind: "ngrok", Config: json.RawMessage(`{"domain":"hooks.ngrok.app"}`)})}
@@ -136,7 +136,7 @@ func TestSuperviseTunnelStopsOnARefusalOrNoProvider(t *testing.T) {
 	for kind, want := range map[string]string{"ngrok": "tunnel_invalid", "cloudflared": "tunnel_unavailable"} {
 		d := tunnelDaemon()
 		f := &fakeTunnel{seen: make(chan extension.TunnelRun, 4), runs: []fakeRun{{err: fmt.Errorf("%w: no URL", extension.ErrTunnelConfig)}}}
-		d.hooks.addTunnel("ngrok", f)
+		d.hooks.setTunnels(map[string]extension.TunnelProvider{"ngrok": f})
 		d.hooks.listening, d.hooks.tunnel = "127.0.0.1:1", kind
 		d.superviseTunnel(context.Background(), kind, extension.TunnelRun{Addr: "127.0.0.1:1"})
 		c := d.webhookCheck(context.Background())

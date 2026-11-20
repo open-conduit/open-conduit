@@ -194,3 +194,8 @@ func (t *faultyTx) Put(namespace, key string, value []byte) error {
 	}
 	return err
 }
+
+// startAll is OPEN_CONDUIT_START_ALL_PACKAGES=1: every catalogued package
+// starts, as the daemon did before it started only those something needs,
+// so a test can show its check of the running packages catches that.
+func startAll() bool { return os.Getenv("OPEN_CONDUIT_START_ALL_PACKAGES") == "1" }

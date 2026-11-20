@@ -192,6 +192,31 @@ func (t *Timers) Cancel(ctx context.Context, id domain.ID, expected domain.Revis
 		return tx.Delete(timerNamespace, timerKey(id))
 	})
 }
+
+// ArmedRecurrencesInTx are the recurrence kinds of the armed timers, each
+// once: the host keeps the extension package that computes a kind running
+// while one of its timers is armed, so the timer can fire or be cancelled.
+func ArmedRecurrencesInTx(tx storage.Tx) (map[string]bool, error) {
+	timers, err := tx.ListTimers()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, timer := range timers {
+		var meta timerMetadata
+		if err := getJSON(tx, timerNamespace, timerKey(timer.ID), &meta); err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if meta.Recurrence != "" {
+			out[meta.Recurrence] = true
+		}
+	}
+	return out, nil
+}
+
 func nextTimer(timer domain.Timer, meta timerMetadata, replacement *domain.Timer) (*domain.Timer, error) {
 	var next *domain.Timer
 	if replacement != nil {

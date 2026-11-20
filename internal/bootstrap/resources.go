@@ -22,7 +22,7 @@ const ResourceConfigSchema = "core.config.resource.v1"
 // resourceState is the host side of the optional resource providers: the
 // registered providers and the last reconcile and sweep reports for doctor.
 type resourceState struct {
-	providers map[string]extension.ResourceProvider
+	providers providerSet[extension.ResourceProvider]
 	mu        sync.Mutex
 	running   bool
 	last      time.Time
@@ -40,7 +40,6 @@ type resourceState struct {
 // openResources starts the host side of the resource providers, which the
 // packages' declared ones (manifest resources) join as they start.
 func (d *daemon) openResources() {
-	d.resources.providers = map[string]extension.ResourceProvider{}
 	d.resources.lastSweep = d.now()
 }
 
@@ -49,7 +48,7 @@ func (d *daemon) openResources() {
 func (d *daemon) sweepResources(c *components) {
 	r := &d.resources
 	r.mu.Lock()
-	if r.sweeping || len(r.providers) == 0 || d.now().Sub(r.lastSweep) < d.o.SweepInterval {
+	if r.sweeping || len(r.providers.all()) == 0 || d.now().Sub(r.lastSweep) < d.o.SweepInterval {
 		r.mu.Unlock()
 		return
 	}
@@ -63,8 +62,9 @@ func (d *daemon) sweepResources(c *components) {
 		}()
 		var total extension.ResourceSweepReport
 		var errs []error
-		for _, name := range providerNames(r.providers) {
-			s, ok := r.providers[name].(extension.ResourceSweeper)
+		providers := r.providers.all()
+		for _, name := range providerNames(providers) {
+			s, ok := providers[name].(extension.ResourceSweeper)
 			if !ok {
 				continue
 			}
@@ -100,7 +100,7 @@ func (d *daemon) bindResourcesAt(ctx context.Context, state runtime.AttemptState
 	if desc == nil {
 		return nil, nil
 	}
-	p := d.resources.providers[desc.Provider]
+	p := d.resources.providers.all()[desc.Provider]
 	if p == nil {
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
@@ -157,7 +157,7 @@ func (r phasedResources) Acquire(ctx context.Context, req extension.ResourceRequ
 func (d *daemon) reconcileResources(c *components) {
 	r := &d.resources
 	r.mu.Lock()
-	if r.running || len(r.providers) == 0 || d.now().Sub(r.last) < d.o.ResourceInterval {
+	if r.running || len(r.providers.all()) == 0 || d.now().Sub(r.last) < d.o.ResourceInterval {
 		r.mu.Unlock()
 		return
 	}
@@ -171,8 +171,9 @@ func (d *daemon) reconcileResources(c *components) {
 		}()
 		var total extension.ResourceReport
 		var errs []error
-		for _, name := range providerNames(r.providers) {
-			report, err := r.providers[name].Reconcile(d.ctx, func(ctx context.Context, o extension.ResourceOwner) (extension.ResourceOwnerStatus, error) {
+		providers := r.providers.all()
+		for _, name := range providerNames(providers) {
+			report, err := providers[name].Reconcile(d.ctx, func(ctx context.Context, o extension.ResourceOwner) (extension.ResourceOwnerStatus, error) {
 				return d.ownerStatus(ctx, c, o)
 			})
 			total.Active += report.Active

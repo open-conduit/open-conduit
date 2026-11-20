@@ -984,3 +984,30 @@ func TestIngressProviderFailureKeepsItsCause(t *testing.T) {
 		})
 	}
 }
+
+// A source its package stopped is unregistered: the runtime no longer
+// reconciles it, and registering the name again (the package started once
+// more) resumes from the checkpoint the store kept. The negative control:
+// registering a name still registered is a conflict.
+func TestIngressUnregisterResumesOnRegister(t *testing.T) {
+	ctx := context.Background()
+	clock := &ingressClock{at: ingressTime}
+	_, r := openIngress(t, filepath.Join(t.TempDir(), "conduit.db"), clock)
+	source := extension.Source{Namespace: "fixture/account-a", ScopeID: "scope_a"}
+	f := newFixtureIngress()
+	registerIngress(t, r, "source_a", source, f)
+	f.pages[""] = extension.Snapshot{ScanID: "baseline", Complete: true, Checkpoint: "baseline_checkpoint", Observations: []extension.Observation{fixtureObservation(source, "a", "v1")}}
+	reconcilePage(t, r, "source_a")
+	if err := r.Register(ctx, "source_a", source, f, time.Minute); !errors.Is(err, extension.ErrConflict) {
+		t.Fatalf("registering a registered name: %v", err)
+	}
+	r.Unregister("source_a")
+	r.Unregister("never_registered")
+	if _, err := r.Reconcile(ctx, "source_a"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("reconciled an unregistered source: %v", err)
+	}
+	registerIngress(t, r, "source_a", source, f)
+	if status := ingressStatus(t, r, "source_a"); status.Checkpoint != "baseline_checkpoint" {
+		t.Fatalf("re-registered source lost its checkpoint: %+v", status)
+	}
+}

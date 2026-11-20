@@ -62,7 +62,7 @@ func TestInstalledSurfaces(t *testing.T) {
 	if len(kinds) != 2 || kinds[0].Kind != "acme.job" || !kinds[0].Standing || !kinds[0].Timed || kinds[0].Trigger != nil || kinds[1].Kind != "acme.chat" || kinds[1].Timed {
 		t.Fatalf("work kinds %+v", kinds)
 	}
-	d := &daemon{packages: []*installed{x}}
+	d := &daemon{external: externalState{packages: []*installed{x}}}
 	if timed := d.timedKinds(); !timed["acme.job"] || timed["acme.chat"] {
 		t.Fatalf("timed kinds %v", timed)
 	}
@@ -92,7 +92,7 @@ func TestTurnPluginCarriesPackagePlaybooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := &installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{Playbooks: "playbooks"}}, dir: dir}
-	d := &daemon{o: Options{StateDir: t.TempDir()}, packages: []*installed{x}}
+	d := &daemon{o: Options{StateDir: t.TempDir()}, external: externalState{catalogue: []*installed{x}}}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}

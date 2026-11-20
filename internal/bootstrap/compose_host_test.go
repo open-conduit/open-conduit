@@ -55,7 +55,7 @@ func TestPackageSourcesStayOwn(t *testing.T) {
 	}
 	x := &installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{
 		WorkKinds: []protocol.WorkKindDecl{{Kind: "acme.tick", Timed: true}, {Kind: "acme.item"}}}}}
-	d := &daemon{coord: store, now: now, log: slog.New(slog.DiscardHandler), ingress: ingress, packages: []*installed{x}, nudge: make(chan struct{}, 1),
+	d := &daemon{coord: store, now: now, log: slog.New(slog.DiscardHandler), ingress: ingress, external: externalState{packages: []*installed{x}}, nudge: make(chan struct{}, 1),
 		reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	src := func(name, ns string, families ...string) ingressSource {
 		return ingressSource{Name: name, Source: extension.Source{Namespace: ns, ScopeID: "eng"}, Ingress: ownFamilyIngress{families: families}}

@@ -29,14 +29,13 @@ const containerStopGrace = 10 * time.Second
 // containerState is the host side of the container providers: the
 // packages' declared ones (manifest containers), by type.
 type containerState struct {
-	providers map[string]extension.ContainerProvider
+	providers providerSet[extension.ContainerProvider]
 	last      time.Time
 	// reconciling is set while a reconcile pass runs off the loop.
 	reconciling atomic.Bool
 }
 
 func (d *daemon) openContainers() {
-	d.containers.providers = map[string]extension.ContainerProvider{}
 }
 
 // adoptLegacyContainerDirs moves what a container provider kept in process
@@ -111,7 +110,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 	if !state.Capabilities.Container {
 		return runtime.ContainerBinding{}, fmt.Errorf("%w: executor %s can't run in a container", extension.ErrSandboxUnavailable, state.Executor)
 	}
-	p := d.containers.providers[desc.Provider]
+	p := d.containers.providers.all()[desc.Provider]
 	if p == nil {
 		return runtime.ContainerBinding{}, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 	}
@@ -303,7 +302,7 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 	if pin == nil {
 		return nil
 	}
-	return extension.StopContainer(ctx, d.containers.providers[pin.Provider], pin, d.containerRecords(state.ExecutionID), containerStopGrace)
+	return extension.StopContainer(ctx, d.containers.providers.all()[pin.Provider], pin, d.containerRecords(state.ExecutionID), containerStopGrace)
 }
 
 // reconcileContainers removes this host's containers whose execution runs
@@ -311,7 +310,7 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 // them, and the homes of finished Work, at most once per resource
 // interval.
 func (d *daemon) reconcileContainers(ctx context.Context) {
-	if len(d.containers.providers) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
+	if len(d.containers.providers.all()) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
 	}
 	if !d.containers.reconciling.CompareAndSwap(false, true) {
@@ -327,14 +326,15 @@ func (d *daemon) reconcileContainers(ctx context.Context) {
 }
 
 func (d *daemon) reconcileContainersPass(ctx context.Context) {
-	names := make([]string, 0, len(d.containers.providers))
-	for name := range d.containers.providers {
+	providers := d.containers.providers.all()
+	names := make([]string, 0, len(providers))
+	for name := range providers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	var errs []error
 	for _, name := range names {
-		removed, err := extension.ReconcileContainersKeeping(ctx, d.containers.providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		removed, err := extension.ReconcileContainersKeeping(ctx, providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
 			keep := map[domain.ID]extension.ContainerKeep{}
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				for _, id := range ids {
@@ -390,7 +390,7 @@ func containersKept(state domain.ExecutionState) extension.ContainerKeep {
 func (d *daemon) segmentEnded(id domain.ID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		x.SegmentEnded(ctx, id)
 	}
 }
@@ -401,7 +401,7 @@ func (d *daemon) segmentEnded(id domain.ID) {
 // use. A listing that fails is an error, so nothing is released or swept
 // on a guess.
 func (d *daemon) containerStatus(ctx context.Context, o extension.ResourceOwner, st *extension.ResourceOwnerStatus) error {
-	for _, p := range d.containers.providers {
+	for _, p := range d.containers.providers.all() {
 		if st.ExecutionDone {
 			if err := extension.RemoveContainers(ctx, p, o); err != nil {
 				return err
@@ -423,7 +423,7 @@ func (d *daemon) containerStatus(ctx context.Context, o extension.ResourceOwner,
 // toolbelt. Its plan is pinned and recorded with the attempt it attaches
 // to before it is returned. The executor says what runs in it.
 func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.Work, execution domain.ID) (management.ContainerAttachment, error) {
-	a, ok := d.executors[executor].(extension.ContainerAttachExecutor)
+	a, ok := d.executorMap()[executor].(extension.ContainerAttachExecutor)
 	if !ok {
 		return management.ContainerAttachment{}, management.ErrAttachUnsupported
 	}
@@ -442,7 +442,7 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 	if desc == nil {
 		return management.ContainerAttachment{}, fmt.Errorf("%w: the binding no longer declares a container", extension.ErrSandboxUnavailable)
 	}
-	p := d.containers.providers[desc.Provider]
+	p := d.containers.providers.all()[desc.Provider]
 	if p == nil {
 		return management.ContainerAttachment{}, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 	}
@@ -530,7 +530,7 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 	if pin == nil {
 		return storage.ErrNotFound
 	}
-	p := d.containers.providers[pin.Provider]
+	p := d.containers.providers.all()[pin.Provider]
 	if p == nil {
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
 	}
@@ -576,7 +576,7 @@ func tokenFile(socket, file string) string {
 // placed its own acquisitions on.
 func (d *daemon) resolveSite(_ context.Context, resourceType, id string) (extension.Site, error) {
 	current, _ := d.configs.Current()
-	return siteFor(current, d.containers.providers, d.sites.given, resourceType, id)
+	return siteFor(current, d.containers.providers.all(), d.sites.given, resourceType, id)
 }
 
 func siteFor(current *config.Snapshot, providers map[string]extension.ContainerProvider, given func(resourceType, site string) bool, resourceType, id string) (extension.Site, error) {

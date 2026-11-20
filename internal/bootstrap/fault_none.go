@@ -16,3 +16,9 @@ func faultStore(s storage.Store, _ *slog.Logger) storage.Store { return s }
 // builds; the faultinject build publishes the count as the integration
 // tests' loop barrier (see fault_inject.go).
 func (d *daemon) passed() {}
+
+// startAll reports whether every catalogued package starts, whether or
+// not anything uses it: never in production builds. The faultinject build
+// reads it from the environment, as the integration tests' negative
+// control for starting only the packages the config uses (fault_inject.go).
+func startAll() bool { return false }

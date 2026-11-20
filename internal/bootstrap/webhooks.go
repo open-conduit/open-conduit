@@ -144,13 +144,11 @@ var (
 const probePath = ".open-conduit/probe/"
 
 // addTunnel registers a package's tunnel type.
-func (h *webhookState) addTunnel(typ string, p extension.TunnelProvider) {
+// setTunnels replaces the tunnel providers with the running packages'.
+func (h *webhookState) setTunnels(providers map[string]extension.TunnelProvider) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.providers == nil {
-		h.providers = map[string]extension.TunnelProvider{}
-	}
-	h.providers[typ] = p
+	h.providers = providers
 }
 
 // tunnelConfig is the provider's config for t: the operator's object as

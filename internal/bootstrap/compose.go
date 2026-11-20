@@ -199,7 +199,7 @@ func workKinds(xs []*installed) map[string]runtime.WorkKindPolicy {
 // run never starts.
 func (d *daemon) timedKinds() map[string]bool {
 	out := map[string]bool{}
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		for _, w := range x.WorkKinds() {
 			if w.Timed {
 				out[w.Kind] = true
@@ -220,13 +220,15 @@ func recurrences(xs []*installed) map[string]runtime.RecurrenceFunc {
 	return r
 }
 
-// stopPackages stops every package at once and waits for the slowest, as
-// startup launches them at once: each package's process is told to go and
-// given time to exit, so stopping them in turn would add those times
-// together.
-func (d *daemon) stopPackages() {
+// stopRunning stops every running package (the daemon's shutdown).
+func (d *daemon) stopRunning() { stopAll(d.extensionPackages()) }
+
+// stopAll stops packages at once and waits for the slowest, as they start
+// at once: each package's process is told to go and given time to exit,
+// so stopping them in turn would add those times together.
+func stopAll(xs []*installed) {
 	var wg sync.WaitGroup
-	for _, x := range d.packages {
+	for _, x := range xs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -239,7 +241,7 @@ func (d *daemon) stopPackages() {
 // configurePackages sends each package configure for the current
 // generation, then registers the ingress sources it declares.
 func (d *daemon) configurePackages(ctx context.Context) {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		x.Configure(ctx)
 		d.registerSources(x, x.Sources())
 	}
@@ -248,9 +250,9 @@ func (d *daemon) configurePackages(ctx context.Context) {
 // registerSources registers a package's ingress sources: only under its
 // own registration names, and only producing its own Event families. A
 // source's namespace is the operator's to choose (a schedule entry's
-// `namespace`); the ingress refuses one another source holds. A
-// registration is immutable for one runtime instance: a source registered
-// earlier keeps its registration until restart.
+// `namespace`); the ingress refuses one another source holds. A source
+// registered earlier keeps its registration until restart or until its
+// package stops (detachPackages), which unregisters it.
 func (d *daemon) registerSources(x *installed, sources []ingressSource) {
 	if d.ingress == nil {
 		return
@@ -306,7 +308,7 @@ func ownFamilies(x *installed, spec extension.IngressSpec) bool {
 // packageWebhook returns the handler a package gives a webhook path under
 // /<name>/, or nil.
 func (d *daemon) packageWebhook(path string) http.Handler {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		if rest, ok := strings.CutPrefix(path, x.Name()+"/"); ok {
 			return x.Webhook(rest)
 		}
@@ -330,7 +332,7 @@ func (d *daemon) authorize(kind string, from, to domain.ID) error {
 // the packages that resolve that kind.
 func (d *daemon) waitTarget(kind string) func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool) {
 	return func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
-		for _, x := range d.packages {
+		for _, x := range d.extensionPackages() {
 			if f := x.Targets()[kind]; f != nil {
 				if key, types, ok := f(ctx, scope, name); ok {
 					return key, types, true
@@ -348,7 +350,7 @@ func (d *daemon) waitTarget(kind string) func(context.Context, domain.ID, string
 // one (provides.entry_gated) no enabled scope of the generation has an
 // entry for.
 func (d *daemon) registerPackageTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		if x.entryGated() && !hasEntry(s, x) {
 			continue
 		}
@@ -406,7 +408,7 @@ func hasEntry(s *config.Snapshot, x *installed) bool {
 }
 
 func (d *daemon) packageActions(scope domain.ID, out map[string]extension.ActionProvider) {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		for name, p := range x.Actions(scope) {
 			out[name] = p
 		}
@@ -417,7 +419,7 @@ func (d *daemon) packageActions(scope domain.ID, out map[string]extension.Action
 // management asks them concurrently and remembers which time out.
 func (d *daemon) annotators() []management.Annotator {
 	var out []management.Annotator
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		if x.m.Provides.Annotate {
 			out = append(out, management.Annotator{Name: x.Name(), Annotate: x.Annotate})
 		}
@@ -426,7 +428,7 @@ func (d *daemon) annotators() []management.Annotator {
 }
 
 func (d *daemon) packageRender(e domain.Event) (string, bool) {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		ctx, cancel := context.WithTimeout(d.lifetime(), 5*time.Second)
 		text, ok := x.Render(ctx, e)
 		cancel()
@@ -439,7 +441,7 @@ func (d *daemon) packageRender(e domain.Event) (string, bool) {
 
 // runPackageTasks starts each task when its pace has elapsed.
 func (d *daemon) runPackageTasks(ctx context.Context) {
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		for _, task := range x.Tasks() {
 			d.runTask(ctx, x.Name()+"/"+task.Name, task.Pace, task.Run)
 		}
@@ -452,7 +454,7 @@ func (d *daemon) runPackageTasks(ctx context.Context) {
 // packages' own health.
 func (d *daemon) packageChecks(deep bool) []func(context.Context) runtime.Check {
 	var out []func(context.Context) runtime.Check
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		for _, check := range x.Checks() {
 			if check.Deep != deep {
 				continue
@@ -460,7 +462,7 @@ func (d *daemon) packageChecks(deep bool) []func(context.Context) runtime.Check 
 			run := check.Run
 			out = append(out, func(ctx context.Context) runtime.Check {
 				s, _ := d.configs.Current()
-				cfg := checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath), probingContainers(d.packages))
+				cfg := checkConfig(s, x, d.executorMap(), filepath.Dir(d.o.ConfigPath), probingContainers(d.extensionPackages()))
 				d.hooks.mu.Lock()
 				cfg.Tunnel = tunnelView(x, d.hooks.options)
 				d.hooks.mu.Unlock()
@@ -661,12 +663,13 @@ func ownExecutors(x *installed) map[string]bool {
 	return out
 }
 
-// packagePlaybooks adds the packages' playbooks. A package's playbook never
+// packagePlaybooks adds the catalogued packages' playbooks, running or not:
+// a playbook is the package's file, not its process. A package's playbook never
 // replaces one already there, and its `{{bin}}` is how a turn runs Open
 // Conduit. Packages that share a playbook (the trackers'
 // work-tracker-issue) give the same text, which is no conflict.
 func (d *daemon) packagePlaybooks(into map[string]string) {
-	for _, x := range d.packages {
+	for _, x := range d.catalogued() {
 		for name, text := range x.Playbooks() {
 			text = extproc.RenderPlaybook(text, "open-conduit")
 			if have, taken := into[name]; taken {
@@ -683,7 +686,7 @@ func (d *daemon) packagePlaybooks(into map[string]string) {
 
 func (d *daemon) packageExporters() []observability.Exporter {
 	var out []observability.Exporter
-	for _, x := range d.packages {
+	for _, x := range d.extensionPackages() {
 		out = append(out, x.Exporter())
 	}
 	return out
@@ -712,7 +715,7 @@ func (f telemetryFanout) Capture(ctx context.Context, scope, name string, at tim
 	return err
 }
 
-func (d *daemon) sinks() []*installed { return d.packages }
+func (d *daemon) sinks() []*installed { return d.extensionPackages() }
 
 // usedBy says whether an enabled scope of the configuration uses the
 // package (usesExtension).

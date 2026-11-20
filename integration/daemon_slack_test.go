@@ -223,8 +223,13 @@ func TestDaemonSlackSocketModeConversation(t *testing.T) {
 	if c := check(report, "slack"); c.Code != "ok" || !strings.Contains(strings.Join(c.Items, " "), "socket connected") {
 		t.Fatalf("doctor slack: %+v", c)
 	}
-	if c := check(report, "github"); c.Code != "not_configured" {
+	// GitHub isn't configured, so its package doesn't run and has no
+	// check of its own; the extensions check lists it as not running.
+	if c := check(report, "github"); c.Name != "" {
 		t.Fatalf("doctor github: %+v", c)
+	}
+	if c := check(report, "extensions"); !strings.Contains(strings.Join(c.Items, " "), "github") || !strings.Contains(strings.Join(c.Items, " "), "not running") {
+		t.Fatalf("doctor extensions: %+v", c)
 	}
 	// Restart: the socket reconnects and nothing is posted or claimed again.
 	d.kill()

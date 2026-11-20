@@ -100,9 +100,10 @@ type Options struct {
 	// Pages are the pages extensions contribute to the web view (GET
 	// /pages; optional: without it there are none).
 	Pages func() []Page
-	// Titles are the extensions' display names by name (GET /extensions;
-	// optional: without it each shows as its name).
-	Titles func() map[string]string
+	// Extensions are the installed extension packages (GET /extensions;
+	// optional: without it there are none, and each source shows as its
+	// name): each one's display name, version and whether it is running.
+	Extensions func() []Extension
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for
@@ -123,6 +124,11 @@ type Options struct {
 	// verifiers (optional: without it no issuer can be trusted, and only
 	// the credentials the host issued authenticate).
 	Verifiers func(typ string) (Verifier, bool)
+	// StartVerifier starts the package that provides a verifier type when
+	// none running does (optional). Only an admin storing an issuer of
+	// that type calls it (PUT /auth/issuers/{id}); a credential check
+	// never does, so an unauthenticated request can't start a process.
+	StartVerifier func(ctx context.Context, typ string)
 }
 
 type Server struct {

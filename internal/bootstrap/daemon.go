@@ -129,19 +129,13 @@ type daemon struct {
 	configHandles configHandles
 	// defaultDoc is the first-run setup's configuration (DefaultConfig),
 	// built once the packages have started.
-	defaultDoc []byte
-	log        *slog.Logger
-	now        func() time.Time
-	owner      string
-	coord      storage.Store
-	artifacts  *artifacts.Store
-	backups    backupState
-	executors  map[string]extension.Executor
-	// pools are the capacity pools of the executors that name one.
-	pools map[string]string
-	// packages are the running extension packages, each composed
-	// through every surface it declares (compose.go).
-	packages      []*installed
+	defaultDoc    []byte
+	log           *slog.Logger
+	now           func() time.Time
+	owner         string
+	coord         storage.Store
+	artifacts     *artifacts.Store
+	backups       backupState
 	configs       *management.ConfigService
 	resolver      *config.Resolver
 	pipeline      *telemetry.Pipeline
@@ -453,24 +447,26 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.preparePlaybooks(); err != nil {
 		return err
 	}
-	d.executors, d.pools = map[string]extension.Executor{}, map[string]string{}
 	if usage != nil {
 		usage.known = firstPartyTypes()
 	}
-	defer d.stopPackages()
+	defer d.stopRunning()
 	d.openResources()
 	d.openSandboxes()
 	d.openContainers()
 	d.sites.dir = filepath.Join(d.o.StateDir, "sites")
-	// Installed extension packages start before the configuration opens,
-	// so their validators check it (07-03).
+	// The packages are catalogued before the configuration opens, so their
+	// validators check it (07-03), and those the generation it opens uses
+	// start first, all at once, so they validate it themselves (#734).
 	d.openExtensions(ctx)
+	d.external.change.Lock()
+	d.startPackages(ctx, d.startingPackages(ctx))
+	d.external.change.Unlock()
 	// The packages' playbooks join the plugin the executor already reads.
 	if err = d.preparePlaybooks(); err != nil {
 		return err
 	}
-	reg := registry(d.executors)
-	d.installedRegistry(&reg)
+	reg := d.configRegistry()
 	d.defaultDoc = d.defaultConfig()
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {
 		return fmt.Errorf("configuration: %w", err)
@@ -482,18 +478,34 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	snapshot, generation := d.configs.Current()
+	// The configuration has the last word on which packages run: those its
+	// generation uses that weren't foreseen start now, and those started
+	// needlessly stop once it is active and configured.
+	d.external.change.Lock()
+	d.startWanted(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
+		d.external.change.Unlock()
 		return err
 	}
 	d.current.Store(c)
 	// Extensions are configured once the generation is active, so a
 	// configure can arm timers through it, as every later apply can.
 	d.configureExtensions(ctx)
+	d.stopUnused(ctx, snapshot, snapshot)
+	d.external.change.Unlock()
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
+		// The packages the generation uses start before it is built, so it
+		// composes them. Those it no longer uses stop only once it is active
+		// and they have had its configure, which lets them let go of what
+		// they held for their entries; a failed build stops nothing.
+		d.external.change.Lock()
+		defer d.external.change.Unlock()
+		prev, _ := d.extensionSnapshot()
+		d.startWanted(d.lifetime(), s)
 		next, err := d.build(s, g)
 		if err != nil {
 			d.log.Error("configuration generation not activated in this process; restart required", "generation", g)
@@ -507,6 +519,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
 		d.log.Info("configuration generation activated", "generation", g)
+		d.stopUnused(d.lifetime(), prev, s)
 		d.poke()
 	}
 
@@ -580,13 +593,15 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	c := &components{generation: strconv.FormatUint(gen, 10)}
 	set := s.Settings
 	limits := runtime.CausalLimits{MaxDepth: set.CausalMaxDepth, PerMinute: set.CausalPerMinute}
+	executors, pools := d.executorMap(), d.poolMap()
 	bindings := map[string]runtime.RouteBinding{}
-	for name, e := range d.executors {
+	for name, e := range executors {
 		bindings[name] = runtime.RouteBinding{Executor: e}
 	}
 	var err error
 	routeHandlers := handlers()
-	packageHandlers(routeHandlers, d.packages)
+	running := d.extensionPackages()
+	packageHandlers(routeHandlers, running)
 	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits, RouteTimeout: d.o.CallTimeout}); err != nil {
 		return nil, err
 	}
@@ -611,18 +626,18 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	// generation, so earlier pinned attempts are reinstalled exactly.
 	history := map[string]map[string]extension.Executor{}
 	for g := uint64(1); g < gen; g++ {
-		history[strconv.FormatUint(g, 10)] = d.executors
+		history[strconv.FormatUint(g, 10)] = executors
 	}
-	kinds := workKinds(d.packages)
-	recurring := recurrences(d.packages)
+	kinds := workKinds(running)
+	recurring := recurrences(running)
 	delays := make([]time.Duration, len(set.RetryDelaysSeconds))
 	for i, seconds := range set.RetryDelaysSeconds {
 		delays[i] = time.Duration(seconds) * time.Second
 	}
 	if c.scheduler, err = runtime.NewScheduler(d.coord, d.now, c.router, runtime.SchedulerOptions{
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
-		Executors: d.executors, HistoricalExecutors: history,
-		GlobalLimit: set.Concurrency, ExecutorPools: d.pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
+		Executors: executors, HistoricalExecutors: history,
+		GlobalLimit: set.Concurrency, ExecutorPools: pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Served: &d.served, Environment: d.runEnvironment,
@@ -640,7 +655,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	c.control = control
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, Checks: d.checks(),
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(),
 		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
