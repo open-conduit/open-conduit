@@ -38,11 +38,18 @@ type InitializeParams struct {
 	// types the manifest declares, by type: the host's
 	// <state>/containers/<type>, the same for a provider in process or out.
 	ContainerDirs map[string]string `json:"container_dirs,omitempty"`
-	// ContainerHost is the host's extension.ContainerLabelHost value (a hash
-	// of its state directory), given to a package declaring containers: it
-	// lists and names only this host's containers, so two daemons sharing a
-	// container daemon never touch each other's.
+	// ContainerHost is the host's extension.ContainerLabelHost value (its
+	// installation's random ID, kept in its state), given to a package
+	// declaring containers: it labels the host's new containers with it,
+	// and lists and names only the host's containers, so two daemons
+	// sharing a container daemon never touch each other's.
 	ContainerHost string `json:"container_host,omitempty"`
+	// ContainerFormerHosts are labels the host made containers under before
+	// (extension.ContainerHosts.Former: the hash of its state directory's
+	// path that older versions used), named until none of its containers
+	// carry them. A provider lists containers carrying one as the host's
+	// too, and never labels a new container with one.
+	ContainerFormerHosts []string `json:"container_former_hosts,omitempty"`
 	// ConfigDir is the directory of the operator's config file, against
 	// which a relative path in a config object resolves ("" when the
 	// configuration has no file).

@@ -28,9 +28,9 @@ import (
 
 // The labels every container the host creates carries.
 const (
-	// ContainerLabelHost names the Open Conduit host (a hash of its state
-	// directory), so two daemons on one container daemon never touch each
-	// other's containers.
+	// ContainerLabelHost names the Open Conduit installation (a random ID
+	// made once and kept in its state, ContainerHosts), so two daemons on
+	// one container daemon never touch each other's containers.
 	ContainerLabelHost = "dev.open-conduit.host"
 	// ContainerLabelExecution is the execution the container belongs to.
 	ContainerLabelExecution = "dev.open-conduit.execution"

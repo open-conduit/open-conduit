@@ -121,8 +121,13 @@ func containerConfig(image string, extra string) domain.Payload {
 }
 
 func (h *containerHost) bind(p extension.ContainerProvider, cfg domain.Payload, pinned *extension.ContainerPin) *extension.BoundContainer {
+	return h.bindAs(extension.ContainerHosts{Host: "host-a"}, p, cfg, pinned)
+}
+
+// bindAs binds as a daemon owning hosts' labels.
+func (h *containerHost) bindAs(hosts extension.ContainerHosts, p extension.ContainerProvider, cfg domain.Payload, pinned *extension.ContainerPin) *extension.BoundContainer {
 	return extension.BindContainer(extension.ContainerBinding{Provider: p, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
-		Config: cfg, Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
+		Config: cfg, Host: hosts.Host, FormerHosts: hosts.Former, Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
 		Toolbelt: h.toolbelt, Records: h.records, Home: h.home, Pinned: pinned, Now: func() time.Time { return h.now },
 		Pin: func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil }})
 }
@@ -285,6 +290,20 @@ func TestContainerRecover(t *testing.T) {
 			t.Fatalf("adopt: %+v %v", exit, err)
 		}
 	})
+	// #724: a daemon upgraded mid-run labels new containers with its
+	// installation's ID, and adopts the one it made under its path hash.
+	// The control: without the former label it is not the daemon's.
+	t.Run("upgraded_daemon_adopts_its_container_under_a_former_label", func(t *testing.T) {
+		h, f := newContainerHost(t), newFakeContainers()
+		pin := launched(t, h, f)
+		upgraded := extension.ContainerHosts{Host: "installation-id", Former: []string{"host-a"}}
+		if exit, err := h.bindAs(upgraded, f, cfg, pin).Adopt(ctx, true); err != nil || exit.Exited {
+			t.Fatalf("adopt under the former label: %+v %v", exit, err)
+		}
+		if _, err := h.bindAs(extension.ContainerHosts{Host: "installation-id"}, f, cfg, pin).Adopt(ctx, true); !errors.Is(err, extension.ErrNotAdoptable) {
+			t.Fatalf("control: adopted without the former label: %v", err)
+		}
+	})
 	t.Run("wrapper_alive_refuses_an_unproven_container", func(t *testing.T) {
 		for name, change := range map[string]func(*extension.ContainerState){
 			"labels": func(c *extension.ContainerState) {
@@ -432,6 +451,40 @@ func TestReconcileContainers(t *testing.T) {
 	f.listErr = errors.New("unreachable")
 	if _, err := extension.ReconcileContainers(context.Background(), f, "host-a", nil); err == nil {
 		t.Error("a failed listing reconciled")
+	}
+}
+
+// TestReconcileFormerHostContainers (#724): under a former label (the path
+// hash older versions used, which another installation at the same path
+// shares) reconcile removes only what belongs to an execution the daemon
+// knows and is over, never one it doesn't know, and reports what it left
+// there. Under its own label an unknown execution is gone, as before.
+func TestReconcileFormerHostContainers(t *testing.T) {
+	f := newFakeContainers()
+	add := func(id, host, exec string) {
+		f.containers[id] = &extension.ContainerState{Ref: extension.ContainerRef{ID: id, Labels: map[string]string{extension.ContainerLabelHost: host, extension.ContainerLabelExecution: exec}}}
+	}
+	add("former-live", "path-hash", "x1")
+	add("former-ended", "path-hash", "x2")
+	add("former-unknown", "path-hash", "x-theirs")
+	add("own-unknown", "installation-id", "x3")
+	add("someone-else", "other-id", "x2")
+	hosts := extension.ContainerHosts{Host: "installation-id", Former: []string{"path-hash"}}
+	r, err := extension.ReconcileHostContainers(context.Background(), f, hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		return map[domain.ID]extension.ContainerKeep{"x1": extension.ContainerKeepAll, "x2": extension.ContainerKeepNone}, nil
+	})
+	if err != nil || r.Removed != 2 || r.Former != 2 {
+		t.Fatalf("reconcile: %+v %v, want 2 removed and 2 left under the former label", r, err)
+	}
+	if len(f.removed) != 2 || !contains(f.removed, "former-ended") || !contains(f.removed, "own-unknown") {
+		t.Errorf("removed %v, want the ended execution's under the former label and the unknown one's under its own", f.removed)
+	}
+	// Without the former label, none of those are the daemon's.
+	f.removed = nil
+	if r, err := extension.ReconcileHostContainers(context.Background(), f, extension.ContainerHosts{Host: "installation-id"}, func([]domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		return nil, nil
+	}); err != nil || r.Removed != 0 || r.Former != 0 || len(f.removed) != 0 {
+		t.Fatalf("no former label: %+v %v removed %v", r, err, f.removed)
 	}
 }
 

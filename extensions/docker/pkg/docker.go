@@ -82,7 +82,7 @@ func (x *provider) get(ctx context.Context) (*docker.Provider, error) {
 		if v := os.Getenv("OPEN_CONDUIT_GATEWAY_IMAGE"); v != "" {
 			gateway = v
 		}
-		x.p = docker.New(docker.Options{Helper: append(self, "run"), Host: h.ContainerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
+		x.p = docker.New(docker.Options{Helper: append(self, "run"), Host: h.ContainerHost(), FormerHosts: h.ContainerFormerHosts(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
 			NoPull: pullOff(os.Getenv("OPEN_CONDUIT_GATEWAY_PULL")), Log: stderrLog, Contexts: x.configured})
 	})
 	return x.p, x.err

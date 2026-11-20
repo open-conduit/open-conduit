@@ -66,6 +66,16 @@ func (h *Host) ContainerHost() string {
 	return h.srv.ContainerHost()
 }
 
+// ContainerFormerHosts are the host's former container labels named at
+// initialize: a provider lists containers carrying one as the host's too,
+// and labels no new one with one.
+func (h *Host) ContainerFormerHosts() []string {
+	if h.srv == nil {
+		return nil
+	}
+	return h.srv.ContainerFormerHosts()
+}
+
 // ConfigDir is the operator's config file's directory the host named at
 // initialize ("" for none).
 func (h *Host) ConfigDir() string {

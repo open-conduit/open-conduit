@@ -833,9 +833,11 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 	}
 	var containers map[string]string
 	var containerHost string
+	var formerHosts []string
 	var env []string
 	if len(f.Manifest.Provides.Containers) > 0 {
-		containers, containerHost, env = map[string]string{}, d.containerHost(), containerSwitches(os.Environ())
+		hosts := d.containerHosts()
+		containers, containerHost, formerHosts, env = map[string]string{}, hosts.Host, hosts.Former, containerSwitches(os.Environ())
 		for _, c := range f.Manifest.Provides.Containers {
 			containers[c.Type] = containerDir(d.o.StateDir, c.Type)
 		}
@@ -846,7 +848,7 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 	}
 	return extproc.Options{
 		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors, ResourceDirs: resources, ConfigDir: configDir,
-		ContainerDirs: containers, ContainerHost: containerHost, Env: env,
+		ContainerDirs: containers, ContainerHost: containerHost, ContainerFormerHosts: formerHosts, Env: env,
 		Host:      protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
 		PassEnv:   func() []string { return d.packagePassEnv(name) },
 		Configure: func() protocol.ConfigureParams { return d.extensionConfigure(f.Manifest) },

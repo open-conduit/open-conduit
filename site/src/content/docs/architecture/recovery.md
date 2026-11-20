@@ -35,6 +35,7 @@ open-conduit auth recover                                 # a lost or ambiguous 
   - It revokes the bundle's operator credential and writes a fresh `private/operator.token` (`auth recover` under the lock).
   - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
   - Worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone.
+  - The restored installation keeps its [container host label](../sandboxes/#the-host-label), the ID its containers carry, since it is the same installation: it still recognises the containers its runs left on a shared runtime, and reconciles them. Never run the old installation and the restored one at once against the same container runtime (a remote Docker context, an SSH runner, a cloud account): with one label, each removes the other's live runs as executions it doesn't know. Stop the old daemon for good before starting the restored one; to run both, restore into a fresh installation instead, which means starting without the bundle.
 - **Timing.** The running daemon takes a bundle itself on a schedule (below). Also take one by hand before every binary upgrade and keep it: the scheduled ones rotate, and after an upgrade they hold the newer binary's records.
 
 ## Scheduled backups

@@ -77,7 +77,7 @@ func (x *provider) get(ctx context.Context) (*ssh.Provider, error) {
 			return
 		}
 		x.dir = h.ContainerDir(ssh.Type)
-		x.p = ssh.New(ssh.Options{Helper: append(self, "run"), Host: h.ContainerHost(), Dir: x.dir, Remotes: x.configured})
+		x.p = ssh.New(ssh.Options{Helper: append(self, "run"), Host: h.ContainerHost(), FormerHosts: h.ContainerFormerHosts(), Dir: x.dir, Remotes: x.configured})
 	})
 	return x.p, x.err
 }

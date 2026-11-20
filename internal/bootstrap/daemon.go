@@ -458,7 +458,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	defer d.stopRunning()
 	d.openResources()
 	d.openSandboxes()
-	d.openContainers()
+	if err = d.openContainers(ctx); err != nil {
+		return err
+	}
 	d.sites.dir = filepath.Join(d.o.StateDir, "sites")
 	// The packages are catalogued before the configuration opens, so their
 	// validators check it (07-03), and those the generation it opens uses
