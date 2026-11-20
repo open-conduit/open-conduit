@@ -96,6 +96,7 @@ var typescriptWire = map[string]any{
 	"EmitRecord":             protocol.Record{},
 	"EmitCommit":             protocol.EmitCommit{},
 	"EmitCommitParams":       protocol.EmitCommitParams{},
+	"SchemaDecl":             protocol.SchemaDecl{},
 	"RouteDecl":              protocol.RouteDecl{},
 	"WorkKindDecl":           protocol.WorkKindDecl{},
 	"Family":                 protocol.Family{},

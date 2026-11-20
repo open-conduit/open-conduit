@@ -783,6 +783,30 @@ export class Extension {
     return this;
   }
 
+  /**
+   * Declares a payload schema the extension writes and reads, named
+   * <extension>.<thing> and written as <name>.v<N>: the versions it can
+   * read, ascending, the highest being the one it writes. The host refuses
+   * an Event (ingress, event.accept or emitted) whose data names any other.
+   */
+  schema(name: string, ...versions: number[]): this {
+    if (
+      versions.length === 0 ||
+      versions.some(
+        (v, i) =>
+          !Number.isInteger(v) || v < 1 || (i > 0 && v <= versions[i - 1]!),
+      )
+    )
+      throw new Error(
+        `sdk: schema ${name} needs positive, strictly increasing versions`,
+      );
+    (this.manifest.provides.schemas ??= []).push({
+      name,
+      versions: [...versions],
+    });
+    return this;
+  }
+
   /** Upgrades the extension's KV namespaces to kvVersion. It must be idempotent: a crash mid-way retries it. */
   onMigrate(fn: MigrateFn): this {
     this.#migrate = fn;

@@ -165,6 +165,7 @@ Schemas are built with `t` (`string`, `enum`, `literal`, `integer`, `number`, `b
 | `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
 | `task(name, intervalSeconds, fn)` | `tasks[]` |
 | `family(...families)` | `families[]`, for Events derived with `host.accept` or emitted |
+| `schema(name, ...versions)` | `schemas[]`: a payload schema named `<extension>.<thing>`, with the versions it reads, ascending. An Event's `data` (ingress, `host.accept` or emitted) must be absent or carry `<name>.v<N>` for the highest, or the host refuses it with `unreadable_schema` |
 | `ingressType(type, { config, validate, families, sources, push, reconcile, webhook, webhookMaxBytes })` | `extensions[]` with `ingress`, its `families[]`, and `webhooks` (with `webhook_max_bytes`) when it has a `webhook`. Each generation, `sources` turns the type's entries into the sources they register (a name and a namespace under the extension's name, a scope, a reconcile interval and any data the handlers need), which configure returns with the webhook path `/<source name>` of each that takes one |
 | `route(handler, { config, match, samples })` | `routes[]`, with `config` when it has a config schema (checked at `validate`, field by field, and decoded before `match` sees it) and `samples` when it offers them, so `routes.decisions` certification and route traces apply |
 | `workKind(kind, { standing, timed, runOnce, trigger })` | `work_kinds[]`; `trigger` picks the pending input that triggers the next execution |
