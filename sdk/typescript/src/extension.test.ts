@@ -186,7 +186,7 @@ test("a request before initialize is refused", async () => {
 test("an unknown method is method_not_found and the connection stays usable", async () => {
   const { host, end } = await ready(weather());
   await assert.rejects(
-    host.call("route.match", {}),
+    host.call("executor.run", {}),
     (e: unknown) =>
       e instanceof ProtocolError && e.code === Code.MethodNotFound,
   );
