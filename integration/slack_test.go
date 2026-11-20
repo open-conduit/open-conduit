@@ -1765,6 +1765,20 @@ func TestSlackPromptWithoutPressesIsAnsweredByReply(t *testing.T) {
 	e.reconcile()
 	e.route()
 	w, _ := e.workFor(root)
+	// A long history in the scope before the prompt (more than one pass
+	// reads) is never read: with no prompt open, the pass moves its cursor
+	// to the head, so each reply below is answered by the next pass.
+	e.read(func(tx storage.Tx) error {
+		for n := range 10000 {
+			id := domain.ID("backlog-" + strconv.Itoa(n))
+			if _, _, err := runtime.AcceptInTx(tx, slScope, domain.Event{ID: id, Type: "other.thing", Source: "other", DeliveryID: string(id),
+				OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now(), Data: domain.Payload{Schema: "other.thing.v1", Data: json.RawMessage(`{}`)}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	e.converge()
 	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
 		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}}}, nil
 	}

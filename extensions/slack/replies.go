@@ -98,8 +98,9 @@ func tsAfter(a, b string) bool {
 }
 
 // answerReplies takes the replies that answer prompts without buttons, at
-// most limit of them. It reads only while such a prompt is open; the cursor
-// stays before a reply the host could not act on, so the next pass tries it
+// most limit of them. It reads only while such a prompt is open, and moves
+// the cursor to the scope's latest sequence while none is; the cursor stays
+// before a reply the host could not act on, so the next pass tries it
 // again.
 func (p *Projector) answerReplies(ctx context.Context, limit int) (int, []string, error) {
 	if p.o.Settings.Presses() || p.o.Act == nil || limit <= 0 {
@@ -117,13 +118,27 @@ func (p *Projector) answerReplies(ctx context.Context, limit int) (int, []string
 			return err
 		}
 		rows, err := tx.List(p.ns, "intent/")
+		if err != nil {
+			return err
+		}
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Replies != nil && !rec.Answered && !rec.Closed && rec.State != IntentFailed && rec.State != IntentPending {
 				prompts = append(prompts, open{row.Key, rec})
 			}
 		}
-		return err
+		if len(prompts) > 0 {
+			return nil
+		}
+		// With no prompt open, no reply read so far can answer one: a
+		// prompt is answered only by a reply after it. The cursor moves to
+		// the head, so a prompt that opens later reads only what comes
+		// after it, however long the scope's history.
+		head, err := tx.LatestSequence()
+		if err != nil || head <= cur.After {
+			return err
+		}
+		return p.put(tx, repliesCursor, sequenceCursor{After: head})
 	}); err != nil || len(prompts) == 0 {
 		return 0, nil, err
 	}
