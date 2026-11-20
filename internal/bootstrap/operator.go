@@ -68,10 +68,21 @@ func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []strin
 }
 
 func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []string, error) {
+	return checkAgainstPackages(configPath, exclude, data, func(reg config.Registry) (*config.Snapshot, error) {
+		return config.ValidateFile(data, reg, fileIncludes(configPath))
+	})
+}
+
+// checkAgainstPackages validates data with validate over the registry the
+// packages installed beside configPath (less exclude) provide, as the
+// daemon would start them for it. A config file and a stored generation
+// differ only in how they validate (a file composes its includes; a
+// generation is self-contained), so both checks share this.
+func checkAgainstPackages(configPath, exclude string, data []byte, validate func(config.Registry) (*config.Snapshot, error)) ([]config.Diagnostic, []string, error) {
 	reg := registry(map[string]extension.Executor{})
 	pkgs := offlineExternal(&reg, configPath, exclude, data)
 	defer pkgs.close()
-	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
+	s, err := validate(reg)
 	if err == nil {
 		warnings := append(append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), config.GrantWarnings(s, reg)...)
 		return nil, append(warnings, config.PackageWarnings(s, reg)...), nil

@@ -45,7 +45,7 @@ open-conduit config export                                     # writes the conf
 open-conduit doctor                                            # secrets shows any reference that doesn't resolve
 ```
 
-The restore lists any `unregistered` entries: types the restored config uses that no installed package provides. Install those before starting.
+The restore lists any `config_problems`: why the restored config wouldn't validate here, such as a type no installed package provides. Fix those before starting: otherwise the daemon starts from a config file at its path instead, or doesn't start.
 
 The bundle holds every Work, its waits and what each integration recorded, so conversations waiting on a reply carry on where they were. Don't run both daemons against the same tracker or workspace at once.
 

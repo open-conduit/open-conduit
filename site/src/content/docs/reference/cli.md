@@ -235,7 +235,7 @@ auth recover               (daemon stopped) revoke every operator credential and
 ### `open-conduit backup`
 
 ```text
-backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC] [--config FILE]   (daemon stopped; restore writes a new state directory, its artifacts into an empty store, and reports config entries no installed package provides)
+backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC] [--config FILE]   (daemon stopped; restore writes a new state directory, its artifacts into an empty store, and reports why its config generation would not validate against the installed packages)
 ```
 
 ### `open-conduit state`

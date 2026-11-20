@@ -1,10 +1,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -12,24 +15,35 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // TestRestoreReportsTheConfigAndWhatItNeeds: a bundle carries the committed
-// config generation, and a restore says which one it brought back and which
-// of its entries name a type no package installed beside the config file
-// provides. A generation that names none reports nothing (the negative
-// control).
+// config generation, and a restore says which one it brought back and every
+// reason the daemon would refuse it here: a type no package installed
+// beside the config file provides, and any other diagnostic validation
+// gives (a generation altered so a scope's parent is gone). A generation
+// that validates reports nothing (the negative control).
 func TestRestoreReportsTheConfigAndWhatItNeeds(t *testing.T) {
 	const (
 		needsAcme = `{"version":1,"settings":{},"connections":[{"id":"acme","type":"acme","config":{},"secret_refs":{}}],"scopes":[{"id":"eng","name":"eng"}]}`
-		plain     = `{"version":1,"settings":{},"connections":[],"scopes":[{"id":"eng","name":"eng"}]}`
+		plain     = `{"version":1,"settings":{},"connections":[],"scopes":[{"id":"eng","name":"eng"},{"id":"web","name":"web","parent":"eng"}]}`
 	)
+	orphan := func(normalized []byte) []byte {
+		out := bytes.Replace(normalized, []byte(`"parent":"eng"`), []byte(`"parent":"gone"`), 1)
+		if bytes.Equal(out, normalized) {
+			t.Fatalf("no parent to alter in %s", normalized)
+		}
+		return out
+	}
 	for _, c := range []struct {
 		name, config string
-		want         []string
+		alter        func([]byte) []byte
+		want         []string // path:code
 	}{
-		{"needs a package", needsAcme, []string{"connections/0/type"}},
-		{"needs nothing", plain, nil},
+		{"needs a package", needsAcme, nil, []string{"connections/0/type:unknown_registration"}},
+		{"refused for another reason", plain, orphan, []string{"scopes/1/parent:unknown_scope"}},
+		{"needs nothing", plain, nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -51,6 +65,17 @@ func TestRestoreReportsTheConfigAndWhatItNeeds(t *testing.T) {
 			if _, err := management.OpenConfig(ctx, store, now, config.Registry{Connections: map[string]func(json.RawMessage) error{"acme": nil}}, source, nil); err != nil {
 				t.Fatal(err)
 			}
+			if c.alter != nil {
+				gen, normalized, err := management.StoredGeneration(ctx, store, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+					return tx.Put("core.config", "generation/"+strconv.FormatUint(gen, 10), c.alter(normalized))
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -69,11 +94,11 @@ func TestRestoreReportsTheConfigAndWhatItNeeds(t *testing.T) {
 				t.Fatalf("restored generation %d, want 1", info.ConfigGeneration)
 			}
 			var got []string
-			for _, e := range info.Unregistered {
-				got = append(got, e.Path)
+			for _, e := range info.ConfigProblems {
+				got = append(got, e.Path+":"+e.Code)
 			}
-			if len(got) != len(c.want) || (len(got) > 0 && got[0] != c.want[0]) {
-				t.Fatalf("unregistered %v, want %v", info.Unregistered, c.want)
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("config problems %v, want %v", info.ConfigProblems, c.want)
 			}
 		})
 	}

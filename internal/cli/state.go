@@ -30,16 +30,20 @@ type BackupInfo struct {
 	// brought back (0 when the bundle holds none): the daemon starts from
 	// it, and `config export` writes it out as a file.
 	ConfigGeneration uint64 `json:"config_generation,omitempty"`
-	// Unregistered are the restored generation's entries that name a type
-	// no installed or bundled package provides here, so the daemon would
-	// not start from it until they are installed.
-	Unregistered []ConfigEntry `json:"unregistered,omitempty"`
+	// ConfigProblems are why the restored generation doesn't validate
+	// against the packages installed here: a type no installed or bundled
+	// package provides (unknown_registration), a package that couldn't
+	// start, an entry a package rejects. With any, the daemon doesn't start
+	// from the generation: it publishes the config file over it when the
+	// file validates, and otherwise refuses to start.
+	ConfigProblems []ConfigEntry `json:"config_problems,omitempty"`
 }
 
-// ConfigEntry is one config entry a restore reports, by its path in the
-// config document (as config check reports it).
+// ConfigEntry is one config diagnostic a restore reports, by its path in
+// the config document and its code (as config check reports them).
 type ConfigEntry struct {
-	Path    string `json:"path"`
+	Path    string `json:"path,omitempty"`
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
