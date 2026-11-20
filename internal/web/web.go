@@ -91,6 +91,7 @@ type Source interface {
 	Pages(ctx context.Context) ([]client.ExtensionPage, error)
 	Extensions(ctx context.Context) ([]client.ExtensionTitle, error)
 	ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (client.ConfigApplied, error)
+	InstallRelease(ctx context.Context, version, key string) (client.ReleaseInstalled, error)
 }
 
 var _ Source = (*client.Client)(nil)
@@ -115,7 +116,9 @@ type Options struct {
 	// only.
 	SaveSignIn func(SignIn) error
 	// Updates checks for releases, for the status line's notice and the
-	// update page; nil leaves both out.
+	// update page, which asks the daemon to install one; nil (updates off,
+	// for a binary managed some other way) leaves both out, and /update
+	// answers 404.
 	Updates Updates
 	// Service restarts the background service after an update; nil (or
 	// one that isn't running) leaves the restart to the operator.

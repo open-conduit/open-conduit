@@ -35,6 +35,10 @@ type ServeRequest struct {
 	// NoTelemetry turns off the anonymous usage reports: --no-telemetry,
 	// or OPEN_CONDUIT_NO_TELEMETRY or DO_NOT_TRACK set in the environment.
 	NoTelemetry bool
+	// NoUpdates leaves installing releases out, for a binary managed some
+	// other way (a package manager, an image, a fleet): the daemon answers
+	// updates_off and the web view has no update page (--no-updates).
+	NoUpdates bool
 	// Web serves the web view from the daemon's process on WebAddr, named
 	// WebHost (the web command's defaults when empty), signed in through
 	// WebSignIn. WebSubjectHeader makes it act for the person a sign-in
@@ -97,6 +101,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	// --claude-usage is retired: a claude-code binding sets usage.
 	usage := fs.fs.Bool("claude-usage", false, "")
 	noTelemetry := fs.fs.Bool("no-telemetry", false, "")
+	noUpdates := fs.fs.Bool("no-updates", false, "")
 	web := fs.fs.Bool("web", false, "")
 	poll := fs.fs.Duration("poll-interval", time.Second, "")
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
@@ -152,6 +157,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.ManagementAddr, r.ManagementTrustedProxy = fs.get("management-addr"), *trustedProxy
 	r.ManagementTLSCert, r.ManagementTLSKey, r.ManagementClientCA = o.abs(fs.get("management-tls-cert")), o.abs(fs.get("management-tls-key")), o.abs(fs.get("management-client-ca"))
 	r.WebSignIn = WebSignInPath(r.StateDir)
+	r.NoUpdates = *noUpdates
 	r.NoTelemetry = *noTelemetry || optedOut(o.env.Getenv("OPEN_CONDUIT_NO_TELEMETRY")) || optedOut(o.env.Getenv("DO_NOT_TRACK"))
 	if r.ConfigPath == "" {
 		r.ConfigPath = o.abs(o.env.Getenv("OPEN_CONDUIT_CONFIG"))

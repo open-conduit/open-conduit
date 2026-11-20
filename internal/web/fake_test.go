@@ -122,6 +122,14 @@ func (f *fake) Doctor(context.Context, bool) (client.Doctor, error) {
 	}
 	return client.Doctor{State: "ok"}, nil
 }
+func (f *fake) InstallRelease(ctx context.Context, version, _ string) (client.ReleaseInstalled, error) {
+	if f.installErr != nil {
+		return client.ReleaseInstalled{}, f.installErr
+	}
+	_, token := client.SubjectFrom(ctx)
+	f.installed = append(f.installed, version+" as "+token)
+	return client.ReleaseInstalled{Version: version}, nil
+}
 func (f *fake) WorkConfigCandidate(_ context.Context, work string) (client.ConfigCandidate, error) {
 	if f.candidate == nil {
 		return client.ConfigCandidate{}, &client.Error{Status: 404, Code: "not_found", Message: "nothing to apply"}

@@ -135,6 +135,11 @@ type Options struct {
 	// no client credential may be let act for that kind (optional: without
 	// it no kind is a package's).
 	ExtensionKind func(kind string) bool
+	// Releases installs releases of the daemon's own binary (POST
+	// /releases/install; optional: without it, as for a daemon whose
+	// binary a package manager, an image or a fleet manages, that route
+	// answers updates_off).
+	Releases Releases
 }
 
 type Server struct {
@@ -563,6 +568,7 @@ var routes = []route{
 	{"GET", []string{"secrets"}, targetDaemon, false, false, (*Server).listSecrets},
 	{"PUT", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).putSecret},
 	{"DELETE", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).deleteSecret},
+	{"POST", []string{"releases", "install"}, targetDaemon, true, false, (*Server).installRelease},
 	{"POST", []string{"auth", "rotate"}, targetAny, true, false, (*Server).rotate},
 	{"GET", []string{"auth", "operators"}, targetDaemon, false, false, (*Server).listOperators},
 	{"POST", []string{"auth", "operators"}, targetDaemon, true, false, (*Server).addOperator},
@@ -655,7 +661,8 @@ func APIRoutes() []APIRoute {
 // applying a submitted include's fragment needs configure; applying the
 // whole config, exporting it (it carries secret reference text),
 // issuing operators' credentials, trusting an issuer or changing its group
-// table, and every secrets route, listing included, need admin; every other control needs operate. Revoking another
+// table, installing a release of the daemon's binary, and every secrets
+// route, listing included, need admin; every other control needs operate. Revoking another
 // operator's credential needs admin too, which revoke checks itself.
 //
 // query is the request's, nil for the route's own least role (the
@@ -676,7 +683,7 @@ func requiredRole(rt *route, parts []string, query url.Values) string {
 	switch path {
 	case "scopes/*/route/trace", "config/validate":
 		return RoleView
-	case "config/apply", "auth/operators", "auth/issuers/*":
+	case "config/apply", "auth/operators", "auth/issuers/*", "releases/install":
 		return RoleAdmin
 	case "config/includes/*/apply":
 		return RoleConfigure

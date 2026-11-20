@@ -181,6 +181,9 @@ type WebRequest struct {
 	// credential in, which the view then acts for
 	// (web.Options.SubjectHeader).
 	SubjectHeader string
+	// NoUpdates leaves the update page out (--no-updates), for a binary
+	// managed some other way.
+	NoUpdates bool
 }
 
 // WebSignInPath is where the web view keeps its sign-in, beside the
@@ -193,10 +196,11 @@ func WebSignInPath(stateDir string) string {
 // sign-in URLs.
 func (o *operator) web(args []string) int {
 	f := newFlags("web", "addr", "host", "subject-header")
+	noUpdates := f.fs.Bool("no-updates", false, "")
 	rest, err := f.parse(args)
 	urlOnly := len(rest) == 1 && rest[0] == "url"
 	if err != nil || (len(rest) != 0 && !urlOnly) {
-		return usageError(o.errOut, "web takes only url, --addr HOST:PORT, --host NAME and --subject-header HEADER")
+		return usageError(o.errOut, "web takes only url, --addr HOST:PORT, --host NAME, --subject-header HEADER and --no-updates")
 	}
 	addr, host := f.get("addr"), f.get("host")
 	if addr == "" {
@@ -209,7 +213,7 @@ func (o *operator) web(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: web is not available in this binary")
 		return 1
 	}
-	r := WebRequest{Addr: addr, Host: host, SignIn: WebSignInPath(o.stateDir()), URLOnly: urlOnly, Out: o.out, SubjectHeader: f.get("subject-header")}
+	r := WebRequest{Addr: addr, Host: host, SignIn: WebSignInPath(o.stateDir()), URLOnly: urlOnly, Out: o.out, SubjectHeader: f.get("subject-header"), NoUpdates: *noUpdates}
 	if !urlOnly {
 		c, _, err := o.client()
 		if err != nil {

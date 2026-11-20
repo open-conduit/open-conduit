@@ -78,9 +78,11 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                            (override the config's settings.webhooks for this run; TYPE is a tunnel
                            a package provides, such as ngrok or cloudflared, and JSON its config)
-      [--no-tunnel] [--dry-run] [--no-telemetry]
+      [--no-tunnel] [--dry-run] [--no-telemetry] [--no-updates]
       (--webhook-addr takes any free local port; 8787 is only an example)
       (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
+      (--no-updates: nothing installs a release through the daemon or its web view, for a binary a package
+      manager, an image or a fleet manages; open-conduit upgrade still works on the machine)
       [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
                            also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
       [--web-subject-header HEADER --web-token-file FILE]
@@ -201,7 +203,7 @@ tui                        the run history in the terminal
 ### `open-conduit web`
 
 ```text
-web [--addr 127.0.0.1:7420] [--host open-conduit.localhost] [--subject-header HEADER]   the same view in a browser on this machine (prints a sign-in URL); with --subject-header, it acts for the person a sign-in proxy passes the credential of in HEADER (its own credential needs --act-for operator)
+web [--addr 127.0.0.1:7420] [--host open-conduit.localhost] [--subject-header HEADER] [--no-updates]   the same view in a browser on this machine (prints a sign-in URL); with --subject-header, it acts for the person a sign-in proxy passes the credential of in HEADER (its own credential needs --act-for operator); --no-updates leaves out the update page (installing a release from it needs the admin role)
 web url [--addr ADDR] [--host NAME]   print the web view's sign-in URL (it lasts across restarts)
 ```
 

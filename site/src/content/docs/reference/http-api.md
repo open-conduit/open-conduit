@@ -117,6 +117,7 @@ A list returns `{"items": […], "next_cursor": …}` (the Work list adds `total
 | `GET` | `/v1/secrets` | admin | daemon | – | – |
 | `PUT` | `/v1/secrets/{id}` | admin | daemon | – | – |
 | `DELETE` | `/v1/secrets/{id}` | admin | daemon | – | – |
+| `POST` | `/v1/releases/install` | admin | daemon | optional | – |
 | `POST` | `/v1/auth/rotate` | operate | any | optional | – |
 | `GET` | `/v1/auth/operators` | view | daemon | – | – |
 | `POST` | `/v1/auth/operators` | admin | daemon | optional | – |

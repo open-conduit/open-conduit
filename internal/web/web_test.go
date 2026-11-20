@@ -66,6 +66,11 @@ type fake struct {
 	applied      []string
 	doctor       *client.Doctor
 	doctorCalled int
+	// installed are the releases the daemon was asked to install, each
+	// with the subject it was asked as ("" for the view's own credential);
+	// installErr is the daemon's refusal.
+	installed  []string
+	installErr error
 	// runReads are the work_id each runs list was read for; runs are read
 	// concurrently, so rmu guards it.
 	rmu      sync.Mutex
