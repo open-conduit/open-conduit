@@ -758,7 +758,8 @@ type Capabilities struct {
 }
 
 // Controls are optional executor methods that are not capabilities: stop
-// (physical-stop evidence), forget (retention cleanup), attach and
+// (physical-stop evidence), forget (retention cleanup), sweep (releasing
+// the private state of executions the host doesn't know), attach and
 // container_attach (operator takeover, on the host or in the binding's
 // container), live (a running attempt's output so far) and
 // interactive_launch (a session of the executor's CLI on a playbook in the
@@ -766,6 +767,7 @@ type Capabilities struct {
 type Controls struct {
 	Stop              bool `json:"stop,omitempty"`
 	Forget            bool `json:"forget,omitempty"`
+	Sweep             bool `json:"sweep,omitempty"`
 	Attach            bool `json:"attach,omitempty"`
 	ContainerAttach   bool `json:"container_attach,omitempty"`
 	Live              bool `json:"live,omitempty"`
@@ -1384,6 +1386,7 @@ func (m Manifest) Enabled() []string {
 		set("executors.container", x.Capabilities.Container)
 		set("executors.stop", x.Controls.Stop)
 		set("executors.forget", x.Controls.Forget)
+		set("executors.sweep", x.Controls.Sweep)
 		set("executors.attach", x.Controls.Attach)
 		set("executors.container_attach", x.Controls.ContainerAttach)
 		set("executors.live", x.Controls.Live)

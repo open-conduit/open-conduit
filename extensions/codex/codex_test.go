@@ -309,6 +309,15 @@ func TestExecutorConformance(t *testing.T) {
 	conformance.RunExecutor(t, func() extension.Executor { return f.executor() }, request("work-c", "exec-c", f.config(nil, nil)))
 }
 
+// TestStateSweeperConformance: a run directory of an execution the host
+// doesn't know is released, and a known one is kept.
+func TestStateSweeperConformance(t *testing.T) {
+	f := newFixture(t)
+	conformance.RunStateSweeper(t, func() conformance.StateSweepFixture {
+		return conformance.StateSweepFixture{Executor: f.executor(), Known: request("work-sk", "exec-sk", f.config(nil, nil)), Unknown: request("work-su", "exec-su", f.config(nil, nil))}
+	})
+}
+
 // TestInjectConformance: an Event injected while the first turn runs is
 // taken in by a follow-up `codex exec resume` turn on the same thread, in
 // the same segment, and proved consumed.

@@ -187,7 +187,7 @@ One retention policy applies to every executor, with two rules:
 2. Outside the transaction, delete the content through `storage.Artifacts`, then call the optional `extension.ForgetExecutor.Forget` to release executor-private state.
 3. Record the release.
 
-A crash between phases is completed by a later sweep.
+A crash between phases is completed by a later sweep. Executor-private state of an execution the coordination state no longer holds at all (one from after the bundle an in-place restore went back to) is never reached by `Forget`; an executor that implements `extension.StateSweeper` releases it when the daemon starts ([public executor controls](../extension-protocol/#public-executor-controls)).
 
 A retention hold defers phase 2's content deletes, and only those. It is a coordination record with an expiry (`runtime.HoldRetention`, `ReleaseRetention`; `core.retention.hold`), which a backup commits before its snapshot, renews while it copies and releases when done. The sweep reads the holds in the transaction that reads what to release, and while one is live it deletes no content (`RetentionResult.Held`): it still records expirations and calls `Forget`, and the content waits, still pending, for the first sweep with no live hold. Under serializable transactions that is enough. A release whose list was read before the hold committed acts only on expirations committed before it, and so before the snapshot, which records those attempts as expired and doesn't need their content. One read after it sees the hold. No artifact backend needs a lock for this. A hold its holder never released (the backup crashed) delays retention only until it lapses, and the sweep then removes it.
 

@@ -142,6 +142,7 @@ type Service struct {
 	writers    map[string]storage.ArtifactWriter
 	sources    map[string]bool
 	reconciles map[string]extension.ResourceStatusFunc
+	sweeps     map[string]extension.ExecutionKnownFunc
 	sites      map[string]acquireSite
 	tunnels    map[string]func(string)
 	setups     map[string]extension.SetupHost
@@ -159,7 +160,7 @@ func NewService(m protocol.Manifest, deps Deps) (*Service, error) {
 	if deps.Scopes == nil {
 		deps.Scopes = func() []domain.ID { return nil }
 	}
-	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, sites: map[string]acquireSite{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
+	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, sweeps: map[string]extension.ExecutionKnownFunc{}, sites: map[string]acquireSite{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
 	for _, method := range m.Enabled() {
 		s.enabled[method] = true
 	}
@@ -465,6 +466,35 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromOwnerStatus(st), nil
+	case "executor.known":
+		var p protocol.ExecutorKnownParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if len(p.Executions) > extension.MaxKnownBatch {
+			return nil, protocol.Errorf(protocol.CodeInvalid, fmt.Sprintf("executor.known takes at most %d executions", extension.MaxKnownBatch))
+		}
+		s.mu.Lock()
+		known := s.sweeps[p.Sweep]
+		s.mu.Unlock()
+		if known == nil {
+			return nil, protocol.Errorf(protocol.CodeConflict, "no executor.sweep in progress under that ID")
+		}
+		ids := make([]domain.ID, 0, len(p.Executions))
+		for _, id := range p.Executions {
+			ids = append(ids, domain.ID(id))
+		}
+		got, err := known(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		var out protocol.ExecutorKnown
+		for _, id := range ids {
+			if got[id] {
+				out.Known = append(out.Known, string(id))
+			}
+		}
+		return out, nil
 	case "site.run":
 		var p protocol.SiteRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

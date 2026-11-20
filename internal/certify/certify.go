@@ -969,11 +969,27 @@ func (r *runner) executors(ctx context.Context, remote *extproc.Remote) {
 				r.fail("executor.controls", "%s forget: %v", e.Name, err)
 			}
 		}
+		if e.Controls.Sweep {
+			controls = true
+			// Every execution is known, so the sweep releases nothing.
+			cx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			_, err := x.(extension.StateSweeper).SweepState(cx, func(_ context.Context, ids []domain.ID) (map[domain.ID]bool, error) {
+				known := map[domain.ID]bool{}
+				for _, id := range ids {
+					known[id] = true
+				}
+				return known, nil
+			})
+			cancel()
+			if unserved(err) {
+				r.fail("executor.controls", "%s sweep: %v", e.Name, err)
+			}
+		}
 	}
 	if controls {
-		r.pass("executor.controls", "stop/forget served")
+		r.pass("executor.controls", "stop/forget/sweep served")
 	} else {
-		r.skip("executor.controls", "no stop or forget control")
+		r.skip("executor.controls", "no stop, forget or sweep control")
 	}
 }
 

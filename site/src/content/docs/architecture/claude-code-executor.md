@@ -31,7 +31,7 @@ The segment runs detached, like the shell executor's:
 - It refuses lower epochs, tampered metadata, and a dead process with no recorded exit or stop (`ErrNotAdoptable`).
 - It never launches.
 
-An adopted segment keeps running and finishes its turn. Its stdin went with the daemon that started it, so it takes no injected input. `Stop`, `Interrupt` (SIGTERM, then SIGKILL after the grace period) and `Forget` behave as they do in the shell executor.
+An adopted segment keeps running and finishes its turn. Its stdin went with the daemon that started it, so it takes no injected input. `Stop`, `Interrupt` (SIGTERM, then SIGKILL after the grace period), `Forget` and `SweepState` behave as they do in the shell executor; a segment's `turn.json` names the execution of a run directory made before `runs/<key>/execution` existed. `SweepState` leaves a Work's container attach directory alone, which an `attach` file marks.
 
 ## Prompt, inputs and injection
 

@@ -3,7 +3,7 @@ title: "Shell executor and CLI toolbelt"
 description: "How the shell executor runs, adopts, interrupts and stops detached processes, and how the os CLI reaches the toolbelt."
 ---
 
-The shell executor, [`extensions/shell`](https://github.com/open-conduit/open-conduit/tree/main/extensions/shell), runs a binding's command as a detached process tree, and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go) gives that process the toolbelt. The daemon uses it for scheduled jobs and any other shell binding ([daemon composition](../daemon-core-gate/)). The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor`, `InjectExecutor`, `ResumeExecutor` and the optional `StopExecutor` and `ForgetExecutor`, and advertises `toolbelt: cli`, `interrupt`, `inject` and `workspace`. `resume` is advertised only when `Options.Resume` is set.
+The shell executor, [`extensions/shell`](https://github.com/open-conduit/open-conduit/tree/main/extensions/shell), runs a binding's command as a detached process tree, and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go) gives that process the toolbelt. The daemon uses it for scheduled jobs and any other shell binding ([daemon composition](../daemon-core-gate/)). The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor`, `InjectExecutor`, `ResumeExecutor` and the optional `StopExecutor`, `ForgetExecutor` and `StateSweeper`, and advertises `toolbelt: cli`, `interrupt`, `inject` and `workspace`. `resume` is advertised only when `Options.Resume` is set.
 
 ## Binding config
 
@@ -111,7 +111,7 @@ The scheduler preserves executor outcome data when it converts a declared wait i
 
 ## Retention and logs
 
-`Forget` implements the shared retention policy for the shell executor: it removes an expired execution's run directories and refuses while a verified process still runs. Run history and the TUI show logs from published artifacts ([observability and history](../observability-history/)). The shell executor does not implement `extension.LiveExecutor`, so a running shell segment's log is not streamed; it is readable once the segment finishes and the log is published.
+`Forget` implements the shared retention policy for the shell executor: it removes an expired execution's run directories and refuses while a verified process still runs. Each execution's run directory, `runs/<key>/`, names its execution in `runs/<key>/execution` before any segment is made, so `SweepState` maps a directory back to its execution (one made before the file existed, through a segment's `intent.json`). It asks the host which executions it holds and forgets the others as `Forget` does, keeping one whose segment still runs (`in_use`) and a directory that names no execution (`unmapped`) ([public executor controls](../extension-protocol/#public-executor-controls)). Run history and the TUI show logs from published artifacts ([observability and history](../observability-history/)). The shell executor does not implement `extension.LiveExecutor`, so a running shell segment's log is not streamed; it is readable once the segment finishes and the log is published.
 
 ## Inject inbox
 

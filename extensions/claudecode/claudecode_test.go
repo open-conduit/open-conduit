@@ -27,6 +27,18 @@ func TestSharedExecutorConformance(t *testing.T) {
 	conformance.RunExecutor(t, func() extension.Executor { return h.executor() }, r)
 }
 
+// TestSharedStateSweeperConformance: a segment directory of an execution
+// the host doesn't know is released, and a known one is kept.
+func TestSharedStateSweeperConformance(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	known, _ := h.request("work/sk", "exec-sweep-known", 1, nil)
+	unknown, _ := h.request("work/su", "exec-sweep-unknown", 1, nil)
+	conformance.RunStateSweeper(t, func() conformance.StateSweepFixture {
+		return conformance.StateSweepFixture{Executor: h.executor(), Known: known, Unknown: unknown}
+	})
+}
+
 // TestSharedInjectConformance runs the generic inject acknowledgement case:
 // the fake claude echoes the injected message (consumption), a retried
 // dispatch is not written twice, a finished turn takes nothing more and the

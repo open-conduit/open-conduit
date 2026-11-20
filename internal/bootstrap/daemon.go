@@ -149,6 +149,7 @@ type daemon struct {
 	telemetry     telemetryFanout
 	telemetryFile *rotatingLog
 	resources     resourceState
+	executorState executorStateSweep
 	sandboxes     sandboxState
 	containers    containerState
 	// sites records the sites the host gave each resource type.

@@ -37,8 +37,8 @@ const Name = codex.Name
 const Version = "0.1.0"
 
 // Manifest declares the executor's capabilities (interrupt, inject,
-// resume, workspace, the MCP toolbelt, a container), its stop, forget and
-// interactive launch controls, and that it says which workspace mode a
+// resume, workspace, the MCP toolbelt, a container), its stop, forget,
+// sweep and interactive launch controls, and that it says which workspace mode a
 // binding requests, which playbook it starts on and how to probe for codex
 // in a container's image.
 func Manifest() protocol.Manifest {
@@ -48,7 +48,7 @@ func Manifest() protocol.Manifest {
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Container: c.Container},
-			Controls:     protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true},
+			Controls:     protocol.Controls{Stop: true, Forget: true, Sweep: true, InteractiveLaunch: true},
 			ResourceMode: true, Playbook: true, VersionProbe: true, Fields: codex.BindingFields()}},
 			Checks: []protocol.CheckDecl{{Name: codex.AuthCheckName, Deep: true}}}}
 }
@@ -165,6 +165,13 @@ func (x *executor) Forget(ctx context.Context, id domain.ID) error {
 	}
 	return e.Forget(ctx, id)
 }
+func (x *executor) SweepState(ctx context.Context, known extension.ExecutionKnownFunc) (extension.StateSweepReport, error) {
+	e, err := x.get()
+	if err != nil {
+		return extension.StateSweepReport{}, err
+	}
+	return e.SweepState(ctx, known)
+}
 
 // Build returns the served extension. stateDir returns the private state
 // directory the host gave at initialize.
@@ -201,6 +208,7 @@ var _ interface {
 	extension.ResumeExecutor
 	extension.StopExecutor
 	extension.ForgetExecutor
+	extension.StateSweeper
 	extension.ResourceModer
 	extension.ConfigWarner
 	extension.VersionProber

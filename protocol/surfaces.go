@@ -399,6 +399,62 @@ func (r ResourceSweepReport) Extension() extension.ResourceSweepReport {
 	return extension.ResourceSweepReport{Removed: conv(r.Removed), Kept: conv(r.Kept)}
 }
 
+// ExecutorSweepParams asks an executor to release the private state of the
+// executions the host doesn't know (extension.StateSweeper). The extension
+// quotes Sweep in executor.known while the call runs.
+type ExecutorSweepParams struct {
+	Executor string `json:"executor"`
+	Sweep    string `json:"sweep"`
+}
+
+// ExecutorKnownParams asks the host which of Executions its coordination
+// state holds while it serves executor.sweep (the ExecutionKnownFunc
+// callback), at most extension.MaxKnownBatch of them.
+type ExecutorKnownParams struct {
+	Sweep      string   `json:"sweep"`
+	Executions []string `json:"executions"`
+}
+
+// ExecutorKnown are those of the asked executions the host holds.
+type ExecutorKnown struct {
+	Known []string `json:"known,omitempty"`
+}
+
+// StateKept is state a sweep kept (extension.StateKept).
+type StateKept struct {
+	ExecutionID string `json:"execution_id,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	Kept        string `json:"kept"`
+}
+
+// StateSweepReport is what executor.sweep did
+// (extension.StateSweepReport).
+type StateSweepReport struct {
+	Removed []string    `json:"removed,omitempty"`
+	Kept    []StateKept `json:"kept,omitempty"`
+}
+
+func FromStateSweepReport(r extension.StateSweepReport) StateSweepReport {
+	var out StateSweepReport
+	for _, id := range r.Removed {
+		out.Removed = append(out.Removed, string(id))
+	}
+	for _, k := range r.Kept {
+		out.Kept = append(out.Kept, StateKept{ExecutionID: string(k.Execution), Ref: k.Ref, Kept: k.Kept})
+	}
+	return out
+}
+func (r StateSweepReport) Extension() extension.StateSweepReport {
+	var out extension.StateSweepReport
+	for _, id := range r.Removed {
+		out.Removed = append(out.Removed, domain.ID(id))
+	}
+	for _, k := range r.Kept {
+		out.Kept = append(out.Kept, extension.StateKept{Execution: domain.ID(k.ExecutionID), Ref: k.Ref, Kept: k.Kept})
+	}
+	return out
+}
+
 // Telemetry.
 
 type Correlation struct {

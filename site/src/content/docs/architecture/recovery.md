@@ -79,9 +79,9 @@ open-conduit service start                         # with the binary the bundle 
 
 If the restore stops part way through the swap (a crash, a full disk), the journal stays and the daemon and the other offline commands refuse the directory. Run the same `backup restore BUNDLE --in-place` again: it finishes the swap from the journal and doesn't restore a second time.
 
-What stays from after the bundle is reported, never deleted, since its layout belongs to its owner:
+What stays from after the bundle is reported, never deleted by the restore, since its layout belongs to its owner:
 
-- `executors/<name>/`: the executor's private state. The restored executions recover or retry, and no process from before the bundle is adopted. Run directories of executions from after the bundle stay until you remove them.
+- `executors/<name>/`: the executor's private state. The restored executions recover or retry, and no process from before the bundle is adopted. When the daemon starts, an executor that sweeps its state (shell, claude-code and codex) removes the run directories of executions the restored database doesn't know, except one whose process still runs, and the daemon logs what each kept. Another executor's stay until you remove them.
 - `resources/<type>/`: workspaces. The provider reconciles each lease against the restored database when the daemon starts, so a lease whose owner it doesn't know comes back unknown. The git provider removes such a workspace once it is idle, and keeps one with unpushed or uncommitted work, which doctor reports.
 - `containers/<type>/`: the container provider reconciles its containers when the daemon starts, removing those of executions the restored database doesn't know.
 - `extensions/<name>/`: an extension's private directory, a cache it rebuilds as it needs ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).

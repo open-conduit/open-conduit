@@ -93,7 +93,8 @@ func WithPending(work domain.ID, in ...protocol.PendingInput) Option {
 	}
 }
 
-// WithExecutions seeds Executions, read with state.executions.
+// WithExecutions seeds Executions, read with state.executions and the
+// coordination state executor.known answers from.
 func WithExecutions(xs ...domain.Execution) Option {
 	return func(h *Host) { h.executions = append(h.executions, xs...) }
 }
@@ -722,6 +723,28 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		}
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
+		return out, nil
+	case "executor.known":
+		// The host's coordination state is the seeded executions
+		// (WithExecutions); any sweep ID is taken as in progress.
+		var p protocol.ExecutorKnownParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if len(p.Executions) > extension.MaxKnownBatch {
+			return nil, protocol.Errorf(protocol.CodeInvalid, "too many executions")
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		var out protocol.ExecutorKnown
+		for _, id := range p.Executions {
+			for _, x := range h.executions {
+				if x.ID == domain.ID(id) {
+					out.Known = append(out.Known, id)
+					break
+				}
+			}
+		}
 		return out, nil
 	case "state.work", "state.works", "state.executions", "state.execution", "state.event", "state.delivery", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
