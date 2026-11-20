@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -421,6 +422,9 @@ func TestManifestRejections(t *testing.T) {
 		"secret output empty field":  {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "secret_output": [""]}`},
 		"input not an object":        {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "input": ["city"]}`},
 		"filter without wait":        {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},
+		"webhook limit over bound":   {`"webhooks": true,`, `"webhooks": true, "webhook_max_bytes": ` + strconv.Itoa(protocol.MaxWebhookBodyBytes+1) + `,`},
+		"webhook limit negative":     {`"webhooks": true,`, `"webhooks": true, "webhook_max_bytes": -1,`},
+		"webhook limit, no webhooks": {`"webhooks": true,`, `"webhook_max_bytes": 1024,`},
 		"kinds without routes":       {`"routes": [{"handler": "chat", "config": true}],`, ``},
 		"duplicate permission":       {`"name": "chat"`, `"name": "chat", "permissions": ["probes", "probes"]`},
 		"setting type":               {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "object"}]}`},
@@ -590,5 +594,26 @@ func TestEntryNamedNeedsAnExtensionType(t *testing.T) {
 	raw, _ = json.Marshal(m)
 	if _, err := protocol.ParseManifest(raw); err != nil {
 		t.Fatalf("entry_named with one: %v", err)
+	}
+}
+
+// A package may declare a webhook body limit up to the host's bound; the
+// rejections above refuse one over it.
+func TestManifestWebhookLimit(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("testdata", "ingress-support.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := strings.Replace(string(base), `"webhooks": true,`, `"webhooks": true, "webhook_max_bytes": `+strconv.Itoa(protocol.MaxWebhookBodyBytes)+`,`, 1)
+	m, err := protocol.ParseManifest([]byte(at))
+	if err != nil {
+		t.Fatalf("a limit at the bound: %v", err)
+	}
+	if m.Provides.WebhookMaxBytes != protocol.MaxWebhookBodyBytes {
+		t.Fatalf("limit %d", m.Provides.WebhookMaxBytes)
+	}
+	// The bound fits one framed message once base64 encoded.
+	if enc := int64(protocol.MaxWebhookBodyBytes+2) / 3 * 4; enc >= protocol.MaxMessageBytes {
+		t.Fatalf("an encoded body of %d bytes does not fit a %d-byte message", enc, protocol.MaxMessageBytes)
 	}
 }

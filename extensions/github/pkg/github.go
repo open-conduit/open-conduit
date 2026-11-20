@@ -55,6 +55,9 @@ func base() protocol.Manifest {
 		p.Operations = append(p.Operations, d)
 	}
 	p.DependencyFilter = true
+	// GitHub sends deliveries of up to 25 MiB (gh.MaxDeliveryBytes); the
+	// host carries up to its own bound, so the package takes what it can.
+	p.WebhookMaxBytes = min(int64(gh.MaxDeliveryBytes), protocol.MaxWebhookBodyBytes)
 	p.Playbooks = PlaybooksDir
 	// The kinds its routes create: in process they need no policy, so the
 	// extension declares none (it is not an inproc.WorkKinder).

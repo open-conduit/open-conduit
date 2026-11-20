@@ -463,7 +463,15 @@ func (x *installed) Webhook(path string) http.Handler {
 	if !ok || x.r == nil {
 		return nil
 	}
-	return x.r.Webhook("/"+full, 0)
+	return x.r.Webhook("/"+full, func(limit, length int64) {
+		props := map[string]any{"extension": x.m.Name, "path": "/" + full, "limit": limit}
+		if length >= 0 {
+			props["length"] = length
+		}
+		if x.d != nil {
+			x.d.capture(context.Background(), "webhooks.body_too_large", props)
+		}
+	})
 }
 
 // Executors are the package's declared executors, each with the capacity
