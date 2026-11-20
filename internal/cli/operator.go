@@ -769,13 +769,17 @@ func (o *operator) auth(args []string) int {
 		defer cancel()
 		return o.emit(c.Operators(cx))
 	case "add":
-		f := newFlags("add", "out", "role", "ttl")
+		f := newFlags("add", "out", "role", "grants", "ttl")
 		pos, err := f.parse(args[1:])
 		if err != nil || len(pos) != 1 || f.get("out") == "" {
-			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--ttl DURATION]")
+			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION]")
+		}
+		grants, ok := parseGrants(f.get("grants"))
+		if !ok {
+			return usageError(o.errOut, "--grants takes SCOPE=ROLE pairs separated by commas, each role view or operate, for example team-a=operate,team-b=view")
 		}
 		role := f.get("role")
-		if role == "" {
+		if role == "" && len(grants) == 0 {
 			role = "operate"
 		}
 		out := o.abs(f.get("out"))
@@ -792,14 +796,17 @@ func (o *operator) auth(args []string) int {
 		}
 		cx, cancel := ctx()
 		defer cancel()
-		file, err := c.AddExpiringOperator(cx, pos[0], role, f.get("ttl"))
+		file, err := c.IssueOperator(cx, client.OperatorRequest{Name: pos[0], Role: role, Grants: grants, TTL: f.get("ttl")})
 		if err != nil {
 			return o.emit(nil, err)
 		}
 		if err = writePrivateJSON(out, client.TokenFile{TokenID: file.TokenID, Token: file.Token}); err != nil {
 			return o.emit(nil, fmt.Errorf("operator %s was added but its token file could not be saved; revoke %s with auth revoke and add it again", pos[0], file.TokenID))
 		}
-		added := map[string]string{"name": pos[0], "role": role, "token_id": file.TokenID, "token_file": out}
+		added := map[string]any{"name": pos[0], "role": role, "token_id": file.TokenID, "token_file": out}
+		if len(grants) > 0 {
+			added["grants"] = grants
+		}
 		if file.ExpiresAt != "" {
 			added["expires_at"] = file.ExpiresAt
 		}
@@ -821,10 +828,10 @@ func (o *operator) auth(args []string) int {
 		}
 		switch args[1] {
 		case "set":
-			f := newFlags("issuer set", "type", "config", "groups")
+			f := newFlags("issuer set", "type", "config", "groups", "grants")
 			pos, err := f.parse(args[2:])
 			if err != nil || len(pos) != 1 || f.get("type") == "" {
-				return usageError(o.errOut, "expected auth issuer set ID --type TYPE [--config JSON] [--groups JSON]")
+				return usageError(o.errOut, "expected auth issuer set ID --type TYPE [--config JSON] [--groups JSON] [--grants JSON]")
 			}
 			config := json.RawMessage(`{}`)
 			if v := f.get("config"); v != "" {
@@ -839,13 +846,19 @@ func (o *operator) auth(args []string) int {
 					return usageError(o.errOut, `--groups must be a JSON object of group to role, for example {"platform":"admin"}`)
 				}
 			}
+			var grants []client.GroupGrant
+			if v := f.get("grants"); v != "" {
+				if json.Unmarshal([]byte(v), &grants) != nil {
+					return usageError(o.errOut, `--grants must be a JSON array of {group, scope, role}, for example [{"group":"team-a-oncall","scope":"team-a","role":"operate"}]`)
+				}
+			}
 			c, _, err := o.client()
 			if err != nil {
 				return o.emit(nil, err)
 			}
 			cx, cancel := ctx()
 			defer cancel()
-			return o.emit(c.SetIssuer(cx, pos[0], f.get("type"), config, groups))
+			return o.emit(c.PutIssuer(cx, client.Issuer{ID: pos[0], Type: f.get("type"), Config: config, Groups: groups, Grants: grants}))
 		case "remove":
 			if len(args) != 3 {
 				return usageError(o.errOut, "expected auth issuer remove ID")
@@ -861,6 +874,23 @@ func (o *operator) auth(args []string) int {
 		return usageError(o.errOut, "expected auth issuer set|remove ID")
 	}
 	return usageError(o.errOut, "expected auth rotate|revoke|recover|operators|add|issuers|issuer")
+}
+
+// parseGrants reads --grants: SCOPE=ROLE pairs separated by commas. The
+// daemon checks the roles and scopes; this checks only the shape.
+func parseGrants(v string) ([]client.Grant, bool) {
+	if v == "" {
+		return nil, true
+	}
+	var out []client.Grant
+	for _, pair := range strings.Split(v, ",") {
+		scope, role, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok || scope == "" || role == "" {
+			return nil, false
+		}
+		out = append(out, client.Grant{Scope: scope, Role: role})
+	}
+	return out, true
 }
 
 func writePrivateJSON(path string, v any) error {

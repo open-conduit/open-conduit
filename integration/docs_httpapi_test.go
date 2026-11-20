@@ -32,11 +32,13 @@ The host name in the URL is not used. A dev server or proxy that forwards to the
 
 ## Roles
 
-Each operator has a role, checked where the request is served, before anything is read or written: ` + "`view`" + ` reads, ` + "`operate`" + ` also runs controls and sends Events, and ` + "`admin`" + ` also applies and exports configuration, stores and removes secrets, and issues credentials. A request the role doesn't allow is refused with ` + "`403 forbidden_role`" + `. The table below gives each endpoint's least role. The ` + "`/v1/toolbelt`" + ` endpoints are not for operators: an execution reaches them with its own token, on the socket the host gives that execution, and an operator credential is refused there (` + "`403 wrong_credential_class`" + `). Everything an operator does is recorded as theirs (` + "`operator:<name>`" + `), from the credential, never from the request.
+Each operator has a role, checked where the request is served, before anything is read or written: ` + "`view`" + ` reads, ` + "`operate`" + ` also runs controls and sends Events, and ` + "`admin`" + ` also applies and exports configuration, stores and removes secrets, and issues credentials. A request the role doesn't allow is refused with ` + "`403 forbidden_role`" + `. The table below gives each endpoint's least role.
+
+A role can also be granted at a scope instead of daemon-wide: ` + "`--grants team-a=operate`" + ` on ` + "`auth add`" + ` (` + "`\"grants\": [{\"scope\", \"role\"}]`" + ` in ` + "`POST /v1/auth/operators`" + `), or ` + "`grants`" + ` rows of ` + "`{\"group\", \"scope\", \"role\"}`" + ` on a trusted issuer. A grant is ` + "`view`" + ` or ` + "`operate`" + ` and covers its scope and every scope beneath it; ` + "`admin`" + ` is only ever daemon-wide. An operator may hold a daemon-wide role and grants together. The table's *Target* column says what each endpoint acts on, and so which scope a grant must cover. For a record named in the path (` + "`scope`" + `, ` + "`work`" + `, ` + "`execution`" + `, ` + "`event`" + `, ` + "`wait`" + `, ` + "`artifact`" + `) or the body's ` + "`scope_id`" + `, the host resolves its scope before the handler runs and refuses one outside every grant with ` + "`403 forbidden_scope`" + ` (a record that doesn't exist is ` + "`404`" + `). A ` + "`list`" + ` holds only what the operator's grants cover, whatever its filters ask for. A ` + "`daemon`" + ` endpoint needs its role daemon-wide, and ` + "`any`" + ` needs it anywhere. The ` + "`/v1/toolbelt`" + ` endpoints are not for operators: an execution reaches them with its own token, on the socket the host gives that execution, and an operator credential is refused there (` + "`403 wrong_credential_class`" + `). Everything an operator does is recorded as theirs (` + "`operator:<name>`" + `), from the credential, never from the request.
 
 ## Envelopes
 
-A success is ` + "`{\"data\": …}`" + `. A failure is ` + "`{\"error\": {\"code\", \"message\", \"request_id\", \"details\"?}}`" + ` with an HTTP status to match: ` + "`400 malformed`" + ` or ` + "`invalid_filter`" + `, ` + "`401 unauthenticated`" + `, ` + "`403 forbidden_role`" + `, ` + "`404 not_found`" + `, ` + "`409 revision_conflict`" + `, ` + "`state_conflict`" + ` or ` + "`idempotency_conflict`" + `, ` + "`422 invalid_request`" + ` or ` + "`invalid_config`" + ` (with ` + "`details`" + `: each diagnostic's ` + "`path`" + `, ` + "`code`" + ` and ` + "`message`" + `), and ` + "`503 unavailable`" + ` (retry). Every response has an ` + "`X-Request-Id`" + ` header, the same as the error's ` + "`request_id`" + `. Messages never carry a backend's or provider's own error text.
+A success is ` + "`{\"data\": …}`" + `. A failure is ` + "`{\"error\": {\"code\", \"message\", \"request_id\", \"details\"?}}`" + ` with an HTTP status to match: ` + "`400 malformed`" + ` or ` + "`invalid_filter`" + `, ` + "`401 unauthenticated`" + `, ` + "`403 forbidden_role`" + ` or ` + "`forbidden_scope`" + `, ` + "`404 not_found`" + `, ` + "`409 revision_conflict`" + `, ` + "`state_conflict`" + ` or ` + "`idempotency_conflict`" + `, ` + "`422 invalid_request`" + ` or ` + "`invalid_config`" + ` (with ` + "`details`" + `: each diagnostic's ` + "`path`" + `, ` + "`code`" + ` and ` + "`message`" + `), and ` + "`503 unavailable`" + ` (retry). Every response has an ` + "`X-Request-Id`" + ` header, the same as the error's ` + "`request_id`" + `. Messages never carry a backend's or provider's own error text.
 
 ## Requests that change something
 
@@ -57,8 +59,8 @@ A list returns ` + "`{\"items\": […], \"next_cursor\": …}`" + ` (the Work li
 
 ## Endpoints
 
-| Method | Path | Role | Idempotency-Key | Filters |
-| --- | --- | --- | --- | --- |
+| Method | Path | Role | Target | Idempotency-Key | Filters |
+| --- | --- | --- | --- | --- | --- |
 `)
 	for _, r := range management.APIRoutes() {
 		key := r.IdempotencyKey
@@ -69,7 +71,7 @@ A list returns ` + "`{\"items\": […], \"next_cursor\": …}`" + ` (the Work li
 		if len(r.Filters) > 0 {
 			filters = "`" + strings.Join(r.Filters, "`, `") + "`"
 		}
-		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s |\n", r.Method, r.Path, r.Role, key, filters)
+		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", r.Method, r.Path, r.Role, r.Target, key, filters)
 	}
 	return b.String()
 }

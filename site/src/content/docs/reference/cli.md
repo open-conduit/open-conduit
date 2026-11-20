@@ -216,8 +216,8 @@ claim [SCOPE#]N [--scope S] [--entry NAME]   claim an issue by hand (the scope's
 
 ```text
 auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
-auth operators | auth add NAME --out FILE [--role admin|operate|view] [--ttl DURATION]   list operator credentials; issue one for a named operator (default role operate), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given
-auth issuers | auth issuer set ID --type TYPE [--config JSON] [--groups JSON] | auth issuer remove ID   list, trust or stop trusting an identity provider issuer (admin); its credentials are recorded as operator:ID:SUBJECT, with the role --groups maps their groups to
+auth operators | auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view or operate at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given
+auth issuers | auth issuer set ID --type TYPE [--config JSON] [--groups JSON] [--grants JSON] | auth issuer remove ID   list, trust or stop trusting an identity provider issuer (admin); its credentials are recorded as operator:ID:SUBJECT, with the role --groups maps their groups to and the scoped roles --grants rows ({group, scope, role}) give them
 auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
 ```
 

@@ -244,12 +244,18 @@ type principal struct {
 	// issuer is the trusted issuer that verified the credential, "" for
 	// one the host issued. The operator's name is then issuer:subject.
 	issuer string
+	// grants are the operator's roles at scopes, each covering its
+	// scope's subtree, beside its daemon-wide role (see Grant).
+	grants []Grant
 }
 
-// may reports whether the operator's role is at least role.
+// may reports whether the operator's daemon-wide role is at least role.
 func (p principal) may(role string) bool { return roleRank[p.role] >= roleRank[role] }
 
 func forbiddenRole(p principal, role string) error {
+	if p.role == "" && len(p.grants) > 0 {
+		return fail(403, "forbidden_role", "operator "+p.name+" holds "+role+" only at the scopes it is granted, and this needs "+role+" daemon-wide or a grant of it")
+	}
 	if p.role == "" {
 		return fail(403, "forbidden_role", "operator "+p.name+" has no role: none of its groups maps to one in issuer "+p.issuer+"'s group table; this needs "+role)
 	}
@@ -361,7 +367,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 		if record.expired(s.o.Now()) {
 			return principal{}, fail(401, "unauthenticated", "credential expired")
 		}
-		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role()}, nil
+		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role(), grants: record.Grants}, nil
 	}
 	known, err := s.o.Toolbelt.Known(ctx, token)
 	if err != nil {
@@ -380,8 +386,11 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 const maxBearer = 16 << 10
 
 type route struct {
-	method   string
-	pattern  []string // "*" captures one segment
+	method  string
+	pattern []string // "*" captures one segment
+	// target is what the route acts on, whose scope a scoped grant must
+	// cover (see target).
+	target   target
 	mutation bool
 	idem     bool
 	handler  func(*Server, *call) (int, any, error)
@@ -396,80 +405,84 @@ type call struct {
 	body    []byte
 	key     string
 	written bool
+	// reach is the scopes the operator's grants cover for this route's
+	// role, when it doesn't hold the role daemon-wide; nil means every
+	// scope. Lists keep only what it covers (sees, scopes).
+	reach map[domain.ID]bool
 }
 
 var routes = []route{
-	{"GET", []string{"health"}, false, false, (*Server).health},
-	{"GET", []string{"capacity"}, false, false, (*Server).capacity},
-	{"GET", []string{"schema"}, false, false, (*Server).schema},
-	{"GET", []string{"scopes"}, false, false, (*Server).listScopes},
-	{"GET", []string{"scopes", "*"}, false, false, (*Server).getScope},
-	{"GET", []string{"work"}, false, false, (*Server).listWork},
-	{"GET", []string{"work", "facets"}, false, false, (*Server).workFacets},
-	{"GET", []string{"work", "*"}, false, false, (*Server).getWork},
-	{"GET", []string{"work", "*", "actions"}, false, false, (*Server).listWorkActions},
-	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},
-	{"GET", []string{"work", "*", "panels"}, false, false, (*Server).listWorkPanels},
-	{"GET", []string{"work", "*", "config-candidate"}, false, false, (*Server).configCandidate},
-	{"GET", []string{"pages"}, false, false, (*Server).listPages},
-	{"GET", []string{"extensions"}, false, false, (*Server).listExtensions},
-	{"GET", []string{"scopes", "*", "panels"}, false, false, (*Server).listScopePanels},
-	{"GET", []string{"scopes", "*", "route", "samples"}, false, false, (*Server).routeSamples},
-	{"GET", []string{"events"}, false, false, (*Server).listEvents},
-	{"GET", []string{"events", "*"}, false, false, (*Server).getEvent},
-	{"GET", []string{"events", "*", "route"}, false, false, (*Server).eventRoute},
-	{"GET", []string{"executions"}, false, false, (*Server).listExecutions},
-	{"GET", []string{"executions", "*"}, false, false, (*Server).getExecution},
-	{"GET", []string{"waits"}, false, false, (*Server).listWaits},
-	{"GET", []string{"waits", "*"}, false, false, (*Server).getWait},
-	{"GET", []string{"runs"}, false, false, (*Server).listRuns},
-	{"GET", []string{"runs", "*"}, false, false, (*Server).getRun},
-	{"GET", []string{"runs", "*", "live"}, false, false, (*Server).liveRun},
-	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
-	{"GET", []string{"config"}, false, false, (*Server).config},
-	{"GET", []string{"config", "export"}, false, false, (*Server).exportConfig},
-	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
-	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},
-	{"POST", []string{"events"}, true, true, (*Server).postEvent},
-	{"POST", []string{"work"}, true, true, (*Server).postWork},
-	{"POST", []string{"work", "*", "cancel"}, true, true, (*Server).cancelWork},
-	{"POST", []string{"work", "*", "retry"}, true, true, (*Server).retryWork},
-	{"POST", []string{"work", "*", "wake"}, true, true, (*Server).wakeWork},
-	{"POST", []string{"work", "*", "rebind"}, true, true, (*Server).rebindWork},
-	{"POST", []string{"work", "*", "hold"}, true, true, (*Server).holdWork},
-	{"POST", []string{"work", "*", "interrupt"}, true, true, (*Server).interruptWork},
-	{"POST", []string{"work", "*", "release"}, true, true, (*Server).releaseWork},
-	{"POST", []string{"work", "*", "attach"}, true, true, (*Server).attachWork},
-	{"POST", []string{"work", "*", "container-attach"}, true, true, (*Server).containerAttach},
-	{"POST", []string{"work", "*", "container-detach"}, true, true, (*Server).containerDetach},
-	{"POST", []string{"work", "*", "actions", "*", "*"}, true, true, (*Server).invokeWorkAction},
-	{"POST", []string{"scopes", "*", "reconcile"}, true, true, (*Server).reconcileScope},
-	{"POST", []string{"scopes", "*", "route", "trace"}, true, false, (*Server).traceRoute},
-	{"POST", []string{"scopes", "*", "actions", "*", "*"}, true, true, (*Server).invokeScopeAction},
-	{"POST", []string{"executions", "*", "cancel"}, true, true, (*Server).cancelExecution},
-	{"POST", []string{"events", "*", "skip"}, true, true, (*Server).skipEvent},
-	{"POST", []string{"events", "*", "reroute"}, true, true, (*Server).rerouteEvent},
-	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
-	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},
-	{"GET", []string{"secrets"}, false, false, (*Server).listSecrets},
-	{"PUT", []string{"secrets", "*"}, true, false, (*Server).putSecret},
-	{"DELETE", []string{"secrets", "*"}, true, false, (*Server).deleteSecret},
-	{"POST", []string{"auth", "rotate"}, true, false, (*Server).rotate},
-	{"GET", []string{"auth", "operators"}, false, false, (*Server).listOperators},
-	{"POST", []string{"auth", "operators"}, true, false, (*Server).addOperator},
-	{"POST", []string{"auth", "revoke"}, true, true, (*Server).revoke},
-	{"GET", []string{"auth", "issuers"}, false, false, (*Server).listIssuersRoute},
-	{"PUT", []string{"auth", "issuers", "*"}, true, false, (*Server).putIssuer},
-	{"DELETE", []string{"auth", "issuers", "*"}, true, false, (*Server).deleteIssuer},
-	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
-	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
-	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
-	{"POST", []string{"toolbelt", "git"}, true, false, (*Server).gitSessionOpen},
-	{"DELETE", []string{"toolbelt", "git", "*"}, true, false, (*Server).gitSessionEnd},
+	{"GET", []string{"health"}, targetAny, false, false, (*Server).health},
+	{"GET", []string{"capacity"}, targetDaemon, false, false, (*Server).capacity},
+	{"GET", []string{"schema"}, targetAny, false, false, (*Server).schema},
+	{"GET", []string{"scopes"}, targetList, false, false, (*Server).listScopes},
+	{"GET", []string{"scopes", "*"}, targetScope, false, false, (*Server).getScope},
+	{"GET", []string{"work"}, targetList, false, false, (*Server).listWork},
+	{"GET", []string{"work", "facets"}, targetList, false, false, (*Server).workFacets},
+	{"GET", []string{"work", "*"}, targetWork, false, false, (*Server).getWork},
+	{"GET", []string{"work", "*", "actions"}, targetWork, false, false, (*Server).listWorkActions},
+	{"GET", []string{"scopes", "*", "actions"}, targetScope, false, false, (*Server).listScopeActions},
+	{"GET", []string{"work", "*", "panels"}, targetWork, false, false, (*Server).listWorkPanels},
+	{"GET", []string{"work", "*", "config-candidate"}, targetWork, false, false, (*Server).configCandidate},
+	{"GET", []string{"pages"}, targetDaemon, false, false, (*Server).listPages},
+	{"GET", []string{"extensions"}, targetAny, false, false, (*Server).listExtensions},
+	{"GET", []string{"scopes", "*", "panels"}, targetScope, false, false, (*Server).listScopePanels},
+	{"GET", []string{"scopes", "*", "route", "samples"}, targetScope, false, false, (*Server).routeSamples},
+	{"GET", []string{"events"}, targetList, false, false, (*Server).listEvents},
+	{"GET", []string{"events", "*"}, targetEvent, false, false, (*Server).getEvent},
+	{"GET", []string{"events", "*", "route"}, targetEvent, false, false, (*Server).eventRoute},
+	{"GET", []string{"executions"}, targetList, false, false, (*Server).listExecutions},
+	{"GET", []string{"executions", "*"}, targetExecution, false, false, (*Server).getExecution},
+	{"GET", []string{"waits"}, targetList, false, false, (*Server).listWaits},
+	{"GET", []string{"waits", "*"}, targetWait, false, false, (*Server).getWait},
+	{"GET", []string{"runs"}, targetList, false, false, (*Server).listRuns},
+	{"GET", []string{"runs", "*"}, targetExecution, false, false, (*Server).getRun},
+	{"GET", []string{"runs", "*", "live"}, targetExecution, false, false, (*Server).liveRun},
+	{"GET", []string{"doctor"}, targetDaemon, false, false, (*Server).doctor},
+	{"GET", []string{"config"}, targetDaemon, false, false, (*Server).config},
+	{"GET", []string{"config", "export"}, targetDaemon, false, false, (*Server).exportConfig},
+	{"GET", []string{"artifacts"}, targetList, false, false, (*Server).listArtifacts},
+	{"GET", []string{"artifacts", "*", "content"}, targetArtifact, false, false, (*Server).artifactContent},
+	{"POST", []string{"events"}, targetBodyScope, true, true, (*Server).postEvent},
+	{"POST", []string{"work"}, targetBodyScope, true, true, (*Server).postWork},
+	{"POST", []string{"work", "*", "cancel"}, targetWork, true, true, (*Server).cancelWork},
+	{"POST", []string{"work", "*", "retry"}, targetWork, true, true, (*Server).retryWork},
+	{"POST", []string{"work", "*", "wake"}, targetWork, true, true, (*Server).wakeWork},
+	{"POST", []string{"work", "*", "rebind"}, targetWork, true, true, (*Server).rebindWork},
+	{"POST", []string{"work", "*", "hold"}, targetWork, true, true, (*Server).holdWork},
+	{"POST", []string{"work", "*", "interrupt"}, targetWork, true, true, (*Server).interruptWork},
+	{"POST", []string{"work", "*", "release"}, targetWork, true, true, (*Server).releaseWork},
+	{"POST", []string{"work", "*", "attach"}, targetWork, true, true, (*Server).attachWork},
+	{"POST", []string{"work", "*", "container-attach"}, targetWork, true, true, (*Server).containerAttach},
+	{"POST", []string{"work", "*", "container-detach"}, targetWork, true, true, (*Server).containerDetach},
+	{"POST", []string{"work", "*", "actions", "*", "*"}, targetWork, true, true, (*Server).invokeWorkAction},
+	{"POST", []string{"scopes", "*", "reconcile"}, targetScope, true, true, (*Server).reconcileScope},
+	{"POST", []string{"scopes", "*", "route", "trace"}, targetScope, true, false, (*Server).traceRoute},
+	{"POST", []string{"scopes", "*", "actions", "*", "*"}, targetScope, true, true, (*Server).invokeScopeAction},
+	{"POST", []string{"executions", "*", "cancel"}, targetExecution, true, true, (*Server).cancelExecution},
+	{"POST", []string{"events", "*", "skip"}, targetEvent, true, true, (*Server).skipEvent},
+	{"POST", []string{"events", "*", "reroute"}, targetEvent, true, true, (*Server).rerouteEvent},
+	{"POST", []string{"config", "validate"}, targetDaemon, true, false, (*Server).validateConfig},
+	{"POST", []string{"config", "apply"}, targetDaemon, true, true, (*Server).applyConfig},
+	{"GET", []string{"secrets"}, targetDaemon, false, false, (*Server).listSecrets},
+	{"PUT", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).putSecret},
+	{"DELETE", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).deleteSecret},
+	{"POST", []string{"auth", "rotate"}, targetAny, true, false, (*Server).rotate},
+	{"GET", []string{"auth", "operators"}, targetDaemon, false, false, (*Server).listOperators},
+	{"POST", []string{"auth", "operators"}, targetDaemon, true, false, (*Server).addOperator},
+	{"POST", []string{"auth", "revoke"}, targetAny, true, true, (*Server).revoke},
+	{"GET", []string{"auth", "issuers"}, targetDaemon, false, false, (*Server).listIssuersRoute},
+	{"PUT", []string{"auth", "issuers", "*"}, targetDaemon, true, false, (*Server).putIssuer},
+	{"DELETE", []string{"auth", "issuers", "*"}, targetDaemon, true, false, (*Server).deleteIssuer},
+	{"POST", []string{"toolbelt", "call"}, targetToolbelt, true, false, (*Server).toolbeltCall},
+	{"GET", []string{"toolbelt", "guidance"}, targetToolbelt, false, false, (*Server).toolbeltGuidance},
+	{"GET", []string{"toolbelt", "serving"}, targetToolbelt, false, false, (*Server).toolbeltServing},
+	{"POST", []string{"toolbelt", "git"}, targetToolbelt, true, false, (*Server).gitSessionOpen},
+	{"DELETE", []string{"toolbelt", "git", "*"}, targetToolbelt, true, false, (*Server).gitSessionEnd},
 	// A git exchange streams git's own body, not JSON, so it is not read
 	// as a mutation's.
-	{"GET", []string{"toolbelt", "git", "*", "*"}, false, false, (*Server).gitRelay},
-	{"POST", []string{"toolbelt", "git", "*", "*"}, false, false, (*Server).gitRelay},
+	{"GET", []string{"toolbelt", "git", "*", "*"}, targetToolbelt, false, false, (*Server).gitRelay},
+	{"POST", []string{"toolbelt", "git", "*", "*"}, targetToolbelt, false, false, (*Server).gitRelay},
 }
 
 // listFilters are each list endpoint's query filters, by path; every list
@@ -490,9 +503,16 @@ var listFilters = map[string][]string{
 // segment), the least operator role it needs ("execution" for the toolbelt,
 // which only an execution's own token reaches), whether it takes an
 // Idempotency-Key ("required", "optional" or ""), and a list's filters.
+// Target is what the route acts on, whose scope a scoped grant must cover:
+// "daemon" (a daemon-wide role only), "any" (the role anywhere), "list"
+// (the role anywhere, listing only what grants cover), the record its
+// path names ("scope", "work", "execution", "event", "wait",
+// "artifact"), "body scope_id", or "execution token" for the toolbelt.
+// A route that declares none has an empty Target, which the HTTP API
+// reference's test refuses.
 type APIRoute struct {
-	Method, Path, Role, IdempotencyKey string
-	Filters                            []string
+	Method, Path, Role, Target, IdempotencyKey string
+	Filters                                    []string
 }
 
 // APIRoutes lists the management API's routes in the order the server
@@ -512,7 +532,7 @@ func APIRoutes() []APIRoute {
 			}
 			parts[j] = p
 		}
-		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern)}
+		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern), Target: targetNames[rt.target]}
 		if rt.pattern[0] == "toolbelt" {
 			// Served only to an execution's token, on its own socket.
 			e.Role = "execution"
@@ -642,11 +662,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return fail(403, "wrong_credential_class", "credential class not permitted for this endpoint")
 	}
 	// An operator's role is checked where the route is served, before
-	// anything is read or written: fail closed.
-	if who.operator {
-		if need := requiredRole(matched, parts); !who.may(need) {
-			return forbiddenRole(who, need)
-		}
+	// anything is read or written: fail closed. One who holds it only at
+	// some scopes is checked against the route's target below, once the
+	// body is read.
+	need := requiredRole(matched, parts)
+	scoped := who.operator && !who.may(need)
+	if scoped && (matched.target == targetDaemon || matched.target == targetUnset || !who.mayAnywhere(need)) {
+		return forbiddenRole(who, need)
 	}
 	// Everything an operator does is recorded as theirs: the host stamps the
 	// credential's principal, never anything the request says.
@@ -670,6 +692,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 			return fail(415, "unsupported_media_type", "Content-Type must be application/json")
 		}
 		c.body = body
+	}
+	// The target's scope is resolved and checked before the handler reads
+	// or writes anything, and before an idempotent replay answers.
+	if scoped {
+		if err := s.authorizeScoped(c, matched, need); err != nil {
+			return err
+		}
+	}
+	if matched.mutation {
 		c.key = r.Header.Get("Idempotency-Key")
 		if c.key != "" && !validKey(c.key) {
 			return fail(400, "invalid_idempotency_key", "Idempotency-Key must be 1-128 printable ASCII characters")

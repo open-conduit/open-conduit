@@ -57,6 +57,11 @@ type WorkQuery struct {
 	ScopeID  domain.ID
 	Kind     string
 	ParentID domain.ID
+	// Within, when not nil, keeps only Work in one of these scopes: an
+	// empty, non-nil Within selects no Work. It is how a reader whose
+	// authority covers some scopes lists only those, so it bounds
+	// ScopeID rather than replacing it.
+	Within []domain.ID
 	// Sources are WorkSource values Work may have, any of them.
 	Sources []string
 	// Executor is the Work's LatestExecutor, the Executor recorded on its
@@ -99,7 +104,8 @@ func WorkSource(w domain.Work) string {
 // Limit.
 func (q WorkQuery) Matches(w domain.Work) bool {
 	return (len(q.States) == 0 || slices.Contains(q.States, w.State)) &&
-		(q.ScopeID == "" || w.ScopeID == q.ScopeID) && (q.Kind == "" || w.Kind == q.Kind) &&
+		(q.ScopeID == "" || w.ScopeID == q.ScopeID) && (q.Within == nil || slices.Contains(q.Within, w.ScopeID)) &&
+		(q.Kind == "" || w.Kind == q.Kind) &&
 		(q.ParentID == "" || w.ParentID == q.ParentID) &&
 		(len(q.Sources) == 0 || slices.Contains(q.Sources, WorkSource(w))) &&
 		(q.Executor == "" || w.LatestExecutor == q.Executor) &&

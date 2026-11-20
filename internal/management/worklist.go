@@ -56,7 +56,10 @@ func latestExecution(tx storage.Tx, work domain.ID) (domain.Execution, bool, err
 
 // workFilter is GET /work's query, parsed.
 type workFilter struct {
-	q            listQuery
+	q listQuery
+	// within is the scopes the operator's grants cover, nil for every
+	// scope: storage selects only Work in them.
+	within       []domain.ID
 	updatedAfter time.Time
 	words        []string
 	sort         string
@@ -84,7 +87,7 @@ func parseWorkFilter(q listQuery) (workFilter, error) {
 // but the words.
 func (f workFilter) cheap(w domain.Work) bool {
 	q := f.q
-	return match(q, "scope_id", string(w.ScopeID)) && matchAny(q, "state", string(w.State)) && match(q, "kind", w.Kind) &&
+	return (f.within == nil || slices.Contains(f.within, w.ScopeID)) && match(q, "scope_id", string(w.ScopeID)) && matchAny(q, "state", string(w.State)) && match(q, "kind", w.Kind) &&
 		match(q, "parent_id", string(w.ParentID)) && match(q, "source", workSource(w)) && match(q, "executor", w.LatestExecutor) &&
 		(f.updatedAfter.IsZero() || !w.UpdatedAt.Before(f.updatedAfter))
 }
@@ -195,6 +198,7 @@ func (f workFilter) storageQuery(sources []string) storage.WorkQuery {
 	}
 	q.ScopeID, q.Kind, q.ParentID = domain.ID(f.q.filters["scope_id"]), f.q.filters["kind"], domain.ID(f.q.filters["parent_id"])
 	q.Executor = f.q.filters["executor"]
+	q.Within = f.within
 	return q
 }
 
@@ -379,6 +383,7 @@ func (s *Server) listWork(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	f.within = c.scopes()
 	var lw listedWork
 	err = s.read(c.ctx, func(tx storage.Tx) error {
 		var e error
@@ -409,7 +414,7 @@ func (s *Server) workFacets(c *call) (int, any, error) {
 	var out map[string]any
 	err = s.read(c.ctx, func(tx storage.Tx) error {
 		var e error
-		out, e = facetsOf(tx, workFilter{q: q})
+		out, e = facetsOf(tx, workFilter{q: q, within: c.scopes()})
 		return e
 	})
 	if err != nil {
