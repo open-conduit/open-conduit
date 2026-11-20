@@ -608,7 +608,8 @@ test("an emit operation plans its Event, and its commit writes records once it i
     correlation_key: { source: "desk", external_id: "T-9" },
   });
   assert.equal(plan.once, "T-9:called back");
-  assert.ok(plan.commit_id);
+  // Random, so a restarted process never reuses an ID the host still holds.
+  assert.match(plan.commit_id ?? "", /^[0-9a-f]{24}$/);
   const emitted = {
     event: {
       event: { id: "ev2", type: "desk.ticket.noted" },

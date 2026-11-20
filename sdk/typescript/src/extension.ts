@@ -7,6 +7,7 @@
 // subcommands (package-manifest, package-certification) and otherwise
 // serves protocol version 1 on stdin and stdout until stdin closes.
 
+import { randomBytes } from "node:crypto";
 import { type Readable, Writable } from "node:stream";
 import { Code, ConfigError, OperationError, ProtocolError } from "./errors.ts";
 import { type DeliveryInput, Host, type Put, base64, toBytes } from "./host.ts";
@@ -890,7 +891,6 @@ export class Server {
   #sources = new Map<string, Registered>();
   /** Emissions' commits, by commit ID, until the host has had its chance to call them. */
   readonly #commits = new Map<string, (emitted: Emitted) => unknown>();
-  #commitSeq = 0;
 
   constructor(ext: Extension, input: Readable, output: Writable) {
     this.#ext = ext;
@@ -973,7 +973,8 @@ export class Server {
           commit?: (emitted: Emitted) => unknown;
         };
         if (commit === undefined) return plan;
-        const id = `c${++this.#commitSeq}`;
+        // Random, as Go's newID: a restarted process must never answer an ID the host holds from before with another emission's commit.
+        const id = randomBytes(12).toString("hex");
         this.#commits.set(id, commit);
         // Dropped oldest first, whether the host called them or never did
         // (its transaction failed before acceptance).
