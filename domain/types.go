@@ -199,9 +199,12 @@ type ArtifactRef struct {
 	MediaType string
 	// SHA256 is the content's digest, 64 lower-case hex characters, so any
 	// backend, bundle or reader can verify the bytes without the backend's
-	// own metadata. Every ref Commit returns carries it. It is empty only
-	// on a ref recorded before record format 7, which a backend verifies by
-	// what it stored itself.
+	// own metadata. Every ref Commit returns carries it, and the host fills
+	// it in on an executor result's refs that lack it (an extension built
+	// on an SDK that predates digests drops it), so a recorded ref lacks it
+	// only if it was recorded before record format 7. A store must still
+	// open a ref without one, verifying it by what it stored itself: such
+	// refs stay in history, and an extension may hand one back.
 	SHA256 string `json:",omitempty"`
 }
 type Timer struct {

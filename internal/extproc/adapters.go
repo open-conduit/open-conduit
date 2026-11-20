@@ -782,6 +782,9 @@ func (h *remoteHandle) Wait(ctx context.Context) (extension.Result, error) {
 			if verr := extension.ValidateResult(res); verr != nil {
 				return extension.Result{}, verr
 			}
+			if res.Artifacts, err = h.e.r.s.completeArtifacts(ctx, res.Artifacts); err != nil {
+				return extension.Result{}, err
+			}
 			return res, nil
 		case errors.Is(err, protocol.ErrTransport) || protocol.ErrorCode(err) == protocol.CodeShuttingDown:
 			if err := h.e.r.p.AwaitGeneration(ctx, gen); err != nil {
