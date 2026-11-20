@@ -121,9 +121,9 @@ Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN
 
   | Role | May |
   | --- | --- |
-  | `view` | read everything: Work, Events, runs and their logs, config, doctor, the operator list; trace a route and validate config, which change nothing |
+  | `view` | read everything: Work, Events, runs and their logs, config, doctor (without `--check-secrets`), the operator list; trace a route and validate config, which change nothing |
   | `operate` | also send Events and run every control and action: create, cancel, retry, wake, hold, release, rebind and attach Work, cancel executions, skip and reroute Events, reconcile scopes, answer asks; rotate and revoke their own credential |
-  | `admin` | also apply config, add operators and revoke other operators' credentials |
+  | `admin` | also apply config, add operators and revoke other operators' credentials; store, list and remove secrets, and run `doctor --check-secrets`, which resolves every secret reference (running each `cmd:` one) |
 
   You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything. A credential added before roles existed is `view`. Revoke it and add it again with `--role` to restore its controls.
 - `--grants support=operate,billing=view` gives a role at a scope instead, covering that scope and every scope beneath it, with `--role` or without it. Lists then show only those scopes, and anything aimed elsewhere is refused with `forbidden_scope`. A grant is `view` or `operate`; `admin`, and routes about the whole daemon such as `config` and `doctor`, stay daemon-wide. See [a role in one team's scopes only](../team/#a-role-in-one-teams-scopes-only).

@@ -167,7 +167,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 
 ## Doctor
 
-`GET /v1/doctor[?check_secrets=true]` and `open-conduit doctor [--check-secrets] [--json]` return `ok`/`info`/`warn`/`fail` checks with safe codes and identifiers. The CLI exits 1 on `fail`. The checks are:
+`GET /v1/doctor[?check_secrets=true]` and `open-conduit doctor [--check-secrets] [--json]` return `ok`/`info`/`warn`/`fail` checks with safe codes and identifiers. The CLI exits 1 on `fail`. Doctor needs the `view` role; `check_secrets=true` resolves every secret reference the config makes (running each `cmd:` one and reading the keyring) and runs the checks that authenticate with them, so the host refuses it with `403 forbidden_role` below `admin`, before anything is resolved. The checks are:
 
 | Check | Meaning |
 | --- | --- |

@@ -14,16 +14,19 @@ import (
 	"github.com/open-conduit/open-conduit/observability"
 )
 
-// memoryKeyring is a platform keyring in memory.
+// memoryKeyring is a platform keyring in memory. gets counts the values
+// read from it, so a test can tell whether anything was resolved.
 type memoryKeyring struct {
 	mu     sync.Mutex
 	values map[string]string
 	refuse bool
+	gets   int
 }
 
 func (k *memoryKeyring) Get(service, name string) (string, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.gets++
 	v, ok := k.values[service+"/"+name]
 	if !ok {
 		return "", errors.New("no such item")
@@ -206,6 +209,71 @@ func TestManagementSecrets(t *testing.T) {
 		if outcomes[want] == 0 {
 			t.Fatalf("trail lacks %q: %v", want, outcomes)
 		}
+	}
+}
+
+// Resolving secrets on request runs cmd: references and reads the keyring,
+// so doctor with check_secrets=true needs admin, as the secrets routes do:
+// view and operate are refused before anything is resolved. Without it,
+// doctor stays a read for view.
+func TestManagementDoctorCheckSecretsNeedsAdmin(t *testing.T) {
+	ctx := context.Background()
+	h := newManagementHarness(t)
+	admin := h.operatorClient()
+	h.keyring.mu.Lock()
+	h.keyring.values["open-conduit/slack-token"] = "tok"
+	h.keyring.mu.Unlock()
+	h.applyText(strings.Replace(managementConfig, `"other": "env:SECRET_FIXTURE_TOKEN"`, `"other": "keyring:slack-token"`, 1))
+	gets := func() int {
+		h.keyring.mu.Lock()
+		defer h.keyring.mu.Unlock()
+		return h.keyring.gets
+	}
+	secrets := func(d client.Doctor) client.Check {
+		for _, c := range d.Checks {
+			if c.Name == "secrets" {
+				return c
+			}
+		}
+		t.Fatalf("doctor has no secrets check: %+v", d)
+		return client.Check{}
+	}
+	before := gets()
+	for _, role := range []string{"view", "operate"} {
+		path := filepath.Join(h.state, role+".token")
+		h.mustCLI(nil, "auth", "add", "olly-"+role, "--role", role, "--out", path)
+		f, err := client.ReadTokenFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := client.New(h.endpoint, f.Token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var api *client.Error
+		if _, err = c.Doctor(ctx, true); !errors.As(err, &api) || api.Status != 403 || api.Code != "forbidden_role" {
+			t.Fatalf("%s check_secrets: %v", role, err)
+		}
+		if n := gets(); n != before {
+			t.Fatalf("%s check_secrets resolved %d reference(s) before it was refused", role, n-before)
+		}
+		d, err := c.Doctor(ctx, false)
+		if err != nil {
+			t.Fatalf("%s doctor: %v", role, err)
+		}
+		if s := secrets(d); s.Code != "not_checked" {
+			t.Fatalf("%s doctor secrets: %+v", role, s)
+		}
+	}
+	if gets() != before {
+		t.Fatal("doctor without check_secrets resolved a reference")
+	}
+	d, err := admin.Doctor(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := secrets(d); s.Code != "resolved" || gets() == before {
+		t.Fatalf("admin check_secrets: %+v (keyring reads %d)", s, gets()-before)
 	}
 }
 
