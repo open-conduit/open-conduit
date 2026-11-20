@@ -457,8 +457,7 @@ func TestReconcileContainers(t *testing.T) {
 // TestReconcileFormerHostContainers (#724): under a former label (the path
 // hash older versions used, which another installation at the same path
 // shares) reconcile removes only what belongs to an execution the daemon
-// knows and is over, never one it doesn't know, and reports what it left
-// there. Under its own label an unknown execution is gone, as before.
+// knows and is over, never one it doesn't know. Under its own label an unknown execution is gone, as before.
 func TestReconcileFormerHostContainers(t *testing.T) {
 	f := newFakeContainers()
 	add := func(id, host, exec string) {
@@ -470,21 +469,21 @@ func TestReconcileFormerHostContainers(t *testing.T) {
 	add("own-unknown", "installation-id", "x3")
 	add("someone-else", "other-id", "x2")
 	hosts := extension.ContainerHosts{Host: "installation-id", Former: []string{"path-hash"}}
-	r, err := extension.ReconcileHostContainers(context.Background(), f, hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+	n, err := extension.ReconcileHostContainers(context.Background(), f, hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
 		return map[domain.ID]extension.ContainerKeep{"x1": extension.ContainerKeepAll, "x2": extension.ContainerKeepNone}, nil
 	})
-	if err != nil || r.Removed != 2 || r.Former != 2 {
-		t.Fatalf("reconcile: %+v %v, want 2 removed and 2 left under the former label", r, err)
+	if err != nil || n != 2 {
+		t.Fatalf("reconcile removed %d: %v, want 2", n, err)
 	}
 	if len(f.removed) != 2 || !contains(f.removed, "former-ended") || !contains(f.removed, "own-unknown") {
 		t.Errorf("removed %v, want the ended execution's under the former label and the unknown one's under its own", f.removed)
 	}
 	// Without the former label, none of those are the daemon's.
 	f.removed = nil
-	if r, err := extension.ReconcileHostContainers(context.Background(), f, extension.ContainerHosts{Host: "installation-id"}, func([]domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+	if n, err := extension.ReconcileHostContainers(context.Background(), f, extension.ContainerHosts{Host: "installation-id"}, func([]domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
 		return nil, nil
-	}); err != nil || r.Removed != 0 || r.Former != 0 || len(f.removed) != 0 {
-		t.Fatalf("no former label: %+v %v removed %v", r, err, f.removed)
+	}); err != nil || n != 0 || len(f.removed) != 0 {
+		t.Fatalf("no former label: removed %d %v %v", n, err, f.removed)
 	}
 }
 

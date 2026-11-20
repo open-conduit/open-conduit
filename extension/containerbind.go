@@ -790,14 +790,13 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 // beside a finished execution until they exit, and their detach removes
 // it then. It is ReconcileHostContainers with no former labels.
 func ReconcileContainersKeeping(ctx context.Context, p ContainerProvider, host string, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
-	r, err := ReconcileHostContainers(ctx, p, ContainerHosts{Host: host}, keep)
-	return r.Removed, err
+	return ReconcileHostContainers(ctx, p, ContainerHosts{Host: host}, keep)
 }
 
 // ContainerHosts are the host labels (ContainerLabelHost) a daemon owns:
 // Host, its installation's, which it labels every new container with, and
 // Former, labels it made containers under before (an upgrade's path hash),
-// recognised until none of its containers carry them.
+// still recognised but never given to a new container.
 type ContainerHosts struct {
 	Host   string
 	Former []string
@@ -817,25 +816,16 @@ func (h ContainerHosts) former(label string) bool {
 	return false
 }
 
-// ContainerReconcile is what a reconcile pass did: how many entries it
-// removed, and how many it listed under a former label and left.
-type ContainerReconcile struct {
-	Removed int
-	Former  int
-}
-
 // ReconcileHostContainers is ReconcileContainersKeeping over every label
 // the daemon owns. Under its own label, an execution keep leaves out is
 // gone. Under a former label only an execution keep reports is the
 // daemon's: another installation once shared that label (a state
 // directory at the same path), so an execution it doesn't know is left
-// alone. It reports how many entries under a former label it left, so the
-// host can stop recognising one none carry.
-func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts ContainerHosts, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (ContainerReconcile, error) {
-	var r ContainerReconcile
+// alone. It returns how many entries it removed.
+func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts ContainerHosts, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {
-		return r, err
+		return 0, err
 	}
 	var ids []domain.ID
 	seen := map[domain.ID]bool{}
@@ -847,12 +837,13 @@ func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts Con
 		}
 	}
 	if len(ids) == 0 {
-		return r, nil
+		return 0, nil
 	}
 	kept, err := keep(ids)
 	if err != nil {
-		return r, err
+		return 0, err
 	}
+	removed := 0
 	var errs []error
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
@@ -865,19 +856,13 @@ func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts Con
 		k, known := kept[id]
 		switch {
 		case former && !known, k == ContainerKeepAll, k == ContainerKeepAttach && attach, st.Running && attach:
-			if former {
-				r.Former++
-			}
 			continue
 		}
 		if err := p.Remove(ctx, st.Ref); err != nil {
 			errs = append(errs, err)
-			if former {
-				r.Former++
-			}
 			continue
 		}
-		r.Removed++
+		removed++
 	}
-	return r, errors.Join(errs...)
+	return removed, errors.Join(errs...)
 }

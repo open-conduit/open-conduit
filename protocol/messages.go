@@ -46,8 +46,8 @@ type InitializeParams struct {
 	ContainerHost string `json:"container_host,omitempty"`
 	// ContainerFormerHosts are labels the host made containers under before
 	// (extension.ContainerHosts.Former: the hash of its state directory's
-	// path that older versions used), named until none of its containers
-	// carry them. A provider lists containers carrying one as the host's
+	// path that older versions used, for an installation upgraded from
+	// one). A provider lists containers carrying one as the host's
 	// too, and never labels a new container with one.
 	ContainerFormerHosts []string `json:"container_former_hosts,omitempty"`
 	// ConfigDir is the directory of the operator's config file, against

@@ -67,7 +67,9 @@ type containerHostRecord struct {
 	Host string `json:"host"`
 	// Former are labels the daemon made containers under before it had
 	// one: the hash of its state directory's path older versions used.
-	// They are recognised until no container carries them.
+	// They stay recognised: nothing can prove no container carries one
+	// (a provider may be down or ignore former labels), and a pinned run
+	// under one would fail its recovery once it was dropped.
 	Former []string `json:"former,omitempty"`
 }
 
@@ -125,11 +127,11 @@ func legacyContainerHost(state string) string {
 }
 
 // loadContainerHosts reads the installation's container labels, making
-// them on first use: a random ID, with the path hash of older versions as
-// a former label, since a daemon upgraded mid-run still has containers
-// under it (a new installation's first reconcile finds none and drops it).
-// They are kept in the store, so a restored backup keeps the ID: it is the
-// same installation.
+// them on first use: a random ID and, when the store already holds
+// executions (an upgrade from a release that labelled by path), the path
+// hash as a former label, since a daemon upgraded mid-run still has
+// containers under it. They are kept in the store, so a restored backup
+// keeps the ID: it is the same installation.
 func (d *daemon) loadContainerHosts(ctx context.Context) (extension.ContainerHosts, error) {
 	var hosts extension.ContainerHosts
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
@@ -149,7 +151,14 @@ func (d *daemon) loadContainerHosts(ctx context.Context) (extension.ContainerHos
 		if _, err := rand.Read(id); err != nil {
 			return err
 		}
-		hosts = extension.ContainerHosts{Host: hex.EncodeToString(id), Former: []string{legacyContainerHost(d.o.StateDir)}}
+		hosts = extension.ContainerHosts{Host: hex.EncodeToString(id)}
+		xs, err := tx.ListExecutions("")
+		if err != nil {
+			return err
+		}
+		if len(xs) > 0 {
+			hosts.Former = []string{legacyContainerHost(d.o.StateDir)}
+		}
 		return putContainerHosts(tx, hosts)
 	})
 	return hosts, err
@@ -185,22 +194,6 @@ func (d *daemon) containerHosts() extension.ContainerHosts {
 
 // containerHost is this daemon's ContainerLabelHost value.
 func (d *daemon) containerHost() string { return d.containerHosts().Host }
-
-// formerHostsGone stops recognising the former labels once a whole
-// reconcile pass found none carrying them. A failure to record it keeps
-// them for the next pass.
-func (d *daemon) formerHostsGone(ctx context.Context, hosts extension.ContainerHosts) {
-	if len(hosts.Former) == 0 {
-		return
-	}
-	now := extension.ContainerHosts{Host: hosts.Host}
-	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error { return putContainerHosts(tx, now) }); err != nil {
-		d.log.Warn("could not record that no container carries a former host label", "err", err)
-		return
-	}
-	d.containers.hosts.Store(&now)
-	d.log.Info("no container carries a former host label any longer", "former", hosts.Former)
-}
 
 // containerRecords is the host-owned directory an execution's container
 // records (the signals the host sent) are kept in.
@@ -447,9 +440,9 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	}
 	sort.Strings(names)
 	var errs []error
-	hosts, former := d.containerHosts(), 0
+	hosts := d.containerHosts()
 	for _, name := range names {
-		r, err := extension.ReconcileHostContainers(ctx, providers[name], hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		removed, err := extension.ReconcileHostContainers(ctx, providers[name], hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
 			var keep map[domain.ID]extension.ContainerKeep
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				keep = map[domain.ID]extension.ContainerKeep{}
@@ -467,16 +460,12 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 			})
 			return keep, err
 		})
-		if r.Removed > 0 {
-			d.log.Info("removed what ended or parked runs left in containers", "provider", name, "removed", r.Removed)
+		if removed > 0 {
+			d.log.Info("removed what ended or parked runs left in containers", "provider", name, "removed", removed)
 		}
-		former += r.Former
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
-	}
-	if len(errs) == 0 && former == 0 {
-		d.formerHostsGone(ctx, hosts)
 	}
 	errs = append(errs, d.sweepHomes(ctx))
 	if err := errors.Join(errs...); err != nil && ctx.Err() == nil {

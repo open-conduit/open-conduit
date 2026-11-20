@@ -64,8 +64,10 @@ func (r *sharedRuntime) Remove(_ context.Context, ref extension.ContainerRef) er
 }
 
 // containerDaemon is a daemon with its own store, at state (a path, which
-// another daemon on another machine may share), using runtime.
-func containerDaemon(t *testing.T, state string, runtime extension.ContainerProvider) *daemon {
+// another daemon on another machine may share), using runtime. earlier are
+// executions its store held before it first started with a container
+// host ID (an upgrade); nil is a new installation.
+func containerDaemon(t *testing.T, state string, providers map[string]extension.ContainerProvider, earlier map[domain.ID]domain.ExecutionState) *daemon {
 	t.Helper()
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
@@ -75,7 +77,10 @@ func containerDaemon(t *testing.T, state string, runtime extension.ContainerProv
 	t.Cleanup(func() { _ = store.Close() })
 	d := &daemon{o: Options{StateDir: state}, coord: store, now: func() time.Time { return time.Unix(1700000000, 0) },
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)), reported: map[string]string{}, reportedAt: map[string]time.Time{}}
-	d.containers.providers.set(map[string]extension.ContainerProvider{"shared": runtime})
+	d.containers.providers.set(providers)
+	if earlier != nil {
+		d.record(t, earlier)
+	}
 	if err := d.openContainers(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +141,8 @@ func endExecution(tx storage.Tx, id domain.ID) error {
 func samePathRuns(t *testing.T, relabel func(*daemon)) []string {
 	const state = "/var/lib/open-conduit"
 	rt := newSharedRuntime()
-	a, b := containerDaemon(t, state, rt), containerDaemon(t, state, rt)
+	shared := map[string]extension.ContainerProvider{"shared": rt}
+	a, b := containerDaemon(t, state, shared, nil), containerDaemon(t, state, shared, nil)
 	if relabel != nil {
 		relabel(a)
 		relabel(b)
@@ -176,27 +182,24 @@ func TestSamePathDaemonsKeepTheirOwnContainers(t *testing.T) {
 // mid-run gets an installation ID and still recognises the containers it
 // made under its path hash: reconcile keeps its live run's container,
 // removes it once the run is over, and leaves one of an execution it
-// doesn't know (another installation at the same path made it). Once a pass
-// finds none of its own under the path hash, it stops recognising it, and
-// keeps its ID across a restart.
+// doesn't know (another installation at the same path made it). The former
+// label is never dropped, so it survives passes with nothing under it and
+// a restart, and the ID is kept. The control: a new installation, its
+// store empty, has no former label.
 func TestUpgradedDaemonKeepsItsPathHashContainers(t *testing.T) {
 	const state = "/home/conduit/.local/state/open-conduit"
 	legacy := legacyContainerHost(state)
 	rt := newSharedRuntime()
 	rt.containers["old-run"] = map[string]string{extension.ContainerLabelHost: legacy, extension.ContainerLabelExecution: "x-old", extension.ContainerLabelSegment: "1"}
 	rt.containers["theirs"] = map[string]string{extension.ContainerLabelHost: legacy, extension.ContainerLabelExecution: "x-theirs", extension.ContainerLabelSegment: "1"}
-	d := containerDaemon(t, state, rt)
+	d := containerDaemon(t, state, map[string]extension.ContainerProvider{"shared": rt}, map[domain.ID]domain.ExecutionState{"x-old": domain.ExecutionPending})
 	hosts := d.containerHosts()
 	if hosts.Host == legacy || len(hosts.Former) != 1 || hosts.Former[0] != legacy {
 		t.Fatalf("upgraded labels %+v, want a new ID with the path hash as a former label", hosts)
 	}
-	d.record(t, map[domain.ID]domain.ExecutionState{"x-old": domain.ExecutionPending})
 	d.reconcileContainersPass(context.Background())
 	if len(rt.removed) != 0 {
 		t.Fatalf("reconcile removed %v while the run is live", rt.removed)
-	}
-	if got := d.containerHosts(); len(got.Former) != 1 {
-		t.Fatalf("the path hash was dropped while a container carries it: %+v", got)
 	}
 	// The run ends: its container goes, and another installation's stays.
 	if err := d.coord.Transact(context.Background(), storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
@@ -208,16 +211,40 @@ func TestUpgradedDaemonKeepsItsPathHashContainers(t *testing.T) {
 	if len(rt.removed) != 1 || rt.removed[0] != "old-run" {
 		t.Fatalf("reconcile removed %v, want only the ended run's", rt.removed)
 	}
-	// Only another installation's are left under the path hash.
 	delete(rt.containers, "theirs")
 	d.reconcileContainersPass(context.Background())
-	if got := d.containerHosts(); got.Host != hosts.Host || len(got.Former) != 0 {
-		t.Fatalf("labels %+v once no container carries the path hash, want %s alone", got, hosts.Host)
+	if err := d.openContainers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.containerHosts(); got.Host != hosts.Host || len(got.Former) != 1 || got.Former[0] != legacy {
+		t.Fatalf("labels %+v after passes with nothing under the path hash and a restart, want %+v kept", got, hosts)
+	}
+	if fresh := containerDaemon(t, state, nil, nil).containerHosts(); fresh.Host == "" || fresh.Host == hosts.Host || len(fresh.Former) != 0 {
+		t.Fatalf("control: a new installation's labels %+v, want a new ID alone", fresh)
+	}
+}
+
+// TestFormerLabelSurvivesAMissingProvider (#724 review): the first pass
+// after an upgrade runs while one of two container packages isn't running.
+// The one that is lists nothing under the path hash; the former label
+// stays, so the missing provider's pinned run is still the daemon's when
+// it comes back, and reconcile keeps its live container then.
+func TestFormerLabelSurvivesAMissingProvider(t *testing.T) {
+	const state = "/var/lib/open-conduit"
+	legacy := legacyContainerHost(state)
+	docker, ssh := newSharedRuntime(), newSharedRuntime()
+	ssh.containers["remote-run"] = map[string]string{extension.ContainerLabelHost: legacy, extension.ContainerLabelExecution: "x-remote", extension.ContainerLabelSegment: "1"}
+	d := containerDaemon(t, state, map[string]extension.ContainerProvider{"docker": docker}, map[domain.ID]domain.ExecutionState{"x-remote": domain.ExecutionPending})
+	d.reconcileContainersPass(context.Background())
+	if got := d.containerHosts(); len(got.Former) != 1 || got.Former[0] != legacy {
+		t.Fatalf("labels %+v after a pass without the ssh provider, want the path hash kept", got)
 	}
 	if err := d.openContainers(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.containerHosts(); got.Host != hosts.Host || len(got.Former) != 0 {
-		t.Fatalf("labels %+v after a restart, want %s kept", got, hosts.Host)
+	d.containers.providers.set(map[string]extension.ContainerProvider{"docker": docker, "ssh": ssh})
+	d.reconcileContainersPass(context.Background())
+	if len(ssh.removed) != 0 || !d.containerHosts().Owns(legacy) {
+		t.Fatalf("once the ssh provider is back: removed %v, labels %+v; want its live run kept as the daemon's", ssh.removed, d.containerHosts())
 	}
 }
