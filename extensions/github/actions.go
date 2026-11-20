@@ -44,7 +44,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 		return refuseAction("unknown_action", "GitHub offers no action "+c.Action+" here")
 	}
 	if c.Caller.Kind != extension.CallerOperator {
-		return refuseAction("not_allowed", "only the local operator claims issues by hand")
+		return refuseAction("not_allowed", "only an operator claims issues by hand")
 	}
 	n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(c.Input), "#"))
 	if err != nil || n <= 0 {
