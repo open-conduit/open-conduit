@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +145,10 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 	for _, r := range []observability.Record{start1, start2} {
 		if r.Correlation.ExecutorBinding != "run" || r.Attributes["executor"] != "shell" || r.Attributes["config.generation"] != "1" || r.Attributes["lease.owner"] != "daemon" || r.Correlation.ScopeID != "ops" {
 			t.Fatalf("executor identity: %+v", r)
+		}
+		// How long the start took from its trigger's acceptance.
+		if ms, err := strconv.ParseInt(r.Attributes["execution.start_latency_ms"], 10, 64); err != nil || ms < 0 || r.Attributes["trigger.received_at"] == "" {
+			t.Fatalf("start latency: %+v", r)
 		}
 	}
 	if l := rs.one(t, "execution.launched", forExecution(first.Lease.ExecutionID)); l.Attributes["launch.mode"] != "run" {
@@ -316,7 +321,7 @@ esac`
 	rs = recordSet(h.records())
 	checkRecordInvariants(t, rs, "shell-secret")
 	recovered := rs.one(t, "execution.recovered", forExecution(a3.Lease.ExecutionID))
-	if recovered.Attributes["lease.previous_epoch"] != "1" || recovered.Attributes["lease.epoch"] != "2" || recovered.From != "running" {
+	if recovered.Attributes["lease.previous_epoch"] != "1" || recovered.Attributes["lease.epoch"] != "2" || recovered.From != "running" || recovered.Attributes["execution.start_latency_ms"] != "" {
 		t.Fatalf("recovery: %+v", recovered)
 	}
 	launches := rs.where("execution.launched", forExecution(a3.Lease.ExecutionID))

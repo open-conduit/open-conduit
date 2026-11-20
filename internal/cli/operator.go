@@ -405,7 +405,13 @@ func (o *operator) health(args []string) int {
 	}
 	cx, cancel := ctx()
 	defer cancel()
-	return o.emit(c.Health(cx))
+	h, err := c.Health(cx)
+	// The JSON is printed either way; the exit code is for a probe or a
+	// script: 0 only when the daemon is ready.
+	if code := o.emit(h, err); code != 0 || h.State == "ready" {
+		return code
+	}
+	return 1
 }
 
 func (o *operator) scopes(args []string) int {

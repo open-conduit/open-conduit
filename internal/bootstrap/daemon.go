@@ -90,6 +90,19 @@ type Options struct {
 	// Tunnel exposes the webhook listener (optional). Any tunnel field
 	// replaces the stored settings.webhooks tunnel; Binary applies to both.
 	Tunnel TunnelOptions
+	// ProbeAddr enables the probe listener on this TCP address (for
+	// example 0.0.0.0:8080): /livez and /readyz with no credential, for an
+	// orchestrator's liveness and readiness probes (health.go). Empty
+	// leaves it off.
+	ProbeAddr string
+	// StallAfter is how long the host loop may go without completing a
+	// pass before its host_loop component is stalled and /livez fails
+	// (default DefaultStallAfter).
+	StallAfter time.Duration
+	// MetricReaders collect the daemon's meter: the lifecycle metrics and
+	// the host's own instruments (metrics.go). Without one they are
+	// recorded and collected by nobody.
+	MetricReaders []sdkmetric.Reader
 	// NoTunnel disables the listener and tunnel (reconcile-only).
 	NoTunnel bool
 	// DryRun makes no external writes: GitHub projections, tool writes and
@@ -187,6 +200,8 @@ type daemon struct {
 	workers workerState
 	// passTimes records how long each pass and its phases take.
 	passTimes *passTimes
+	// health is whether the daemon is alive and ready (health.go).
+	health healthState
 }
 
 // toolbeltBeside finds the directory holding the `os` toolbelt next to the
@@ -330,7 +345,10 @@ func (o *Options) defaults() error {
 	if o.SweepInterval == 0 {
 		o.SweepInterval = 6 * time.Hour
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 {
+	if o.StallAfter == 0 {
+		o.StallAfter = DefaultStallAfter
+	}
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 || o.StallAfter <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -349,6 +367,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	host, _ := os.Hostname()
 	d.owner = fmt.Sprintf("open-conduit/%s/%d/%s", host, os.Getpid(), hex.EncodeToString(suffix))
+	d.health.phase.Store(management.PhaseStarting)
 	// A listener that would serve plaintext to the network, or is
 	// half-configured, stops the start before anything is touched.
 	if err = o.Management.Check(); err != nil {
@@ -403,7 +422,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer logFile.Close()
-	tracer, meter, logger := sdktrace.NewTracerProvider(), sdkmetric.NewMeterProvider(), sdklog.NewLoggerProvider()
+	readers := make([]sdkmetric.Option, 0, len(o.MetricReaders))
+	for _, r := range o.MetricReaders {
+		readers = append(readers, sdkmetric.WithReader(r))
+	}
+	tracer, meter, logger := sdktrace.NewTracerProvider(), sdkmetric.NewMeterProvider(readers...), sdklog.NewLoggerProvider()
 	otel, err := telemetry.NewOTel(telemetry.OTelOptions{Tracer: tracer, Meter: meter, Logger: logger})
 	if err != nil {
 		return err
@@ -442,6 +465,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.coord, err = runtime.Instrument(coord, runtime.TelemetryOptions{Observer: d.pipeline, Diagnostic: func(code string) { d.report("telemetry", "", code) }}); err != nil {
 		return err
 	}
+	// The probe listener answers from here on: starting until the host
+	// loop's first pass, stopping once it has returned.
+	stopProbes, err := d.startProbes()
+	if err != nil {
+		return err
+	}
+	defer stopProbes()
 	// The store is the state directory's chosen artifact backend; an
 	// unknown one stops the daemon rather than open an empty store.
 	if _, d.artifacts, err = openArtifacts(context.Background(), o.StateDir); err != nil {
@@ -593,7 +623,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		}()
 	}
 
+	if err = d.openMetrics(meter); err != nil {
+		return err
+	}
 	loopErr := d.loop(loopCtx)
+	d.health.phase.Store(management.PhaseStopping)
 
 	// Graceful shutdown: stop serving, stop observing (processes survive) and
 	// release live leases so the next daemon can recover them immediately.
@@ -685,7 +719,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
-		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
+		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
 		return nil, err
 	}
 	return c, nil

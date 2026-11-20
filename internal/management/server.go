@@ -48,8 +48,12 @@ type Options struct {
 	Config     *ConfigService
 	Version    string
 	InstanceID string
-	// Components supplies safe readiness diagnostics; nil reports ready.
-	Components func() map[string]string
+	// Components supplies safe readiness diagnostics, each component's
+	// state ("ready" or a short code such as "stalled"); nil adds none
+	// beyond the database. Phase is the daemon's phase (PhaseStarting,
+	// PhaseRunning, PhaseStopping); nil is running.
+	Components func(context.Context) map[string]string
+	Phase      func() string
 	CursorKey  []byte
 	// Doctor inputs, all optional: ingress state for reconcile lag and loss
 	// declarations, the scheduler for pinned-executor checks, a resolver for

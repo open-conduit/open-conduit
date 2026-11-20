@@ -43,6 +43,21 @@ type DoctorOptions struct {
 
 const doctorNamespace = "core.doctor"
 
+// SourceLag classifies one ingress source's reconcile: failing when its
+// last scan failed, and lagging when it has gone more than factor
+// reconcile intervals without a complete scan (or, never having completed
+// one, is more than an interval past due).
+func SourceLag(s IngressStatus, now time.Time, factor int) (failing, lagging bool) {
+	switch {
+	case s.LastError != "":
+		return true, false
+	case s.LastComplete.IsZero():
+		return false, now.Sub(s.NextDue) > s.Interval
+	default:
+		return false, now.Sub(s.LastComplete) > time.Duration(factor)*s.Interval
+	}
+}
+
 // Diagnose runs generic runtime checks: storage read/write, reconcile lag,
 // lease recovery backlog, unconfirmed resource holds, retention backlog and
 // declared non-re-derivable delivery families. It never mutates domain state:
@@ -173,16 +188,16 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 		case s.LastError == "":
 			current = append(current, fmt.Sprintf("%s: reconciled %s ago", s.Name, now.Sub(s.LastComplete).Truncate(time.Second)))
 		}
-		switch {
-		case s.LastError != "":
+		switch fails, lags := SourceLag(s, now, o.LagFactor); {
+		case fails:
 			cause := s.LastError
 			if s.Failure != nil {
 				cause += ": " + s.Failure.String()
 			}
 			failing = append(failing, fmt.Sprintf("%s: %s (failures %d, next %s)", s.Name, cause, s.Failures, s.NextDue.UTC().Format(time.RFC3339)))
-		case s.LastComplete.IsZero() && now.Sub(s.NextDue) > s.Interval:
+		case lags && s.LastComplete.IsZero():
 			lagging = append(lagging, s.Name+": no complete scan yet")
-		case !s.LastComplete.IsZero() && now.Sub(s.LastComplete) > time.Duration(o.LagFactor)*s.Interval:
+		case lags:
 			lagging = append(lagging, fmt.Sprintf("%s: last complete %s ago", s.Name, now.Sub(s.LastComplete).Truncate(time.Second)))
 		}
 		for _, f := range s.Families {

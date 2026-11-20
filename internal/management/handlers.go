@@ -30,18 +30,42 @@ func (s *Server) health(c *call) (int, any, error) {
 	if err := s.read(c.ctx, func(tx storage.Tx) error { _, e := tx.ListScopes(); return e }); err != nil {
 		components["database"] = "unavailable"
 	}
-	state := "ready"
 	if s.o.Components != nil {
-		for k, v := range s.o.Components() {
+		for k, v := range s.o.Components(c.ctx) {
 			components[k] = v
 		}
 	}
+	return 200, map[string]any{"state": HealthState(s.phase(), components), "version": s.o.Version, "instance_id": s.o.InstanceID, "config_generation": u64(generation), "components": components}, nil
+}
+
+func (s *Server) phase() string {
+	if s.o.Phase == nil {
+		return PhaseRunning
+	}
+	return s.o.Phase()
+}
+
+// The daemon's phases (Options.Phase): starting until its host loop has
+// completed a pass, running, and stopping once its shutdown has begun.
+const (
+	PhaseStarting = "starting"
+	PhaseRunning  = "running"
+	PhaseStopping = "stopping"
+)
+
+// HealthState is GET /health's state: the phase while the daemon is
+// starting or stopping, and otherwise ready when every component is ready
+// and degraded when any is not.
+func HealthState(phase string, components map[string]string) string {
+	if phase == PhaseStarting || phase == PhaseStopping {
+		return phase
+	}
 	for _, v := range components {
 		if v != "ready" {
-			state = "degraded"
+			return "degraded"
 		}
 	}
-	return 200, map[string]any{"state": state, "version": s.o.Version, "instance_id": s.o.InstanceID, "config_generation": u64(generation), "components": components}, nil
+	return "ready"
 }
 
 // Pool is one capacity pool's slots: the limit from settings (zero:

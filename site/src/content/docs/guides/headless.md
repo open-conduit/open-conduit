@@ -111,8 +111,7 @@ Runs started without a sandbox or container are processes in the daemon's own co
 - **Webhooks.** Listen on all interfaces, with the URL the cluster's ingress or load balancer gives the listener: `"settings": {"webhooks": {"addr": "0.0.0.0:8787", "public_url": "https://hooks.example.com"}}`. Without webhooks, the daemon reconciles with each service on an interval and nothing is lost.
 - **The CLI.** Use `kubectl exec` (or `docker exec`, `aws ecs execute-command`) for the owner's commands. Use the [management API over TLS](../team/#reach-the-daemon-over-tls) (`--management-addr 0.0.0.0:8443` with a certificate from a mounted Secret) for people with [their own credentials](../team/#3-a-credential-and-a-role-for-each-person).
 - **The web view** serves loopback only. Put a sign-in proxy in the same pod, in front of `--web-addr 127.0.0.1:7420`, as [the team guide](../team/#4-the-web-view-behind-your-own-sign-in) describes for a server.
-
-The daemon has no HTTP health endpoint yet. It exits on an error it can't recover from, and the orchestrator restarts it, so it needs no liveness probe.
+- **Probes.** `--probe-addr 0.0.0.0:8080` serves `/livez` and `/readyz` with no credential and nothing but a one-word state ([probes](/open-conduit/architecture/config-management/#probes)). `/livez` fails once the host loop has gone 2 minutes without completing a pass. `/readyz` passes once the daemon is running and its storage answers, and fails again while it stops. A degraded daemon (a package that didn't start, say) stays ready, so a restart doesn't end the runs the rest is serving: `open-conduit doctor` says what is wrong. Point a startup probe at `/readyz` too, because `/livez` passes while the daemon is starting. The daemon also exits on an error it can't recover from, and the orchestrator restarts it.
 
 ## Where the runs go
 
@@ -173,8 +172,19 @@ spec:
       containers:
         - name: open-conduit
           image: ghcr.io/open-conduit/open-conduit:X.Y.Z
+          args: [--probe-addr, "0.0.0.0:8080"]
           ports:
             - {name: webhooks, containerPort: 8787}
+            - {name: probes, containerPort: 8080}
+          startupProbe:                   # packages start before it is ready
+            httpGet: {path: /readyz, port: probes}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /readyz, port: probes}
+          livenessProbe:
+            httpGet: {path: /livez, port: probes}
+            periodSeconds: 30
           envFrom:
             - secretRef: {name: open-conduit}    # CLAUDE_TOKEN, GITHUB_APP_KEY, …
           resources:

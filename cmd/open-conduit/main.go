@@ -114,7 +114,7 @@ func serve(r cli.ServeRequest) int {
 	defer stop()
 	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval, CallTimeout: r.CallTimeout,
 		BackupInterval: r.BackupInterval, BackupDir: r.BackupDir, BackupsKept: r.BackupsKept,
-		WebhookAddr: r.WebhookAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Config: r.TunnelConfig, PublicURL: r.PublicURL},
+		WebhookAddr: r.WebhookAddr, ProbeAddr: r.ProbeAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Config: r.TunnelConfig, PublicURL: r.PublicURL},
 		Management: management.NetworkConfig{Addr: r.ManagementAddr, CertFile: r.ManagementTLSCert, KeyFile: r.ManagementTLSKey, ClientCAFile: r.ManagementClientCA, TrustedProxy: r.ManagementTrustedProxy},
 		NoTunnel:   r.NoTunnel, DryRun: r.DryRun, NoTelemetry: r.NoTelemetry, Releases: daemonReleases(r.NoUpdates), Ready: webReady(ctx, r)})
 	if err != nil {

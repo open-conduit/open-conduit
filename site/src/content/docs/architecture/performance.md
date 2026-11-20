@@ -82,7 +82,7 @@ Accepting and routing one Event that opens a new Work is flat against retained h
 
 ### Measurements
 
-The parts of an idle pass that read history are measured against retained history ([history growth](#history-growth)): at a million Events the routing pass takes 18 µs, `Poll` 80 µs and the live Work read `startReady` and control dispatch each make 57 µs, about the same as at a thousand. No test records the time from acceptance to `execution.started`. The daemon times every pass and phase: doctor's `loop` check gives the latest 600 passes' median, 95th percentile and longest, for the pass and for each phase, and the OpenTelemetry meter records `open_conduit.host.pass.duration` and `open_conduit.host.phase.duration`. No figures from them are published here yet.
+The parts of an idle pass that read history are measured against retained history ([history growth](#history-growth)): at a million Events the routing pass takes 18 µs, `Poll` 80 µs and the live Work read `startReady` and control dispatch each make 57 µs, about the same as at a thousand. Every `execution.started` and `execution.resumed` record carries `execution.start_latency_ms` from its trigger's acceptance (the `open_conduit.execution.start_latency` histogram, [metrics](../observability-history/)); no test measures it under load. The daemon times every pass and phase: doctor's `loop` check gives the latest 600 passes' median, 95th percentile and longest, for the pass and for each phase, and the OpenTelemetry meter records `open_conduit.host.pass.duration` and `open_conduit.host.phase.duration`. No figures from them are published here yet.
 
 ### To measure
 

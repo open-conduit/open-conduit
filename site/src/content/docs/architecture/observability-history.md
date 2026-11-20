@@ -123,11 +123,23 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
 - **Metrics**:
   - `open_conduit.lifecycle.records`, by record name and generic from/to state
   - `open_conduit.execution.duration` in seconds, by binding and outcome
+  - `open_conduit.execution.start_latency` in seconds, from the trigger Event's acceptance to `execution.started` or `execution.resumed` (their `execution.start_latency_ms` attribute), by binding and record
   - `open_conduit.execution.tokens`, by binding and token type
   - `open_conduit.execution.cost`, by binding and currency
   - `open_conduit.host.pass.duration` in seconds, one per host loop pass, and `open_conduit.host.phase.duration` in seconds by phase (`open_conduit.phase`), recorded by the daemon itself rather than from records ([host loop](../daemon-core-gate/#host-loop))
 
   Identifiers never become metric attributes.
+
+The host also registers gauges on the same `MeterProvider` (`internal/bootstrap/metrics.go`), read when a reader collects:
+
+- `open_conduit.host.last_pass_age`, the seconds since the host loop last completed a pass (beside `open_conduit.host.pass.duration` above)
+- `open_conduit.capacity.limit`, `.in_use` and `.waiting`, by `pool` (`agents`, `jobs` or an executor's pool), as `GET /v1/capacity` reports them
+- `open_conduit.events.unrouted`, the accepted Events not yet routed, counted up to 1,000 so a collection's cost stays fixed during an outage, and `open_conduit.events.unrouted.oldest_age` in seconds
+- `open_conduit.reconcile.lag`, the longest any ingress source has gone since a complete scan, in seconds, and `open_conduit.reconcile.sources` by `state` (`current`, `lagging`, `failing`)
+- `open_conduit.leases.held`, the execution leases this daemon renews
+- `open_conduit.telemetry.records` by `outcome` (`observed`, `exported`, `dropped`, `invalid`) and `open_conduit.telemetry.export_failures`, the pipeline's own counts
+
+Their attributes are those fixed sets only. The daemon's `MeterProvider` has no reader configured yet, so these are collected only where a reader is given (`bootstrap.Options.MetricReaders`, which tests use); exporting them is [#692](https://github.com/open-conduit/open-conduit/issues/692)'s remaining step.
 
 `telemetry.LogExporter` writes the same records as local JSON lines, for operation without a collector. Executors report cost and tokens through `extension.Result.Usage` on their structured outcome. The usage appears as `Usage` on the terminal record and in run history. Each result reports its own segment's usage; an attempt that parks and resumes reports the sum of its segments, kept in attempt state as `EarlierUsage` beside the latest result.
 

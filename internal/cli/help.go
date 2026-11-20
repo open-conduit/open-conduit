@@ -51,6 +51,8 @@ var helpGroups = []helpGroup{
         [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                              (override the config's settings.webhooks for this run; TYPE is a tunnel
                              a package provides, such as ngrok or cloudflared, and JSON its config)
+        [--probe-addr 0.0.0.0:8080]
+                             (also serve /livez and /readyz, with no credential, for an orchestrator's probes)
         [--no-tunnel] [--dry-run] [--no-telemetry] [--no-updates]
         (--webhook-addr takes any free local port; 8787 is only an example)
         (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
@@ -69,7 +71,7 @@ var helpGroups = []helpGroup{
                              run the daemon in the background (launchd on macOS, systemd --user on Linux)`},
 	}},
 	{"Observe", []helpEntry{
-		{"health", `  health                     whether the daemon answers`},
+		{"health", `  health                     the daemon's state and components; exits 1 unless it is ready`},
 		{"doctor", `  doctor [--check-secrets] [--json]   check the config, its bindings, the agent CLIs and the daemon`},
 		{"scopes", `  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID`},
 		{"work", `  work list [--scope S --state --kind --parent-id] [--json] | work get ID`},

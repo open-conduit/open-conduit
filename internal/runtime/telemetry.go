@@ -678,6 +678,13 @@ func (r *recorder) executionRecords(add func(observability.Record), before *doma
 		if a, err := r.Tx.Event(trigger); err == nil {
 			attrs["trigger.type"] = a.Event.Type
 			attrs["trigger.source"] = a.Event.Source
+			// How long the attempt took to start once its trigger was
+			// accepted: routing, queueing behind capacity and the claim.
+			// A recovery adopts an attempt that had already started.
+			if received := a.Event.ReceivedAt; name != "execution.recovered" && !received.IsZero() && !r.at.Before(received) {
+				attrs["trigger.received_at"] = timeAttr(received)
+				attrs["execution.start_latency_ms"] = strconv.FormatInt(r.at.Sub(received).Milliseconds(), 10)
+			}
 		}
 		attrs["lease.owner"] = after.Lease.Owner
 		if name == "execution.recovered" {
