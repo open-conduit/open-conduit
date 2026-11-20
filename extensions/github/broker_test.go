@@ -2,9 +2,12 @@ package github_test
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"maps"
@@ -136,6 +139,57 @@ func TestBrokeredApp(t *testing.T) {
 	}
 }
 
+// TestBrokeredTokensNameOneRepository: the App's installation covers
+// another team's repository as well as the daemon's, as one organisation
+// App with a daemon per team does. Every installation token the daemon
+// gets through the broker names the daemon's one repository, so none
+// reaches the other; and the broker refuses a token that names no
+// repository (a token for the whole installation).
+func TestBrokeredTokensNameOneRepository(t *testing.T) {
+	fake, broker, client, daemonPEM := brokerLab(t, []string{repo}, []int64{77})
+	ctx := context.Background()
+	n := fake.OpenIssue("Hello", "", alice)
+	if _, err := client.Issue(ctx, repo, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Comment(ctx, repo, n, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Verify(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	toks := fake.InstallationTokens()
+	if len(toks) == 0 {
+		t.Fatal("no installation token minted")
+	}
+	for _, tok := range toks {
+		if scope, ok := fake.Scope(tok); !ok || !slices.Equal(scope.Repositories, []string{"widgets"}) {
+			t.Fatalf("token %s minted for %+v, want widgets alone", tok, scope)
+		}
+	}
+	if r := broker.Refused(); len(r) != 0 {
+		t.Fatalf("broker refused %v", r)
+	}
+
+	// Asked for the whole installation, the broker refuses.
+	block, _ := pem.Decode([]byte(daemonPEM))
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt := signJWT(t, key, "team-a", fake.Now())
+	req, _ := http.NewRequest(http.MethodPost, broker.URL+"/app/installations/77/access_tokens", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden || len(fake.InstallationTokens()) != len(toks) {
+		t.Fatalf("an unscoped mint answered %d", res.StatusCode)
+	}
+}
+
 // TestBrokeredGitToken: a git token through the broker is limited to the
 // one repository and the granted operations' permissions, as from an App
 // whose key is local, and revoking it at GitHub works as before.
@@ -227,4 +281,19 @@ func TestExtensionDoctorBrokeredApp(t *testing.T) {
 		t.Fatalf("brokered App: %+v", c)
 	}
 
+}
+
+// signJWT is the JWT the daemon known as iss signs with key.
+func signJWT(t *testing.T, key *rsa.PrivateKey, iss string, now time.Time) string {
+	t.Helper()
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	claims, _ := json.Marshal(map[string]any{"iat": now.Unix() - 60, "exp": now.Unix() + 540, "iss": iss})
+	unsigned := header + "." + enc.EncodeToString(claims)
+	sum := sha256.Sum256([]byte(unsigned))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return unsigned + "." + enc.EncodeToString(sig)
 }

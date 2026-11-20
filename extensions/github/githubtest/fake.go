@@ -495,6 +495,18 @@ func (s *Server) Unauthorized() []string {
 	return slices.Clone(s.unauthorized)
 }
 
+// InstallationTokens are the installation tokens minted and not revoked.
+func (s *Server) InstallationTokens() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.installs))
+	for tok := range s.installs {
+		out = append(out, tok)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // InstallationTokensIssued counts minted installation tokens.
 func (s *Server) InstallationTokensIssued() int { s.mu.Lock(); defer s.mu.Unlock(); return s.issued }
 

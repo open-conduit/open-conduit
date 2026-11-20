@@ -26,7 +26,9 @@ import (
 // key of its own, and is limited to the repositories and installations it
 // was registered with. It makes each call it allows to the GitHub fake with
 // the App's real key, and refuses the rest with 404, as GitHub refuses an
-// App a repository it isn't installed on.
+// App a repository it isn't installed on. A token request must name its
+// repositories, all of them the daemon's; one naming none (a token for
+// the whole installation) is refused with 403.
 type Broker struct {
 	*httptest.Server
 	upstream *Server
@@ -124,15 +126,19 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 			refuse(http.StatusNotFound, "installation")
 			return
 		}
-		// A scoped token may name only the daemon's repositories.
+		// A token must name its repositories, and only the daemon's: an
+		// installation shared with other daemons covers theirs too, so a
+		// token for the whole of it would reach them.
 		var scope TokenScope
-		if len(body) > 0 && json.Unmarshal(body, &scope) == nil {
-			owner, _, _ := strings.Cut(b.upstream.Repo, "/")
-			for _, name := range scope.Repositories {
-				if !slices.ContainsFunc(client.Repos, func(s string) bool { return strings.EqualFold(s, owner+"/"+name) }) {
-					refuse(http.StatusNotFound, "repository")
-					return
-				}
+		if len(body) == 0 || json.Unmarshal(body, &scope) != nil || len(scope.Repositories) == 0 {
+			refuse(http.StatusForbidden, "unscoped")
+			return
+		}
+		owner, _, _ := strings.Cut(b.upstream.Repo, "/")
+		for _, name := range scope.Repositories {
+			if !slices.ContainsFunc(client.Repos, func(s string) bool { return strings.EqualFold(s, owner+"/"+name) }) {
+				refuse(http.StatusNotFound, "repository")
+				return
 			}
 		}
 	default:
