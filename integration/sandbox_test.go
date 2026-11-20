@@ -32,6 +32,7 @@ import (
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/extensions/srt"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
 )
 
 func srtBinary(t *testing.T) string {
@@ -70,8 +71,11 @@ type sandboxLab struct {
 	run, other, sock, otherSock, loopback  string
 	execState                              string
 	pins                                   []extension.SandboxPlan
-	mu                                     sync.Mutex
-	listeners                              []net.Listener
+	// protected is the host's protected set when set; the daemon's own
+	// (bootstrap.ProtectedPaths) for the lab's state and config otherwise.
+	protected []string
+	mu        sync.Mutex
+	listeners []net.Listener
 }
 
 func newSandboxLab(t *testing.T, executor string) *sandboxLab {
@@ -175,7 +179,7 @@ func (l *sandboxLab) binding(policy string, pinned string, o srt.Options) *exten
 		Provider:  srt.New(o),
 		Owner:     extension.ResourceOwner{ScopeID: "scope", WorkID: "work", ExecutionID: "exec"},
 		Config:    domain.Payload{Schema: "core.config.sandbox.v1", Data: json.RawMessage(policy)},
-		Protected: []string{l.state, l.config},
+		Protected: l.protectedSet(),
 		Shared:    []string{l.run},
 		RunRoot:   filepath.Join(l.execState, "runs"),
 		Toolbelt:  l.sock,
@@ -188,6 +192,13 @@ func (l *sandboxLab) binding(policy string, pinned string, o srt.Options) *exten
 		},
 		Pinned: pinned,
 	})
+}
+
+func (l *sandboxLab) protectedSet() []string {
+	if l.protected != nil {
+		return l.protected
+	}
+	return bootstrap.ProtectedPaths(l.state, "", l.config)
 }
 
 func (l *sandboxLab) pinned() string {

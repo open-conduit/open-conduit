@@ -338,7 +338,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = o.defaults(); err != nil {
 		return err
 	}
-	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
+	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath)}}
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err

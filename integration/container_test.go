@@ -36,6 +36,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/docker"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
@@ -231,7 +232,7 @@ func (l *dockerLab) binding(config string, exec domain.ID, pinned *extension.Con
 		Config:    domain.Payload{Schema: extension.ContainerConfigSchema, Data: json.RawMessage(config)},
 		Host:      l.host,
 		Segment:   max(l.segment, 1),
-		Protected: []string{l.state, l.config},
+		Protected: bootstrap.ProtectedPaths(l.state, "", l.config),
 		Shared:    []string{l.run},
 		RunRoot:   l.runRoot,
 		Records:   l.records,

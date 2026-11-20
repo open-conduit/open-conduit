@@ -100,17 +100,32 @@ func (d *daemon) entrySandbox(m protocol.Manifest) extension.EntrySandbox {
 	}
 }
 
-// protectedPaths are what no sandboxed process may read or write, whatever
-// its policy grants: the state directory (the operator token, the
-// management socket, the database, every other execution's run directory
-// and workspace), the fallback toolbelt socket root and the config file.
+// protectedPaths are what no sandboxed or containerised process may read or
+// write, whatever its policy grants (ProtectedPaths).
 func (d *daemon) protectedPaths() []string {
-	out := []string{d.o.StateDir}
+	short := ""
 	if d.endpoints != nil {
-		out = append(out, d.endpoints.ShortRoot())
+		short = d.endpoints.ShortRoot()
 	}
-	if d.o.ConfigPath != "" {
-		out = append(out, d.o.ConfigPath)
+	return ProtectedPaths(d.o.StateDir, short, d.o.ConfigPath)
+}
+
+// ProtectedPaths are the host's protected set for a daemon with this state
+// directory, fallback toolbelt socket root and config file (either may be
+// ""): the state directory (the operator token, the management socket, the
+// database, every other execution's run directory and workspace), the
+// socket root, and the config file with what the daemon keeps beside it:
+// the last-good copy, the secrets file file: references read in plaintext,
+// and the installed packages root, whose packages the daemon starts
+// unconfined. A path that doesn't exist yet is protected all the same, so a
+// run can't create it.
+func ProtectedPaths(stateDir, shortRoot, configPath string) []string {
+	out := []string{stateDir}
+	if shortRoot != "" {
+		out = append(out, shortRoot)
+	}
+	if configPath != "" {
+		out = append(out, configPath, config.LastGoodPath(configPath), config.SecretsPath(configPath), extensionsRoot(configPath))
 	}
 	return out
 }
