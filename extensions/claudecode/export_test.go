@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -38,3 +39,6 @@ func Processes() ([]Process, error) { return scanProcesses() }
 func (x *Extension) StubAuth(apiURL string, client *http.Client, login func(ctx context.Context, configDir string) (string, error), secrets func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error)) {
 	x.apiURL, x.authHTTP, x.loginToken, x.h.BindingSecrets = apiURL, client, login, secrets
 }
+
+// SetProbeBudget bounds each binding's credential probe.
+func (x *Extension) SetProbeBudget(d time.Duration) { x.probeBudget = d }

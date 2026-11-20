@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -47,6 +48,9 @@ var credRank = map[string]int{"ok": 0, "info": 1, "warn": 2, "fail": 3}
 // AuthOptions are what the credential check reaches; zero values are
 // OpenAI's API and a 15-second client.
 type AuthOptions struct {
+	// Budget bounds each binding's probe (default 8s); bindings are tried
+	// at once.
+	Budget    time.Duration
 	OpenAIURL string
 	HTTP      *http.Client
 	// Secrets resolves the secrets a binding selects (sdk.Host's
@@ -63,23 +67,45 @@ type AuthOptions struct {
 // checked: a ChatGPT sign-in has no free request to make.
 func CheckAuth(ctx context.Context, cfg protocol.CheckConfig, o AuthOptions) protocol.CheckRunResult {
 	res := protocol.CheckRunResult{OK: true, Status: "ok", Code: credOK}
-	worst := ""
+	// Every binding is tried at once, each within its own budget, so one
+	// endpoint that never answers costs one budget and not the host's whole
+	// deadline for check.run (20s). Items keep the config's order.
+	type binding struct {
+		scope domain.ID
+		b     protocol.CheckBinding
+		c     Config
+	}
+	var bindings []binding
 	for _, scope := range cfg.Scopes {
 		for _, b := range scope.Bindings {
 			if b.Executor != Name {
 				continue
 			}
-			c, err := ParseConfig(b.Config)
-			if err != nil {
-				continue
+			if c, err := ParseConfig(b.Config); err == nil {
+				bindings = append(bindings, binding{domain.ID(scope.ID), b, c})
 			}
-			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			code, detail := credential(cx, domain.ID(scope.ID), b, c, o)
-			cancel()
-			if worst == "" || credRank[credStatus[code]] > credRank[credStatus[worst]] {
-				worst = code
-			}
-			res.Items = append(res.Items, fmt.Sprintf("%s/%s: %s (%s)", scope.ID, b.Name, code, detail))
+		}
+	}
+	budget := o.budget()
+	codes := make([]string, len(bindings))
+	res.Items = make([]string, len(bindings))
+	var wg sync.WaitGroup
+	for i, j := range bindings {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cx, cancel := context.WithTimeout(ctx, budget)
+			defer cancel()
+			code, detail := credential(cx, j.scope, j.b, j.c, o)
+			codes[i] = code
+			res.Items[i] = fmt.Sprintf("%s/%s: %s (%s)", j.scope, j.b.Name, code, detail)
+		}()
+	}
+	wg.Wait()
+	worst := ""
+	for _, code := range codes {
+		if worst == "" || credRank[credStatus[code]] > credRank[credStatus[worst]] {
+			worst = code
 		}
 	}
 	if worst == "" {
@@ -159,7 +185,7 @@ func probe(ctx context.Context, o AuthOptions, target, key, kind string) (string
 	req.Header.Set("User-Agent", "open-conduit")
 	client := o.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -176,4 +202,15 @@ func probe(ctx context.Context, o AuthOptions, target, key, kind string) (string
 	default:
 		return credUnexpected, fmt.Sprintf("%s, HTTP %d", detail, s)
 	}
+}
+
+// probeBudget bounds one binding's credential probe, well inside the host's
+// deadline for the whole check.
+const probeBudget = 8 * time.Second
+
+func (o AuthOptions) budget() time.Duration {
+	if o.Budget > 0 {
+		return o.Budget
+	}
+	return probeBudget
 }

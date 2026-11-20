@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension/inproc"
@@ -78,6 +80,7 @@ func TestAuthCheck(t *testing.T) {
 		"boxed":    {"ANTHROPIC_API_KEY": "sk-good"},
 		"no-login": {},
 	}
+	var mu sync.Mutex
 	var asked []string
 	x := claudecode.NewExtension()
 	x.StubAuth(anthropic.URL, anthropic.Client(), func(_ context.Context, dir string) (string, error) {
@@ -86,7 +89,9 @@ func TestAuthCheck(t *testing.T) {
 		}
 		return "login-token", nil
 	}, func(_ context.Context, scope domain.ID, binding string, names []string) (map[string]string, error) {
+		mu.Lock()
 		asked = append(asked, string(scope)+"/"+binding+":"+strings.Join(names, ","))
+		mu.Unlock()
 		if binding == "gone" {
 			return nil, errors.New("unresolved")
 		}
@@ -167,5 +172,51 @@ func TestAuthCheckNeedsSecrets(t *testing.T) {
 	}
 	if seen := api.requests(); len(seen) != 0 {
 		t.Errorf("plain doctor made requests %q", seen)
+	}
+}
+
+// TestAuthCheckHungEndpoint: bindings are tried at once, each within its
+// own budget, so an endpoint that never answers is reported unreachable
+// without costing the bindings after it their results, and the items keep
+// the config's order.
+func TestAuthCheckHungEndpoint(t *testing.T) {
+	// The stuck endpoint answers only once the fine one has been asked, so
+	// bindings tried one after another would leave it hanging to its budget
+	// and the fine one unasked: overlapped records that they weren't.
+	release := make(chan struct{})
+	reached := make(chan struct{})
+	var once sync.Once
+	var overlapped atomic.Bool
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-reached:
+			overlapped.Store(true)
+			<-r.Context().Done()
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); hung.Close() })
+	good := newFakeAPI(t, func(*http.Request) bool {
+		once.Do(func() { close(reached) })
+		return true
+	})
+	x := claudecode.NewExtension()
+	x.SetProbeBudget(200 * time.Millisecond)
+	x.StubAuth(good.URL, good.Client(), nil, func(_ context.Context, _ domain.ID, _ string, _ []string) (map[string]string, error) {
+		return map[string]string{"ANTHROPIC_API_KEY": "sk-good"}, nil
+	})
+	cfg := protocol.CheckConfig{Scopes: []protocol.CheckScope{{ID: "eng", Bindings: []protocol.CheckBinding{
+		authBinding("stuck", map[string]any{"env": map[string]string{"ANTHROPIC_BASE_URL": hung.URL}}, "ANTHROPIC_API_KEY"),
+		authBinding("fine", map[string]any{}, "ANTHROPIC_API_KEY"),
+	}}}}
+	got := x.Checks()[1].Run(context.Background(), cfg)
+	host := strings.TrimPrefix(good.URL, "http://")
+	want := []string{"eng/stuck: unreachable (" + strings.TrimPrefix(hung.URL, "http://") + ", API key)", "eng/fine: ok (" + host + ", API key)"}
+	if got.Status != inproc.CheckWarn || got.Code != "unreachable" || !slices.Equal(got.Items, want) {
+		t.Fatalf("check %+v, want items %q", got, want)
+	}
+	if !overlapped.Load() {
+		t.Fatal("the fine binding was asked only after the stuck one gave up: bindings must be tried at once")
 	}
 }

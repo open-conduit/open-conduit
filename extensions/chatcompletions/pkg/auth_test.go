@@ -62,7 +62,9 @@ func TestAuthCheck(t *testing.T) {
 			t.Errorf("item %q carries a value or the provider's text", item)
 		}
 	}
-	if want := []string{"/v1/models Bearer sk-good oc", "/v1/models Bearer sk-wrong oc", "/v1/models  "}; !slices.Equal(seen, want) {
+	if want := []string{"/v1/models Bearer sk-good oc", "/v1/models Bearer sk-wrong oc", "/v1/models  "}; !slices.Equal(sorted(seen), sorted(want)) {
 		t.Errorf("requests %q, want %q", seen, want)
 	}
 }
+
+func sorted(s []string) []string { s = slices.Clone(s); slices.Sort(s); return s }

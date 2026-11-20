@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -63,23 +64,45 @@ var cloudEnvs = map[string]string{"CLAUDE_CODE_USE_BEDROCK": "Amazon Bedrock", "
 // checked.
 func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 	res := inproc.CheckResult{Name: AuthCheckName, Status: inproc.CheckOK, Code: credOK}
-	worst := ""
+	// Every binding is tried at once, each within its own budget, so one
+	// endpoint that never answers costs one budget and not the host's whole
+	// deadline for the whole run (20s). Items keep the config's order.
+	type binding struct {
+		scope domain.ID
+		b     protocol.CheckBinding
+		c     Config
+	}
+	var bindings []binding
 	for _, scope := range cfg.Scopes {
 		for _, b := range scope.Bindings {
 			if b.Executor != Name {
 				continue
 			}
-			c, err := ParseConfig(b.Config)
-			if err != nil {
-				continue
+			if c, err := ParseConfig(b.Config); err == nil {
+				bindings = append(bindings, binding{domain.ID(scope.ID), b, c})
 			}
-			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			code, detail := x.credential(cx, domain.ID(scope.ID), b, c)
-			cancel()
-			if worst == "" || credRank[credStatus[code]] > credRank[credStatus[worst]] {
-				worst = code
-			}
-			res.Items = append(res.Items, fmt.Sprintf("%s/%s: %s (%s)", scope.ID, b.Name, code, detail))
+		}
+	}
+	budget := x.authBudget()
+	codes := make([]string, len(bindings))
+	res.Items = make([]string, len(bindings))
+	var wg sync.WaitGroup
+	for i, j := range bindings {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cx, cancel := context.WithTimeout(ctx, budget)
+			defer cancel()
+			code, detail := x.credential(cx, j.scope, j.b, j.c)
+			codes[i] = code
+			res.Items[i] = fmt.Sprintf("%s/%s: %s (%s)", j.scope, j.b.Name, code, detail)
+		}()
+	}
+	wg.Wait()
+	worst := ""
+	for _, code := range codes {
+		if worst == "" || credRank[credStatus[code]] > credRank[credStatus[worst]] {
+			worst = code
 		}
 	}
 	if worst == "" {
@@ -163,7 +186,7 @@ func (x *Extension) probe(ctx context.Context, target, host, kind string, auth f
 	req.Header.Set("User-Agent", "open-conduit")
 	client := x.authHTTP
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -215,4 +238,15 @@ func endpointHost(raw string) string {
 		return u.Host
 	}
 	return "the configured endpoint"
+}
+
+// probeBudget bounds one binding's credential probe, well inside the host's
+// deadline for the whole doctor entry.
+const probeBudget = 8 * time.Second
+
+func (x *Extension) authBudget() time.Duration {
+	if x.probeBudget > 0 {
+		return x.probeBudget
+	}
+	return probeBudget
 }
