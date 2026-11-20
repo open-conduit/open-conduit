@@ -362,13 +362,24 @@ func TestMarkers(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
-	for _, bad := range []string{`{"auth":"gh"}`, `{"auth":"app"}`, `{"api_url":"ftp://x"}`, `{"api_url":"https://u:p@x"}`, `{"token":"literal"}`} {
+	for _, bad := range []string{`{"auth":"gh"}`, `{"auth":"app"}`, `{"api_url":"ftp://x"}`, `{"api_url":"https://u:p@x"}`, `{"token":"literal"}`,
+		// A broker brokers an App's calls: there must be an App, and it
+		// is an http(s) URL with nothing a JWT could leak into.
+		`{"app_api_url":"https://broker.example"}`, `{"auth":"app","app_id":"12","app_api_url":"ftp://broker.example"}`,
+		`{"auth":"app","app_id":"12","app_api_url":"https://u:p@broker.example"}`, `{"auth":"app","app_id":"12","app_api_url":"https://broker.example?x=1"}`,
+		`{"auth":"app","app_id":"team a","app_api_url":"https://broker.example"}`, `{"auth":"app","app_id":"team-a"}`} {
 		if ValidateConnection([]byte(bad)) == nil {
 			t.Fatalf("connection %s accepted", bad)
 		}
 	}
 	if err := ValidateConnection([]byte(`{"auth":"app","app_id":"12","bot_app_id":"13"}`)); err != nil {
 		t.Fatal(err)
+	}
+	// Through a broker, an App ID is whatever the broker knows the daemon by.
+	for _, ok := range []string{`{"auth":"app","app_id":"team-a","app_api_url":"https://broker.example/v1/"}`, `{"bot_app_id":"team-a:bot","app_api_url":"https://broker.example"}`} {
+		if err := ValidateConnection([]byte(ok)); err != nil {
+			t.Fatalf("%s: %v", ok, err)
+		}
 	}
 	good := `{"namespace":"github/github.com/octo/widgets","scope":"eng","repo":"octo/widgets","webhook_secret":"hook"}`
 	s, err := ParseExtension([]byte(good), []string{"hook"})

@@ -68,10 +68,18 @@ func (s *staticToken) invalidate(string) {
 
 // appToken is a GitHub App: an RS256 JWT for the app itself and installation
 // tokens per repository, cached until five minutes before they expire.
+//
+// The calls that authenticate as the App (appCall) go to api: GitHub's API,
+// or a broker the operator runs (connection app_api_url). With a broker, id
+// and the key are the daemon's own, which the broker registered: it checks
+// the JWT, limits the daemon to its installations and makes the call to
+// GitHub with the App's real key. Every call with an installation token
+// goes to GitHub either way.
 type appToken struct {
 	id      string
 	secrets SecretFunc
 	keyName string
+	api     string
 	c       *Client
 
 	mu    sync.Mutex
@@ -86,8 +94,14 @@ type cachedToken struct {
 	expires time.Time
 }
 
-func newAppToken(id string, secrets SecretFunc, keyName string, c *Client) *appToken {
-	return &appToken{id: id, secrets: secrets, keyName: keyName, c: c, inst: map[string]int64{}, cache: map[int64]cachedToken{}}
+func newAppToken(id string, secrets SecretFunc, keyName, api string, c *Client) *appToken {
+	return &appToken{id: id, secrets: secrets, keyName: keyName, api: strings.TrimRight(api, "/"), c: c, inst: map[string]int64{}, cache: map[int64]cachedToken{}}
+}
+
+// appCall is one call authenticated as the App itself, sent to a.api.
+func (a *appToken) appCall(ctx context.Context, jwt, method, path string, body, out any) error {
+	_, err := a.c.raw(ctx, "Bearer "+jwt, method, a.api+path, body, out)
+	return err
 }
 
 // parseKey reads an App's PEM private key. It also takes the key as two
@@ -171,7 +185,7 @@ func (a *appToken) installation(ctx context.Context, jwt, repo string) (int64, e
 	var inst struct {
 		ID int64 `json:"id"`
 	}
-	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
+	if err := a.appCall(ctx, jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
 		return 0, fmt.Errorf("github app installation for %s: %w", repo, err)
 	}
 	a.mu.Lock()
@@ -181,6 +195,10 @@ func (a *appToken) installation(ctx context.Context, jwt, repo string) (int64, e
 }
 
 func (a *appToken) token(ctx context.Context, repo string) (string, error) {
+	if repo == "" && a.api != a.c.api {
+		// A brokered App's JWT is the daemon's, which GitHub doesn't take.
+		return "", ErrCredential
+	}
 	jwt, err := a.jwt(ctx)
 	if err != nil || repo == "" {
 		return jwt, err
@@ -199,7 +217,7 @@ func (a *appToken) token(ctx context.Context, repo string) (string, error) {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), nil, &t); err != nil {
+	if err := a.appCall(ctx, jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), nil, &t); err != nil {
 		return "", fmt.Errorf("github installation token for %s: %w", repo, err)
 	}
 	if t.Token == "" {
@@ -223,7 +241,7 @@ func (a *appToken) permissions(ctx context.Context, repo string) (map[string]str
 		ID          int64             `json:"id"`
 		Permissions map[string]string `json:"permissions"`
 	}
-	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
+	if err := a.appCall(ctx, jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
 		return nil, fmt.Errorf("github app installation for %s: %w", repo, err)
 	}
 	return inst.Permissions, nil
@@ -284,7 +302,7 @@ func (a *appToken) scopedTo(ctx context.Context, repos []string, perms map[strin
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), body, &t); err != nil {
+	if err := a.appCall(ctx, jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), body, &t); err != nil {
 		return "", time.Time{}, fmt.Errorf("github scoped token for %s: %w", repo, err)
 	}
 	if t.Token == "" {
@@ -310,7 +328,7 @@ func (a *appToken) identity(ctx context.Context, repo string) (GitIdentity, erro
 	var app struct {
 		Slug string `json:"slug"`
 	}
-	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/app", nil, &app); err != nil {
+	if err := a.appCall(ctx, jwt, http.MethodGet, "/app", nil, &app); err != nil {
 		return GitIdentity{}, fmt.Errorf("github app: %w", err)
 	}
 	if app.Slug == "" || strings.ContainsAny(app.Slug, "/?#%\n\x00<>") {

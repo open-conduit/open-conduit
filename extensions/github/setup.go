@@ -90,6 +90,12 @@ type GitHubScope struct {
 	// Require is the labels.require label: only issues carrying it are
 	// picked up (empty: every admitted issue).
 	Require string
+	// Broker, BrokerID and BrokerKey make the connection a brokered App
+	// instead of a token: its App calls go to the broker at Broker
+	// (app_api_url), which knows the daemon as BrokerID (app_id) and has
+	// registered the key the reference BrokerKey resolves to. Git works as
+	// the App's bot.
+	Broker, BrokerID, BrokerKey string
 }
 
 func obj(kv ...any) map[string]any {
@@ -149,7 +155,22 @@ func (g GitHubScope) executor() string {
 
 // ConnectionConfig is the connection JSON g adds when none with its id exists.
 func (g GitHubScope) ConnectionConfig() map[string]any {
+	if g.Broker != "" {
+		return obj("id", g.Connection, "type", Type,
+			"config", obj("auth", "app", "app_id", g.BrokerID, "app_api_url", g.Broker, "git", GitBot),
+			"secret_refs", obj(SecretAppPrivateKey, g.BrokerKey))
+	}
 	return obj("id", g.Connection, "type", Type, "config", obj(), "secret_refs", obj(SecretToken, g.Token))
+}
+
+// credential is the summary's account of the connection's sign-in.
+func (g GitHubScope) credential() string {
+	if g.Broker != "" {
+		scheme, _, _ := strings.Cut(g.BrokerKey, ":")
+		return fmt.Sprintf("credential %s connection, App %s via broker %s, key %s:… (git works as the App's bot)", g.Connection, g.BrokerID, g.Broker, scheme)
+	}
+	scheme, _, _ := strings.Cut(g.Token, ":")
+	return fmt.Sprintf("credential %s connection, token %s:…", g.Connection, scheme)
 }
 
 // Result is the setup result for g.
@@ -166,12 +187,11 @@ func (g GitHubScope) Result() (extension.SetupResult, error) {
 	if g.Checkout != "" {
 		workspace = g.Checkout + " (a worktree per issue)"
 	}
-	scheme, _, _ := strings.Cut(g.Token, ":")
 	return extension.SetupResult{
 		Connections: []json.RawMessage{conn},
 		Scope:       scope,
 		Summary: []string{"scope      " + g.Scope, "repository " + g.Repo,
-			fmt.Sprintf("credential %s connection, token %s:…", g.Connection, scheme),
+			g.credential(),
 			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds), "picks up   " + g.pickedUp(), "agent      " + g.executor()},
 		Next: []string{
 			"open-conduit serve --dry-run       preview which issues it picks up, with no GitHub writes and stub agents",
@@ -198,7 +218,7 @@ type Setup struct{}
 
 func (Setup) SetupInfo() extension.SetupInfo {
 	return extension.SetupInfo{Type: Type, Summary: "add a scope that works a GitHub repository's issues",
-		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]"}
+		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF | --broker URL --broker-id ID --broker-key REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]"}
 }
 
 func usage(msg string) error { return fmt.Errorf("%w: %s", extension.ErrSetupUsage, msg) }
@@ -215,6 +235,9 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 	holds := fs.Bool("holds", false, "")
 	require := fs.String("require", "", "")
 	executor := fs.String("executor", AgentExecutors[0], "")
+	broker := fs.String("broker", "", "")
+	brokerID := fs.String("broker-id", "", "")
+	brokerKey := fs.String("broker-key", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		if errors.Is(err, flag.ErrHelp) {
 			return extension.SetupResult{}, usage("init github " + Setup{}.SetupInfo().Usage)
@@ -224,7 +247,8 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 	if !slices.Contains(AgentExecutors, *executor) {
 		return extension.SetupResult{}, usage("--executor is claude-code or codex")
 	}
-	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds, Require: strings.TrimSpace(*require), Executor: *executor}
+	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds, Require: strings.TrimSpace(*require), Executor: *executor,
+		Broker: strings.TrimRight(*broker, "/"), BrokerID: *brokerID, BrokerKey: *brokerKey}
 	if len(g.Require) > 100 || strings.ContainsAny(g.Require, ",\r\n") {
 		return extension.SetupResult{}, usage("--require takes one label name")
 	}
@@ -256,14 +280,40 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 	if g.Connection == "" {
 		g.Connection = Type
 	}
-	if g.Token == "" {
+	if g.Broker != "" || g.BrokerID != "" || g.BrokerKey != "" {
+		if err := g.checkBroker(); err != nil {
+			return extension.SetupResult{}, err
+		}
+	} else if g.Token == "" {
 		g.Token = "cmd:gh auth token"
 	}
 	if !idPattern.MatchString(g.Scope) || !idPattern.MatchString(g.Connection) {
 		return extension.SetupResult{}, usage("--scope and --connection must match [a-z][a-z0-9_-]*")
 	}
-	if !RefPattern.MatchString(g.Token) {
+	if g.Broker == "" && !RefPattern.MatchString(g.Token) {
 		return extension.SetupResult{}, usage("--token takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a token")
 	}
 	return g.Result()
+}
+
+// checkBroker checks the --broker flags: all three, no --token, and a
+// connection the validator takes.
+func (g GitHubScope) checkBroker() error {
+	if g.Token != "" {
+		return usage("--token and --broker are two ways to sign in: give one")
+	}
+	if g.Broker == "" || g.BrokerID == "" || g.BrokerKey == "" {
+		return usage("a brokered App needs --broker URL, --broker-id ID and --broker-key REF")
+	}
+	if !RefPattern.MatchString(g.BrokerKey) {
+		return usage("--broker-key takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a key")
+	}
+	data, err := json.Marshal(g.ConnectionConfig()["config"])
+	if err != nil {
+		return err
+	}
+	if _, err := ParseConnection(data); err != nil {
+		return usage(strings.TrimPrefix(err.Error(), "github connection: "))
+	}
+	return nil
 }

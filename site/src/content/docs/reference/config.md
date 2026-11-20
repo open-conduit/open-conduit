@@ -376,14 +376,15 @@ Connection `config`:
 | `auth` | `token` | One of token, app. |
 | `app_id` |  | for auth app |
 | `bot_app_id` |  | an App that performs writes |
+| `app_api_url` |  | a broker that holds the App's key and answers its App calls; the key secrets are then the daemon's own |
 
 Connection `secret_refs`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `token` |  | token auth (cmd:gh auth token for the gh login) |
-| `app_private_key` |  | app auth |
-| `bot_private_key` |  | the bot App |
+| `app_private_key` |  | app auth (with app_api_url, the daemon's key the broker registered) |
+| `bot_private_key` |  | the bot App (with app_api_url, the daemon's key the broker registered) |
 | `webhook_secret` |  | verifies the connection's webhook (POST /github/<connection>), such as the App's |
 
 Extension entry `config`:

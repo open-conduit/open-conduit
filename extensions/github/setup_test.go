@@ -129,3 +129,46 @@ func TestGitHubSetupFlags(t *testing.T) {
 		t.Fatalf("summary: %v", r.Summary)
 	}
 }
+
+// TestGitHubSetupBroker: --broker writes a connection whose App calls go to
+// the operator's broker, signed with the daemon's own key, and git works
+// as the App's bot; the three flags go together and never with --token
+// (#742).
+func TestGitHubSetupBroker(t *testing.T) {
+	setup := gh.Setup{}
+	h := host{cwd: t.TempDir()}
+	base := []string{"--repo", "acme/web", "--no-workspace"}
+	for _, extra := range [][]string{
+		{"--broker", "https://broker.example"},
+		{"--broker", "https://broker.example", "--broker-id", "team-a"},
+		{"--broker", "https://broker.example", "--broker-id", "team-a", "--broker-key", "-----BEGIN RSA PRIVATE KEY-----"},
+		{"--broker", "https://broker.example", "--broker-id", "team-a", "--broker-key", "keyring:oc", "--token", "env:GH"},
+		{"--broker", "ftp://broker.example", "--broker-id", "team-a", "--broker-key", "keyring:oc"},
+		{"--broker", "https://broker.example", "--broker-id", "team a", "--broker-key", "keyring:oc"},
+	} {
+		if _, err := setup.Setup(context.Background(), h, append(append([]string{}, base...), extra...)); !errors.Is(err, extension.ErrSetupUsage) {
+			t.Errorf("%v: %v, want a usage error", extra, err)
+		}
+	}
+	r, err := setup.Setup(context.Background(), h, append(base, "--broker", "https://broker.example/", "--broker-id", "team-a", "--broker-key", "keyring:oc-broker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conn struct {
+		Config     json.RawMessage   `json:"config"`
+		SecretRefs map[string]string `json:"secret_refs"`
+	}
+	if len(r.Connections) != 1 || json.Unmarshal(r.Connections[0], &conn) != nil {
+		t.Fatalf("connections: %s", r.Connections)
+	}
+	cfg, err := gh.ParseConnection(conn.Config)
+	if err != nil || cfg.Auth != "app" || cfg.AppID != "team-a" || cfg.AppAPIURL != "https://broker.example" || cfg.Git != gh.GitBot {
+		t.Fatalf("connection config %+v %v", cfg, err)
+	}
+	if len(conn.SecretRefs) != 1 || conn.SecretRefs[gh.SecretAppPrivateKey] != "keyring:oc-broker" {
+		t.Fatalf("secret refs %v", conn.SecretRefs)
+	}
+	if summary := strings.Join(r.Summary, "\n"); !strings.Contains(summary, "App team-a via broker https://broker.example") || strings.Contains(summary, "oc-broker") {
+		t.Fatalf("summary: %s", summary)
+	}
+}

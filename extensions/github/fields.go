@@ -10,9 +10,10 @@ func connectionFields() []protocol.FieldDecl {
 		{Name: "auth", Default: "token", Options: []string{"token", "app"}},
 		{Name: "app_id", Help: "for auth app"},
 		{Name: "bot_app_id", Help: "an App that performs writes"},
+		{Name: "app_api_url", Help: "a broker that holds the App's key and answers its App calls; the key secrets are then the daemon's own"},
 		{Name: SecretToken, Help: "token auth (cmd:gh auth token for the gh login)", Secret: true},
-		{Name: SecretAppPrivateKey, Help: "app auth", Secret: true},
-		{Name: SecretBotPrivateKey, Help: "the bot App", Secret: true},
+		{Name: SecretAppPrivateKey, Help: "app auth (with app_api_url, the daemon's key the broker registered)", Secret: true},
+		{Name: SecretBotPrivateKey, Help: "the bot App (with app_api_url, the daemon's key the broker registered)", Secret: true},
 		{Name: SecretWebhook, Help: "verifies the connection's webhook (POST /github/<connection>), such as the App's", Secret: true},
 	}
 }

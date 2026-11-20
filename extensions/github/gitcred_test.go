@@ -45,15 +45,23 @@ func (t workTx) Work(id domain.ID) (domain.Work, error) {
 	return t.w, nil
 }
 
-// apiOnly sends every request for api.github.com to the fake, so the
-// client has github.com's real hosts.
+// apiOnly sends every request for github.com and api.github.com to the
+// fake, so the client has github.com's real hosts. Any other host (a
+// broker) is left as it is.
 type apiOnly struct{ to *url.URL }
 
 func (a apiOnly) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.URL.Scheme, r.URL.Host = a.to.Scheme, a.to.Host
+	if r.URL.Host == "github.com" || r.URL.Host == "api.github.com" {
+		r = r.Clone(r.Context())
+		r.URL.Scheme, r.URL.Host = a.to.Scheme, a.to.Host
+	}
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+// brokerURL in a lab's auth is replaced by the URL of a broker that holds
+// App 42's key and serves the daemon team-a on the lab's repository
+// (installation 77), which then signs with a key GitHub doesn't know.
+const brokerURL = "{broker}"
 
 // gitCredLab is a GitHub App connection, the tools over it and a Work on
 // issue 3 of octo/widgets.
@@ -84,6 +92,10 @@ func gitCredLabFor(t *testing.T, auth string, conns map[string]string, work doma
 	fake.AddApp("43", &key.PublicKey)
 	fake.AddApp("44", &key.PublicKey)
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	if strings.Contains(auth, brokerURL) {
+		broker, daemonPEM := brokerFor(t, fake, "42", key, "team-a", []string{repo}, []int64{77})
+		auth, pemText = strings.ReplaceAll(auth, brokerURL, broker.URL), daemonPEM
+	}
 	cfg, err := gh.ParseConnection([]byte(auth))
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +279,36 @@ func TestGitCredential(t *testing.T) {
 	}
 	if _, ok := fake.Scope(credentialOf(t, next).Password); !ok {
 		t.Fatal("a failed listing revoked a token")
+	}
+}
+
+// TestGitCredentialBrokered: through a broker that holds the App's key,
+// git's credential is still minted for the one repository with only the
+// granted operations' permissions, and revoked once the segment ends
+// (#742).
+func TestGitCredentialBrokered(t *testing.T) {
+	fake, tools, call := gitCredLab(t, `{"auth":"app","app_id":"team-a","app_api_url":"`+brokerURL+`","git":"bot"}`)
+	fake.SetInstallationPermissions(map[string]string{"contents": "write", "pull_requests": "write", "issues": "write", "workflows": "write"})
+	out, err := call.granted(gh.OpPRCreate).do("x/1", `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := credentialOf(t, out)
+	scope, ok := fake.Scope(c.Password)
+	if !ok || !slices.Equal(scope.Repositories, []string{"widgets"}) || !maps.Equal(scope.Permissions, map[string]string{"contents": "write", "pull_requests": "write"}) {
+		t.Fatalf("minted for %+v (valid %v), want widgets alone with contents and pull requests write", scope, ok)
+	}
+	if app, _ := fake.TokenApp(c.Password); app != "42" {
+		t.Fatalf("minted by App %q, want 42 through the broker", app)
+	}
+	if u := fake.Unauthorized(); len(u) != 0 {
+		t.Fatalf("GitHub refused %v", u)
+	}
+	if err := tools.RevokeGitTokens(context.Background(), "x/1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fake.Scope(c.Password); ok {
+		t.Fatal("the execution's token still works once its segment ended")
 	}
 }
 

@@ -115,24 +115,31 @@ func (c *Client) signIn(cfg ConnectionConfig, secrets SecretFunc) (*signIn, erro
 	case "token", "":
 		who.read = &staticToken{secrets: secrets, name: SecretToken}
 	case "app":
-		who.read = newAppToken(cfg.AppID, secrets, SecretAppPrivateKey, c)
+		who.read = newAppToken(cfg.AppID, secrets, SecretAppPrivateKey, cfg.AppAPI(), c)
 	default:
 		return nil, errors.New("github: unknown auth")
 	}
+	// A brokered App is named with the broker, so a changed app_api_url
+	// shows as drift like a changed App.
+	via := ""
+	if cfg.Brokered() {
+		via = " via broker " + cfg.AppAPIURL
+	}
 	who.write, who.writer = who.read, "the connection's token"
 	if cfg.Auth == "app" {
-		who.writer = "App " + cfg.AppID
+		who.writer = "App " + cfg.AppID + via
 	}
 	who.reader = who.writer
 	if cfg.BotAppID != "" {
-		who.write, who.writer = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c), "bot App "+cfg.BotAppID
+		who.write, who.writer = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, cfg.AppAPI(), c), "bot App "+cfg.BotAppID+via
 	}
 	return who, nil
 }
 
 // Writer names, from the connection config the client was last built or
-// reconfigured from, who its writes go out as: "bot App <id>", "App <id>" or
-// "the connection's token". Doctor compares a running entry's client with
+// reconfigured from, who its writes go out as: "bot App <id>", "App <id>"
+// (either followed by "via broker <app_api_url>" when brokered) or "the
+// connection's token". Doctor compares a running entry's client with
 // one built from the current config, to catch the two drifting apart.
 func (c *Client) Writer() string { return c.who.Load().writer }
 
