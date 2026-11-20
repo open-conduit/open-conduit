@@ -162,6 +162,33 @@ type callback struct {
 	Event     pushEvent `json:"event"`
 }
 
+// For reports whether a callback from workspace team about channel is this
+// entry's: its team, and a channel it watches or a direct message it takes.
+func (g *Ingress) For(team, channel string) bool {
+	return team != "" && team == g.s.Team && channel != "" && g.s.Observes(channel)
+}
+
+// Target is who a verified callback (VerifyDelivery's) is for: its
+// workspace and the channel its event is in ("" for an event in none, such
+// as team_join or app_uninstalled).
+func Target(d extension.Delivery) (team, channel string, err error) {
+	var cb struct {
+		TeamID string `json:"team_id"`
+		Event  struct {
+			Channel any `json:"channel"`
+		} `json:"event"`
+	}
+	if d.ContentType != DeliveryContentType || json.Unmarshal(d.Body, &cb) != nil {
+		return "", "", extension.ErrInvalid
+	}
+	// Most events name their channel by ID; a few (channel_created) carry
+	// the channel object, which no entry takes.
+	if ch, ok := cb.Event.Channel.(string); ok {
+		channel = ch
+	}
+	return cb.TeamID, channel, nil
+}
+
 // Push normalizes one verified Events API callback. It makes no service calls
 // and no coordination writes. The caller must have verified the signature
 // (VerifyDelivery). Retries of one callback share its event ID, and every
@@ -180,7 +207,7 @@ func (g *Ingress) Push(_ context.Context, src extension.Source, d extension.Deli
 		return out, extension.ErrInvalid
 	}
 	e := cb.Event
-	if cb.TeamID != g.s.Team || e.Type != "message" || !g.s.Observes(e.Channel) {
+	if !g.For(cb.TeamID, e.Channel) || e.Type != "message" {
 		return out, nil
 	}
 	received := d.ReceivedAt.UTC()

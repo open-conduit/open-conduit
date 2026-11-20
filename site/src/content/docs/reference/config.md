@@ -382,6 +382,7 @@ Connection `secret_refs`:
 | `token` |  | token auth (cmd:gh auth token for the gh login) |
 | `app_private_key` |  | app auth |
 | `bot_private_key` |  | the bot App |
+| `webhook_secret` |  | verifies the connection's webhook (POST /github/<connection>), such as the App's |
 
 Extension entry `config`:
 
@@ -662,6 +663,7 @@ Connection `secret_refs`:
 | --- | --- | --- |
 | `bot_token` |  | Required. xoxb-… |
 | `app_token` |  | xapp-… for Socket Mode |
+| `signing_secret` |  | verifies the connection's Events API Request URL (POST /slack/<connection>) for its receiver http entries |
 
 Extension entry `config`:
 
@@ -678,8 +680,8 @@ Extension entry `config`:
 | `claim_from` | `registration` | registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time |
 | `history_hours` |  |  |
 | `refresh_minutes` |  |  |
-| `receiver` | `socket` | One of socket, events, none. |
-| `signing_secret` |  |  |
+| `receiver` | `socket` | One of socket, http, none. |
+| `signing_secret` |  | names a selected scope secret that verifies the entry's own route (POST /slack/<scope>/<entry>); without it, receiver http takes the connection's |
 | `projection` |  | {"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)} |
 | `post` |  |  |
 | `progress` |  | {"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed |

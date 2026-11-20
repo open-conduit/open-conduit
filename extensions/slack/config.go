@@ -33,6 +33,10 @@ const (
 	// SecretAppToken holds the app-level token (xapp-…, connections:write)
 	// that opens Socket Mode connections.
 	SecretAppToken = "app_token"
+	// SecretSigning holds the app's signing secret, which verifies the
+	// callbacks to the connection's own Events API Request URL (POST
+	// /slack/<connection>): one URL for every entry of the app.
+	SecretSigning = "signing_secret"
 )
 
 var (
@@ -156,11 +160,14 @@ type ExtensionConfig struct {
 	RefreshMinutes int `json:"refresh_minutes,omitempty"`
 	// Receiver is how push deliveries arrive: socket (default; Socket Mode
 	// with the connection's app_token, no public endpoint), http (Events API
-	// Request URL on the webhook listener, verified with signing_secret) or
-	// none (reconcile only).
+	// Request URL on the webhook listener: the entry's own, verified with
+	// signing_secret, or the connection's, verified with the connection's
+	// signing_secret) or none (reconcile only).
 	Receiver string `json:"receiver,omitempty"`
 	// SigningSecret names a selected scope secret: the app's signing secret
-	// used to verify HTTP Events API deliveries (receiver http).
+	// used to verify HTTP Events API deliveries to the entry's own route
+	// (receiver http). Without it, the entry receives only through its
+	// connection's route.
 	SigningSecret string     `json:"signing_secret,omitempty"`
 	Projection    Projection `json:"projection,omitempty"`
 	// Post lists the bindings whose Work may post a new top-level message
@@ -685,9 +692,6 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	case ReceiverSocket, ReceiverHTTP, ReceiverNone:
 	default:
 		return s, errors.New("slack extension: receiver must be socket, http or none")
-	}
-	if s.Receiver == ReceiverHTTP && c.SigningSecret == "" {
-		return s, errors.New("slack extension: receiver http needs signing_secret")
 	}
 	if c.SigningSecret != "" && checkSecrets {
 		found := false

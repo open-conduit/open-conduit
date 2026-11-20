@@ -81,6 +81,11 @@ type IngressOptions struct {
 	// Observed, when set, sees each push's and scan page's observations
 	// before the host accepts them (wait progress). It cannot fail them.
 	Observed func(ctx context.Context, obs []extension.Observation)
+	// Memo, when set, is the read memo a delivery shares with the other
+	// entries it is delivered to (nil for its own): a connection's webhook
+	// delivers one delivery to every entry of its repository, and their
+	// read-backs are the same calls on the same connection.
+	Memo func(delivery string) *memo
 }
 
 // Ingress is one repository's (push, reconcile) pair.
@@ -133,6 +138,32 @@ func (g *Ingress) checkSource(src extension.Source) error {
 	return nil
 }
 
+// For reports whether a delivery for repository (owner/name) is this
+// entry's.
+func (g *Ingress) For(repository string) bool { return strings.EqualFold(repository, g.s.Repo) }
+
+// Target is who a verified delivery (VerifyDelivery's) is for: GitHub's
+// event name and the repository (owner/name) it is about, "" for an
+// App-level event such as installation, or a ping of an App's webhook.
+func Target(d extension.Delivery) (event, repository string, err error) {
+	var env envelope
+	if d.ContentType != DeliveryContentType || json.Unmarshal(d.Body, &env) != nil || env.Event == "" {
+		return "", "", extension.ErrInvalid
+	}
+	var p struct {
+		Repository *struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	if json.Unmarshal(env.Payload, &p) != nil {
+		return "", "", extension.ErrInvalid
+	}
+	if p.Repository != nil {
+		repository = p.Repository.FullName
+	}
+	return env.Event, repository, nil
+}
+
 // Push normalizes one verified delivery. It performs read-only service calls
 // (generation history, PR details, check state) and no coordination writes.
 // The caller must have verified the signature (VerifyDelivery).
@@ -152,14 +183,20 @@ func (g *Ingress) Push(ctx context.Context, src extension.Source, d extension.De
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return out, extension.ErrInvalid
 	}
-	if p.Repository == nil || !strings.EqualFold(p.Repository.FullName, g.s.Repo) || env.Event == "ping" {
+	if p.Repository == nil || !g.For(p.Repository.FullName) || env.Event == "ping" {
 		return out, nil
 	}
 	received := d.ReceivedAt.UTC()
 	if received.IsZero() {
 		received = g.now().UTC()
 	}
-	n := &normalizer{s: g.s, c: g.c, m: newMemo(), received: received}
+	m := newMemo()
+	if g.o.Memo != nil {
+		if shared := g.o.Memo(d.ID); shared != nil {
+			m = shared
+		}
+	}
+	n := &normalizer{s: g.s, c: g.c, m: m, received: received}
 	obs, err := g.pushObservations(ctx, n, env.Event, p)
 	if err == nil {
 		obs, err = n.withCopies(obs)

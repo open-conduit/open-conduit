@@ -61,6 +61,7 @@ A `slack` connection holds `api_url` (default `https://slack.com/api`). Credenti
 
 - `bot_token` (`xoxb-…`) for every Web API call.
 - `app_token` (`xapp-…`, `connections:write`) for Socket Mode.
+- `signing_secret`, the app's signing secret, for the [connection's Request URL](#one-request-url-for-a-connection).
 
 Tokens are resolved lazily. They are resolved again once after `invalid_auth` or `token_expired`, so a rotated reference applies without a restart. A credential failure is `ErrCredential` and never carries the reference or the value.
 
@@ -73,7 +74,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 | `channels` | 1–100 channel IDs (`C…` public, `G…`/`C…` private) to observe. May be empty when `direct_messages` is set. A DM (`D…`) is never listed here. |
 | `direct_messages` | Turns on [direct messages](#direct-messages) with the app: `{"users": ["U…", …]}` (at most 1000) or `{"anyone": true}`. Exactly one is required, so turning DMs on always says whom they admit. Unset: DMs are not observed. |
 | `receiver` | `socket` (default), `http` or `none` (reconcile only). |
-| `signing_secret` | Names a selected scope secret. Required for `http`. |
+| `signing_secret` | Names a selected scope secret that verifies the entry's own Request URL. Without it, an `http` entry receives through its [connection's](#one-request-url-for-a-connection), and doctor's `slack` check warns `receiver_unmounted` when the connection names no `signing_secret` either. |
 | `start` | `all` (default): every human top-level message starts a conversation. `mention`: a human message mentioning `bot_user_id` in a thread no Work owns starts one. |
 | `bot_user_id` | The app's bot user. Required for `mention`; also recognizes the app's own unmarked messages. |
 | `start_window_hours` | Default 24. A message starts a conversation only if it was first received within this time of being written, so the first reconcile does not turn history into Work. |
@@ -139,12 +140,18 @@ With `direct_messages` set, a direct message with the app (an `im` conversation,
 
 The TLS connection opened with the app token is the authentication boundary. The extension starts one receiver per registered entry and stops them when the daemon stops, and doctor's `slack` check reports whether it is connected, plus counts of acknowledged and unacknowledged envelopes.
 
-**HTTP Events API** (`receiver: http`). The webhook listener mounts `POST /slack/<scope>/<entry>`, which is the app's Request URL. `VerifyDelivery` handles each request:
+**HTTP Events API** (`receiver: http`). The webhook listener mounts `POST /slack/<scope>/<entry>` for an entry with a `signing_secret`, and `POST /slack/<connection>` for a connection whose `secret_refs` name one; either is the app's Request URL. `VerifyDelivery` and `RoutedHandler` handle each request:
 
-- It checks `X-Slack-Signature` (HMAC-SHA256 over `v0:<timestamp>:<body>`, in constant time; an empty secret never verifies) and rejects a timestamp more than 5 minutes from receipt (the replay guard). This happens before anything is parsed.
+- It checks `X-Slack-Signature` (HMAC-SHA256 over `v0:<timestamp>:<body>`, in constant time; an empty secret never verifies) and rejects a timestamp more than 5 minutes from receipt (the replay guard). This happens before anything is parsed, so a bad signature is 401 before any entry sees the callback.
 - It echoes `url_verification`.
-- It answers 200 only after durable acceptance, 401 for a bad signature, 400 for a malformed body and 503 when the delivery was not accepted (Slack retries).
+- It answers 200 only after every entry the callback is for durably accepted it, with a receipt `{"entries": n, "duplicate": bool}` (`duplicate` when every entry had already accepted it, a retry); 400 for a malformed body; 503 when an entry didn't accept it (Slack retries); and 421 Misdirected Request with `X-Slack-No-Retry: 1` when no entry is for it.
 - It acknowledges `app_rate_limited` and other callbacks.
+
+A callback is for an entry when its `team_id` is the entry's `team` and its event's channel is one the entry watches, or a DM it takes. An entry's own route answers 421 for a callback from another workspace or channel rather than acknowledging and dropping it, and an event in no channel (`team_join`, `app_uninstalled`) is for no entry.
+
+### One Request URL for a connection
+
+A Slack app has one Events API Request URL for all its workspaces and channels. `POST /slack/<connection>` is it: verified once with the connection's `signing_secret`, so the entries don't need it, then delivered to every `receiver: http` entry of the connection the callback is for, each its own source, one after another. Every entry is tried even when one fails; any failure answers 503, and Slack's retry completes the rest, the entries that had accepted deduplicating on their source and the `event_id`. A callback for no entry is answered 421 without a retry, is in the extension's log (`slack callback for no configured entry`, with the route, team and channel) and is counted in the `slack` check: `POST /slack/<connection>: N callbacks for no configured entry (answered 421), the last from team T channel C at <time>`. Slack turns an app's events off when nearly all its deliveries fail for an hour, so a Request URL that mostly gets 421 means the config and the app's subscriptions disagree. Interactivity (button presses) still arrives only over Socket Mode.
 
 The listener never serves `/v1`. Socket Mode is the practical default.
 
@@ -152,7 +159,7 @@ The listener never serves `/v1`. Socket Mode is the practical default.
 
 - A new message or `message_changed` is normalized as above.
 - A `message_deleted` becomes the direct `slack.message.removed` Event (delivery `removed/<C>/<ts>`).
-- Events from other teams, unwatched channels, or DMs when `direct_messages` is unset are ignored.
+- Events from other teams, unwatched channels, or DMs when `direct_messages` is unset are ignored (the route has already answered them 421).
 
 Retries of one callback share its `event_id`, and the message identity is its observed state, so redelivery deduplicates.
 
@@ -324,6 +331,8 @@ make drill
 
 - Reconcile starts the conversation and the shell stand-in replies through `os call slack.reply`. A human reply over Socket Mode is acknowledged and resumes the same Work. The agent's own replies pushed back start nothing, and doctor is `slack: ok` with `github: not_configured`. A restart reconnects and posts nothing.
 - The HTTP receiver echoes URL verification, refuses forgeries and accepts a signed callback.
+
+**Connection Request URL** ([`slack_connection_webhook_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_connection_webhook_test.go)), over the real ingress: one callback for a channel two entries watch is an Event in each and its retry is answered duplicate with none; a bad signature is 401 with no Event; another workspace and an unwatched channel are 421 with `X-Slack-No-Retry` and no Event, and show in the `slack` check; with one of the two entries refusing, the answer is 503 and the retry completes the second without duplicating the first.
 
 ## Prompts and button answers
 

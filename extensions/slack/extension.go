@@ -42,6 +42,19 @@ type source struct {
 	// deliver is the code of the last failed delivery to the host ("" once
 	// one succeeds): an unregistered source refuses every push.
 	deliver string
+	// connection is the entry's connection, and shared whether it names a
+	// signing_secret, so its Events API Request URL delivers to the entry
+	// (receiver http).
+	connection string
+	shared     bool
+}
+
+// unmatched records the callbacks a webhook route verified that no entry
+// was for, for the slack check.
+type unmatched struct {
+	count         int
+	at            time.Time
+	team, channel string
 }
 
 // Extension is the Slack extension.
@@ -52,39 +65,42 @@ type Extension struct {
 	// which the route reads.
 	book *Book
 
-	mu       sync.Mutex
-	sources  map[string]*source // by namespace, for the daemon's lifetime
-	failed   map[string]string
-	replies  map[string]string // last projection code by namespace
-	next     int               // the entry the next projection pass starts at
-	codes    map[string]string
-	sockets  sync.WaitGroup
-	stop     context.CancelFunc
-	stopped  bool
-	stopping context.Context
+	mu      sync.Mutex
+	sources map[string]*source // by namespace, for the daemon's lifetime
+	failed  map[string]string
+	replies map[string]string // last projection code by namespace
+	next    int               // the entry the next projection pass starts at
+	codes   map[string]string
+	// unmatched is by route ("slack/<connection>" or an entry's name).
+	unmatched map[string]*unmatched
+	sockets   sync.WaitGroup
+	stop      context.CancelFunc
+	stopped   bool
+	stopping  context.Context
 }
 
 // New returns the Slack extension.
 func New() *Extension {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Extension{book: NewBook(), sources: map[string]*source{}, failed: map[string]string{}, replies: map[string]string{}, codes: map[string]string{}, stopping: ctx, stop: cancel}
+	return &Extension{book: NewBook(), sources: map[string]*source{}, failed: map[string]string{}, replies: map[string]string{}, codes: map[string]string{}, unmatched: map[string]*unmatched{}, stopping: ctx, stop: cancel}
 }
 
 var (
-	_ inproc.Typed      = (*Extension)(nil)
-	_ inproc.Operator   = (*Extension)(nil)
-	_ inproc.Declarer   = (*Extension)(nil)
-	_ inproc.Router     = (*Extension)(nil)
-	_ inproc.Starter    = (*Extension)(nil)
-	_ inproc.Stopper    = (*Extension)(nil)
-	_ inproc.Configurer = (*Extension)(nil)
-	_ inproc.Ingester   = (*Extension)(nil)
-	_ inproc.Webhooker  = (*Extension)(nil)
-	_ inproc.Tooled     = (*Extension)(nil)
-	_ inproc.Tasker     = (*Extension)(nil)
-	_ inproc.Checker    = (*Extension)(nil)
-	_ inproc.Renderer   = (*Extension)(nil)
-	_ inproc.Playbooker = (*Extension)(nil)
+	_ inproc.Typed         = (*Extension)(nil)
+	_ inproc.Operator      = (*Extension)(nil)
+	_ inproc.Declarer      = (*Extension)(nil)
+	_ inproc.Router        = (*Extension)(nil)
+	_ inproc.Starter       = (*Extension)(nil)
+	_ inproc.Stopper       = (*Extension)(nil)
+	_ inproc.Configurer    = (*Extension)(nil)
+	_ inproc.Ingester      = (*Extension)(nil)
+	_ inproc.Webhooker     = (*Extension)(nil)
+	_ inproc.WebhookPather = (*Extension)(nil)
+	_ inproc.Tooled        = (*Extension)(nil)
+	_ inproc.Tasker        = (*Extension)(nil)
+	_ inproc.Checker       = (*Extension)(nil)
+	_ inproc.Renderer      = (*Extension)(nil)
+	_ inproc.Playbooker    = (*Extension)(nil)
 )
 
 func (*Extension) Name() string { return Type }
@@ -202,6 +218,11 @@ func (x *Extension) Configure(ctx context.Context, p protocol.ConfigureParams) {
 		x.mu.Unlock()
 		if ok {
 			restart = restart || string(prev.config) != string(e.Config)
+			if e.Connection != nil {
+				x.mu.Lock()
+				prev.shared = prev.connection == e.Connection.ID && slices.Contains(e.Connection.Secrets, SecretSigning)
+				x.mu.Unlock()
+			}
 			continue
 		}
 		code := ""
@@ -278,7 +299,8 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 		return codeError("slack_state_unavailable")
 	}
 	x.book.Load(reg)
-	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...), settings: settings, client: client, projector: projector}
+	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...), settings: settings, client: client, projector: projector,
+		connection: conn, shared: slices.Contains(e.Connection.Secrets, SecretSigning)}
 	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings),
 		StartPoint: func(channel string) (time.Time, bool) { return settings.StartPoint(x.book, channel) },
 		Unowned:    x.unowned(settings), Foreign: x.foreign(settings)})
@@ -451,15 +473,166 @@ func (x *Extension) Sources() []inproc.Source {
 	return out
 }
 
-// Webhook serves the Events API of an entry with receiver http (POST
-// /slack/<scope>/<entry>).
+// Webhook serves the Events API of an entry with receiver http and a
+// signing_secret (POST /slack/<scope>/<entry>), and of a connection that
+// names a signing_secret (POST /slack/<connection>): the one Request URL of
+// a Slack app, which delivers each callback to every receiver http entry of
+// the connection that watches its workspace and channel.
 func (x *Extension) Webhook(path string) http.Handler {
+	if !strings.Contains(path, "/") {
+		return x.connectionWebhook(path)
+	}
 	for _, s := range x.list() {
-		if s.name == Type+"/"+path && s.settings.Receiver == ReceiverHTTP {
-			return WebhookHandler(x.signingSecret(s), x.push(s), x.now)
+		if s.name == Type+"/"+path && s.settings.Receiver == ReceiverHTTP && s.settings.SigningSecret != "" {
+			src := s
+			route := func(ctx context.Context, d extension.Delivery) (Routed, error) {
+				team, channel, err := Target(d)
+				if err != nil {
+					return Routed{}, err
+				}
+				if !src.ingress.For(team, channel) {
+					x.recordUnmatched(src.name, team, channel)
+					return Routed{}, nil
+				}
+				return x.deliver(ctx, []*source{src}, d)
+			}
+			return RoutedHandler(x.signingSecret(src), route, x.now)
 		}
 	}
 	return nil
+}
+
+// WebhookPaths are the connections' Request URLs: each connection of a
+// receiver http entry that names a signing_secret.
+func (x *Extension) WebhookPaths() []string {
+	var out []string
+	for _, s := range x.list() {
+		x.mu.Lock()
+		shared := s.shared
+		x.mu.Unlock()
+		if shared && s.settings.Receiver == ReceiverHTTP && !slices.Contains(out, s.connection) {
+			out = append(out, s.connection)
+		}
+	}
+	return out
+}
+
+// connectionWebhook serves the Events API of connection conn, verified with
+// its signing_secret, or nil when it names none or has no receiver http
+// entry.
+func (x *Extension) connectionWebhook(conn string) http.Handler {
+	var sources []*source
+	for _, s := range x.list() {
+		x.mu.Lock()
+		shared := s.shared
+		x.mu.Unlock()
+		if s.connection == conn && shared && s.settings.Receiver == ReceiverHTTP {
+			sources = append(sources, s)
+		}
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	// Any of the entries resolves the connection's secret: each is
+	// authorized for its own connection.
+	first := sources[0]
+	secret := func(ctx context.Context) (string, error) {
+		if x.h.Secrets == nil {
+			return "", ErrCredential
+		}
+		values, err := x.h.Secrets(ctx, first.scope, conn, []string{SecretSigning})
+		if err != nil || values[SecretSigning] == "" {
+			return "", ErrCredential
+		}
+		return values[SecretSigning], nil
+	}
+	route := func(ctx context.Context, d extension.Delivery) (Routed, error) {
+		team, channel, err := Target(d)
+		if err != nil {
+			return Routed{}, err
+		}
+		var to []*source
+		for _, s := range sources {
+			if s.ingress.For(team, channel) {
+				to = append(to, s)
+			}
+		}
+		if len(to) == 0 {
+			x.recordUnmatched(Type+"/"+conn, team, channel)
+			return Routed{}, nil
+		}
+		return x.deliver(ctx, to, d)
+	}
+	return RoutedHandler(secret, route, x.now)
+}
+
+// deliver hands a verified callback to each entry in turn. Every entry is
+// tried even after one fails, so Slack's retry finds the rest already
+// accepted; any failure fails the whole. A refusal is kept for the entry's
+// doctor line.
+func (x *Extension) deliver(ctx context.Context, to []*source, d extension.Delivery) (Routed, error) {
+	out := Routed{Entries: len(to), Duplicate: true}
+	var failed error
+	for _, s := range to {
+		var err error
+		if x.h.DeliverAdded != nil {
+			var accepted []domain.AcceptedEvent
+			var added []bool
+			accepted, added, err = x.h.DeliverAdded(ctx, s.name, d)
+			if err == nil && (len(accepted) == 0 || slices.Contains(added, true)) {
+				out.Duplicate = false
+			}
+		} else {
+			out.Duplicate = false
+			err = x.push(s)(ctx, d)
+		}
+		code := ""
+		if err != nil {
+			failed, code = err, "deliver_failed"
+		}
+		x.mu.Lock()
+		s.deliver = code
+		x.mu.Unlock()
+	}
+	if failed != nil {
+		return Routed{}, failed
+	}
+	return out, nil
+}
+
+// recordUnmatched records a verified callback that no entry of route was
+// for: another workspace, a channel no entry watches, or an event in no
+// channel.
+func (x *Extension) recordUnmatched(route, team, channel string) {
+	if x.h.Log != nil {
+		x.h.Log.Warn("slack callback for no configured entry", "route", route, "team", team, "channel", channel)
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	u := x.unmatched[route]
+	if u == nil {
+		u = &unmatched{}
+		x.unmatched[route] = u
+	}
+	u.count++
+	u.at, u.team, u.channel = x.now(), team, channel
+}
+
+// unmatchedItems are the webhook routes' callbacks that no entry was for.
+func (x *Extension) unmatchedItems() []string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	var out []string
+	for route, u := range x.unmatched {
+		what := "team " + u.team
+		if u.channel != "" {
+			what += " channel " + u.channel
+		} else {
+			what += " in no channel"
+		}
+		out = append(out, fmt.Sprintf("POST /%s: %d callbacks for no configured entry (answered 421), the last from %s at %s", route, u.count, what, u.at.UTC().Format(time.RFC3339)))
+	}
+	return out
 }
 
 // signingSecret resolves an entry's signing_secret among its selected
@@ -607,7 +780,19 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		}
 		switch set.Receiver {
 		case ReceiverHTTP:
-			notes = append(notes, "POST /"+s.name+" (set it as the app's Events API Request URL)")
+			x.mu.Lock()
+			shared := s.shared
+			x.mu.Unlock()
+			switch {
+			case shared:
+				notes = append(notes, "POST /"+Type+"/"+s.connection+" (the connection's; set it as the app's Events API Request URL)")
+			case set.SigningSecret == "":
+				raise(inproc.CheckWarn, "receiver_unmounted")
+				notes = append(notes, "receiver http has no route: name a signing_secret on the entry or the connection")
+			}
+			if set.SigningSecret != "" {
+				notes = append(notes, "POST /"+s.name+" (the entry's own)")
+			}
 		case ReceiverSocket:
 			st := s.socket.Status()
 			switch {
@@ -630,6 +815,7 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		}
 		check.Items = append(check.Items, set.Namespace+": "+strings.Join(notes, "; "))
 	}
+	check.Items = append(check.Items, x.unmatchedItems()...)
 	sort.Strings(check.Items)
 	return check
 }

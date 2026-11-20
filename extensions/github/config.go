@@ -31,6 +31,10 @@ const (
 	SecretToken         = "token"
 	SecretAppPrivateKey = "app_private_key"
 	SecretBotPrivateKey = "bot_private_key"
+	// SecretWebhook verifies the deliveries to the connection's own
+	// webhook route (POST /github/<connection>), for a sender with one URL
+	// for every repository: a GitHub App's or an organisation's webhook.
+	SecretWebhook = "webhook_secret"
 )
 
 var (
