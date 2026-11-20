@@ -2,8 +2,10 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
@@ -265,5 +267,40 @@ func TestInjectUndispatchedOrUnknownProofIgnored(t *testing.T) {
 	}
 	if len(next.Request.Inputs) != 1 || next.Request.Inputs[0].ID != "queued" {
 		t.Fatalf("N+1 inputs %+v", next.Request.Inputs)
+	}
+}
+
+// TestInjectCallIsBoundedAndATimeoutIsAmbiguous: the executor's Inject is
+// given a deadline inside the dispatch claim's lease, so a call that hangs
+// ends in time to record its outcome. Running out of time is ambiguous (the
+// executor may have taken the input): the intent stays retryable and the
+// input stays pending, never settled as refused.
+func TestInjectCallIsBoundedAndATimeoutIsAmbiguous(t *testing.T) {
+	x := newInjectAckFixture(t, "bounded")
+	intent := x.inject("hung")
+	var deadline time.Time
+	var bounded bool
+	x.e.OnInject = func(ctx context.Context, _ domain.ID, _ domain.Event) error {
+		deadline, bounded = ctx.Deadline()
+		// Stand in for a call that hung until its deadline, without
+		// waiting for one.
+		return context.DeadlineExceeded
+	}
+	before := time.Now()
+	if err := x.s.DispatchControl(context.Background(), intent); !errors.Is(err, runtime.ErrControlDispatch) {
+		t.Fatalf("dispatch = %v, want ErrControlDispatch", err)
+	}
+	if !bounded {
+		t.Fatal("Inject was called without a deadline")
+	}
+	// The fixture's lease is a minute; the call gets at most half of it.
+	if limit := before.Add(30*time.Second + time.Second); deadline.After(limit) {
+		t.Fatalf("Inject deadline %s, want within half the lease of %s", deadline, before)
+	}
+	if st := x.status(intent); st != "retryable" {
+		t.Fatalf("intent status %s, want retryable", st)
+	}
+	if p := x.pending(); !reflect.DeepEqual(p, []domain.ID{"hung"}) {
+		t.Fatalf("pending %v, want the timed-out input kept", p)
 	}
 }
