@@ -41,6 +41,8 @@ var (
 	repoPattern  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	idPattern    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 	digitPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
+	// brokerIDPattern is an App ID as a broker knows a daemon by.
+	brokerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 	// workflowPattern is a workflow file's name in .github/workflows.
 	workflowPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}\.ya?ml$`)
 )
@@ -52,12 +54,34 @@ var (
 // GitOwner (the default) leaves the operator's own credentials and
 // identity; GitBot pushes with tokens the App mints and commits as its bot
 // user, and needs an App (auth app, or a bot App).
+//
+// AppAPIURL sends the calls that authenticate as the App itself (its
+// installation on a repository, minting an installation token and GET
+// /app) to a broker the operator runs instead of api_url. The broker holds
+// the App's private key; the connection's key secrets are then the
+// daemon's own keys, which the broker registered, and app_id and
+// bot_app_id are the IDs the broker knows them by. Everything else
+// (installation tokens, scoping, revocation) is GitHub's as before.
 type ConnectionConfig struct {
-	APIURL   string `json:"api_url,omitempty"`
-	Auth     string `json:"auth,omitempty"`
-	AppID    string `json:"app_id,omitempty"`
-	BotAppID string `json:"bot_app_id,omitempty"`
-	Git      string `json:"git,omitempty"`
+	APIURL    string `json:"api_url,omitempty"`
+	Auth      string `json:"auth,omitempty"`
+	AppID     string `json:"app_id,omitempty"`
+	BotAppID  string `json:"bot_app_id,omitempty"`
+	AppAPIURL string `json:"app_api_url,omitempty"`
+	Git       string `json:"git,omitempty"`
+}
+
+// Brokered reports whether the connection's App calls go to a broker
+// (app_api_url) rather than GitHub.
+func (c ConnectionConfig) Brokered() bool { return c.AppAPIURL != "" }
+
+// AppAPI is where the calls that authenticate as the App go: the broker
+// when app_api_url is set, else GitHub's API.
+func (c ConnectionConfig) AppAPI() string {
+	if c.AppAPIURL != "" {
+		return c.AppAPIURL
+	}
+	return c.APIURL
 }
 
 // Who git works as (ConnectionConfig.Git).
@@ -94,9 +118,19 @@ func ParseConnection(data []byte) (ConnectionConfig, error) {
 	if c.Auth == "" {
 		c.Auth = "token"
 	}
-	u, err := url.Parse(c.APIURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+	if !httpURL(c.APIURL) {
 		return c, errors.New("github connection: api_url must be an http(s) URL without credentials")
+	}
+	appID, idRule := digitPattern, "numeric"
+	if c.AppAPIURL != "" {
+		c.AppAPIURL = strings.TrimRight(c.AppAPIURL, "/")
+		if !httpURL(c.AppAPIURL) || strings.ContainsAny(c.AppAPIURL, "?#") {
+			return c, errors.New("github connection: app_api_url must be an http(s) URL without credentials, a query or a fragment")
+		}
+		if c.Auth != "app" && c.BotAppID == "" {
+			return c, errors.New(`github connection: app_api_url brokers a GitHub App's calls: set auth "app" or bot_app_id`)
+		}
+		appID, idRule = brokerIDPattern, "the ID the broker knows this daemon by (letters, digits and _.:-)"
 	}
 	switch c.Auth {
 	case "token":
@@ -104,14 +138,14 @@ func ParseConnection(data []byte) (ConnectionConfig, error) {
 			return c, errors.New("github connection: app_id requires auth app")
 		}
 	case "app":
-		if !digitPattern.MatchString(c.AppID) {
-			return c, errors.New("github connection: auth app requires a numeric app_id")
+		if !appID.MatchString(c.AppID) {
+			return c, fmt.Errorf("github connection: auth app requires app_id, %s", idRule)
 		}
 	default:
 		return c, errors.New("github connection: auth must be token or app")
 	}
-	if c.BotAppID != "" && !digitPattern.MatchString(c.BotAppID) {
-		return c, errors.New("github connection: bot_app_id must be numeric")
+	if c.BotAppID != "" && !appID.MatchString(c.BotAppID) {
+		return c, fmt.Errorf("github connection: bot_app_id must be %s", idRule)
 	}
 	switch c.Git {
 	case "":
@@ -125,6 +159,12 @@ func ParseConnection(data []byte) (ConnectionConfig, error) {
 		return c, errors.New("github connection: git must be owner or bot")
 	}
 	return c, nil
+}
+
+// httpURL reports whether s is an absolute http(s) URL without credentials.
+func httpURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http") && u.User == nil
 }
 
 // ValidateConnection is the config.Registry connection validator.

@@ -28,7 +28,7 @@ Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]
 
 Types (from the registered extensions):
   github   add a scope that works a GitHub repository's issues (package github 0.1.0)
-           [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]
+           [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF | --broker URL --broker-id ID --broker-key REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]
   jira     add a scope that works Jira projects' issues (package jira 0.1.0)
            [--bitbucket WORKSPACE/SLUG --bitbucket-username EMAIL --bitbucket-token REF] --site https://acme.atlassian.net --projects PROJ[,WEB] [--email E | --auth bearer] [--jql JQL] [--fields customfield_1,…] [--scope ID] [--token REF] [--connection ID] [--checkout DIR | --no-workspace]
   linear   add a scope that works Linear teams' issues (package linear 0.1.0)

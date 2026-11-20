@@ -172,6 +172,11 @@ type Server struct {
 	failNext                         map[string]int
 	loseNext                         map[string]int
 	tokenTTL                         time.Duration
+	// expireTokens refuses an installation token once tokenTTL has passed
+	// since it was minted (ExpireInstallationTokens); unauthorized are the
+	// requests refused for their credentials.
+	expireTokens bool
+	unauthorized []string
 	// gitLag is how long after it is minted an installation token is
 	// refused for push (SetGitPropagation); minted is when each was.
 	gitLag     time.Duration
@@ -476,6 +481,31 @@ func (s *Server) GitPushChecks() int { s.mu.Lock(); defer s.mu.Unlock(); return 
 
 // SetTokenTTL sets installation token lifetime.
 func (s *Server) SetTokenTTL(d time.Duration) { s.mu.Lock(); s.tokenTTL = d; s.mu.Unlock() }
+
+// ExpireInstallationTokens makes the fake refuse an installation token
+// with 401 once its lifetime (SetTokenTTL) has passed, as GitHub does.
+func (s *Server) ExpireInstallationTokens() { s.mu.Lock(); s.expireTokens = true; s.mu.Unlock() }
+
+// Unauthorized are the requests ("METHOD path") refused with 401 for
+// their credentials: an unknown or expired token, or a JWT no registered
+// App key signed.
+func (s *Server) Unauthorized() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.unauthorized)
+}
+
+// InstallationTokens are the installation tokens minted and not revoked.
+func (s *Server) InstallationTokens() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.installs))
+	for tok := range s.installs {
+		out = append(out, tok)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // InstallationTokensIssued counts minted installation tokens.
 func (s *Server) InstallationTokensIssued() int { s.mu.Lock(); defer s.mu.Unlock(); return s.issued }
@@ -1360,6 +1390,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool
 	if reInstall.MatchString(r.URL.Path) || reAccessToken.MatchString(r.URL.Path) || r.URL.Path == "/app" {
 		app, ok := s.verifyJWT(auth)
 		if !ok {
+			s.unauthorized = append(s.unauthorized, r.Method+" "+r.URL.Path)
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
 			return "", false
 		}
@@ -1368,9 +1399,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool
 	if s.tokens[auth] {
 		return auth, true
 	}
-	if _, ok := s.installs[auth]; ok {
+	if _, ok := s.installs[auth]; ok && (!s.expireTokens || s.now.Before(s.minted[auth].Add(s.tokenTTL))) {
 		return auth, true
 	}
+	s.unauthorized = append(s.unauthorized, r.Method+" "+r.URL.Path)
 	http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
 	return "", false
 }

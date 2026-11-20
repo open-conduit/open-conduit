@@ -958,7 +958,7 @@ func TestOwnBotIsMarkedByConnection(t *testing.T) {
 		fake.SetAssociation(n, "NONE")
 	}
 	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
-	scan := func(conn string) map[string]bool {
+	scanWith := func(conn, keyPEM string) map[string]bool {
 		cfg, err := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"` + conn + `}`))
 		if err != nil {
 			t.Fatal(err)
@@ -967,7 +967,7 @@ func TestOwnBotIsMarkedByConnection(t *testing.T) {
 			if name == gh.SecretToken {
 				return "tok", nil
 			}
-			return pemText, nil
+			return keyPEM, nil
 		}, gh.ClientOptions{Now: func() time.Time { return now }})
 		if err != nil {
 			t.Fatal(err)
@@ -986,11 +986,18 @@ func TestOwnBotIsMarkedByConnection(t *testing.T) {
 		}
 		return out
 	}
+	scan := func(conn string) map[string]bool { return scanWith(conn, pemText) }
 	if got := scan(`,"bot_app_id":"42"`); !got[own] || got["dependabot[bot]"] || got["alice"] {
 		t.Fatalf("bot App connection: %v", got)
 	}
 	if got := scan(""); got[own] || got["dependabot[bot]"] || got["alice"] {
 		t.Fatalf("token connection: %v", got)
+	}
+	// An App whose key only a broker holds knows its bot the same way
+	// (#742): the daemon signs with a key of its own.
+	broker, daemonPEM := brokerFor(t, fake, "42", key, "team-a", []string{repo}, []int64{77})
+	if got := scanWith(`,"auth":"app","app_id":"team-a","app_api_url":"`+broker.URL+`"`, daemonPEM); !got[own] || got["dependabot[bot]"] || got["alice"] {
+		t.Fatalf("brokered App connection: %v", got)
 	}
 }
 

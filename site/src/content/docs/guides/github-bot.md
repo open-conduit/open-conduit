@@ -23,6 +23,8 @@ Git is separate. By default:
 
 To have git work as the bot too, see [push and commit as the bot](#push-and-commit-as-the-bot).
 
+If your organisation already has an App and keeps its private key in a broker, so no daemon holds it, skip the steps below and [sign in through the broker](#sign-in-through-a-broker) instead.
+
 ## 1. Create the App
 
 On GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub App**. Use your organization's settings for an organization's repositories, or your own for personal ones. Then fill in the form:
@@ -193,6 +195,48 @@ Run `open-conduit config check` and apply as in step 4. PRs opened while the dae
 A PR on an issue's branch, or one that says `Closes #12`, belongs to that issue's Work and is also claimed as its own Work, which the reviewer works. The builder hears the reviewer's reviews as another agent's comments, and the reviewer hears the builder's replies and pushes, so the two can go back and forth until the PR is ready.
 
 The reviewer route must live in the scope whose entry reads the repository. A scope from an [included folder](../../architecture/config-management/#included-folders) can't see a repository the main scope reads; give it its own entry for the repository instead, with its own `namespace`, `"track_issues": false` and `"track_pull_requests": true` ([which scope routes an entry's events](../../architecture/github-extension/#which-scope-routes-an-entrys-events)).
+
+## Sign in through a broker
+
+An App's private key can mint a token for every repository the App is installed on. When one App serves several teams, each with its own daemon, or your organisation keeps signing keys in an HSM or a KMS, the key shouldn't be on the daemon's machine. Instead, a broker your organisation runs holds the key, and the daemon holds a key of its own that the broker has registered, which GitHub won't accept on its own.
+
+You get everything the App gives as if the key were local: writes as the App's bot, git pushing and committing as the bot with tokens for one repository at a time that are revoked when the run ends, and doctor's account of the App's permissions. The broker decides which repositories your daemon may use. One it won't serve shows in doctor as `repo_unreachable`, just as a repository the App isn't installed on does.
+
+### What to get from whoever runs the broker
+
+- **The broker's URL**, such as `https://github-broker.acme.internal`.
+- **The ID it knows your daemon by**, such as `team-web`.
+- **That your key is registered.** Make a key and send them its public half:
+
+  ```sh
+  openssl genrsa -out daemon.pem 2048
+  openssl rsa -in daemon.pem -pubout -out daemon.pub
+  open-conduit secret set github-broker-key < daemon.pem
+  rm daemon.pem
+  ```
+
+  `secret set` prints the reference to use, such as `keyring:github-broker-key`. Send them `daemon.pub`, which isn't secret.
+
+### Write the connection
+
+For a new scope, `init github` writes the connection with the rest:
+
+```sh
+open-conduit init github --repo acme/web --broker https://github-broker.acme.internal --broker-id team-web --broker-key keyring:github-broker-key
+```
+
+For an existing connection, set the same fields (`app_api_url` is the broker's URL):
+
+```sh
+open-conduit config set /connections/github/config '{"auth":"app","app_id":"team-web","app_api_url":"https://github-broker.acme.internal","git":"bot"}'
+open-conduit config set /connections/github/secret_refs '{"app_private_key":"keyring:github-broker-key"}'
+```
+
+Then check it as in [step 5](#5-check-it). The entry names the App as `App team-web via broker https://github-broker.acme.internal`.
+
+### What the broker answers
+
+The daemon asks the broker only what it would ask GitHub as the App, at the same paths under the broker's URL and in GitHub's shape: `GET /repos/<owner>/<repo>/installation`, `POST /app/installations/<id>/access_tokens` and `GET /app`. Each comes with a JWT the daemon signs with its own key, whose `iss` is the ID above. The daemon names its repository in every token request (`{"repositories": ["web"]}`), never asking for a token for the whole installation. The broker checks the JWT against the key it registered and makes the call to GitHub with the App's key. It must refuse (404) a repository or installation the daemon may not use, and a token request that names no `repositories` or names any outside the daemon's set: the App's installation may cover other teams' repositories too, and a token for all of it would reach them. Everything else goes to GitHub directly with the installation tokens the broker hands back. [A brokered App](../../architecture/github-extension/#a-brokered-app) has the detail.
 
 ## What changes for you
 
