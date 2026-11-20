@@ -128,6 +128,16 @@ func (w weakened) Restore(ctx context.Context, snapshot, destination string, now
 	return w.Backend.Restore(ctx, snapshot, destination, now)
 }
 
+// unowned opens the database without owning its location.
+func unowned(ctx context.Context, location string) (storage.Database, error) {
+	return sqlite.Open(ctx, location)
+}
+
+type eager struct{ storage.Backend }
+
+// Present says yes to anything.
+func (eager) Present(context.Context, string) (bool, error) { return true, nil }
+
 type unfenced struct{ storage.Database }
 
 func (unfenced) Fence(_ context.Context, now time.Time) error {
@@ -170,7 +180,7 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 	}, {
 		// Open lowers the stored record format to its own, and so accepts
 		// records a newer binary wrote.
-		name: "open_accepts_newer_records", failing: "newer_records_refused_before_any_change", want: "Open of newer state",
+		name: "open_accepts_newer_records", failing: "newer_records_refused_before_any_change", want: "open of newer state",
 		backend: weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
 			if db, err := existing(location); err == nil {
 				db.Exec(fmt.Sprintf("UPDATE metadata SET value='%d' WHERE key='record_format'", sqlite.RecordFormat))
@@ -188,6 +198,14 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 			}
 			return sqlite.Backend.Open(ctx, location)
 		}},
+	}, {
+		// Open shares the location with any other opener.
+		name: "open_shares_its_location", failing: "one_owner_at_a_time", want: "a second owner opened",
+		backend: weakened{Backend: sqlite.Backend, open: unowned},
+	}, {
+		// Present reports state that isn't there.
+		name: "present_reports_absent_state", failing: "present_reports_state_without_creating_it", want: "absent state reported present",
+		backend: eager{sqlite.Backend},
 	}, {
 		// Fence does nothing.
 		name: "fence_leaves_a_lease_live", failing: "fence_ends_live_lease_authority", want: "still held",

@@ -13,7 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// The lifecycle suite proves a storage.Backend's lifecycle: open, refusal
+// The lifecycle suite proves a storage.Backend's lifecycle: open, one owner
+// at a time, refusal
 // of state a newer binary wrote before anything changes, a consistent
 // snapshot, a restore that fences every lease, a fence in place, an
 // integrity check and an inspection that changes nothing (#767). The
@@ -69,6 +70,8 @@ func RunLifecycle(t *testing.T, h LifecycleHarness) {
 func LifecycleCases() []LifecycleCase {
 	return []LifecycleCase{
 		{"open_creates_then_reopens_state", openReopens},
+		{"present_reports_state_without_creating_it", presentCreatesNothing},
+		{"one_owner_at_a_time", oneOwner},
 		{"newer_schema_refused_before_any_change", func(t *testing.T, h LifecycleHarness) error { return refusesNewer(t, h, NewerSchema) }},
 		{"newer_records_refused_before_any_change", func(t *testing.T, h LifecycleHarness) error { return refusesNewer(t, h, NewerRecords) }},
 		{"inspect_reads_without_changing_state", inspectChangesNothing},
@@ -126,6 +129,76 @@ func openReopens(t *testing.T, h LifecycleHarness) error {
 	return nil
 }
 
+// presentCreatesNothing: Present reports absent state as absent and leaves
+// it absent, and reports state once Open has made it.
+func presentCreatesNothing(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	location := h.Location(t, t.TempDir())
+	for range 2 {
+		if present, err := h.Backend.Present(ctx, location); err != nil || present {
+			return fmt.Errorf("absent state reported present (%v)", err)
+		}
+	}
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	if present, err := h.Backend.Present(ctx, location); err != nil || !present {
+		return fmt.Errorf("opened state reported absent (%v)", err)
+	}
+	return nil
+}
+
+// oneOwner: while a Database or an Inspection owns state, neither Open nor
+// Inspect can open it again, in this process or any other; once it closes,
+// they can.
+func oneOwner(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	location, err := openSeeded(t, h)
+	if err != nil {
+		return err
+	}
+	second := func(holder string) error {
+		if db, err := h.Backend.Open(ctx, location); !errors.Is(err, storage.ErrInUse) {
+			if err == nil {
+				db.Close()
+			}
+			return fmt.Errorf("a second owner opened state %s holds: got %v, want %v", holder, err, storage.ErrInUse)
+		}
+		if i, err := h.Backend.Inspect(ctx, location); !errors.Is(err, storage.ErrInUse) {
+			if err == nil {
+				i.Close()
+			}
+			return fmt.Errorf("a second owner inspected state %s holds: got %v, want %v", holder, err, storage.ErrInUse)
+		}
+		return nil
+	}
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	err = second("an open Database")
+	if err := errors.Join(err, db.Close()); err != nil {
+		return err
+	}
+	i, err := h.Backend.Inspect(ctx, location)
+	if err != nil {
+		return fmt.Errorf("inspect once the Database closed: %w", err)
+	}
+	err = second("an Inspection")
+	if err := errors.Join(err, i.Close()); err != nil {
+		return err
+	}
+	db, err = h.Backend.Open(ctx, location)
+	if err != nil {
+		return fmt.Errorf("open once every owner closed: %w", err)
+	}
+	return db.Close()
+}
+
 // refusesNewer: state a newer binary wrote is refused with the contract's
 // error by Open and by Inspect, and neither changes it.
 func refusesNewer(t *testing.T, h LifecycleHarness, newer Newer) error {
@@ -140,19 +213,19 @@ func refusesNewer(t *testing.T, h LifecycleHarness, newer Newer) error {
 		if err == nil {
 			db.Close()
 		}
-		return fmt.Errorf("Open of newer state: got %v, want %v", err, want)
+		return fmt.Errorf("open of newer state: got %v, want %v", err, want)
 	}
 	if after := h.Fingerprint(t, location); after != before {
-		return fmt.Errorf("Open changed the newer state it refused")
+		return fmt.Errorf("open changed the newer state it refused")
 	}
 	if i, err := h.Backend.Inspect(context.Background(), location); !errors.Is(err, want) {
 		if err == nil {
 			i.Close()
 		}
-		return fmt.Errorf("Inspect of newer state: got %v, want %v", err, want)
+		return fmt.Errorf("inspect of newer state: got %v, want %v", err, want)
 	}
 	if after := h.Fingerprint(t, location); after != before {
-		return fmt.Errorf("Inspect changed the newer state it refused")
+		return fmt.Errorf("inspect changed the newer state it refused")
 	}
 	return nil
 }

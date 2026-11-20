@@ -34,7 +34,9 @@ func locked(stateDir string) (*management.Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !c.present(stateDir) {
+	if present, err := c.backend.Present(context.Background(), c.location); err != nil {
+		return nil, err
+	} else if !present {
 		return nil, fmt.Errorf("no Open Conduit database in %s", stateDir)
 	}
 	lock, err := management.AcquireLock(stateDir)
@@ -99,10 +101,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends); err != nil {
-		return info, err
-	}
-	if err := recordChoice(dest, info.Backend); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)
@@ -137,10 +136,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends); err != nil {
-		return info, err
-	}
-	if err := recordChoice(destination, info.Backend); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -210,6 +206,8 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		switch {
 		case errors.Is(err, storage.ErrRecordsNewer):
 			code, remedy = "records_newer", "a newer Open Conduit wrote these records and this binary would drop the fields it doesn't know: run that binary, or restore the bundle taken before the upgrade"
+		case errors.Is(err, storage.ErrInUse):
+			code, remedy = "in_use", "another daemon or command owns this coordination state (a storage.json in another state directory may name the same database): stop it first"
 		case errors.Is(err, storage.ErrSchemaNewer):
 			code, remedy = "schema_newer", "a newer Open Conduit migrated this database: run that binary, or restore the bundle taken before the upgrade"
 		case strings.Contains(msg, "explicit migration required"), strings.Contains(msg, "metadata"):

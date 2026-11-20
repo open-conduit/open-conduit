@@ -32,8 +32,11 @@ const storageFile = "storage.json"
 //	{"backend": "sqlite", "location": "/abs/path/conduit.db"}
 //
 // backend names a registered storage.Backend; location is handed to it
-// verbatim (a path, a connection string). An omitted location is
-// <state>/conduit.db.
+// verbatim (an absolute path, a connection string), and the backend
+// refuses one it cannot resolve the same way from every process. An
+// omitted location is <state>/conduit.db. The backend's Open owns what
+// the location names, so a location two state directories share is open
+// in one daemon at a time.
 type storageChoice struct {
 	Backend  string `json:"backend"`
 	Location string `json:"location,omitempty"`
@@ -44,12 +47,14 @@ type coordination struct {
 	name     string
 	backend  storage.Backend
 	location string
-	// chosen is whether storage.json chose it, rather than the default.
-	chosen bool
 }
 
 // coordinationOf reads stateDir's storage choice and finds its backend.
 func coordinationOf(stateDir string) (coordination, error) {
+	stateDir, err := filepath.Abs(stateDir)
+	if err != nil {
+		return coordination{}, err
+	}
 	c := coordination{name: sqlite.Name, location: filepath.Join(stateDir, "conduit.db")}
 	data, err := os.ReadFile(filepath.Join(stateDir, storageFile))
 	switch {
@@ -69,7 +74,7 @@ func coordinationOf(stateDir string) (coordination, error) {
 		if choice.Backend == "" {
 			return c, fmt.Errorf("%s: backend is required", storageFile)
 		}
-		c.name, c.chosen = choice.Backend, true
+		c.name = choice.Backend
 		if choice.Location != "" {
 			c.location = choice.Location
 		}
@@ -78,16 +83,6 @@ func coordinationOf(stateDir string) (coordination, error) {
 		return c, fmt.Errorf("%s: %w", storageFile, err)
 	}
 	return c, nil
-}
-
-// present reports whether the directory holds coordination state: a
-// storage choice, or the default database.
-func (c coordination) present(stateDir string) bool {
-	if c.chosen {
-		return true
-	}
-	_, err := os.Stat(c.location)
-	return err == nil
 }
 
 func (c coordination) open(ctx context.Context) (storage.Database, error) {
@@ -106,12 +101,14 @@ func openState(ctx context.Context, stateDir string) (coordination, storage.Data
 
 // recordChoice writes a restored directory's storage choice when its
 // bundle's backend is not the default, so the directory opens with the
-// backend that restored it.
+// backend that restored it. backup.Restore calls it on the staged
+// directory, before publishing, so the location is left to its default
+// (<state>/conduit.db, where the snapshot was restored).
 func recordChoice(stateDir, backendName string) error {
 	if backendName == sqlite.Name || backendName == "" {
 		return nil
 	}
-	data, err := json.Marshal(storageChoice{Backend: backendName, Location: filepath.Join(stateDir, "conduit.db")})
+	data, err := json.Marshal(storageChoice{Backend: backendName})
 	if err != nil {
 		return err
 	}

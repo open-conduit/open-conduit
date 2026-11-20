@@ -151,11 +151,17 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 // (storage.LookupBackend).
 type Backends func(name string) (storage.Backend, error)
 
+// Record writes into a restored state directory, before it is published,
+// whatever its caller needs to open it with backend (the composition
+// root's storage choice). The directory is published with it or not at
+// all. nil records nothing.
+type Record func(dir, backend string) error
+
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The bundle's backend restores its snapshot to conduit.db in
 // that directory and fences old lease authority. No daemon may own
 // destination; an existing path is rejected, never overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends) error {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, record Record) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}
@@ -216,6 +222,11 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 		}
 		if err := backend.Restore(ctx, database, filepath.Join(stage, snapshotName), now); err != nil {
 			return err
+		}
+		if record != nil {
+			if err := record(stage, m.backend()); err != nil {
+				return err
+			}
 		}
 		restored, err := backend.Open(ctx, filepath.Join(stage, snapshotName))
 		if err != nil {

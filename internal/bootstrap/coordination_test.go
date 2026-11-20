@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestStateDefaultsToSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.name != "sqlite" || c.location != filepath.Join(dir, "conduit.db") || c.chosen || c.present(dir) {
+	if c.name != "sqlite" || c.location != filepath.Join(dir, "conduit.db") {
 		t.Fatalf("default coordination: %+v", c)
 	}
 }
@@ -41,7 +42,7 @@ func TestStorageChoiceSelectsTheBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if c.location != elsewhere || !c.present(dir) {
+	if c.location != elsewhere {
 		t.Fatalf("chosen coordination: %+v", c)
 	}
 	if _, err := os.Stat(elsewhere); err != nil {
@@ -49,6 +50,52 @@ func TestStorageChoiceSelectsTheBackend(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "conduit.db")); !os.IsNotExist(err) {
 		t.Fatalf("default location used anyway: %v", err)
+	}
+}
+
+// A relative location would name a different database from each process's
+// working directory, so the backend refuses it.
+func TestRelativeLocationRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeChoice(t, dir, `{"backend": "sqlite", "location": "conduit.db"}`)
+	if _, _, err := openState(context.Background(), dir); !errors.Is(err, storage.ErrInvalid) {
+		t.Fatalf("relative location: got %v, want ErrInvalid", err)
+	}
+}
+
+// The offline commands only ever see existing state: a choice whose
+// location isn't there (a typo, an unmounted volume) is refused, not
+// created empty.
+func TestOfflineCommandsRefuseAbsentChosenState(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "unmounted", "conduit.db")
+	writeChoice(t, dir, `{"backend": "sqlite", "location": "`+missing+`"}`)
+	if _, err := BackupState(context.Background(), dir, filepath.Join(t.TempDir(), "bundle"), "test"); err == nil || !strings.Contains(err.Error(), "no Open Conduit database") {
+		t.Fatalf("backup of absent state: %v", err)
+	}
+	if err := RecoverOperator(context.Background(), dir, filepath.Join(dir, "operator.token")); err == nil {
+		t.Fatal("auth recover wrote into absent state")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("absent state was created: %v", err)
+	}
+}
+
+// Two state directories naming the same database can't both own it: the
+// backend's ownership covers the location, not the directory.
+func TestSharedLocationHasOneOwner(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "conduit.db")
+	first, second := t.TempDir(), t.TempDir()
+	for _, dir := range []string{first, second} {
+		writeChoice(t, dir, `{"backend": "sqlite", "location": "`+shared+`"}`)
+	}
+	_, db, err := openState(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, _, err := openState(context.Background(), second); !errors.Is(err, storage.ErrInUse) {
+		t.Fatalf("second state directory opened the shared database: %v", err)
 	}
 }
 
@@ -101,13 +148,14 @@ func TestRestoredDirectoryRecordsItsBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := coordinationOf(dir)
-	if err != nil || c.name != "bootstrap-test" || c.location != filepath.Join(dir, "conduit.db") {
+	if abs, _ := filepath.Abs(dir); err != nil || c.name != "bootstrap-test" || c.location != filepath.Join(abs, "conduit.db") {
 		t.Fatalf("recorded choice: %+v, %v", c, err)
 	}
 }
 
 type fakeBackend struct{}
 
+func (fakeBackend) Present(context.Context, string) (bool, error) { return false, nil }
 func (fakeBackend) Open(context.Context, string) (storage.Database, error) {
 	return nil, storage.ErrInvalid
 }

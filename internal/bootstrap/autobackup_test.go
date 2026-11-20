@@ -72,7 +72,7 @@ func TestScheduledBackupsKeepTheNewest(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("bundles %v, want %v", got, want)
 	}
-	if err := backup.Restore(ctx, filepath.Join(d.o.BackupDir, want[2]), filepath.Join(t.TempDir(), "restored"), start, retentionExpired, restoreBackends); err != nil {
+	if err := backup.Restore(ctx, filepath.Join(d.o.BackupDir, want[2]), filepath.Join(t.TempDir(), "restored"), start, retentionExpired, restoreBackends, recordChoice); err != nil {
 		t.Fatalf("scheduled bundle does not restore: %v", err)
 	}
 }

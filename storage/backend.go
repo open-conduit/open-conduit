@@ -17,6 +17,9 @@ var (
 	// one would drop the fields it doesn't know from every record it
 	// rewrites. Nothing was changed.
 	ErrRecordsNewer = errors.New("stored records are newer than this binary writes")
+	// ErrInUse refuses state another Database or Inspection, in this
+	// process or another, already owns.
+	ErrInUse = errors.New("coordination state is in use by another owner")
 )
 
 // Backend is one kind of coordination state's lifecycle: how it is opened,
@@ -27,7 +30,18 @@ var (
 // Open and Inspect refuse state a newer binary wrote (ErrSchemaNewer,
 // ErrRecordsNewer) before they change anything at the location, so the
 // newer binary, or a restore, can still use it.
+//
+// Open and Inspect take exclusive ownership of the state they open, held
+// until Close, and refuse state another owner holds with ErrInUse. The
+// ownership covers what the location names, wherever that is (a lock
+// beside a database file, an advisory lock on a database server), so two
+// hosts or state directories naming the same state cannot both own it.
+// A location the backend cannot resolve the same way from any process (a
+// relative path) is refused with ErrInvalid.
 type Backend interface {
+	// Present reports whether state exists at location, without creating
+	// or changing anything.
+	Present(ctx context.Context, location string) (bool, error)
 	// Open opens the state at location, creating it when it is absent.
 	Open(ctx context.Context, location string) (Database, error)
 	// Inspect opens the state at location to read it without changing it,

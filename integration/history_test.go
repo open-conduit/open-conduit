@@ -403,7 +403,7 @@ esac`
 	if err != nil || info.Omitted != len(x1.Artifacts) || info.Artifacts != len(x2.Artifacts) {
 		t.Fatalf("bundle after retention: %+v %v", info, err)
 	}
-	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now(), expired, storage.LookupBackend); err != nil {
+	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now(), expired, storage.LookupBackend, nil); err != nil {
 		t.Fatalf("restore after retention: %v", err)
 	}
 }
