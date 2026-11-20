@@ -157,21 +157,21 @@ func (d *daemon) alive() (bool, string) {
 // probeReadTimeout bounds /readyz's storage read.
 const probeReadTimeout = 2 * time.Second
 
-// ready is /readyz: the daemon is running, storage answers, the
-// configuration generation is active in this process and every package it
-// uses is running. Reconcile lag and a slow host loop don't make it
-// unready: webhooks are still accepted durably, and a probe that took the
-// daemon out of service for an upstream's outage would only add to it.
+// ready is /readyz: the daemon is running and storage answers, so it can
+// accept and persist what it is sent. A degraded daemon is still ready:
+// a package that failed to start, a generation that didn't build here,
+// reconcile lag and a slow host loop leave it accepting webhooks durably
+// and serving everything else, and /v1/health and doctor report them.
+// Taking it out of service would only refuse deliveries, and a restart
+// that a startup probe forced would end the runs the rest was serving.
 func (d *daemon) ready(ctx context.Context) (bool, string) {
 	if p := d.phase(); p != management.PhaseRunning {
 		return false, p
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeReadTimeout)
 	defer cancel()
-	for _, s := range []string{d.databaseState(ctx), d.configState(), d.packageState()} {
-		if s != "ready" {
-			return false, "not_ready"
-		}
+	if d.databaseState(ctx) != "ready" {
+		return false, "not_ready"
 	}
 	return true, "ready"
 }

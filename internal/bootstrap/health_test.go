@@ -19,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/internal/telemetry"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func probe(t *testing.T, h http.Handler, path string) (int, string) {
@@ -43,8 +44,9 @@ func TestProbesFollowPhaseAndLoop(t *testing.T) {
 			t.Fatalf("starting %s: %d %q", path, code, body)
 		}
 	}
-	// The first pass makes it running; storage that doesn't answer and a
-	// configuration not yet built leave it unready.
+	// The first pass makes it running. A degraded daemon (here, with no
+	// configuration built or package started) is still ready while storage
+	// answers, and unready once it doesn't.
 	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "conduit.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -54,15 +56,18 @@ func TestProbesFollowPhaseAndLoop(t *testing.T) {
 	if p := d.phase(); p != management.PhaseRunning {
 		t.Fatalf("phase after a pass: %s", p)
 	}
-	if code, body := probe(t, h, "/readyz"); code != http.StatusServiceUnavailable || body != "not_ready\n" {
-		t.Fatalf("no configuration: %d %q", code, body)
+	if d.configState() == "ready" || d.packageState() == "ready" {
+		t.Fatal("the daemon under test should be degraded")
 	}
-	if s := d.databaseState(context.Background()); s != "ready" {
-		t.Fatalf("database: %s", s)
+	if code, body := probe(t, h, "/readyz"); code != http.StatusOK || body != "ready\n" {
+		t.Fatalf("degraded but serving: %d %q", code, body)
 	}
 	store.Close()
 	if s := d.databaseState(context.Background()); s != "unavailable" {
 		t.Fatalf("closed database: %s", s)
+	}
+	if code, body := probe(t, h, "/readyz"); code != http.StatusServiceUnavailable || body != "not_ready\n" {
+		t.Fatalf("storage down: %d %q", code, body)
 	}
 	// Alive while passes complete; stalled once none has for StallAfter.
 	now = now.Add(59 * time.Second)
@@ -134,6 +139,22 @@ func TestHostMetrics(t *testing.T) {
 	if d.pipeline, err = telemetry.New(telemetry.Options{}); err != nil {
 		t.Fatal(err)
 	}
+	// Three unrouted Events over a cap of two: the count stops at the cap,
+	// and the oldest's age is exact.
+	old := unroutedCap
+	unroutedCap = 2
+	t.Cleanup(func() { unroutedCap = old })
+	if err = store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		for i, at := range []time.Time{now.Add(-time.Minute), now, now} {
+			e := domain.Event{ID: domain.ID("e" + strconv.Itoa(i)), Type: "fixture.changed", Source: "fixture", DeliveryID: strconv.Itoa(i), OccurredAt: at, ReceivedAt: at}
+			if _, _, err := tx.AcceptEvent(e); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	reader := sdkmetric.NewManualReader()
 	if err = d.openMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))); err != nil {
 		t.Fatal(err)
@@ -164,8 +185,11 @@ func TestHostMetrics(t *testing.T) {
 	if age := gauge("open_conduit.host.last_pass_age"); age != 3 {
 		t.Fatalf("last pass age %v", age)
 	}
-	if n := gauge("open_conduit.events.unrouted"); n != 0 {
+	if n := gauge("open_conduit.events.unrouted"); n != 2 {
 		t.Fatalf("unrouted %v", n)
+	}
+	if age := gauge("open_conduit.events.unrouted.oldest_age"); age != 63 {
+		t.Fatalf("oldest unrouted age %v", age)
 	}
 	if n := gauge("open_conduit.leases.held"); n != 1 {
 		t.Fatalf("leases %v", n)

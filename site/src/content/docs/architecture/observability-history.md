@@ -134,7 +134,7 @@ The host also registers gauges on the same `MeterProvider` (`internal/bootstrap/
 
 - `open_conduit.host.last_pass_age`, the seconds since the host loop last completed a pass (beside `open_conduit.host.pass.duration` above)
 - `open_conduit.capacity.limit`, `.in_use` and `.waiting`, by `pool` (`agents`, `jobs` or an executor's pool), as `GET /v1/capacity` reports them
-- `open_conduit.events.unrouted`, the accepted Events not yet routed, and `open_conduit.events.unrouted.oldest_age` in seconds
+- `open_conduit.events.unrouted`, the accepted Events not yet routed, counted up to 1,000 so a collection's cost stays fixed during an outage, and `open_conduit.events.unrouted.oldest_age` in seconds
 - `open_conduit.reconcile.lag`, the longest any ingress source has gone since a complete scan, in seconds, and `open_conduit.reconcile.sources` by `state` (`current`, `lagging`, `failing`)
 - `open_conduit.leases.held`, the execution leases this daemon renews
 - `open_conduit.telemetry.records` by `outcome` (`observed`, `exported`, `dropped`, `invalid`) and `open_conduit.telemetry.export_failures`, the pipeline's own counts

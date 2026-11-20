@@ -12,6 +12,12 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
+// unroutedCap bounds the unrouted Events a collection reads: the gauge
+// counts up to it, so a collection's cost stays fixed however large the
+// backlog grows during an outage, and a backlog at the cap is alarming
+// already. The oldest is the first read, so its age is exact.
+var unroutedCap = 1000
+
 // openMetrics registers the host's gauges on the meter: what it holds now,
 // read when the meter's readers collect (passTimes records each pass's
 // duration). No attribute carries an identifier: pools, states and
@@ -36,7 +42,7 @@ func (d *daemon) openMetrics(meter metric.MeterProvider) error {
 	if err != nil {
 		return err
 	}
-	unrouted, err := m.Int64ObservableGauge("open_conduit.events.unrouted", metric.WithDescription("Accepted Events not yet routed"), metric.WithUnit("{event}"))
+	unrouted, err := m.Int64ObservableGauge("open_conduit.events.unrouted", metric.WithDescription("Accepted Events not yet routed, counted up to 1000"), metric.WithUnit("{event}"))
 	if err != nil {
 		return err
 	}
@@ -82,7 +88,7 @@ func (d *daemon) openMetrics(meter metric.MeterProvider) error {
 		var count int
 		var oldest time.Time
 		if err := storage.View(ctx, d.coord, now, func(tx storage.Tx) error {
-			got, e := tx.UnroutedEvents(0, 0)
+			got, e := tx.UnroutedEvents(0, unroutedCap)
 			count, oldest = len(got), time.Time{}
 			if len(got) > 0 {
 				oldest = got[0].Event.ReceivedAt

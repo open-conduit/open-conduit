@@ -175,9 +175,9 @@ Errors use `{ "error": { "code": "...", "message": "safe summary", "request_id":
 | Path | `200` when | `503` body |
 | --- | --- | --- |
 | `/livez` | the daemon is starting or stopping, or its host loop completed a pass within the stall window (2 minutes, `bootstrap.DefaultStallAfter`); body `ok` | `stalled`: the loop is stuck, for instance behind a call that ignores its bound |
-| `/readyz` | the daemon is running, storage answers within 2 seconds, the committed generation is active in this process and every package it uses is running; body `ready` | `starting`, `stopping` or `not_ready` |
+| `/readyz` | the daemon is running and storage answers within 2 seconds, so it can accept and persist what it is sent; body `ready` | `starting`, `stopping` or `not_ready` (storage doesn't answer) |
 
-Readiness leaves out the host loop and reconcile lag on purpose: webhooks are still accepted durably while either is behind, and a probe that took the daemon out of service during an upstream's outage would add to it. `/v1/health` reports both. A start that never finishes is caught by a startup probe on `/readyz`, since `/livez` passes while the daemon starts.
+A degraded daemon is still ready. A package that failed to start, a generation that didn't build in this process, reconcile lag and a slow host loop all leave it accepting webhooks durably and serving everything else. Taking it out of service would only refuse deliveries at the load balancer, and a restart forced by a startup probe would end the runs the rest of the daemon was serving without fixing, say, a missing binary. `/v1/health` (`degraded`) and doctor report each of them. A start that never finishes is caught by a startup probe on `/readyz`, since `/livez` passes while the daemon starts.
 
 ## Local setup and editing
 
