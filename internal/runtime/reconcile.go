@@ -430,10 +430,39 @@ func (i *Ingress) publishGeneration(tx storage.Tx, r ingressRegistration, scanID
 
 // ReconcileDue performs at most limit external page calls in stable source-name
 // order. Each source appears at most once per call; failures cannot block peers.
+// It is DueSources and ReconcileSource in turn, one source after another; a
+// host that must not wait on one provider for another runs ReconcileSource
+// for each due source on its own instead.
 func (i *Ingress) ReconcileDue(ctx context.Context, limit int) ([]ReconcileResult, error) {
 	if limit < 1 || limit > 200 {
 		return nil, storage.ErrInvalid
 	}
+	names, err := i.DueSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []ReconcileResult{}
+	for _, name := range names {
+		if len(out) >= limit {
+			break
+		}
+		result, e := i.ReconcileSource(ctx, name)
+		if errors.Is(e, ErrIngressBusy) {
+			continue
+		}
+		if e != nil {
+			return out, e
+		}
+		out = append(out, result)
+	}
+	return out, nil
+}
+
+// DueSources names the registered sources whose next scan is due, in a
+// durable lexical ring that starts after the source last reconciled, so one
+// many-page source cannot starve its peers even when deterministic clocks do
+// not advance between bounded polls.
+func (i *Ingress) DueSources(ctx context.Context) ([]string, error) {
 	statuses, err := i.Inspect(ctx)
 	if err != nil {
 		return nil, err
@@ -450,34 +479,40 @@ func (i *Ingress) ReconcileDue(ctx context.Context, limit int) ([]ReconcileResul
 	if err != nil {
 		return nil, err
 	}
-	// Rotate a durable lexical ring so one many-page source cannot starve peers
-	// even when deterministic clocks do not advance between bounded polls.
 	pivot := sort.Search(len(statuses), func(n int) bool { return statuses[n].Name > last })
 	statuses = append(statuses[pivot:], statuses[:pivot]...)
-	out := []ReconcileResult{}
+	now := i.now()
+	names := []string{}
 	for _, status := range statuses {
-		if len(out) >= limit {
-			break
-		}
-		if i.now().Before(status.NextDue) {
-			continue
-		}
-		result, e := i.reconcile(ctx, status.Name, true)
-		if errors.Is(e, ErrIngressBusy) {
-			continue
-		}
-		if e != nil && !errors.Is(e, ErrIngressProvider) && !errors.Is(e, extension.ErrInvalid) && !errors.Is(e, extension.ErrConflict) && !errors.Is(e, ErrScanLeaseLost) && !errors.Is(e, storage.ErrInvalid) && !errors.Is(e, storage.ErrConflict) && !errors.Is(e, storage.ErrNotFound) {
-			return out, e
-		}
-		if e != nil && result.ErrorCode == "" {
-			result.ErrorCode = "reconcile_failed"
-		}
-		out = append(out, result)
-		if err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error { return putJSON(tx, "core.ingress.scheduler", "last_source", status.Name) }); err != nil {
-			return out, err
+		if !now.Before(status.NextDue) {
+			names = append(names, status.Name)
 		}
 	}
-	return out, nil
+	return names, nil
+}
+
+// ReconcileSource makes one page call for a source whose scan is due, under
+// the source's scan lease, and moves the ring past it. It returns
+// ErrIngressBusy when the source is not due or another scan holds its lease.
+// A provider failure, an invalid or conflicting page, a lost lease or a
+// source that went away is the source's own outcome, reported in the
+// result's ErrorCode with a nil error; any other error (storage failing, the
+// context ending) is returned.
+func (i *Ingress) ReconcileSource(ctx context.Context, name string) (ReconcileResult, error) {
+	result, e := i.reconcile(ctx, name, true)
+	if errors.Is(e, ErrIngressBusy) {
+		return result, e
+	}
+	if e != nil && !errors.Is(e, ErrIngressProvider) && !errors.Is(e, extension.ErrInvalid) && !errors.Is(e, extension.ErrConflict) && !errors.Is(e, ErrScanLeaseLost) && !errors.Is(e, storage.ErrInvalid) && !errors.Is(e, storage.ErrConflict) && !errors.Is(e, storage.ErrNotFound) {
+		return result, e
+	}
+	if e != nil && result.ErrorCode == "" {
+		result.ErrorCode = "reconcile_failed"
+	}
+	if err := i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error { return putJSON(tx, "core.ingress.scheduler", "last_source", name) }); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // RestartScan discards only resumable staging after a provider invalidates its

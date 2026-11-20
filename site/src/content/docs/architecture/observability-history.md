@@ -99,6 +99,7 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
   - `open_conduit.execution.duration` in seconds, by binding and outcome
   - `open_conduit.execution.tokens`, by binding and token type
   - `open_conduit.execution.cost`, by binding and currency
+  - `open_conduit.host.pass.duration` in seconds, one per host loop pass, and `open_conduit.host.phase.duration` in seconds by phase (`open_conduit.phase`), recorded by the daemon itself rather than from records ([host loop](../daemon-core-gate/#host-loop))
 
   Identifiers never become metric attributes.
 
@@ -186,6 +187,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `connections` | Declared connections have registered types. Reachability is extension-specific. |
 | `secrets` | Resolved only with `check_secrets`, reporting names and codes, never values or references. |
 | `pinned_executors` | Live or held attempts whose pinned generation or registration is not installed. |
+| `loop` | How long the host loop's latest 600 passes took (median, 95th percentile and longest), and the same for each phase (`route`, `poll`, `start`, `controls`, `subscriptions`, `ingress`, `packages`, `endpoints`, `retention`, `backup`), in the order a pass runs them ([host loop](../daemon-core-gate/#host-loop)). It reports, and never warns: how long a pass may take is the operator's call. |
 | `providers` | Action providers and annotating extensions whose actions, panels or annotations call is timing out, so views skip it (`provider_timing_out`, `warn`): each with the call, since when, how many timeouts, the scope and Work it last timed out on, and when it is next asked. |
 
 Only the `storage` probe writes, and so waits its turn with the daemon's writes. Every other runtime check reads through a View ([SQLite](../sqlite-artifacts/)), and reads only what is outstanding. `lease_recovery`, `resource_holds` and `pinned_executors` read the live attempts and the scheduler's index of attempts whose resource exclusion is unconfirmed; `retention` reads the ledger's pending list. An attempt that has finished and confirmed its exclusion is never read again, so doctor costs the same however long the history grows. On a store written before those indexes existed, the checks read every attempt until the daemon's first poll or retention sweep builds them.

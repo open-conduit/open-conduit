@@ -22,6 +22,9 @@ func (d *daemon) loop(ctx context.Context) error {
 	ticker := time.NewTicker(d.o.PollInterval)
 	defer ticker.Stop()
 	var lastSweep time.Time
+	if d.passTimes == nil {
+		d.passTimes, _ = newPassTimes(nil)
+	}
 	// Events from before their scope was recorded get it, so a scope's
 	// events are read from storage's index; a failure only leaves readers
 	// resolving the rest one by one, as before.
@@ -47,47 +50,36 @@ func (d *daemon) loop(ctx context.Context) error {
 	}
 	for {
 		c := d.current.Load()
-		d.routePending(ctx, c)
-		poll, err := c.scheduler.PollClaims(ctx, c.timers, passLimit)
-		if err != nil && ctx.Err() == nil {
-			d.report("poll", "", errorCode(err))
-		}
-		for _, a := range poll.Recovered {
-			d.attend(c, a, "")
-		}
-		for _, diag := range poll.Diagnostics {
-			d.report("poll", diag.ID, diag.Code)
-			if diag.Code == "executor_recovery_failed" {
-				d.confirmStopped(ctx, c, diag.ID, 0)
+		// The pass keeps the phases that only read and write storage. Those
+		// that wait on another process (a provider's page, an executor's
+		// inject or interrupt, a package's task, a container runtime) only
+		// hand their work to workers of their own here (workers.go).
+		pass := d.passTimes.begin()
+		pass.phase("route", func() { d.routePending(ctx, c) })
+		pass.phase("poll", func() { d.pollPass(ctx, c) })
+		pass.phase("start", func() { d.startReady(ctx) })
+		pass.phase("controls", func() { d.dispatchControls(ctx, c) })
+		pass.phase("subscriptions", func() {
+			if err := c.scheduler.ReconcileSubscriptions(ctx, passLimit); ctx.Err() == nil {
+				d.reportSubscriptions(err)
 			}
-		}
-		for _, due := range poll.Stops {
-			d.followUpStop(ctx, c, due)
-		}
-		if len(poll.Timers) > 0 {
-			d.routePending(ctx, c)
-		}
-		if err = c.scheduler.SettleBudgets(ctx); err != nil && ctx.Err() == nil {
-			d.report("budgets", "", errorCode(err))
-		}
-		d.startReady(ctx)
-		d.dispatchControls(ctx, c)
-		if err = c.scheduler.ReconcileSubscriptions(ctx, passLimit); ctx.Err() == nil {
-			d.reportSubscriptions(err)
-		}
-		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
-			d.report("ingress", "", errorCode(err))
-		}
-		d.reconfigureOnURLChange(ctx)
-		d.runPackageTasks(ctx)
-		d.reconcileContainers(ctx)
-		d.reconcileResources(c)
-		d.drainPackages(ctx)
-		d.reapValidation()
-		d.reconcileEndpoints(ctx)
-		d.sweepResources(c)
-		d.retentionPass(ctx, c, &lastSweep)
-		d.scheduleBackup(ctx)
+		})
+		pass.phase("ingress", func() { d.reconcileIngress(ctx) })
+		pass.phase("packages", func() {
+			d.reconfigureOnURLChange(ctx)
+			d.runPackageTasks(ctx)
+			d.reconcileContainers(ctx)
+			d.reconcileResources(c)
+			d.drainPackages(ctx)
+			d.reapValidation()
+		})
+		pass.phase("endpoints", func() {
+			d.reconcileEndpoints(ctx)
+			d.sweepResources(c)
+		})
+		pass.phase("retention", func() { d.retentionPass(ctx, c, &lastSweep) })
+		pass.phase("backup", func() { d.scheduleBackup(ctx) })
+		pass.done(ctx)
 		d.passed()
 		select {
 		case <-ctx.Done():
@@ -99,6 +91,34 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.log.Warn("stopping: the install this daemon runs from is gone", "path", p)
 			return fmt.Errorf("%w (%s)", ErrInstallRemoved, p)
 		}
+	}
+}
+
+// pollPass runs Scheduler.PollClaims: recovered attempts go to their
+// holders, unconfirmed stops to their follow-ups, and Events from fired
+// timers are routed in the same pass. Budgets are settled after it.
+func (d *daemon) pollPass(ctx context.Context, c *components) {
+	poll, err := c.scheduler.PollClaims(ctx, c.timers, passLimit)
+	if err != nil && ctx.Err() == nil {
+		d.report("poll", "", errorCode(err))
+	}
+	for _, a := range poll.Recovered {
+		d.attend(c, a, "")
+	}
+	for _, diag := range poll.Diagnostics {
+		d.report("poll", diag.ID, diag.Code)
+		if diag.Code == "executor_recovery_failed" {
+			d.confirmStopped(ctx, c, diag.ID, 0)
+		}
+	}
+	for _, due := range poll.Stops {
+		d.followUpStop(ctx, c, due)
+	}
+	if len(poll.Timers) > 0 {
+		d.routePending(ctx, c)
+	}
+	if err = c.scheduler.SettleBudgets(ctx); err != nil && ctx.Err() == nil {
+		d.report("budgets", "", errorCode(err))
 	}
 }
 
@@ -226,32 +246,6 @@ func (d *daemon) startReady(ctx context.Context) {
 		}
 		d.clear("start", id)
 		d.attend(c, a, id)
-	}
-}
-
-// dispatchControls delivers committed inject/interrupt intents for running Work.
-func (d *daemon) dispatchControls(ctx context.Context, c *components) {
-	var running []domain.ID
-	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		running = nil
-		works, err := tx.LiveWorks()
-		for _, w := range works {
-			if w.State == domain.WorkRunning {
-				running = append(running, w.ID)
-			}
-		}
-		return err
-	})
-	for _, id := range running {
-		intents, err := c.router.Intents(ctx, id)
-		if err != nil {
-			continue
-		}
-		for _, intent := range intents {
-			if err = c.scheduler.DispatchControl(ctx, intent.ID); err != nil {
-				d.report("control", domain.ID(intent.ID), errorCode(err))
-			}
-		}
 	}
 }
 

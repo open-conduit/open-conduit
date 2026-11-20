@@ -183,6 +183,10 @@ type daemon struct {
 	reportedAt map[string]time.Time
 	wg         sync.WaitGroup
 	nudge      chan struct{}
+	// workers are the sources and Work the pass's workers are busy with.
+	workers workerState
+	// passTimes records how long each pass and its phases take.
+	passTimes *passTimes
 }
 
 // toolbeltBeside finds the directory holding the `os` toolbelt next to the
@@ -397,6 +401,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	tracer, meter, logger := sdktrace.NewTracerProvider(), sdkmetric.NewMeterProvider(), sdklog.NewLoggerProvider()
 	otel, err := telemetry.NewOTel(telemetry.OTelOptions{Tracer: tracer, Meter: meter, Logger: logger})
 	if err != nil {
+		return err
+	}
+	if d.passTimes, err = newPassTimes(meter.Meter(telemetry.Scope)); err != nil {
 		return err
 	}
 	if err = d.openTelemetry(); err != nil {
@@ -686,7 +693,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.capacityCheck, d.loopCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

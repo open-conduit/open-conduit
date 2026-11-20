@@ -130,15 +130,22 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 	if err != nil || !dispatch {
 		return err
 	}
+	// The call has a deadline of its own, half the dispatch lease, so its
+	// acknowledgement commits while the claim is still this dispatch's. A
+	// call that runs out of time is ambiguous like any other failure: the
+	// executor may have taken the input, so it is retried or falls back,
+	// never taken as refused.
+	call, cancel := context.WithTimeout(ctx, s.controlTimeout())
 	var callErr error
 	if intent.Policy == "inject" {
-		callErr = executor.(extension.InjectExecutor).Inject(ctx, intent.ExecutionID, event)
+		callErr = executor.(extension.InjectExecutor).Inject(call, intent.ExecutionID, event)
 	} else {
 		if s.options.Signalled != nil {
-			s.options.Signalled(ctx, intent.ExecutionID, "term")
+			s.options.Signalled(call, intent.ExecutionID, "term")
 		}
-		callErr = executor.(extension.InterruptExecutor).Interrupt(ctx, intent.ExecutionID)
+		callErr = executor.(extension.InterruptExecutor).Interrupt(call, intent.ExecutionID)
 	}
+	cancel()
 	// Commit dispatch acknowledgement independently of caller cancellation. The
 	// durable claim remains retryable if this transaction cannot finish.
 	commitErr := s.transact(context.WithoutCancel(ctx), nil, func(tx storage.Tx) error {
@@ -208,6 +215,11 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// controlTimeout bounds one inject or interrupt call: half the lease a
+// dispatch claim holds (LeaseDuration), so a call that hangs ends in time
+// for its outcome to be recorded against the same claim.
+func (s *Scheduler) controlTimeout() time.Duration { return s.options.LeaseDuration / 2 }
 
 func (s *Scheduler) handoffContinuationInTx(tx storage.Tx, x domain.Execution, now time.Time) error {
 	work, err := tx.Work(x.WorkID)
