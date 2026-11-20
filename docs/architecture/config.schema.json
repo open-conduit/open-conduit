@@ -28,7 +28,7 @@
       "description": "The tree of scopes: what each watches, how its Work runs and what it may do."
     },
     "includes": {
-      "description": "Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of this file. path is absolute or relative to this file's directory.",
+      "description": "Includes that add scopes beneath parent, a scope of this file: a folder (path) whose .open-conduit/config.json holds them, absolute or relative to this file's directory, or a submitted include (name) whose fragment an operator granted configure on parent applies through the management API.",
       "type": "array",
       "items": {
         "type": "object",
@@ -38,15 +38,31 @@
             "minLength": 1,
             "description": "The folder holding .open-conduit/config.json, absolute or relative to this file's directory (no ~)."
           },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "description": "A submitted include's name: POST /v1/config/includes/{name}/apply applies its fragment."
+          },
           "parent": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,62}$",
-            "description": "A scope defined in this file that the folder's scopes sit beneath."
+            "description": "A scope defined in this file that the include's scopes sit beneath."
           }
         },
         "required": [
-          "path",
           "parent"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "path"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          }
         ],
         "additionalProperties": false
       }

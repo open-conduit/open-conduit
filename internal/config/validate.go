@@ -170,7 +170,20 @@ type Snapshot struct {
 	// sorted by name. The host registers them for the generation
 	// (extension.Registration.EntryOperations).
 	EntryOperations map[string][]extension.EntryOperation
-	redacted        json.RawMessage
+	// Includes are the submitted includes, each a fragment an operator
+	// granted configure on its parent may apply (ApplyFragment).
+	Includes []Include
+	redacted json.RawMessage
+}
+
+// Include returns the submitted include name.
+func (s *Snapshot) Include(name string) (Include, bool) {
+	for _, in := range s.Includes {
+		if in.Name == name {
+			return in, true
+		}
+	}
+	return Include{}, false
 }
 
 // slots implement B04 stable slots: replacement keeps the ancestor position.
@@ -368,6 +381,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 			v.fail(ptr("settings/budgets", i)+"/scope", "unknown_scope", "budget names a scope that is not defined; use a scope id")
 		}
 	}
+	v.submittedIncludes()
 	v.tunnel(doc.Settings.Webhooks.Tunnel)
 	v.secretSchemes()
 	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
@@ -1206,7 +1220,33 @@ func (v *validator) snapshot() *Snapshot {
 			EntryOperations: slices.Clone(e.entryOps)}
 	}
 	s.EntryOperations = v.registeredEntryOperations(s)
+	s.Includes = v.doc.Submitted()
 	return s
+}
+
+// submittedIncludes checks a document's submitted includes: unique names,
+// each under a scope of the config file itself, and every submitted
+// scope's include still declared.
+func (v *validator) submittedIncludes() {
+	names := map[string]bool{}
+	for i, in := range v.doc.Includes {
+		p := ptr("includes", i)
+		if in.Name == "" {
+			continue
+		}
+		if names[in.Name] {
+			v.fail(p+"/name", "duplicate_value", "this include is already declared; name each include once")
+		}
+		names[in.Name] = true
+		if k, ok := v.index[in.Parent]; !ok || v.doc.Scopes[k].Source != "" {
+			v.fail(p+"/parent", "unknown_scope", "parent must be a scope defined in the config file itself")
+		}
+	}
+	for i, sc := range v.doc.Scopes {
+		if name, ok := strings.CutPrefix(sc.Source, "submitted:"); ok && !names[name] {
+			v.fail(ptr("scopes", i)+"/source", "unknown_include", "this scope's submitted include is not declared")
+		}
+	}
 }
 
 // registeredEntryOperations are the entry operations in effect in the

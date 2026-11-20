@@ -84,9 +84,31 @@ func compose(data []byte, reg Registry, inc Includes) (*Document, []string, erro
 		own[sc.ID] = true
 	}
 	c := &checker{fragment: true}
-	seen, included := map[string]bool{}, map[string]bool{}
+	seen, included, names := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	var submitted []ScopeConfig
+	var submittedOrigins []string
 	for i, in := range doc.Includes {
 		p := ptr("includes", i)
+		if in.Name != "" {
+			// A submitted include's scopes are the committed generation's:
+			// only a fragment applied to it changes them.
+			if names[in.Name] {
+				c.fail(p+"/name", "duplicate_value", "this include is already declared; name each include once")
+				continue
+			}
+			names[in.Name] = true
+			if !own[in.Parent] {
+				c.fail(p+"/parent", "unknown_scope", "parent must be a scope defined in the config file itself")
+			}
+			if previous != nil {
+				for j, sc := range submittedScopes(previous, in) {
+					submitted = append(submitted, sc)
+					submittedOrigins = append(submittedOrigins, ptr(p+"/scopes", j))
+					included[sc.ID] = true
+				}
+			}
+			continue
+		}
 		folder, ok := includeFolder(in.Path, inc.Base)
 		if !ok {
 			c.fail(p+"/path", "invalid_value", "use an absolute folder, or one relative to the config file's directory")
@@ -134,6 +156,10 @@ func compose(data []byte, reg Registry, inc Includes) (*Document, []string, erro
 			included[sc.ID] = true
 		}
 	}
+	// Submitted scopes follow every folder's, in include order, as
+	// ApplyFragment places them.
+	doc.Scopes = append(doc.Scopes, submitted...)
+	origins = append(origins, submittedOrigins...)
 	for i, sc := range doc.Scopes[:owned] {
 		if included[sc.Parent] && !own[sc.Parent] {
 			c.fail(ptr("scopes", i)+"/parent", "invalid_value", "a scope of the config file cannot sit under an included folder's scope; choose a parent in the config file")
@@ -142,8 +168,29 @@ func compose(data []byte, reg Registry, inc Includes) (*Document, []string, erro
 	if len(c.diags) > 0 {
 		return nil, nil, invalid(c.diags)
 	}
-	doc.Includes = nil
+	doc.Includes = doc.Submitted()
 	return doc, origins, nil
+}
+
+// submittedScopes are the scopes doc holds for the submitted include in,
+// with its top scopes under in's parent, which the config file may have
+// moved since.
+func submittedScopes(doc *Document, in Include) []ScopeConfig {
+	source := SubmittedSource(in.Name)
+	ids := map[string]bool{}
+	var out []ScopeConfig
+	for _, sc := range doc.Scopes {
+		if sc.Source == source {
+			ids[sc.ID] = true
+			out = append(out, sc)
+		}
+	}
+	for j := range out {
+		if !ids[out[j].Parent] {
+			out[j].Parent = in.Parent
+		}
+	}
+	return out
 }
 
 // folderScopes reads and checks an included folder's scopes. found is false when
@@ -157,19 +204,25 @@ func (c *checker) folderScopes(folder, path, parent string) (scopes []ScopeConfi
 		c.fail(path+"/path", "include_unreadable", "the folder's "+FragmentFile+" must be a regular file you own, not writable by others, at most 1 MiB")
 		return nil, true
 	}
+	return c.fragmentScopes(data, path, parent), true
+}
+
+// fragmentScopes checks a fragment, { "version": 1, "scopes": [...] },
+// reporting at path, and gives each top scope parent.
+func (c *checker) fragmentScopes(data []byte, path, parent string) (scopes []ScopeConfig) {
 	root, diags := decode(data)
 	for _, d := range diags {
 		c.fail(strings.TrimSuffix(path+"/"+d.Path, "/"), d.Code, d.Message)
 	}
 	if root == nil || !c.object(root, path, []string{"version", "scopes"}) {
-		return nil, true
+		return nil
 	}
 	if v := root.field("version"); c.typed(v, path+"/version", kNumber, "integer") && v.num.String() != "1" {
 		c.fail(path+"/version", "unsupported_version", "version must be exactly 1")
 	}
 	list := root.field("scopes")
 	if !c.typed(list, path+"/scopes", kArray, "array") {
-		return nil, true
+		return nil
 	}
 	ids := map[string]bool{}
 	for j, item := range list.items {
@@ -182,10 +235,10 @@ func (c *checker) folderScopes(folder, path, parent string) (scopes []ScopeConfi
 		case p == "":
 			scopes[j].Parent = parent
 		case p != parent && !ids[p]:
-			c.fail(ptr(path+"/scopes", j)+"/parent", "invalid_value", "an included scope's parent is the include's parent or another scope in the same folder; omit it to use the include's parent")
+			c.fail(ptr(path+"/scopes", j)+"/parent", "invalid_value", "an included scope's parent is the include's parent or another scope in the same fragment; omit it to use the include's parent")
 		}
 	}
-	return scopes, true
+	return scopes
 }
 
 // includeFolder resolves an include path: absolute, or relative to base.

@@ -64,15 +64,17 @@ func (r operatorRecord) active(now time.Time) bool { return !r.Revoked && !r.exp
 const LocalOperatorName = "local"
 
 // Operator roles, from least to most: view reads; operate also runs every
-// control and action; admin also applies config and manages other
-// operators' credentials.
+// control and action; configure also applies the fragments of the
+// submitted includes it covers; admin also applies the whole config and
+// manages secrets and other operators' credentials.
 const (
-	RoleView    = "view"
-	RoleOperate = "operate"
-	RoleAdmin   = "admin"
+	RoleView      = "view"
+	RoleOperate   = "operate"
+	RoleConfigure = "configure"
+	RoleAdmin     = "admin"
 )
 
-var roleRank = map[string]int{RoleView: 1, RoleOperate: 2, RoleAdmin: 3}
+var roleRank = map[string]int{RoleView: 1, RoleOperate: 2, RoleConfigure: 3, RoleAdmin: 4}
 
 // ValidRole reports whether role names an operator role.
 func ValidRole(role string) bool { return roleRank[role] > 0 }

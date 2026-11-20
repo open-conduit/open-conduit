@@ -1033,6 +1033,52 @@ func (s *Server) applyConfig(c *call) (int, any, error) {
 	return 200, map[string]any{"generation": u64(generation), "hash": hash}, nil
 }
 
+// getInclude is a submitted include's fragment as its team edits it: the
+// scope it sits under, the text POST /config/includes/{name}/apply takes
+// back, and the hash that apply names as the one it replaces.
+func (s *Server) getInclude(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	f, generation, err := s.o.Config.Fragment(c.params[0])
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, map[string]any{"name": f.Name, "parent": f.Parent, "generation": u64(generation), "hash": f.Hash, "fragment_text": string(f.Text)}, nil
+}
+
+// applyInclude applies a submitted include's fragment, given as fragment
+// (JSON) or fragment_text (its text as a JSON string), over expected_hash,
+// the fragment it replaces. It is recorded in the operator trail under the
+// caller.
+func (s *Server) applyInclude(c *call) (status int, data any, err error) {
+	name := c.params[0]
+	defer func() { s.observeOperator(c, "operator.include_applied", name, "", err) }()
+	var in struct {
+		Fragment     json.RawMessage `json:"fragment"`
+		FragmentText *string         `json:"fragment_text"`
+		ExpectedHash string          `json:"expected_hash"`
+	}
+	if err = c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	if in.ExpectedHash == "" {
+		return 0, nil, fail(400, "malformed", "expected_hash is required: the hash GET /v1/config/includes/{name} gives")
+	}
+	fragment := []byte(in.Fragment)
+	if in.FragmentText != nil {
+		if len(in.Fragment) > 0 {
+			return 0, nil, fail(400, "malformed", "give fragment or fragment_text, not both")
+		}
+		fragment = []byte(*in.FragmentText)
+	}
+	generation, hash, err := s.o.Config.ApplyFragment(c.ctx, name, fragment, in.ExpectedHash, func(parent string) bool { return c.sees(domain.ID(parent)) })
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, map[string]any{"generation": u64(generation), "hash": hash}, nil
+}
+
 // ConfigCandidate is a configuration a Work proposes: the changes it is
 // made of, for the operator to review, and once one is approved, ready for
 // POST /config/apply: its file text (which may carry reference text), the

@@ -12,7 +12,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `connections` | array of [connection](#connections) | yes |  | Credentials and endpoints for the services integrations talk to. |
-| `includes` | array of object |  |  | Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of this file. path is absolute or relative to this file's directory. |
+| `includes` | array of object |  |  | Includes that add scopes beneath parent, a scope of this file: a folder (path) whose .open-conduit/config.json holds them, absolute or relative to this file's directory, or a submitted include (name) whose fragment an operator granted configure on parent applies through the management API. |
 | `scopes` | array of [scope](#scopes) | yes |  | The tree of scopes: what each watches, how its Work runs and what it may do. |
 | `settings` | [settings](#settings) | yes |  | Daemon-wide limits and timing. |
 | `version` | `1` | yes |  | Config format version; always 1. |
@@ -174,10 +174,8 @@ Each entry of `includes`.
 
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `parent` | string | yes |  | A scope defined in this file that the folder's scopes sit beneath. |
-| `path` | string | yes |  | The folder holding .open-conduit/config.json, absolute or relative to this file's directory (no ~). |
 
-Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of this file. path is absolute or relative to this file's directory.
+Includes that add scopes beneath parent, a scope of this file: a folder (path) whose .open-conduit/config.json holds them, absolute or relative to this file's directory, or a submitted include (name) whose fragment an operator granted configure on parent applies through the management API.
 
 ## Integration fields
 

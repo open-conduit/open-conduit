@@ -221,6 +221,12 @@ func mapError(err error) *apiError {
 		return fail(409, "not_live", "the run is not running; its output is in its artifacts")
 	case errors.Is(err, ErrLiveUnsupported):
 		return fail(422, "live_unsupported", "the run's executor does not show output while it runs")
+	case errors.Is(err, config.ErrUnknownInclude):
+		return fail(404, "not_found", "no submitted include of that name; the config file declares it as an include with a name and parent")
+	case errors.Is(err, ErrFragmentConflict):
+		return fail(409, "fragment_conflict", "expected_hash is no longer the include's fragment: read it again and apply over the current one")
+	case errors.Is(err, ErrIncludeMoved):
+		return fail(403, "forbidden_scope", "the config file has moved this include under a scope no grant of configure covers")
 	case errors.Is(err, ErrHashMismatch):
 		return fail(422, "candidate_hash_mismatch", "candidate hash does not match the submitted config")
 	case errors.Is(err, storage.ErrConflict), errors.Is(err, runtime.ErrNotEligible), errors.Is(err, storage.ErrClaimed):
@@ -551,6 +557,8 @@ var routes = []route{
 	{"POST", []string{"events", "*", "reroute"}, targetEvent, true, true, (*Server).rerouteEvent},
 	{"POST", []string{"config", "validate"}, targetDaemon, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, targetDaemon, true, true, (*Server).applyConfig},
+	{"GET", []string{"config", "includes", "*"}, targetInclude, false, false, (*Server).getInclude},
+	{"POST", []string{"config", "includes", "*", "apply"}, targetInclude, true, true, (*Server).applyInclude},
 	{"GET", []string{"secrets"}, targetDaemon, false, false, (*Server).listSecrets},
 	{"PUT", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).putSecret},
 	{"DELETE", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).deleteSecret},
@@ -643,7 +651,8 @@ func APIRoutes() []APIRoute {
 
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
-// applying config, exporting it (it carries secret reference text),
+// applying a submitted include's fragment needs configure; applying the
+// whole config, exporting it (it carries secret reference text),
 // issuing operators' credentials, trusting an issuer or changing its group
 // table, and every secrets route, listing included, need admin; every other control needs operate. Revoking another
 // operator's credential needs admin too, which revoke checks itself.
@@ -660,6 +669,8 @@ func requiredRole(rt *route, parts []string) string {
 		return RoleView
 	case "config/apply", "auth/operators", "auth/issuers/*":
 		return RoleAdmin
+	case "config/includes/*/apply":
+		return RoleConfigure
 	}
 	return RoleOperate
 }
