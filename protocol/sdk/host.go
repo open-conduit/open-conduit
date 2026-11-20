@@ -359,6 +359,16 @@ func (h *Host) ConnectionSecrets(ctx context.Context, scope domain.ID, connectio
 	return out.Values, err
 }
 
+// BindingSecrets resolves secret names a binding in scope selects, when
+// the binding's executor is one of the extension's own: the values each of
+// its runs is given, for a doctor check that the binding's credential works.
+// The host refuses any other binding or name.
+func (h *Host) BindingSecrets(ctx context.Context, scope domain.ID, binding string, names ...string) (map[string]string, error) {
+	var out protocol.SecretResolveResult
+	err := h.conn.Call(ctx, "secret.resolve", protocol.SecretResolveParams{ScopeID: string(scope), Binding: binding, Names: names}, &out)
+	return out.Values, err
+}
+
 // Artifact writes an immutable artifact in acknowledged chunks.
 func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (domain.ArtifactRef, error) {
 	var created protocol.ArtifactCreateResult

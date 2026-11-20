@@ -152,6 +152,11 @@ type Host struct {
 	// installed package). An operation's Authority.Connection is the one
 	// the calling Execution's binding names.
 	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
+	// BindingSecrets resolves names a binding in scope selects, when the
+	// binding's executor is one of the extension's own: the values each of
+	// its runs is given, for a doctor check that the binding's credential
+	// works. The host refuses any other binding or name.
+	BindingSecrets func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error)
 	// Report records a safe diagnostic code for the extension (logged once
 	// per change; "" clears it).
 	Report func(code string)

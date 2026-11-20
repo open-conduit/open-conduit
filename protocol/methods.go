@@ -151,7 +151,7 @@ var Methods = []Method{
 	{Name: "artifact.write", Direction: ExtensionToHost, Contract: []string{"storage.ArtifactWriter.Write (io.Writer)"}},
 	{Name: "artifact.commit", Direction: ExtensionToHost, Contract: []string{"storage.ArtifactWriter.Commit"}},
 	{Name: "artifact.abort", Direction: ExtensionToHost, Contract: []string{"storage.ArtifactWriter.Close (without Commit)"}},
-	{Name: "secret.resolve", Direction: ExtensionToHost, Contract: []string{"host:connectionSecrets / resolver.ResolveNames"}},
+	{Name: "secret.resolve", Direction: ExtensionToHost, Contract: []string{"host:connectionSecrets / host:bindingSecrets / resolver.ResolveNames"}},
 	{Name: "secret.serve", Direction: HostToExtension, Provides: "secret_schemes", Contract: []string{"extension.SecretProvider.Serve", "extension.SecretRequest", "extension.SecretRefusal"}},
 
 	// Background tasks, telemetry and operator surfaces.

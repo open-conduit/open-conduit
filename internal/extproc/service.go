@@ -46,6 +46,10 @@ type Deps struct {
 	// names, of one of its connection types. The host refuses any other
 	// name (B05 isolation).
 	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
+	// BindingSecrets resolves names a binding in scope selects, when the
+	// binding's executor is one of the extension's own (secret.resolve with
+	// a binding). The host refuses any other binding or name.
+	BindingSecrets func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error)
 	// CurrentLimits, when set, supplies the causal limits of the current
 	// configuration generation instead of Limits.
 	CurrentLimits func() runtime.CausalLimits
@@ -375,6 +379,19 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		}
 		if !s.allowedScopes()[domain.ID(p.ScopeID)] {
 			return nil, unauthorized("scope is not configured for this extension")
+		}
+		if p.Binding != "" {
+			if p.Connection != "" {
+				return nil, invalid("connection and binding are exclusive")
+			}
+			if s.deps.BindingSecrets == nil {
+				return nil, protocol.Errorf(protocol.CodeUnsupported, "binding secrets")
+			}
+			values, err := s.deps.BindingSecrets(ctx, domain.ID(p.ScopeID), p.Binding, p.Names)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.SecretResolveResult{Values: values}, nil
 		}
 		if s.deps.Secrets == nil {
 			return nil, protocol.Errorf(protocol.CodeUnsupported, "secrets")
