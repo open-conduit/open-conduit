@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -118,6 +118,30 @@ gateway-image:
 			CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/gateway/linux-$$arch/$$binary ./cmd/$$binary; \
 		done; \
 		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
+
+# The daemon's image (image/Dockerfile) for this machine's Docker, as
+# open-conduit:dev, from the Linux archive `make release-snapshot` wrote for
+# Docker's architecture. Then it checks the image: the daemon and os report
+# the snapshot's version, claude, git and the bundled packages are there, it
+# runs as the conduit user (uid 10001), and the entry point installs a
+# mounted config owner-only. A release builds and pushes both architectures
+# (scripts/publish-image.sh).
+image:
+	@scripts/require-tool.sh docker 'image needs Docker (OrbStack or Docker Desktop on macOS)'
+	@set -eu; archive=$$(ls $(RELEASE_DIR)/open-conduit_*_linux_amd64.tar.gz 2>/dev/null | head -n 1); \
+		test -n "$$archive" || { echo 'image: no release archive in $(RELEASE_DIR); run make release-snapshot first' >&2; exit 1; }; \
+		version=$$(basename $$archive _linux_amd64.tar.gz); version=$${version#open-conduit_}; \
+		scripts/publish-image.sh --load $$version; \
+		docker run --rm open-conduit:dev --version | grep -q "^open-conduit $$version "; \
+		docker run --rm --entrypoint /opt/open-conduit/os open-conduit:dev --version | grep -q "^os $$version "; \
+		docker run --rm --entrypoint id open-conduit:dev -u | grep -qx 10001; \
+		docker run --rm --entrypoint claude open-conduit:dev --version >/dev/null; \
+		docker run --rm --entrypoint git open-conduit:dev --version >/dev/null; \
+		docker run --rm open-conduit:dev extension list | grep -q '^  claude-code .*(bundled with open-conduit)'; \
+		printf '{}\n' > dist/image/config.json; chmod 0644 dist/image/config.json; \
+		docker run --rm -v "$$PWD/dist/image/config.json:/etc/open-conduit/config.json:ro" --entrypoint sh open-conduit:dev -c \
+			'open-conduit-entrypoint --dry-run >/dev/null 2>&1 || true; test "$$(stat -c %a:%u .config/open-conduit/config.json)" = 600:10001'; \
+		echo "image open-conduit:dev: open-conduit and os $$version, claude, git, uid 10001, mounted config installed 0600"
 
 check: check-static test
 

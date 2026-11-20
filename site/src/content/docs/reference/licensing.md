@@ -30,6 +30,8 @@ Every release also becomes available under the Apache License 2.0 two years afte
 
 Each MIT directory holds its own `LICENSE` file, which applies to it and the directories under it instead of the FSL. An extension that imports only these packages, which is all the SDKs need, is built entirely on MIT-licensed code.
 
+The [container image](/open-conduit/guides/headless/) holds third-party software under its own terms beside Open Conduit: Debian's packages, Node.js, and Claude Code, which is Anthropic's and is used under [Anthropic's terms](https://www.anthropic.com/legal/commercial-terms). Using Claude Code in the image is the same as installing it yourself.
+
 ## Contributing
 
 A contribution is accepted under the licence of the directory it changes. [CONTRIBUTING.md](https://github.com/open-conduit/open-conduit/blob/main/CONTRIBUTING.md) covers the rest.
