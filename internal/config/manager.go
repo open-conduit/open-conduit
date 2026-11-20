@@ -105,8 +105,16 @@ func ReadFile(path string) ([]byte, error) {
 	return data, err
 }
 
+// LastGoodPath is where SaveAtomic keeps the previous content of the config
+// file at path.
+func LastGoodPath(path string) string { return path + ".last-good" }
+
+// SecretsPath is the owner-only secrets file beside the config file at
+// path, which file: references read.
+func SecretsPath(path string) string { return filepath.Join(filepath.Dir(path), "secrets.json") }
+
 // SaveAtomic replaces path via a same-directory 0600 temporary file, fsync,
-// rename and parent fsync. The previous content is kept as "<path>.last-good".
+// rename and parent fsync. The previous content is kept as LastGoodPath.
 func SaveAtomic(path string, data []byte) error {
 	if len(data) > MaxSize {
 		return fmt.Errorf("%w: larger than 1 MiB", ErrUnsafeFile)
@@ -118,7 +126,7 @@ func SaveAtomic(path string, data []byte) error {
 	previous, err := ReadFile(path)
 	switch {
 	case err == nil:
-		if err = replace(path+".last-good", previous); err != nil {
+		if err = replace(LastGoodPath(path), previous); err != nil {
 			return err
 		}
 	case !errors.Is(err, os.ErrNotExist):
