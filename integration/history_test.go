@@ -640,7 +640,9 @@ func TestDoctorChecks(t *testing.T) {
 // its change cursor and the finished Work that aged since its age cursor,
 // not every Work ever made (#707): once 60 finished Work are counted, a
 // sweep reads the live one, and once they age and expire whole, a sweep
-// reads the live one again. The control, a store answering every query
+// reads the live one again, and the one whose attempt's resource hold is
+// uncertain from the held list rather than every aged Work after it. The
+// control, a store answering every query
 // from the whole list, sweeps the same and fails the bound.
 func TestRetentionSweepReadsTheLiveChangedAndAged(t *testing.T) {
 	for _, unqueried := range []bool{false, true} {
@@ -698,6 +700,16 @@ func TestRetentionSweepReadsTheLiveChangedAndAged(t *testing.T) {
 			finish(fmt.Sprintf("work-%02d", i), false)
 		}
 		finish("live", true)
+		// stuck's attempt has a resource hold that was never confirmed
+		// released, so its content can't expire; it comes first in the age
+		// order, ahead of the 60.
+		finish("aaa-stuck", false)
+		write(func(tx storage.Tx) error {
+			h := sha256.New()
+			fmt.Fprintf(h, "%d:%s", len("aaa-stuck/attempt"), "aaa-stuck/attempt")
+			state, _ := json.Marshal(map[string]any{"ExecutionID": "aaa-stuck/attempt", "WorkID": "aaa-stuck", "Excluded": false})
+			return tx.Put("core.scheduler.attempts", hex.EncodeToString(h.Sum(nil)), state)
+		})
 		read := 0
 		counted := recordCounter{Store: store, read: &read, unqueried: unqueried}
 		router, err := runtime.NewRouter(counted, clock.Now, runtime.RouterOptions{Generation: "g", Handlers: map[string]extension.RouteHandler{}, Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: routingFixtureExecutor{}}}})
@@ -728,11 +740,9 @@ func TestRetentionSweepReadsTheLiveChangedAndAged(t *testing.T) {
 				return tx.PutWork(w, w.Revision)
 			})
 		}
-		bound := func(stage string) {
+		bound := func(stage string, limit int) {
 			t.Helper()
-			// The live Work and its attempt, and the first finished Work
-			// not yet aged.
-			if limit := 3; unqueried == (read <= limit) {
+			if unqueried == (read <= limit) {
 				t.Fatalf("unqueried %v, %s: a sweep read %d records, bound %d", unqueried, stage, read, limit)
 			}
 		}
@@ -743,14 +753,19 @@ func TestRetentionSweepReadsTheLiveChangedAndAged(t *testing.T) {
 		touch()
 		sweep()
 		sweep()
-		bound("counted")
+		// The live Work and its attempt, and the first finished Work not
+		// yet aged.
+		bound("counted", 3)
 		// A day on, the 60 have aged: one sweep expires them whole.
 		clock.Advance(25 * time.Hour)
 		touch()
 		if r := sweep(); len(r.Expired) != 60 {
 			t.Fatalf("aged sweep expired %d, want 60", len(r.Expired))
 		}
+		// The stuck Work's hold doesn't hold the age cursor back: it is read
+		// from the held list (it and its attempt), beside the live Work, its
+		// attempt and the first not yet aged.
 		sweep()
-		bound("expired")
+		bound("expired", 5)
 	}
 }
