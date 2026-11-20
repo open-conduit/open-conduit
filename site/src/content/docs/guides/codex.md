@@ -74,6 +74,8 @@ open-conduit secret set openai
 
 The scope's `secret_refs` names `openai`, as for any secret ([configuration and secrets](/open-conduit/guides/configuration/)).
 
+`open-conduit doctor --check-secrets` checks the key: `codex-auth` lists OpenAI's models with it (or the provider's, for a binding with a `provider`) and says `ok` or `unauthorised` for each binding. A binding that signs in with your `codex login` shows `not_checked`, because a ChatGPT sign-in has no free request to try; `codex login status` shows whether you're signed in.
+
 ### Run Codex in a container
 
 A binding with a `container` runs each turn in a container, so the agent can reach only what the container's config grants: not your home, your own Codex login, or Open Conduit's state. [Process sandboxes and containers](/open-conduit/architecture/sandboxes/#containers) describes the config and the Docker provider.

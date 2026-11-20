@@ -117,7 +117,16 @@ func WithEvents(scope domain.ID, events ...domain.Event) Option {
 func WithSecrets(scope domain.ID, values map[string]string) Option {
 	return func(h *Host) {
 		h.addScope(domain.Scope{ID: scope, Name: string(scope)})
-		h.secrets[secretKey{scope, ""}] = values
+		h.secrets[secretKey{scope: scope}] = values
+	}
+}
+
+// WithBindingSecrets sets the secret values a binding of the extension's
+// executor in scope selects (Host.BindingSecrets).
+func WithBindingSecrets(scope domain.ID, binding string, values map[string]string) Option {
+	return func(h *Host) {
+		h.addScope(domain.Scope{ID: scope, Name: string(scope)})
+		h.secrets[secretKey{scope: scope, binding: binding}] = values
 	}
 }
 
@@ -127,7 +136,7 @@ func WithSecrets(scope domain.ID, values map[string]string) Option {
 func WithConnectionSecrets(scope domain.ID, connection string, values map[string]string) Option {
 	return func(h *Host) {
 		h.addScope(domain.Scope{ID: scope, Name: string(scope)})
-		h.secrets[secretKey{scope, connection}] = values
+		h.secrets[secretKey{scope: scope, connection: connection}] = values
 	}
 }
 
@@ -206,6 +215,7 @@ type Host struct {
 type secretKey struct {
 	scope      domain.ID
 	connection string
+	binding    string
 }
 
 type causal struct {
@@ -743,9 +753,15 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		if !h.allowedLocked(domain.ID(p.ScopeID)) {
 			return nil, unauthorized("scope is not configured for this extension")
 		}
-		values, ok := h.secrets[secretKey{domain.ID(p.ScopeID), p.Connection}]
+		if p.Connection != "" && p.Binding != "" {
+			return nil, invalid("connection and binding are exclusive")
+		}
+		values, ok := h.secrets[secretKey{scope: domain.ID(p.ScopeID), connection: p.Connection, binding: p.Binding}]
 		if !ok && p.Connection != "" {
 			return nil, unauthorized("connection is not bound to the extension in the scope")
+		}
+		if !ok && p.Binding != "" {
+			return nil, unauthorized("binding is not one of the extension's executors in the scope")
 		}
 		out := protocol.SecretResolveResult{Values: map[string]string{}}
 		for _, n := range p.Names {

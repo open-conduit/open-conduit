@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +165,26 @@ func TestCheckConfig(t *testing.T) {
 	}
 	if got := checkConfig(nil, x, nil, "/cfg", nil); len(got.Scopes) != 0 {
 		t.Fatalf("no snapshot: %+v", got)
+	}
+}
+
+// A binding's selected secret names, like its config, are in the view of
+// the extension whose executor it names alone, and never their references.
+func TestCheckConfigBindingSecretNames(t *testing.T) {
+	s := &config.Snapshot{Order: []domain.ID{"work"}, Scopes: map[domain.ID]*config.EffectiveScope{
+		"work": {ID: "work", Enabled: true, SecretRefs: map[string]string{"key": "env:KEY"}, Bindings: []config.Binding{{Name: "agent", Executor: "agent", SecretNames: []string{"key"}, Operations: []string{"acme.ping"}}}},
+	}}
+	own := checkConfig(s, &installed{m: protocol.Manifest{Name: "agent", Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: "agent"}}}}}, nil, "/cfg", nil)
+	if len(own.Scopes) != 1 || !slices.Equal(own.Scopes[0].Bindings[0].SecretNames, []string{"key"}) {
+		t.Fatalf("own executor's view: %+v", own.Scopes)
+	}
+	other := checkConfig(s, &installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{Operations: []protocol.OperationDecl{{Name: "acme.ping", Kind: protocol.OperationHandler}}}}}, nil, "/cfg", nil)
+	if len(other.Scopes) != 1 || other.Scopes[0].Bindings[0].SecretNames != nil {
+		t.Fatalf("another extension's view: %+v", other.Scopes)
+	}
+	raw, _ := json.Marshal(own)
+	if strings.Contains(string(raw), "env:KEY") {
+		t.Fatalf("view carries a reference: %s", raw)
 	}
 }
 

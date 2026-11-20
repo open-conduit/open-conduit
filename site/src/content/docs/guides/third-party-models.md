@@ -17,6 +17,10 @@ open-conduit secret set openrouter
 
 The binding lists it in `secret_names`, and the scope's `secret_refs` names it. The `provider` then says which selected secret is the key. A local server that needs no key needs no secret.
 
+To check the key works before any Work runs on it, run `open-conduit doctor --check-secrets`. Each binding's executor makes one free request to the provider's host with the key its turns would send, and says `ok`, `unauthorised` or `unreachable` ([doctor](/open-conduit/architecture/observability-history/#doctor)). A provider that lists its models without a key (OpenRouter does) shows `ok` whatever the key.
+
+**Bedrock and Vertex** have no `provider` setting. Claude Code reaches them through its own variables (`CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` and the cloud's credentials), which you set in the binding's `env` and `secret_env`. Doctor doesn't check those credentials: it reports such a binding as `not_checked`.
+
 ## Claude Code
 
 Claude Code speaks Anthropic's Messages API, so the endpoint must serve that API. OpenRouter, LiteLLM and Ollama all do.

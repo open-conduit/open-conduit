@@ -200,7 +200,7 @@ Each step landed with its tests and the page amendments above:
 
 6. The move to an installed package in its own repository ([#243](https://github.com/open-conduit/open-conduit/issues/243)): core gained `entry_gated`, route binding checks, `setup.first_run`, package playbooks and bundled packages first ([#248](https://github.com/open-conduit/open-conduit/pull/248)); then the extension moved to open-conduit/extension-setup on `protocol/sdk`, and the release archive bundles it.
 
-Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the sign-in state on the `claude-code` doctor check.
+Not built: naming scopes when a session starts and the operator's `doctor` action with secrets checked recorded as `setup.checks`. With secrets checked, doctor's `claude-code-auth` check now tries each binding's credential, the Claude login included ([doctor](../observability-history/#doctor)); plain doctor still doesn't report sign-in state.
 
 ## Decided in review
 

@@ -16,7 +16,7 @@
 // The extension is started at the first configure, with an inproc.Host
 // whose services are the host's methods: the store is sdk.Store (the
 // extension's own KV and scoped state reads), secrets go through
-// secret.resolve, deliveries through ingress.deliver, and Authorize,
+// secret.resolve (a binding's, with its binding), deliveries through ingress.deliver, and Authorize,
 // WaitTarget, WaitProgress, Pending, Render, Act, Actions, SettleHold and Capture
 // through their methods. In-transaction acceptance returns the Event from
 // the transaction as a kv.commit Emission, which the host accepts with the
@@ -659,6 +659,9 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 				return h.Secrets(ctx, scope, names...)
 			}
 			return h.ConnectionSecrets(ctx, scope, connection, names...)
+		},
+		BindingSecrets: func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error) {
+			return h.BindingSecrets(ctx, scope, binding, names...)
 		},
 		Report: func(code string) {
 			if code != "" {

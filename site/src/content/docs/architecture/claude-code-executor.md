@@ -169,7 +169,7 @@ A `call github.wait` parks the attempt exactly like `wait`, because `Complete` a
 
 ## Operator controls
 
-[Operator setup](../operator-setup/) covers attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command, which starts through the executor's interactive launch (below). The executor also renders each turn's activity as a run artifact, shown by the TUI and `runs log` ([installed integrations](../installed-integrations/#operator-tools)).
+[Operator setup](../operator-setup/) covers attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), the deep `claude-code-auth` check that, with `check_secrets=true`, tries each binding's credential against the endpoint its runs reach ([doctor](../observability-history/#doctor)), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command, which starts through the executor's interactive launch (below). The executor also renders each turn's activity as a run artifact, shown by the TUI and `runs log` ([installed integrations](../installed-integrations/#operator-tools)).
 
 Handed-back Work sits `ready` with no pending input, and the host loop skips it quietly.
 

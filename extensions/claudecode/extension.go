@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,6 +45,14 @@ type Extension struct {
 	// `--version` in tests.
 	usage     usageRead
 	versionOf func(ctx context.Context, bin string) (string, error)
+
+	// apiURL, authHTTP and loginToken stand in for Anthropic's API, the
+	// credential probe's client and the Claude login in tests.
+	apiURL     string
+	authHTTP   *http.Client
+	loginToken func(ctx context.Context, configDir string) (string, error)
+	// probeBudget bounds each binding's credential probe (default 8s).
+	probeBudget time.Duration
 }
 
 // NewExtension returns the extension, its executor not yet opened.

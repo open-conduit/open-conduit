@@ -62,6 +62,7 @@ var parity = map[string][]string{
 	"Host.Now":               {"process:its own clock; time-dependent calls carry the host's now"},
 	"Host.Log":               {"process:its stderr, which the host keeps as the extension's log"},
 	"Host.Secrets":           {"method:secret.resolve"},
+	"Host.BindingSecrets":    {"method:secret.resolve"},
 	"Host.Report":            {"method:check.run"},
 	"Host.Nudge":             {"method:event.accept", "method:timer.arm"},
 	"Host.StateDir":          {"method:initialize"},

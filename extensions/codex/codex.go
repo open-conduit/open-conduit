@@ -546,18 +546,8 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 			vars["PATH"] = toolbelt + string(os.PathListSeparator) + vars["PATH"]
 		}
 	}
-	for name, value := range cfg.Env {
-		vars[name] = value
-	}
-	for secret, value := range r.Context.Secrets {
-		name := cfg.secretVariable(secret)
-		if cfg.providerKey(secret) {
-			name = providerKeyVar
-		}
-		if reserved(name) || strings.ContainsRune(value, 0) {
-			return nil, configError("secret maps to a reserved variable")
-		}
-		vars[name] = value
+	if err := cfg.bindingVars(vars, r.Context.Secrets); err != nil {
+		return nil, err
 	}
 	vars["OS_SCOPE_ID"] = string(r.Work.ScopeID)
 	vars["OS_WORK_ID"] = string(r.Work.ID)
@@ -569,6 +559,27 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// bindingVars sets the binding's own layers in vars, over the earlier
+// ones: its env, then its selected secrets under their variables (the
+// provider's key under the provider's). They decide the credential codex
+// runs on, so doctor's credential check reads them the same way.
+func (c Config) bindingVars(vars, secrets map[string]string) error {
+	for name, value := range c.Env {
+		vars[name] = value
+	}
+	for secret, value := range secrets {
+		name := c.secretVariable(secret)
+		if c.providerKey(secret) {
+			name = providerKeyVar
+		}
+		if reserved(name) || strings.ContainsRune(value, 0) {
+			return configError("secret maps to a reserved variable")
+		}
+		vars[name] = value
+	}
+	return nil
 }
 
 func contains(list []string, s string) bool {

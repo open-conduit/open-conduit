@@ -653,7 +653,8 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return out
 		},
-		Secrets: d.scopedSecrets(m.Name, extTypes, connTypes),
+		Secrets:        d.scopedSecrets(m.Name, extTypes, connTypes),
+		BindingSecrets: d.bindingSecrets(m),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 			accepted, added, err := d.ingress.Deliver(ctx, name, delivery)
 			if err == nil {
@@ -763,6 +764,38 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes map[string]bool) 
 			out[n] = v
 		}
 		return out, nil
+	}
+}
+
+// bindingSecrets resolves names a binding in an enabled scope selects,
+// for the package whose executor the binding names: the values each of the
+// binding's runs is given (ConfigService.Secrets), which the executor's
+// doctor check of the binding's credential needs. Any other binding, or a
+// name the binding doesn't select, is refused.
+func (d *daemon) bindingSecrets(m protocol.Manifest) func(ctx context.Context, id domain.ID, binding string, names []string) (map[string]string, error) {
+	own := map[string]bool{}
+	for _, e := range m.Provides.Executors {
+		own[e.Name] = true
+	}
+	return func(ctx context.Context, id domain.ID, binding string, names []string) (map[string]string, error) {
+		s, _ := d.extensionSnapshot()
+		if s == nil || s.Scopes[id] == nil || !s.Scopes[id].Enabled {
+			return nil, extension.ErrUnauthorized
+		}
+		scope := s.Scopes[id]
+		b, ok := scope.Binding(binding)
+		if !ok || !own[b.Executor] {
+			return nil, extension.ErrUnauthorized
+		}
+		for _, n := range names {
+			if !slices.Contains(b.SecretNames, n) {
+				return nil, extension.ErrUnauthorized
+			}
+		}
+		if len(names) == 0 {
+			return map[string]string{}, nil
+		}
+		return d.resolver.For(m.Name).ResolveNames(ctx, scope, names)
 	}
 }
 

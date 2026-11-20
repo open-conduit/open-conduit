@@ -83,6 +83,10 @@ The first message is built as it is for Claude Code and Codex: the playbook, its
 
 The [Chat Completions executor](/open-conduit/architecture/chat-completions-executor/#binding-config) page has the detail.
 
+## Check the key
+
+`open-conduit doctor --check-secrets` lists `<base_url>/models` once for each binding, with its `api_key_secret` and `headers`, and says whether the key works: `ok`, `unauthorised` or `unreachable` (`chat-completions-auth`). A provider that lists its models without a key, as OpenRouter does, shows `ok` whatever the key. Plain `open-conduit doctor` sends nothing.
+
 ## When the provider says no
 
 A rate limit ends the attempt, and Open Conduit retries it when the provider said to come back (`Retry-After`), plus a margin. A provider outage or a timeout is an ordinary failure, retried on the runtime's retry delays (`settings.retry_delays_seconds`). A bad key or an unknown model fails at once without retrying: fix the config or the secret, then retry the Work. Nothing sleeps in the meantime, so a rate-limited provider holds no capacity.

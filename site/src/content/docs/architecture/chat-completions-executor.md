@@ -116,6 +116,7 @@ The attempt's loop lives in the extension's process. Before its first request, `
 - **Stop** cancels the attempt at that epoch and returns once its loop has returned. An attempt this instance doesn't hold has nothing running. A newer epoch refuses an older stop.
 - **Forget** removes an attempt's recorded result and keeps the Work's conversation.
 - **Interrupt** cancels the request in flight. The attempt fails as `interrupted` and its turn stays open.
+- **Doctor.** With `check_secrets=true`, the deep `chat-completions-auth` check lists `<base_url>/models` once per binding, with its `api_key_secret` (resolved through `sdk.Host.BindingSecrets`) and `headers`, and reports a safe code by the answer's status alone ([doctor](../observability-history/#doctor)).
 
 ## Binding config
 

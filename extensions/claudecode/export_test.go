@@ -1,6 +1,12 @@
 package claudecode
 
-import "context"
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
+)
 
 // HoldFollowers keeps every turn launched from now on from following its
 // output until release is closed. The returned func restores the default.
@@ -27,3 +33,12 @@ type Process = procInfo
 
 // Processes lists the host's processes as the executor's sweep sees them.
 func Processes() ([]Process, error) { return scanProcesses() }
+
+// StubAuth points the credential check at a fake Anthropic API, its
+// client, a fake Claude login and the host's binding secrets.
+func (x *Extension) StubAuth(apiURL string, client *http.Client, login func(ctx context.Context, configDir string) (string, error), secrets func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error)) {
+	x.apiURL, x.authHTTP, x.loginToken, x.h.BindingSecrets = apiURL, client, login, secrets
+}
+
+// SetProbeBudget bounds each binding's credential probe.
+func (x *Extension) SetProbeBudget(d time.Duration) { x.probeBudget = d }

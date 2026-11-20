@@ -751,10 +751,15 @@ type ArtifactTarget struct {
 // extension's entries in a configured scope: the entry's selected secret
 // names, or, with Connection set, the secret names of that connection when
 // an entry of the extension in the scope names it (07-03), or a binding in
-// the scope names it and it is of one of the extension's connection types.
+// the scope names it and it is of one of the extension's connection types,
+// or, with Binding set, the secret names a binding in the scope selects
+// when its executor is one of the extension's own (what each of that
+// binding's runs is given, for the executor's doctor check of its
+// credential). Connection and Binding are not both set.
 type SecretResolveParams struct {
 	ScopeID    string   `json:"scope_id"`
 	Connection string   `json:"connection,omitempty"`
+	Binding    string   `json:"binding,omitempty"`
 	Names      []string `json:"names"`
 }
 type SecretResolveResult struct {
@@ -837,8 +842,12 @@ type CheckBinding struct {
 	Toolbelt   string          `json:"toolbelt,omitempty"`
 	Operations []string        `json:"operations,omitempty"`
 	Connection string          `json:"connection,omitempty"`
-	Resource   *CheckResource  `json:"resource,omitempty"`
-	Isolation  string          `json:"isolation,omitempty"`
+	// SecretNames are the secret names the binding selects, never their
+	// values, given (like Config) only to the extension whose executor it
+	// names, which resolves them with secret.resolve and Binding.
+	SecretNames []string       `json:"secret_names,omitempty"`
+	Resource    *CheckResource `json:"resource,omitempty"`
+	Isolation   string         `json:"isolation,omitempty"`
 	// Sandbox is the binding's sandbox, when its provider is one the
 	// extension declares (manifest sandboxes).
 	Sandbox *CheckSandbox `json:"sandbox,omitempty"`

@@ -599,7 +599,7 @@ func checkConfig(s *config.Snapshot, x *installed, executors map[string]extensio
 				cb.Toolbelt = e.Capabilities().Toolbelt
 			}
 			if own[b.Executor] {
-				cb.Config = b.Config
+				cb.Config, cb.SecretNames = b.Config, b.SecretNames
 			}
 			if b.Resource != nil {
 				cb.Resource = &protocol.CheckResource{Provider: b.Resource.Provider, Config: b.Resource.Config}
