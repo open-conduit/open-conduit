@@ -264,6 +264,12 @@ type Capabilities struct {
 	// Container: the executor launches in a binding's container, through
 	// its ContainerBroker. Only a binding with a container requires it.
 	Container bool `json:",omitempty"`
+	// NoProcess: the executor runs no process the agent controls. Its
+	// turns run in its own package and reach the world only through the
+	// toolbelt (a chat completions loop, a hold), so a scope whose
+	// authorization requires isolation accepts it without a sandbox or
+	// container. Only the executor declares it; a binding never requires it.
+	NoProcess bool `json:",omitempty"`
 }
 type Binding struct {
 	Name, Executor string

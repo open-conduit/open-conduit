@@ -98,6 +98,7 @@ A scope's `authorization`.
 | --- | --- | --- | --- | --- |
 | `connections` | array of string | yes |  | Connection IDs this scope (and its bindings) may use. |
 | `file_scopes` | array of string |  |  | Other scopes whose trackers this scope's agents may file issues in and comment on. |
+| `isolation` | one of `required` |  |  | `required`: every binding in the scope must run in a sandbox or a container, unless its executor declares that it runs no process the agent controls (no_process). Config check refuses one that doesn't, and a launch or recovery that would run unconfined fails closed. Descendant scopes inherit it and can't drop it, even when they write their own authorization. Omitted, nothing is required. |
 | `operations` | array of string | yes |  | Toolbelt operations executions in this scope may call (see the operations reference): an operation, a toolset an extension publishes as `@<name>` (every operation it has in the running release), or either denied with a leading `!`. A binding's operations narrow it. |
 | `read_scopes` | array of string | yes |  | Other scopes whose Events this scope's executions may wait on. |
 | `work_kinds` | array of string |  |  | Kinds of child Work this scope's bindings may be granted to ask for with create_work (a binding's work_kinds). Empty grants none. |

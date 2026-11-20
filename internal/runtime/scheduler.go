@@ -64,6 +64,11 @@ var ErrSecretUnavailable = errors.New("execution secrets unavailable")
 var ErrEnvironmentUnavailable = errors.New("run environment unavailable")
 var ErrResourceUnavailable = errors.New("execution resource provider unavailable")
 
+// ErrIsolationRequired is a launch or recovery refused because the
+// attempt's scope requires isolation (Options.Isolation) and neither a
+// sandbox nor a container confines it.
+var ErrIsolationRequired = errors.New("isolation required: the binding runs in neither a sandbox nor a container")
+
 type SchedulerOptions struct {
 	Owner               string
 	LeaseDuration       time.Duration
@@ -147,6 +152,15 @@ type SchedulerOptions struct {
 	// before its argv reaches the executor. Core never inspects the
 	// binding.
 	Container func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, env map[string]string, pin func(extension.ContainerPin) error) (ContainerBinding, error)
+	// Isolation names the scope whose authorization requires the
+	// attempt's scope to run confined, in the current generation, or ""
+	// when none does. It is asked after Sandbox and Container have bound,
+	// for an executor that runs processes (domain.Capabilities.NoProcess
+	// false), whenever neither bound a broker. A name or an error fails the
+	// launch closed (ErrIsolationRequired) before the executor is called: a
+	// recovery is then not adopted, and the host stops what it left. Nil
+	// requires nothing.
+	Isolation func(context.Context, AttemptState) (domain.ID, error)
 	// Signalled is told, before the host asks an executor to interrupt an
 	// execution, so a container's records hold every TERM the host sends.
 	Signalled func(ctx context.Context, execution domain.ID, kind string)
@@ -1569,6 +1583,25 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		if c.Broker != nil {
 			attempt.Request.Context.Container, attempt.Request.Context.Resources, settle = c.Broker, c.Resources, c.Settle
 			attempt.Request.Context.ContainerHome = c.Home
+		}
+	}
+	if s.options.Isolation != nil && attempt.Request.Context.Sandbox == nil && attempt.Request.Context.Container == nil && !executor.Capabilities().NoProcess {
+		var required domain.ID
+		isolationErr := trail.phase("isolation", func() (e error) {
+			if required, e = s.options.Isolation(ctx, state); e == nil && required != "" {
+				e = fmt.Errorf("%w (scope %s requires isolation)", ErrIsolationRequired, required)
+			}
+			return e
+		})
+		if isolationErr != nil {
+			// A recovered segment ran unconfined: it is not adopted, and,
+			// unconfirmed, the host stops it. A launch has run nothing.
+			summary := "isolation required"
+			if required != "" {
+				summary = "scope " + string(required) + " requires a sandbox or container"
+			}
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary}}
+			return attempt, errors.Join(ErrIsolationRequired, isolationErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
 	}
 	if !recovering {

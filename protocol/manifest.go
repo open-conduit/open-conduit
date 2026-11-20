@@ -751,6 +751,10 @@ type Capabilities struct {
 	// and container.adopt.
 	Sandbox   bool `json:"sandbox,omitempty"`
 	Container bool `json:"container,omitempty"`
+	// NoProcess marks an executor that runs no process the agent controls
+	// (domain.Capabilities.NoProcess): a scope that requires isolation
+	// accepts its bindings without a sandbox or container.
+	NoProcess bool `json:"no_process,omitempty"`
 }
 
 // Controls are optional executor methods that are not capabilities: stop

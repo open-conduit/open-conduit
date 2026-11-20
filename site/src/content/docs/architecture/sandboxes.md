@@ -17,6 +17,8 @@ A sandbox here is local and process-scoped: the sandbox is the process tree the 
 
 Core knows nothing about sandboxes. Its only involvement is one generic hook, `SchedulerOptions.Sandbox`, called after `Resources` and immediately before `Run`, `Recover` or `Resume`, outside coordination transactions. The host returns the attempt's `extension.SandboxBroker` (nil when the binding declares no sandbox) and the resource broker the executor gets in its place. Core puts the broker in `ExecutionContext.Sandbox`. A binding failure fails the attempt as `sandbox unavailable` (`ErrSandboxUnavailable`) before any executor call. The hook also gets a `pin` function, which records a plan's digest and summary with the attempt's open segment (`Segment.Sandbox`), fenced by the lease. Core stores those two strings and never reads them. A recovered segment carries the pin of the process it adopts.
 
+A second hook, `SchedulerOptions.Isolation`, says whether the attempt's scope requires isolation ([Requiring isolation](#requiring-isolation)). Core asks it only when neither hook bound a broker and the executor runs processes, and fails the attempt closed if the answer names a scope.
+
 ## The contract
 
 | Type | Role |
@@ -169,6 +171,17 @@ A package can also run processes of its own for a config entry, and some of thos
 - **The entry names the sandbox.** An extension entry takes a `sandbox`, `{provider, config}`, as a binding does. Its type declares whether one is `required` or `optional` (manifest `extensions[].sandbox`). Config check refuses a missing required sandbox (`sandbox_required`), a sandbox on a type that declares none (`unsupported_sandbox`), since nothing would confine, and checks the provider and its policy as it does a binding's (`unknown_registration`, `invalid_config`).
 - **The host plans the launch.** The package asks with `sandbox.entry_plan` (`extension.EntrySandbox`, the Go SDK's `Host.EntrySandbox`), naming the scope, the entry and its argv and environment. The host finds the entry's sandbox in that scope, never the package's, so a package can't choose a wider policy than the operator wrote. It makes a fresh directory for the process, `<state>/entries/<package>/runs/<entry>-<random>`, as both its working and run directory, and plans it through `extension.BindSandbox` with the host's protected set denied, as for an attempt. The answer is the plan and that directory. An entry with no sandbox, an entry of a type the package declares none for, or a scope that doesn't use the package is refused, and nothing may run.
 - **Not pinned to a segment.** The plan is recorded beside the runs (`<state>/entries/<package>/records`) and logged with its digest and summary. It is never adopted: the process belongs to the package that launched it and ends with it, so a restarted daemon removes `<state>/entries` and the package launches again.
+
+## Requiring isolation
+
+A sandbox or container is opt-in per binding, so an operator who runs several teams' scopes on one daemon needs a way to say that none of them runs on the host. That rule is the operator's, written in their config: a scope's `authorization` takes `isolation: "required"`.
+
+- **Inherited, never dropped.** A descendant scope has the requirement whether it writes an `authorization` of its own or not, so a scope that an included folder adds under it can't widen it. The scope that set it is recorded with the effective scope (`EffectiveScope.IsolationScope`).
+- **Config check refuses an unconfined binding.** In such a scope, every enabled binding, its own or inherited, must declare a `sandbox` or a `container`, or config check refuses it as `isolation_required`, naming the scope that set the requirement. A binding's grants run under the binding's own sandbox or container, so they need nothing more.
+- **Executors that run no process.** An executor whose turns run in its own package and reach the world only through the toolbelt, such as [chat completions](../chat-completions-executor/) and the GitHub hold, declares `Capabilities.NoProcess` (manifest `no_process`). Its bindings pass without a sandbox or container. An executor that doesn't declare it, or isn't registered, is refused. The packages themselves are trusted code and stay outside the rule.
+- **The launch checks again.** Before the executor is called, the host answers `SchedulerOptions.Isolation` from the current generation (`ConfigService.Isolation`), so an attempt queued or parked before the requirement was added doesn't start unconfined. A launch fails as `ErrIsolationRequired` with nothing run. A recovered segment that ran unconfined isn't adopted: the attempt fails unconfirmed, and the host stops what it left ([recovery and relaunch](../execution-scheduling/#recovery-and-relaunch)).
+
+Entry processes keep their own rule (`sandbox: required` on the entry's type), and `work attach` is already refused for Work that ran in a sandbox.
 
 ## Workspaces
 

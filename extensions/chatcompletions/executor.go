@@ -59,9 +59,9 @@ var (
 
 // Capabilities are interrupt, inject, resume and the toolbelt, which the
 // executor calls itself (sdk). It needs no workspace, sandbox or container:
-// it runs no process.
+// it runs no process (NoProcess).
 func Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltSDK}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltSDK, NoProcess: true}
 }
 
 // Options configure an Executor.

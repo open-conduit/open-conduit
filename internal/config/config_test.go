@@ -1198,3 +1198,91 @@ func TestBudgets(t *testing.T) {
 		}
 	}
 }
+
+// TestIsolationRequired: a scope whose authorization requires isolation
+// refuses an unconfined binding, naming the scope that set the requirement;
+// a child inherits the requirement and can't drop it by restating its
+// authorization; a binding in a sandbox, or whose executor runs no process,
+// passes. Without the requirement the same config is valid (the control).
+func TestIsolationRequired(t *testing.T) {
+	reg := registry()
+	reg.Executors["chat_agent"] = fakeExecutor{domain.Capabilities{Toolbelt: "sdk", NoProcess: true}}
+	base := generic(t, example(t, "inheritance"))
+	if _, err := Validate(encode(t, base), reg); err != nil {
+		t.Fatalf("control: %+v", diagnostics(t, err))
+	}
+	require := func(m map[string]any) {
+		scope(m, 0)["authorization"].(map[string]any)["isolation"] = "required"
+	}
+	refused := func(t *testing.T, m map[string]any, path, scopeID string) {
+		t.Helper()
+		_, err := Validate(encode(t, m), reg)
+		if err == nil {
+			t.Fatal("an unconfined binding was accepted")
+		}
+		for _, d := range diagnostics(t, err) {
+			if d.Code == "isolation_required" && d.Path == path {
+				if !strings.Contains(d.Message, "scope "+scopeID+" requires") {
+					t.Errorf("diagnostic %q doesn't name scope %s", d.Message, scopeID)
+				}
+				return
+			}
+		}
+		t.Fatalf("diagnostics %+v, want isolation_required at %s", diagnostics(t, err), path)
+	}
+
+	m := clone(t, base)
+	require(m)
+	refused(t, m, "scopes/0/bindings/0", "parent")
+	refused(t, m, "scopes/1/bindings/0", "parent")
+
+	// The child restates its authorization without the requirement.
+	m = clone(t, base)
+	require(m)
+	scope(m, 1)["authorization"] = clone(t, scope(base, 0))["authorization"]
+	for _, b := range scope(m, 0)["bindings"].([]any) {
+		b.(map[string]any)["executor"], b.(map[string]any)["requires"] = "chat_agent", map[string]any{"toolbelt": "sdk"}
+	}
+	refused(t, m, "scopes/1/bindings/0", "parent")
+	snap := func(m map[string]any) *Snapshot {
+		t.Helper()
+		s, err := Validate(encode(t, m), reg)
+		if err != nil {
+			t.Fatalf("%+v", diagnostics(t, err))
+		}
+		return s
+	}
+	entry(m, 1, "bindings", 0)["executor"], entry(m, 1, "bindings", 0)["requires"] = "chat_agent", map[string]any{"toolbelt": "sdk"}
+	s := snap(m)
+	if c := s.Scopes["child"]; c.Authorization.Isolation != IsolationRequired || c.IsolationScope != "parent" {
+		t.Fatalf("child authorization %+v, set by %q", c.Authorization, c.IsolationScope)
+	}
+	if p := s.Scopes["parent"]; p.IsolationScope != "parent" {
+		t.Fatalf("parent set by %q", p.IsolationScope)
+	}
+
+	// A child sets it itself: only the child's bindings must be confined.
+	m = clone(t, base)
+	scope(m, 1)["authorization"] = clone(t, scope(base, 0))["authorization"]
+	scope(m, 1)["authorization"].(map[string]any)["isolation"] = "required"
+	refused(t, m, "scopes/1/bindings/0", "child")
+	entry(m, 1, "bindings", 0)["executor"], entry(m, 1, "bindings", 0)["requires"] = "chat_agent", map[string]any{"toolbelt": "sdk"}
+	if s := snap(m); s.Scopes["parent"].IsolationScope != "" || s.Scopes["child"].IsolationScope != "child" {
+		t.Fatalf("set by parent %q, child %q", s.Scopes["parent"].IsolationScope, s.Scopes["child"].IsolationScope)
+	}
+
+	// A sandboxed binding passes.
+	reg.Sandboxes = map[string]func(json.RawMessage) error{"srt": nil}
+	reg.ResourceSandbox = map[string]func(json.RawMessage, string) error{"git": func(json.RawMessage, string) error { return nil }}
+	sandboxed := generic(t, example(t, "sandboxed"))
+	scope(sandboxed, 0)["authorization"].(map[string]any)["isolation"] = "required"
+	snap(sandboxed)
+	delete(entry(sandboxed, 0, "bindings", 0), "sandbox")
+	refused(t, sandboxed, "scopes/0/bindings/0", "engineering")
+
+	m = clone(t, base)
+	scope(m, 0)["authorization"].(map[string]any)["isolation"] = "optional"
+	if _, err := Validate(encode(t, m), reg); err == nil || !slices.Contains(codes(diagnostics(t, err)), "invalid_value") {
+		t.Fatalf("isolation optional: %v", err)
+	}
+}

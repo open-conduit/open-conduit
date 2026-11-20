@@ -48,7 +48,7 @@ func Manifest() protocol.Manifest {
 		Summary: "Runs toolbelt-only turns as a Chat Completions tool loop against an OpenAI-compatible endpoint.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
-			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
+			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, NoProcess: c.NoProcess},
 			Controls:     protocol.Controls{Stop: true, Forget: true},
 			Playbook:     true, Fields: chatcompletions.BindingFields()}}}}
 }

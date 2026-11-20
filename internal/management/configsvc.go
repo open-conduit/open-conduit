@@ -607,6 +607,26 @@ func (c *ConfigService) Container(state runtime.AttemptState) (*config.Container
 	return b.Container, nil
 }
 
+// Isolation names the scope whose authorization requires the attempt's
+// scope to run confined in the current config (runtime.SchedulerOptions.
+// Isolation), or "" when none does, so a requirement added after an attempt
+// was queued or parked holds when it launches. A scope or binding the
+// current config no longer has is config.ErrDenied.
+func (c *ConfigService) Isolation(_ context.Context, state runtime.AttemptState) (domain.ID, error) {
+	current, _ := c.Current()
+	cs, ok := current.Scope(state.ScopeID)
+	if !ok || !cs.Enabled {
+		return "", config.ErrDenied
+	}
+	if _, ok := cs.Binding(state.Binding.Name); !ok {
+		return "", config.ErrDenied
+	}
+	if cs.Authorization.Isolation == "" {
+		return "", nil
+	}
+	return cs.IsolationScope, nil
+}
+
 // Connection is the connection the attempt's pinned binding names ("" for
 // none), as Grant pins it into the toolbelt's authority.
 func (c *ConfigService) Connection(state runtime.AttemptState) string {

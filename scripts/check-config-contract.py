@@ -18,6 +18,7 @@ EXECUTORS = {
     'shell': {'toolbelt': 'cli'},
     'support_agent': {'toolbelt': 'mcp', 'inject': True},
     'coding_agent': {'toolbelt': 'mcp', 'interrupt': True, 'workspace': True, 'sandbox': True},
+    'chat_agent': {'toolbelt': 'sdk', 'no_process': True},
 }
 SANDBOXES = {'srt'}
 # No container provider ships yet, and no executor can run in one.
@@ -88,10 +89,19 @@ def check(config):
         }
         result['enabled'] = result['enabled'] and scope.get('enabled', True)
         for category, requested in scope.get('authorization', result['authorization']).items():
-            if parent and not set(requested) <= set(parent['authorization'][category]):
+            if category == 'isolation':
+                continue
+            if parent and not set(requested) <= set(parent['authorization'].get(category, [])):
                 fail(path + '/authorization/' + category, 'authority_widening')
+        # An isolation requirement is inherited whether or not the child
+        # restates its authorization, so no descendant drops it.
+        inherited = result['authorization'].get('isolation')
         result['authorization'] = copy.deepcopy(scope.get('authorization', result['authorization']))
+        if inherited:
+            result['authorization']['isolation'] = inherited
         for category, requested in result['authorization'].items():
+            if category == 'isolation':
+                continue
             available = connections if category == 'connections' else scopes if category == 'read_scopes' else OPERATIONS
             if not set(requested) <= set(available):
                 fail(path + '/authorization/' + category, 'unknown_reference')
@@ -142,6 +152,8 @@ def check(config):
                     fail(bp + '/container', 'unsupported_capability')
                 if binding['container']['provider'] not in CONTAINERS:
                     fail(bp + '/container/provider', 'unknown_registration')
+            if result['authorization'].get('isolation') and 'sandbox' not in binding and 'container' not in binding and not capabilities.get('no_process'):
+                fail(bp, 'isolation_required')
             if not set(binding.get('operations', [])) <= set(result['authorization']['operations']):
                 fail(bp + '/operations', 'operation_denied')
             for i, grant in enumerate(binding.get('grants', [])):
@@ -245,6 +257,11 @@ def main():
         ('connection_denied', lambda c: c['scopes'][1]['bindings'][0].update(connection='ungranted')),
         ('resource_required', lambda c: c['scopes'][1]['bindings'][0].update(requires={'workspace': True})),
         ('unknown_disabled_entry', lambda c: c['scopes'][1]['routes'].append({'name': 'missing', 'disabled': True})),
+        ('schema', lambda c: c['scopes'][0].update(authorization={'connections': [], 'operations': ['emit'], 'read_scopes': [], 'isolation': 'optional'})),
+        # The parent requires isolation: its own unconfined binding is
+        # refused, and the child's, which restates its authorization
+        # without the requirement, still is.
+        ('isolation_required', lambda c: c['scopes'][0].setdefault('authorization', {'connections': [], 'operations': ['emit', 'read_context', 'declare_outcome'], 'read_scopes': []}).update(isolation='required')),
     ]
     for expected, mutate in mutations:
         candidate = copy.deepcopy(base)
@@ -256,6 +273,20 @@ def main():
     candidate['scopes'][0]['bindings'][0]['config']['parent_only'] = True
     errors, effective = check(candidate)
     assert not errors and 'parent_only' not in effective['child']['bindings']['run']['config']
+    # A scope that requires isolation takes a confined binding or one whose
+    # executor runs no process, and a child that restates its authorization
+    # without the requirement keeps it.
+    candidate = copy.deepcopy(base)
+    candidate['scopes'][0]['authorization']['isolation'] = 'required'
+    for scope in candidate['scopes']:
+        for binding in scope['bindings']:
+            binding.update(executor='chat_agent', requires={})
+    candidate['scopes'][1]['authorization'] = copy.deepcopy(base['scopes'][0]['authorization'])
+    errors, effective = check(candidate)
+    assert not errors and effective['child']['authorization'].get('isolation') == 'required', errors
+    candidate['scopes'][1]['bindings'][0].update(executor='shell')
+    errors, _ = check(candidate)
+    assert ('scopes/1/bindings/run', 'isolation_required') in errors, errors
     # A masked slot may be restored by a grandchild without moving the second route.
     candidate = copy.deepcopy(base)
     candidate['scopes'][1]['routes'] = [{'name': 'incoming', 'disabled': True}]

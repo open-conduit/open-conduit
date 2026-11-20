@@ -255,7 +255,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, probe := x.(extension.VersionProber)
 			_, folder := x.(extension.FolderConfigurer)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
-				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
+				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container, NoProcess: c.NoProcess},
 				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
 				ResourceMode: moded, Playbook: playbook, VersionProbe: probe, FolderConfig: folder, LaunchNames: launchNames, Fields: slices.Clone(execs[n].Fields)})
 		}

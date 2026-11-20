@@ -7,7 +7,7 @@ The Chat Completions executor runs each attempt as a tool loop against an OpenAI
 
 The executor is [`extensions/chatcompletions`](https://github.com/open-conduit/open-conduit/tree/main/extensions/chatcompletions). It reaches the daemon only as a package, [`extensions/chatcompletions/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/chatcompletions/pkg), served by `open-conduit extension-run chat-completions` and bundled with the release like the Codex package. Nothing in the daemon knows about it: a binding names executor `chat-completions`, and the host binds it from the capabilities in the package's manifest. The executor imports only public contracts, `client` and the protocol SDK.
 
-It advertises `interrupt`, `inject`, `resume` and `toolbelt: sdk` (it calls the toolbelt itself), the stop and forget controls, and `playbook`. It needs no `workspace`, and it doesn't advertise `sandbox` or `container`, because it runs no process to confine (see [limitations](#limitations)).
+It advertises `interrupt`, `inject`, `resume`, `toolbelt: sdk` (it calls the toolbelt itself) and `no_process`, the stop and forget controls, and `playbook`. It needs no `workspace`, and it doesn't advertise `sandbox` or `container`, because it runs no process to confine (see [limitations](#limitations)). `no_process` says so, so a scope that [requires isolation](../sandboxes/#requiring-isolation) accepts its bindings without either.
 
 | Capability | How the executor provides it |
 | --- | --- |
