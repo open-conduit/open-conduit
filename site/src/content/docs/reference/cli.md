@@ -8,7 +8,7 @@ This page is generated from the CLI's help (`open-conduit --help` and `open-cond
 Every command takes the global flags before it, and `--help` after it:
 
 ```text
-Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH] [--data-dir DIR] COMMAND
+Usage: open-conduit [--endpoint unix:///path | https://host:port] [--token-file PATH] [--socket PATH] [--data-dir DIR]
 ```
 
 ```text
@@ -81,6 +81,10 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
       [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
                            also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
+      [--management-addr HOST:PORT --management-tls-cert FILE --management-tls-key FILE [--management-client-ca FILE]]
+      [--management-addr 127.0.0.1:PORT --management-trusted-proxy]
+                           also serve the management API over the network: TLS (mutual TLS with a client CA),
+                           or plaintext on loopback to a local proxy that terminates TLS; off by default
 ```
 
 ### `open-conduit service`

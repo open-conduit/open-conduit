@@ -97,6 +97,10 @@ type Options struct {
 	// webhook management report dry_run, and Claude Code turns run as
 	// stubs on a cheap model.
 	DryRun bool
+	// Management is the opt-in management listener on a TCP address
+	// (management.NetworkConfig): off by default, so the owner-only socket
+	// is the only way in. Half-configured is a startup error.
+	Management management.NetworkConfig
 	// NoTelemetry turns off the anonymous usage reports (usage.go).
 	NoTelemetry bool
 	// TelemetryURL and TelemetryKey override where usage reports go
@@ -338,8 +342,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	host, _ := os.Hostname()
 	d.owner = fmt.Sprintf("open-conduit/%s/%d/%s", host, os.Getpid(), hex.EncodeToString(suffix))
-	d.cursorKey = make([]byte, 32)
-	if _, err = rand.Read(d.cursorKey); err != nil {
+	// A listener that would serve plaintext to the network, or is
+	// half-configured, stops the start before anything is touched.
+	if err = o.Management.Check(); err != nil {
 		return err
 	}
 	d.endpoint = "unix://" + o.Socket
@@ -351,6 +356,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer lock.Close()
+	// List cursors are signed with a key kept in the state directory, so a
+	// client's cursor survives a restart.
+	if d.cursorKey, err = management.CursorKey(filepath.Join(o.StateDir, "private", "cursor.key")); err != nil {
+		return err
+	}
 	// Executions get the toolbelt through a link this daemon re-points, so
 	// one still running when an upgrade removes the old install finds the
 	// new `os` once the daemon restarts on it.
@@ -539,9 +549,16 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer stopWebhooks()
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { d.current.Load().server.ServeHTTP(w, r) }), ReadHeaderTimeout: 5 * time.Second}
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { d.current.Load().server.ServeHTTP(w, r) })
+	srv := &http.Server{Handler: api, ReadHeaderTimeout: 5 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(listener) }()
+	stopNetwork, err := d.startNetwork(api)
+	if err != nil {
+		_ = srv.Close()
+		return err
+	}
+	defer stopNetwork()
 	d.log.Info("open-conduit serving", "version", o.Version, "commit", o.Commit, "endpoint", d.endpoint, "generation", generation, "owner", d.owner, "dry_run", o.DryRun)
 	// A restart resumes the stored generation, never the file: say so when
 	// they differ, or an edit looks applied when it is not.
@@ -572,6 +589,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
+	stopNetwork()
 	d.endpoints.Shutdown(shutdown)
 	stopLoop()
 	d.wg.Wait()

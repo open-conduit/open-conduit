@@ -98,8 +98,10 @@ type operator struct {
 	tokenFile   string
 	socket      string
 	dataDir     string
-	build       string
-	version     string
+	// caFile, clientCert and clientKey reach an https endpoint (tlsOptions).
+	caFile, clientCert, clientKey string
+	build                         string
+	version                       string
 }
 
 func usageError(errOut io.Writer, msg string) int {
@@ -129,6 +131,9 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 	global.StringVar(&o.tokenFile, "token-file", "", "")
 	global.StringVar(&o.socket, "socket", "", "")
 	global.StringVar(&o.dataDir, "data-dir", "", "")
+	global.StringVar(&o.caFile, "ca-file", "", "")
+	global.StringVar(&o.clientCert, "client-cert", "", "")
+	global.StringVar(&o.clientKey, "client-key", "", "")
 	showVersion := global.Bool("version", false, "")
 	if err := global.Parse(args); errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(out, operatorHelp)
@@ -199,8 +204,27 @@ func (o *operator) client() (*client.Client, client.TokenFile, error) {
 		}
 		return nil, file, err
 	}
-	c, err := client.New(endpoint, file.Token)
+	c, err := client.NewWithOptions(endpoint, file.Token, o.tlsOptions(endpoint))
 	return c, file, err
+}
+
+// tlsOptions are how the CLI reaches an https endpoint: --ca-file (or
+// OPEN_CONDUIT_CA_FILE) pins the CA its certificate must chain to, and
+// --client-cert and --client-key (OPEN_CONDUIT_CLIENT_CERT and
+// OPEN_CONDUIT_CLIENT_KEY) present a client certificate for mutual TLS.
+// A Unix socket takes none: environment values are ignored for one, and
+// the client refuses flags given for one.
+func (o *operator) tlsOptions(endpoint string) client.Options {
+	pick := func(flag, env string) string {
+		if flag != "" {
+			return o.abs(flag)
+		}
+		if !strings.HasPrefix(endpoint, "https://") {
+			return ""
+		}
+		return o.abs(o.env.Getenv(env))
+	}
+	return client.Options{CAFile: pick(o.caFile, "OPEN_CONDUIT_CA_FILE"), ClientCertFile: pick(o.clientCert, "OPEN_CONDUIT_CLIENT_CERT"), ClientKeyFile: pick(o.clientKey, "OPEN_CONDUIT_CLIENT_KEY")}
 }
 
 // notRunningError reports that no daemon answers on the management endpoint.
@@ -213,14 +237,21 @@ func (e *notRunningError) Error() string {
 	return "no Open Conduit daemon is running; start one with `open-conduit serve`"
 }
 
-// listening reports whether something accepts connections on a unix
-// endpoint; an endpoint that does not parse is left to the client to report.
+// listening reports whether something accepts connections on an endpoint:
+// its Unix socket, or an https endpoint's host and port. An endpoint that
+// does not parse is left to the client to report.
 func listening(endpoint string) bool {
-	socket, err := client.ParseEndpoint(endpoint)
-	if err != nil {
+	network, addr := "unix", ""
+	if u, err := client.ParseNetworkEndpoint(endpoint); err == nil {
+		port := u.Port()
+		if port == "" {
+			port = "443"
+		}
+		network, addr = "tcp", net.JoinHostPort(u.Hostname(), port)
+	} else if addr, err = client.ParseEndpoint(endpoint); err != nil {
 		return true
 	}
-	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+	conn, err := net.DialTimeout(network, addr, 2*time.Second)
 	if err != nil {
 		return false
 	}

@@ -627,8 +627,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	if scopedExecution(ctx) != "" && !toolbeltPath(parts) {
 		return fail(404, "not_found", "this socket serves only toolbelt calls")
 	}
+	// The management listener serves operators on other machines: never
+	// the toolbelt. A client that keeps failing authentication is refused
+	// for a while, but only its failures: a credential that authenticates
+	// is served, so an attacker sharing its address can't hold it out.
+	rc := remote(ctx)
+	if rc != nil && toolbeltPath(parts) {
+		return fail(404, "not_found", "the management listener serves no toolbelt calls; an execution reaches its toolbelt on its own socket")
+	}
 	who, err := s.authenticate(ctx, r)
 	if err != nil {
+		var api *apiError
+		if rc != nil && errors.As(err, &api) && api.status == 401 {
+			wait, first := rc.network.limiter.fail(rc.client)
+			if first && rc.network.OnThrottle != nil {
+				rc.network.OnThrottle(rc.client)
+			}
+			if wait > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+				return fail(429, "too_many_auth_failures", "too many failed authentications from this client; check the credential, then retry later")
+			}
+		}
 		return err
 	}
 	var matched *route
@@ -677,6 +696,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	scoped := who.operator && !who.may(need)
 	if scoped && (matched.target == targetDaemon || matched.target == targetUnset || !who.mayAnywhere(need)) {
 		return forbiddenRole(who, need)
+	}
+	// Attach runs a command on the daemon's machine; over the network it
+	// is refused with the command to run there.
+	if rc != nil && localOnly(matched) {
+		return errLocalOnly(matched, params)
 	}
 	// Everything an operator does is recorded as theirs: the host stamps the
 	// credential's principal, never anything the request says.

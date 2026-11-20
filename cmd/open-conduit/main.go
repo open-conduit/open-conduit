@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/internal/web"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -82,7 +83,8 @@ func serve(r cli.ServeRequest) int {
 	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval, CallTimeout: r.CallTimeout,
 		BackupInterval: r.BackupInterval, BackupDir: r.BackupDir, BackupsKept: r.BackupsKept,
 		WebhookAddr: r.WebhookAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Config: r.TunnelConfig, PublicURL: r.PublicURL},
-		NoTunnel: r.NoTunnel, DryRun: r.DryRun, NoTelemetry: r.NoTelemetry, Ready: webReady(ctx, r)})
+		Management: management.NetworkConfig{Addr: r.ManagementAddr, CertFile: r.ManagementTLSCert, KeyFile: r.ManagementTLSKey, ClientCAFile: r.ManagementClientCA, TrustedProxy: r.ManagementTrustedProxy},
+		NoTunnel:   r.NoTunnel, DryRun: r.DryRun, NoTelemetry: r.NoTelemetry, Ready: webReady(ctx, r)})
 	if err != nil {
 		// Composition errors carry safe summaries (paths, codes); never config values.
 		fmt.Fprintf(os.Stderr, "open-conduit: serve: %s\n", err)
