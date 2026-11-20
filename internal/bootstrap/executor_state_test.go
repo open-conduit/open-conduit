@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -79,6 +80,11 @@ func TestDaemonSweepsExecutorStateOnce(t *testing.T) {
 	if d.reported["executor_sweep\x00fails"] == "" {
 		t.Fatal("a failed sweep was not reported")
 	}
+	// Doctor lists what each sweep released, and warns of the failed one.
+	check := d.executorStateCheck(ctx)
+	if check.Status != runtime.CheckWarn || check.Code != "sweep_failed" || !slices.Contains(check.Items, "sweeps released x-later") {
+		t.Fatalf("doctor after the first pass: %+v", check)
+	}
 	pass()
 	if sweeper.sweeps != 1 || failing.sweeps != 1 {
 		t.Fatalf("swept again at once: %d, %d", sweeper.sweeps, failing.sweeps)
@@ -91,5 +97,8 @@ func TestDaemonSweepsExecutorStateOnce(t *testing.T) {
 	}
 	if d.reported["executor_sweep\x00fails"] != "" {
 		t.Fatal("a sweep that passed stayed reported")
+	}
+	if check := d.executorStateCheck(ctx); check.Status != runtime.CheckOK || !slices.Contains(check.Items, "sweeps released x-later") {
+		t.Fatalf("doctor once every sweep passed: %+v", check)
 	}
 }

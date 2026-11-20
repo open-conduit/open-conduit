@@ -488,7 +488,7 @@ func laterTimeline(stateDir string) []cli.LaterEntry {
 			}
 		}
 	}
-	each("executors", "the executor's private state, kept: when the daemon starts, an executor that sweeps its state removes the run directories of executions the restored database doesn't know; another's stay until removed by hand. The restored executions recover or retry, and no process from before the bundle is adopted")
+	each("executors", "the executor's private state, kept: when the daemon starts, an executor that sweeps its state removes the run directories of executions the restored database doesn't know, which doctor's executor_state check lists; another's stay until removed by hand. The restored executions recover or retry, and no process from before the bundle is adopted")
 	each("resources", "kept: the provider reconciles its leases against the restored database when the daemon starts, so an owner the database doesn't know is reported unknown to it; what it keeps (a workspace with unpushed work, say), doctor reports")
 	each("containers", "kept: the container provider reconciles its containers against the restored database when the daemon starts, removing those of executions it doesn't know")
 	each("extensions", "the extension's private directory, a cache: kept, and rebuilt by the extension as it needs; durable extension state is in the restored database")
