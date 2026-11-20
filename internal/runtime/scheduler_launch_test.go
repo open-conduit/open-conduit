@@ -391,9 +391,10 @@ func TestProductionSchedulerHoldEndsOnLostLease(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a renewal past the lease did not lose it")
 	}
-	<-ctx.Done()
-	if !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
-		t.Fatalf("cause %v, want the lease lost", context.Cause(ctx))
+	// The cause is set by the time lost closes, so a caller that stops
+	// the hold on seeing lost still reads the lease lost.
+	if ctx.Err() == nil || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
+		t.Fatalf("cause %v once lost closed, want the lease lost", context.Cause(ctx))
 	}
 }
 
