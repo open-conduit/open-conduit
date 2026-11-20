@@ -72,13 +72,16 @@ type externalState struct {
 	// a surface the host asked of them.
 	retiring map[string]*retiring
 	onDemand map[string]bool
-	draining bool
-	drained  time.Time
-	failed   []extproc.Diagnostic
-	sources  map[string]bool      // registered ingress names
-	tasks    map[string]time.Time // last start by package/task
-	running  map[string]bool      // task in flight
-	public   string               // public URL last sent in configure
+	// onDemandFailed is when each package started on demand last failed
+	// to start (startOnDemand).
+	onDemandFailed map[string]time.Time
+	draining       bool
+	drained        time.Time
+	failed         []extproc.Diagnostic
+	sources        map[string]bool      // registered ingress names
+	tasks          map[string]time.Time // last start by package/task
+	running        map[string]bool      // task in flight
+	public         string               // public URL last sent in configure
 	// startGrants are the package grants (settings.extensions) the
 	// packages start with before a generation is published: the
 	// committed generation's, or the config file's on a first start.

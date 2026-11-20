@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/extensions/linear/lineartest"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // demandConfig uses five packages: the shell executor, and entries of the
@@ -177,4 +180,62 @@ func TestDaemonStartsOnlyUsedPackages(t *testing.T) {
 	if pid != d.cmd.Process.Pid {
 		t.Fatal("the daemon restarted")
 	}
+
+	// A package whose last entry goes gets the configure that says so
+	// before it stops, so it lets go of what it held: the schedule's job
+	// timer, armed while its entry stood, is cancelled.
+	d.kill()
+	if n := armedTimers(t, d.state); n == 0 {
+		t.Fatal("the schedule entry armed no timer")
+	}
+	d.start("")
+	pid = d.cmd.Process.Pid
+	without := withoutEntry(t, demandConfig("", nil), "jobs")
+	v, err = d.c.ValidateConfig(ctx, without)
+	if err != nil || !v.Valid {
+		t.Fatalf("validate: %+v %v", v, err)
+	}
+	if _, err := d.c.ApplyConfig(ctx, without, v.CandidateHash, "3", "remove-schedule"); err != nil {
+		t.Fatal(err)
+	}
+	d.until("the schedule package stopped", 20*time.Second, func() bool {
+		return onlyThese(packageProcesses(t, pid), "human", "observe", "shell", "webhook") == nil
+	})
+	d.kill()
+	if n := armedTimers(t, d.state); n != 0 {
+		t.Fatalf("%d timer(s) still armed after the schedule entry went", n)
+	}
+}
+
+// withoutEntry is a config with the extension entry named name removed.
+func withoutEntry(t *testing.T, raw []byte, name string) []byte {
+	t.Helper()
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	scope := cfg["scopes"].([]any)[0].(map[string]any)
+	scope["extensions"] = slices.DeleteFunc(scope["extensions"].([]any), func(e any) bool { return e.(map[string]any)["name"] == name })
+	out, _ := json.Marshal(cfg)
+	return out
+}
+
+// armedTimers counts the timers a stopped daemon's store holds.
+func armedTimers(t *testing.T, state string) int {
+	t.Helper()
+	store, err := sqlite.Open(context.Background(), filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	n := 0
+	err = store.Transact(context.Background(), storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		all, err := tx.ListTimers()
+		n = len(all)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

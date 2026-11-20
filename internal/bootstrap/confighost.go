@@ -190,13 +190,15 @@ func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management
 	return management.ConfigCandidate{}, storage.ErrNotFound
 }
 
-// pages are every package's pages, by the package that declares them. A
-// page that doesn't validate, or whose ID an earlier package took, is
-// left out.
+// pages are every catalogued package's pages, running or not, by the
+// package that declares them: a page is its manifest's, and a scope offers
+// it only once it has an entry of the page's type, which starts the
+// package. A page that doesn't validate, or whose ID an earlier package
+// took, is left out.
 func (d *daemon) pages() []management.Page {
 	var out []management.Page
 	taken := map[string]bool{}
-	for _, x := range d.extensionPackages() {
+	for _, x := range d.catalogued() {
 		for i, pg := range x.Pages() {
 			if i == extension.MaxPages || pg.Validate() != nil || taken[pg.ID] {
 				continue

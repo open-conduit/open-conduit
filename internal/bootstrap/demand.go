@@ -221,6 +221,16 @@ func (d *daemon) startPackages(ctx context.Context, names []string) {
 // for them stays, for the next start). Executor jobs a package detached
 // keep running. It is called with change held.
 func (d *daemon) stopPackages(names []string) {
+	d.finishStopping(d.detachPackages(names))
+}
+
+// detachPackages takes the named packages out of the running set, so
+// nothing composes them from now on (a generation built next leaves them
+// out), and unregisters their ingress sources. Their processes keep
+// running until finishStopping, so a generation still active that composes
+// them isn't left calling dead processes until it is rebuilt. It is called
+// with change held.
+func (d *daemon) detachPackages(names []string) []*installed {
 	x := &d.external
 	var stopping []*installed
 	x.mu.Lock()
@@ -236,7 +246,7 @@ func (d *daemon) stopPackages(names []string) {
 	}
 	x.mu.Unlock()
 	if len(stopping) == 0 {
-		return
+		return nil
 	}
 	d.publishRunning()
 	for _, pkg := range stopping {
@@ -249,6 +259,11 @@ func (d *daemon) stopPackages(names []string) {
 			x.mu.Unlock()
 		}
 	}
+	return stopping
+}
+
+// finishStopping stops detached packages' processes.
+func (d *daemon) finishStopping(stopping []*installed) {
 	stopAll(stopping)
 	for _, pkg := range stopping {
 		d.log.Info("extension stopped: nothing uses it", "extension", pkg.Name())
@@ -287,6 +302,12 @@ func (d *daemon) packagesWanted(ctx context.Context, s *config.Snapshot) map[str
 	_, noFile := os.Stat(d.o.ConfigPath)
 	firstRun := errors.Is(noFile, os.ErrNotExist)
 	issuers, _ := management.IssuerTypes(ctx, d.coord, d.now)
+	var armed map[string]bool
+	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		var err error
+		armed, err = runtime.ArmedRecurrencesInTx(tx)
+		return err
+	})
 	d.external.mu.Lock()
 	onDemand := maps.Clone(d.external.onDemand)
 	d.external.mu.Unlock()
@@ -297,6 +318,10 @@ func (d *daemon) packagesWanted(ctx context.Context, s *config.Snapshot) map[str
 		case startAll(), onDemand[name], packageUsed(s, m), d.holdsState(m):
 		case slices.ContainsFunc(m.Provides.Tunnels, func(t protocol.TunnelDecl) bool { return slices.Contains(tunnels, t.Type) }):
 		case firstRun && m.Provides.Setup != nil && m.Provides.Setup.FirstRun:
+		case slices.ContainsFunc(m.Provides.Recurrences, func(kind string) bool { return armed[kind] }):
+			// A timer of one of its recurrence kinds is armed: the package
+			// computes when it fires next, and cancels it once its entry
+			// is gone (it gets that configure before it stops).
 		case slices.ContainsFunc(m.Provides.Verifiers, func(v protocol.VerifierDecl) bool { return slices.Contains(issuers, v.Type) }):
 		default:
 			continue
@@ -338,6 +363,13 @@ func packageUsed(s *config.Snapshot, m protocol.Manifest) bool {
 		}
 		if usesExtension(scope, m) {
 			return true
+		}
+		// An entry that runs its processes in a sandbox uses the sandbox's
+		// provider.
+		for _, e := range scope.Extensions {
+			if e.Sandbox != nil && slices.ContainsFunc(m.Provides.Sandboxes, func(sb protocol.SandboxDecl) bool { return sb.Type == e.Sandbox.Provider }) {
+				return true
+			}
 		}
 		for _, b := range scope.Bindings {
 			if bindingUses(b, m, connTypes) {
@@ -437,7 +469,7 @@ func (d *daemon) liveHolds(ctx context.Context, s *config.Snapshot) (map[string]
 // startingPackages are the packages to start before the configuration
 // opens: those the generation it will open uses, worked out from the
 // manifests alone (no package is asked), and those live executions hold.
-// The configuration's own validation then decides; reconcilePackages
+// The configuration's own validation then decides: startWanted and stopUnused
 // starts any this missed and stops any it started needlessly.
 func (d *daemon) startingPackages(ctx context.Context) []string {
 	s := d.manifestSnapshot(ctx)
@@ -493,12 +525,10 @@ func (d *daemon) manifestSnapshot(ctx context.Context) *config.Snapshot {
 	return s
 }
 
-// reconcilePackages brings the running packages in line with next, the
-// generation about to be built: it starts those next wants, stops those it
-// doesn't that no live execution may need under prev (the generation that
-// gave them their work), and keeps the rest until those executions finish
-// (drainPackages). It is called with change held.
-func (d *daemon) reconcilePackages(ctx context.Context, prev, next *config.Snapshot) {
+// startWanted starts the packages next, the generation about to be built,
+// wants, so that generation composes them. It stops nothing: retireUnused
+// does, once the generation is active. It is called with change held.
+func (d *daemon) startWanted(ctx context.Context, next *config.Snapshot) {
 	want := d.packagesWanted(ctx, next)
 	var start []string
 	for _, c := range d.catalogued() {
@@ -507,6 +537,20 @@ func (d *daemon) reconcilePackages(ctx context.Context, prev, next *config.Snaps
 		}
 	}
 	d.startPackages(ctx, start)
+}
+
+// retireUnused stops the running packages the active generation, next,
+// doesn't want and no execution may need under prev (the generation that
+// gave them their work), and keeps the rest until those executions finish
+// (drainPackages). It runs after next is active and every package has had
+// its configure, so a package whose entries went has already let go of
+// what it held for them (a schedule's timers); those timers, still armed
+// until then, are why it is asked again here rather than before. It
+// detaches the idle ones (detachPackages) and returns them: the caller
+// rebuilds the generation without them, then stops them (stopUnused). It
+// is called with change held.
+func (d *daemon) retireUnused(ctx context.Context, prev, next *config.Snapshot) []*installed {
+	want := d.packagesWanted(ctx, next)
 	var unused []string
 	for _, x := range d.extensionPackages() {
 		if !want[x.Name()] {
@@ -514,7 +558,7 @@ func (d *daemon) reconcilePackages(ctx context.Context, prev, next *config.Snaps
 		}
 	}
 	if len(unused) == 0 {
-		return
+		return nil
 	}
 	holds, err := d.liveHolds(ctx, prev)
 	var idle []string
@@ -541,7 +585,42 @@ func (d *daemon) reconcilePackages(ctx context.Context, prev, next *config.Snaps
 		}
 	}
 	d.external.mu.Unlock()
-	d.stopPackages(idle)
+	return d.detachPackages(idle)
+}
+
+// stopUnused retires the packages the active generation next doesn't use
+// (retireUnused), rebuilds it without those it detached and then stops
+// them, so the generation never composes a stopped package. It is called
+// with change held, once next is active and configured.
+func (d *daemon) stopUnused(ctx context.Context, prev, next *config.Snapshot) {
+	detached := d.retireUnused(ctx, prev, next)
+	if len(detached) == 0 {
+		return
+	}
+	var names []string
+	for _, x := range detached {
+		names = append(names, x.Name())
+	}
+	d.rebuildWithout(strings.Join(names, ","))
+	d.finishStopping(detached)
+}
+
+// rebuildWithout rebuilds the active generation once packages it composed
+// have stopped, so nothing routes to them. A failed rebuild keeps the
+// generation as it was and says so.
+func (d *daemon) rebuildWithout(why string) {
+	s, gen := d.extensionSnapshot()
+	if s == nil || gen == 0 {
+		return
+	}
+	next, err := d.build(s, gen)
+	if err != nil {
+		d.log.Error("configuration generation not rebuilt without the stopped extensions; restart required", "generation", gen, "extensions", why)
+		return
+	}
+	d.current.Store(next)
+	d.log.Info("configuration generation rebuilt without the stopped extensions", "generation", gen, "extensions", why)
+	d.poke()
 }
 
 // drainPackages stops the retiring packages whose executions have all
@@ -620,19 +699,9 @@ func (d *daemon) drainPackages(ctx context.Context) {
 			return
 		}
 		sort.Strings(done)
-		d.stopPackages(done)
-		s, gen := d.extensionSnapshot()
-		if s == nil || gen == 0 {
-			return
-		}
-		next, err := d.build(s, gen)
-		if err != nil {
-			d.log.Error("configuration generation not rebuilt without the stopped extensions; restart required", "generation", gen, "extensions", strings.Join(done, ","))
-			return
-		}
-		d.current.Store(next)
-		d.log.Info("configuration generation rebuilt without the stopped extensions", "generation", gen, "extensions", strings.Join(done, ","))
-		d.poke()
+		detached := d.detachPackages(done)
+		d.rebuildWithout(strings.Join(done, ","))
+		d.finishStopping(detached)
 	})
 }
 
@@ -647,19 +716,35 @@ func (d *daemon) reapValidation() {
 	}
 }
 
-// startOnDemand starts a catalogued package for a surface the host needs of
-// it now (a verifier), and keeps it running for the daemon's life.
+// onDemandRetry is how long after a failed start a package started on
+// demand isn't tried again.
+const onDemandRetry = time.Minute
+
+// startOnDemand starts a catalogued package for a surface an operator asks
+// of it (the verifier of an issuer an admin is storing), and keeps it
+// running for the daemon's life. A package that failed to start isn't
+// tried again within onDemandRetry. It never runs on an unauthenticated
+// path: credential checks only find running verifiers.
 func (d *daemon) startOnDemand(ctx context.Context, name string) {
 	x := &d.external
 	x.change.Lock()
 	defer x.change.Unlock()
 	x.mu.Lock()
 	if x.onDemand == nil {
-		x.onDemand = map[string]bool{}
+		x.onDemand, x.onDemandFailed = map[string]bool{}, map[string]time.Time{}
+	}
+	if at, ok := x.onDemandFailed[name]; ok && d.now().Sub(at) < onDemandRetry {
+		x.mu.Unlock()
+		return
 	}
 	x.onDemand[name] = true
 	x.mu.Unlock()
 	d.startPackages(ctx, []string{name})
+	if d.runningRemote(name) == nil {
+		x.mu.Lock()
+		x.onDemandFailed[name] = d.now()
+		x.mu.Unlock()
+	}
 }
 
 // installedExtensions lists every catalogued package for GET /extensions:

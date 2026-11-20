@@ -480,28 +480,32 @@ func Serve(ctx context.Context, o Options) (err error) {
 	snapshot, generation := d.configs.Current()
 	// The configuration has the last word on which packages run: those its
 	// generation uses that weren't foreseen start now, and those started
-	// needlessly stop.
+	// needlessly stop once it is active and configured.
 	d.external.change.Lock()
-	d.reconcilePackages(ctx, snapshot, snapshot)
-	d.external.change.Unlock()
+	d.startWanted(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
+		d.external.change.Unlock()
 		return err
 	}
 	d.current.Store(c)
 	// Extensions are configured once the generation is active, so a
 	// configure can arm timers through it, as every later apply can.
 	d.configureExtensions(ctx)
+	d.stopUnused(ctx, snapshot, snapshot)
+	d.external.change.Unlock()
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
 		// The packages the generation uses start before it is built, so it
-		// composes them; those it no longer uses stop, or drain.
+		// composes them. Those it no longer uses stop only once it is active
+		// and they have had its configure, which lets them let go of what
+		// they held for their entries; a failed build stops nothing.
 		d.external.change.Lock()
 		defer d.external.change.Unlock()
 		prev, _ := d.extensionSnapshot()
-		d.reconcilePackages(d.lifetime(), prev, s)
+		d.startWanted(d.lifetime(), s)
 		next, err := d.build(s, g)
 		if err != nil {
 			d.log.Error("configuration generation not activated in this process; restart required", "generation", g)
@@ -515,6 +519,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
 		d.log.Info("configuration generation activated", "generation", g)
+		d.stopUnused(d.lifetime(), prev, s)
 		d.poke()
 	}
 
@@ -650,7 +655,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	c.control = control
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, Checks: d.checks(),
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(),
 		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}

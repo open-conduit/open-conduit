@@ -51,6 +51,7 @@ func TestPackageUsedThroughEverythingAScopeGivesIt(t *testing.T) {
 		"operation":      {bound(config.Binding{Operations: []string{"read_context", "acme.ping"}}), bound(config.Binding{Operations: []string{"read_context"}})},
 		"grant":          {bound(config.Binding{Grants: []config.Grant{{Name: "g", Operations: []string{"acme.ping"}}}}), bound(config.Binding{Grants: []config.Grant{{Name: "g", Operations: []string{"wait"}}}})},
 		"connection":     {bound(config.Binding{Connection: "api"}), bound(config.Binding{Connection: "other"})},
+		"entry sandbox":  {config.EffectiveScope{Extensions: []config.Extension{{Name: "a", Type: "other", Sandbox: &config.Sandbox{Provider: "acme-jail"}}}}, config.EffectiveScope{Extensions: []config.Extension{{Name: "a", Type: "other", Sandbox: &config.Sandbox{Provider: "srt"}}}}},
 		"disabled scope": {config.EffectiveScope{Enabled: false, Extensions: []config.Extension{{Name: "a", Type: "acme"}}}, config.EffectiveScope{}},
 	} {
 		if !packageUsed(snap(c.uses), m) {

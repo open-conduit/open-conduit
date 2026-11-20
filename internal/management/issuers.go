@@ -363,6 +363,11 @@ func (s *Server) putIssuer(c *call) (int, any, error) {
 			}
 			seen[key] = true
 		}
+		if s.o.StartVerifier != nil && s.o.Verifiers != nil {
+			if _, running := s.o.Verifiers(in.Type); !running {
+				s.o.StartVerifier(c.ctx, in.Type)
+			}
+		}
 		var ver Verifier
 		ok := false
 		if s.o.Verifiers != nil {

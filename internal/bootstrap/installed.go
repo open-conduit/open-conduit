@@ -823,21 +823,28 @@ func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []config.E
 
 // verifier finds the credential verifier of a type among the running
 // packages (manifest verifiers), with its check of a trusted issuer's
-// config (validate, kind verifier). A catalogued package that provides it
-// but isn't running is started for it and kept running. A type no package
-// provides, or whose package can't start, is not found, so its issuer's
-// credentials are refused.
+// config (validate, kind verifier). A type no running package provides is
+// not found, so its issuer's credentials are refused: checking a
+// credential never starts a package (the packages of stored issuers'
+// verifiers start with the daemon, and startVerifier starts one when an
+// admin stores an issuer).
 func (d *daemon) verifier(typ string) (management.Verifier, bool) {
-	if v, ok := d.runningVerifier(typ); ok {
-		return v, true
+	return d.runningVerifier(typ)
+}
+
+// startVerifier starts the catalogued package that provides a verifier
+// type when none running does, for an admin storing an issuer of that
+// type (management.Options.StartVerifier).
+func (d *daemon) startVerifier(ctx context.Context, typ string) {
+	if _, ok := d.runningVerifier(typ); ok {
+		return
 	}
 	for _, c := range d.catalogued() {
 		if slices.ContainsFunc(c.m.Provides.Verifiers, func(v protocol.VerifierDecl) bool { return v.Type == typ }) {
 			d.startOnDemand(d.lifetime(), c.Name())
-			return d.runningVerifier(typ)
+			return
 		}
 	}
-	return management.Verifier{}, false
 }
 
 func (d *daemon) runningVerifier(typ string) (management.Verifier, bool) {

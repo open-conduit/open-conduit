@@ -220,8 +220,13 @@ func TestDaemonSlackSupportConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := check(report, "github"); c.Code != "not_configured" {
+	// GitHub isn't configured, so its package doesn't run and has no
+	// check of its own; the extensions check lists it as not running.
+	if c := check(report, "github"); c.Name != "" {
 		t.Fatalf("doctor github: %+v", c)
+	}
+	if c := check(report, "extensions"); !strings.Contains(strings.Join(c.Items, " "), "github") || !strings.Contains(strings.Join(c.Items, " "), "not running") {
+		t.Fatalf("doctor extensions: %+v", c)
 	}
 	if c := check(report, "resources"); c.Status == "fail" {
 		t.Fatalf("doctor resources: %+v", c)

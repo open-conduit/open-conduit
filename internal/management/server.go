@@ -124,6 +124,11 @@ type Options struct {
 	// verifiers (optional: without it no issuer can be trusted, and only
 	// the credentials the host issued authenticate).
 	Verifiers func(typ string) (Verifier, bool)
+	// StartVerifier starts the package that provides a verifier type when
+	// none running does (optional). Only an admin storing an issuer of
+	// that type calls it (PUT /auth/issuers/{id}); a credential check
+	// never does, so an unauthenticated request can't start a process.
+	StartVerifier func(ctx context.Context, typ string)
 }
 
 type Server struct {
