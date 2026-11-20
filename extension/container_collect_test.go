@@ -3,7 +3,9 @@ package extension_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -139,4 +141,68 @@ func TestContainerCollect(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// notCollecting is an adapter that implements Collect but whose provider
+// doesn't collect (extension.ContainerCollecting false).
+type notCollecting struct{ *collectingContainers }
+
+func (notCollecting) Collecting() bool { return false }
+
+// TestRetryWaitsBehindAnUncollectedContainer (#725 review): a recovery
+// whose collect failed fails its attempt, and the retry is another
+// execution of the same Work, in the same workspace. Its launch collects
+// what the earlier execution left first and is refused while that fails,
+// so the earlier run's work never arrives over the retry's.
+func TestRetryWaitsBehindAnUncollectedContainer(t *testing.T) {
+	ctx := context.Background()
+	cfg := containerConfig(testImage, "")
+	h, f := newContainerHost(t), &collectingContainers{fakeContainers: newFakeContainers()}
+	if _, err := h.bind(f, cfg, nil).Launch(ctx, h.needs(), h.launch()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.created[0][extension.ContainerLabelWork]; got != "w" {
+		t.Fatalf("the container's work label is %q, want the Work's", got)
+	}
+	f.start("c1", h.now.Add(time.Second))
+	f.containers["c1"].Running = false
+	f.collectErr = errors.New("remote unreachable")
+	retry := func(p extension.ContainerProvider) error {
+		_, err := extension.BindContainer(extension.ContainerBinding{Provider: p, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x-retry"},
+			Config: cfg, Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)}, RunRoot: h.runRoot,
+			Toolbelt: h.toolbelt, Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
+			Pin: func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil }}).Launch(ctx, h.needs(), h.launch())
+		return err
+	}
+	if err := retry(f); !errors.Is(err, extension.ErrSandboxUnavailable) || !errors.Is(err, extension.ErrContainerUncollected) {
+		t.Fatalf("a retry launched beside the Work's uncollected container: %v", err)
+	}
+	if len(f.created) != 1 || f.containers["c1"] == nil {
+		t.Fatalf("created %d, c1 %v: nothing may launch, and the container stays", len(f.created), f.containers["c1"])
+	}
+	// Once it collects, the earlier run's work is back before the retry
+	// runs; the container itself is left to the removal paths.
+	f.collectErr = nil
+	if err := retry(f); err != nil {
+		t.Fatalf("retry once collectable: %v", err)
+	}
+	if len(f.collected) != 1 || f.collected[0] != "c1" || f.containers["c1"] == nil {
+		t.Errorf("collected %v, c1 kept %v; want c1 collected before the retry and left for removal", f.collected, f.containers["c1"] != nil)
+	}
+	// Another Work's container, and a provider that doesn't collect, are
+	// never asked.
+	for id := range f.containers {
+		if id != "c1" {
+			delete(f.containers, id)
+		}
+	}
+	f.collected, f.collectErr = nil, errors.New("must not be asked")
+	f.containers["c1"].Ref.Labels[extension.ContainerLabelWork] = "another-work"
+	if err := retry(f); err != nil {
+		t.Errorf("another Work's uncollected container held this one's launch: %v", err)
+	}
+	f.containers["c1"].Ref.Labels[extension.ContainerLabelWork] = "w"
+	if err := retry(notCollecting{f}); err != nil {
+		t.Errorf("a provider that doesn't collect was gated on collect: %v", err)
+	}
 }

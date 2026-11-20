@@ -520,10 +520,10 @@ func (p *remoteSandbox) Adopt(ctx context.Context, plan extension.SandboxPlan, p
 // container, and keeps stop, reconcile and removal, so the package only
 // plans, creates and reports containers. One declared with forward is an
 // extension.ContainerForwarder, and one declared with place an
-// extension.ContainerPlacer. Every one is an extension.ContainerCollector,
-// whose Collect calls container_provider.collect only when the type is
-// declared with collect, and is nil otherwise, as for a provider that
-// doesn't collect.
+// extension.ContainerPlacer. Every one is an extension.ContainerCollector
+// whose Collecting (extension.ContainerCollecting) is whether the type is
+// declared with collect: only then does Collect call
+// container_provider.collect.
 func (r *Remote) Container(typ string) (extension.ContainerProvider, bool) {
 	for _, d := range r.m.Provides.Containers {
 		if d.Type == typ {
@@ -730,6 +730,10 @@ func (p *remoteContainer) List(ctx context.Context, owner extension.ResourceOwne
 	}
 	return states, nil
 }
+
+// Collecting is whether the type is declared with collect
+// (extension.ContainerCollecting).
+func (p *remoteContainer) Collecting() bool { return p.collect }
 
 // Collect is nil for a type not declared with collect: its output came
 // back with its wrapper, or never leaves the host.

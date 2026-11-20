@@ -34,6 +34,9 @@ const (
 	ContainerLabelHost = "dev.open-conduit.host"
 	// ContainerLabelExecution is the execution the container belongs to.
 	ContainerLabelExecution = "dev.open-conduit.execution"
+	// ContainerLabelWork is the Work its execution is for, so a launch
+	// can find what another execution of the Work left uncollected.
+	ContainerLabelWork = "dev.open-conduit.work"
 	// ContainerLabelSegment is the attempt segment it was created for.
 	ContainerLabelSegment = "dev.open-conduit.segment"
 	// ContainerLabelDigest is the digest of the plan it was created from.
@@ -171,6 +174,25 @@ type ContainerCollector interface {
 	Collect(ctx context.Context, ref ContainerRef) error
 }
 
+// ContainerCollecting is optional beside ContainerCollector, for an
+// adapter that implements Collect whether or not its provider collects (a
+// package's, whose manifest says): Collecting false means it collects
+// nothing, and the host treats it as a provider that doesn't collect.
+type ContainerCollecting interface {
+	Collecting() bool
+}
+
+// Collects reports whether p collects its containers' output.
+func Collects(p ContainerProvider) bool {
+	if _, ok := p.(ContainerCollector); !ok {
+		return false
+	}
+	if c, ok := p.(ContainerCollecting); ok {
+		return c.Collecting()
+	}
+	return true
+}
+
 // ErrContainerUncollected means an exited container's output could not be
 // collected (ContainerCollector), so the host keeps the container.
 var ErrContainerUncollected = errors.New("container output not collected")
@@ -178,11 +200,10 @@ var ErrContainerUncollected = errors.New("container output not collected")
 // CollectContainer collects ref's output when p is a ContainerCollector,
 // and is nil for any other provider. Its error is ErrContainerUncollected.
 func CollectContainer(ctx context.Context, p ContainerProvider, ref ContainerRef) error {
-	c, ok := p.(ContainerCollector)
-	if !ok {
+	if !Collects(p) {
 		return nil
 	}
-	if err := c.Collect(ctx, ref); err != nil {
+	if err := p.(ContainerCollector).Collect(ctx, ref); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrContainerUncollected, ref.ID, err)
 	}
 	return nil

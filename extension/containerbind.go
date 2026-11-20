@@ -302,6 +302,12 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 			return SandboxPlan{}, fmt.Errorf("%w: %s", ErrContainerRunning, st.Ref.ID)
 		}
 	}
+	// What another execution of the Work left (an attempt whose recovery
+	// failed, before its retry) comes back to the workspace before this
+	// one runs there; while any of it can't be collected, nothing launches.
+	if err := c.collectWork(ctx); err != nil {
+		return SandboxPlan{}, err
+	}
 	// What a stopped container wrote comes back before it goes; one that
 	// can't be collected is kept, and nothing launches beside it.
 	for _, st := range listed {
@@ -371,6 +377,7 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	labels := map[string]string{
 		ContainerLabelHost:      b.Host,
 		ContainerLabelExecution: string(b.Owner.ExecutionID),
+		ContainerLabelWork:      string(b.Owner.WorkID),
 		ContainerLabelSegment:   segment,
 		ContainerLabelDigest:    plan.Digest,
 	}
@@ -410,6 +417,36 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		out.Dir = g.Run
 	}
 	return out, nil
+}
+
+// collectWork collects every stopped container of the Work's other
+// executions (ContainerLabelWork) that this host made, when the provider
+// collects: they write to the Work's workspace, which this launch's
+// execution shares, so what they wrote must be back before it runs, and
+// never arrive over what it writes. A collected container changes
+// nothing, so this costs a listing once each is back; its removal stays
+// with the removal paths. One that can't be collected refuses the launch,
+// so a retry waits behind it.
+func (c *BoundContainer) collectWork(ctx context.Context) error {
+	b := c.b
+	if !Collects(b.Provider) || b.Owner.WorkID == "" {
+		return nil
+	}
+	listed, err := b.Provider.List(ctx, ResourceOwner{})
+	if err != nil {
+		return fmt.Errorf("%w: could not list the Work's containers: %v", ErrSandboxUnavailable, err)
+	}
+	hosts := ContainerHosts{Host: b.Host, Former: b.FormerHosts}
+	for _, st := range listed {
+		l := st.Ref.Labels
+		if st.Running || !hosts.Owns(l[ContainerLabelHost]) || l[ContainerLabelWork] != string(b.Owner.WorkID) || l[ContainerLabelExecution] == string(b.Owner.ExecutionID) {
+			continue
+		}
+		if err := CollectContainer(ctx, b.Provider, st.Ref); err != nil {
+			return fmt.Errorf("%w: another run of the Work left %s uncollected: %w", ErrSandboxUnavailable, st.Ref.ID, err)
+		}
+	}
+	return nil
 }
 
 // AttachWorkspace is where an attach to the Work's session goes under
