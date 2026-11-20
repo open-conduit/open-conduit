@@ -220,6 +220,8 @@ type Options struct {
 	// generated entry's config declares (<package>.<entry>.<name>), or a
 	// toolset of them as @<name>.
 	Operations []string
+	// Webhooks, when set, is the config's settings.webhooks.
+	Webhooks json.RawMessage
 }
 
 // Generate is the config of one scope, ScopeID, for the manifests: an
@@ -306,8 +308,12 @@ func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []st
 			"config": map[string]any{"argv": o.Shell, "env": agentEnv},
 		}
 	}
+	settings := map[string]any{}
+	if len(o.Webhooks) > 0 {
+		settings["webhooks"] = o.Webhooks
+	}
 	cfg := map[string]any{
-		"version": 1, "settings": map[string]any{}, "connections": []any{},
+		"version": 1, "settings": settings, "connections": []any{},
 		"scopes": []any{map[string]any{
 			"id": ScopeID, "name": "Test",
 			"authorization": map[string]any{"connections": []string{}, "operations": ops, "read_scopes": []any{}},

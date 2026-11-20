@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -179,6 +180,38 @@ const MaxBudgets = 64
 type Webhooks struct {
 	Addr, PublicURL string
 	Tunnel          *Tunnel
+	// NoProbe turns off the host's probe of a static public URL ("probe":
+	// false): the operator's own monitoring watches the route, and the
+	// daemon makes no request through it.
+	NoProbe bool
+	// Forwarder, when set, is the one sender the listener accepts: a queue
+	// or gateway that receives deliveries, holds them, and forwards each
+	// with its MAC over the request, when it first received it and its own
+	// delivery ID.
+	Forwarder *Forwarder
+}
+
+// Forwarder is settings.webhooks.forwarder: who it is (Name, in logs and
+// doctor), the reference of the secret it signs with, and how old a receipt
+// time it attests may be.
+type Forwarder struct {
+	Name, Secret  string
+	MaxAgeSeconds int
+}
+
+// Forwarder bounds: the receipt age a forwarder's attestation may carry
+// when settings.webhooks.forwarder sets none, and the most it may set.
+const (
+	DefaultForwarderMaxAgeSeconds = 24 * 60 * 60
+	MaxForwarderMaxAgeSeconds     = 30 * 24 * 60 * 60
+)
+
+// MaxAge is how old a receipt time the forwarder attests may be.
+func (f Forwarder) MaxAge() time.Duration {
+	if f.MaxAgeSeconds <= 0 {
+		return DefaultForwarderMaxAgeSeconds * time.Second
+	}
+	return time.Duration(f.MaxAgeSeconds) * time.Second
 }
 
 // Tunnel is a webhook tunnel: a type some package declares (manifest
@@ -191,7 +224,10 @@ type Tunnel struct {
 
 // Equal says whether w and o expose the listener the same way.
 func (w Webhooks) Equal(o Webhooks) bool {
-	if w.Addr != o.Addr || w.PublicURL != o.PublicURL || (w.Tunnel == nil) != (o.Tunnel == nil) {
+	if w.Addr != o.Addr || w.PublicURL != o.PublicURL || w.NoProbe != o.NoProbe || (w.Tunnel == nil) != (o.Tunnel == nil) || (w.Forwarder == nil) != (o.Forwarder == nil) {
+		return false
+	}
+	if w.Forwarder != nil && *w.Forwarder != *o.Forwarder {
 		return false
 	}
 	return w.Tunnel == nil || (w.Tunnel.Provider == o.Tunnel.Provider && bytes.Equal(w.Tunnel.Config, o.Tunnel.Config))
@@ -646,7 +682,7 @@ func (c *checker) webhooks(n *node) Webhooks {
 			moved = true
 		}
 	}
-	if moved || !c.object(n, path, []string{"addr"}, "tunnel", "public_url") {
+	if moved || !c.object(n, path, []string{"addr"}, "tunnel", "public_url", "probe", "forwarder") {
 		return w
 	}
 	w.Addr, _ = c.str(n.field("addr"), path+"/addr", nil)
@@ -660,6 +696,32 @@ func (c *checker) webhooks(n *node) Webhooks {
 			w.Tunnel = &Tunnel{}
 			w.Tunnel.Provider, _ = c.str(t.field("provider"), path+"/tunnel/provider", idPattern)
 			w.Tunnel.Config = c.opaque(t.field("config"), path+"/tunnel/config")
+		}
+	}
+	if p := n.field("probe"); p != nil {
+		if on, ok := c.boolean(p, path+"/probe"); ok && !on {
+			w.NoProbe = true
+			if w.PublicURL == "" {
+				c.fail(path+"/probe", "invalid_value", "probe: false is for a static public_url; a tunnel's probe is how the host notices its URL stopped answering and starts it again")
+			}
+		}
+	}
+	if f := n.field("forwarder"); f != nil && c.object(f, path+"/forwarder", []string{"name", "secret"}, "max_age_seconds") {
+		w.Forwarder = &Forwarder{}
+		w.Forwarder.Name, _ = c.str(f.field("name"), path+"/forwarder/name", idPattern)
+		if v, ok := c.str(f.field("secret"), path+"/forwarder/secret", nil); ok {
+			if !ValidSecretRef(v) {
+				c.fail(path+"/forwarder/secret", "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
+			}
+			w.Forwarder.Secret = v
+		}
+		if m := f.field("max_age_seconds"); m != nil {
+			if v, ok := c.integer(m, path+"/forwarder/max_age_seconds"); ok {
+				if v < 60 || v > MaxForwarderMaxAgeSeconds {
+					c.fail(path+"/forwarder/max_age_seconds", "invalid_value", fmt.Sprintf("max_age_seconds is 60 to %d (30 days)", MaxForwarderMaxAgeSeconds))
+				}
+				w.Forwarder.MaxAgeSeconds = v
+			}
 		}
 	}
 	if a := n.field("addr"); a != nil && a.kind == kString {
@@ -1074,6 +1136,16 @@ func (d *Document) normalized(redact bool) any {
 		}
 		if w.Tunnel != nil {
 			hooks["tunnel"] = w.Tunnel
+		}
+		if w.NoProbe {
+			hooks["probe"] = false
+		}
+		if f := w.Forwarder; f != nil {
+			fw := map[string]any{"name": f.Name, "secret": f.Secret}
+			if f.MaxAgeSeconds != 0 {
+				fw["max_age_seconds"] = f.MaxAgeSeconds
+			}
+			hooks["forwarder"] = fw
 		}
 		settings["webhooks"] = hooks
 	}

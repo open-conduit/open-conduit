@@ -547,6 +547,9 @@ func (r *recorder) Write(b []byte) (int, error) {
 
 func serveWebhook(ctx context.Context, h http.Handler, p protocol.WebhookHandleParams) protocol.WebhookHandleResult {
 	u := &url.URL{Path: p.Path, RawQuery: p.Query}
+	if !p.ReceivedAt.IsZero() {
+		ctx = extension.WithWebhookReceipt(ctx, extension.WebhookReceipt{ReceivedAt: p.ReceivedAt.UTC(), ForwardID: p.ForwardID})
+	}
 	req, err := http.NewRequestWithContext(ctx, p.Method, u.String(), io.NopCloser(bytes.NewReader(p.Body)))
 	if err != nil {
 		return protocol.WebhookHandleResult{Status: http.StatusBadRequest}

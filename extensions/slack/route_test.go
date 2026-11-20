@@ -190,6 +190,36 @@ func TestWebhookVerificationAndStatuses(t *testing.T) {
 	}
 }
 
+// A callback a forwarder held for ten minutes is judged at the receipt the
+// host attests, the time the forwarder first received it: it is accepted,
+// with that receipt time on its delivery, and the same request with no
+// receipt (judged against now) is refused as a replay.
+func TestHeldCallbackIsFreshAtItsAttestedReceipt(t *testing.T) {
+	const secret = "s3cret"
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	held := now.Add(-10 * time.Minute)
+	body := []byte(`{"type":"event_callback","team_id":"T0TEAM","event_id":"Ev123","event":{"type":"message"}}`)
+	var pushed []extension.Delivery
+	h := slack.WebhookHandler(func(context.Context) (string, error) { return secret, nil }, func(_ context.Context, d extension.Delivery) error {
+		pushed = append(pushed, d)
+		return nil
+	}, func() time.Time { return now })
+	serve := func(ctx context.Context) int {
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/slack", strings.NewReader(string(body)))
+		req.Header = slacktest.Headers(secret, body, held)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := serve(context.Background()); code != http.StatusUnauthorized || len(pushed) != 0 {
+		t.Fatalf("held, no receipt: %d", code)
+	}
+	attested := extension.WithWebhookReceipt(context.Background(), extension.WebhookReceipt{ReceivedAt: held.Add(2 * time.Second), ForwardID: "fw-1"})
+	if code := serve(attested); code != http.StatusOK || len(pushed) != 1 || !pushed[0].ReceivedAt.Equal(held.Add(2*time.Second)) {
+		t.Fatalf("held, attested: %d %+v", code, pushed)
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	ok := `{"namespace":"slack/T1","scope":"support","team":"T1","channels":["C2","C1"]}`
 	s, err := slack.ParseExtension([]byte(ok), nil)

@@ -58,7 +58,10 @@ import (
 // diagnostic, a warning in the log and a telemetry event) and, for a
 // provider's tunnel, ends the run so it starts again with a new URL, which
 // the extensions' managed hooks then follow. A static URL is the operator's
-// to fix, so the host only reports it, and keeps probing until it answers.
+// to fix, so the host only reports it, and keeps probing until it answers;
+// settings.webhooks.probe false turns its probe off, for a route the
+// operator watches itself. A forwarder in front of the listener is
+// forwarder.go's.
 
 // TunnelOptions select webhook exposure.
 type TunnelOptions struct {
@@ -111,6 +114,16 @@ type webhookState struct {
 	probeCause string
 	// delivered is when a request last reached a package's webhook route.
 	delivered time.Time
+	// noProbe is set when the operator turned the probe of a static public
+	// URL off (settings.webhooks.probe).
+	noProbe bool
+	// forwarder is settings.webhooks.forwarder when the listener started
+	// with one; forwarded and forwardRefused count the requests it
+	// authenticated and those refused since, forwardLast why the last one
+	// was.
+	forwarder                 *config.Forwarder
+	forwarded, forwardRefused int
+	forwardLast               string
 }
 
 // staticTunnel is settings.webhooks' tunnel for a public URL the operator
@@ -239,6 +252,7 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 	d.hooks.mu.Unlock()
 	srv := &http.Server{Handler: d.webhookHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	d.hooks.mu.Lock()
+	d.hooks.forwarder = stored.Forwarder
 	d.hooks.listening = ln.Addr().String()
 	d.hooks.listenFrom, d.hooks.tunnelFrom = addrFrom, tunnelFrom
 	d.hooks.server = srv
@@ -269,6 +283,14 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 			// The operator already routes this URL to the listener: there
 			// is nothing to run.
 			d.publicURL(t.Kind, t.PublicURL)
+			if stored.NoProbe {
+				// The operator watches the route; the daemon makes no
+				// request through it.
+				d.hooks.mu.Lock()
+				d.hooks.noProbe = true
+				d.hooks.mu.Unlock()
+				return stop(cancel, &wg, srv), nil
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -545,18 +567,25 @@ func (d *daemon) capture(ctx context.Context, name string, props map[string]any)
 }
 
 // webhookHandler serves only the registered routes listed above, and the
-// host's own probe.
+// host's own probe. Behind a forwarder (forwarder.go) a request must carry
+// its MAC before any route is looked up; either way the package gets the
+// request with its receipt (extension.WebhookReceipt).
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
 		d.hooks.mu.Lock()
-		token := d.hooks.probeToken
+		token, forwarder := d.hooks.probeToken, d.hooks.forwarder
 		d.hooks.mu.Unlock()
 		if token != "" && r.Method == http.MethodGet && name == probePath+token {
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = io.WriteString(w, token)
 			return
 		}
+		receipt, ok := d.receive(w, r, forwarder)
+		if !ok {
+			return
+		}
+		r = r.WithContext(extension.WithWebhookReceipt(r.Context(), receipt))
 		if h := d.packageWebhook(name); h != nil {
 			d.hooks.mu.Lock()
 			d.hooks.delivered = d.now()
@@ -576,6 +605,7 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	starts, failures := d.hooks.starts, d.hooks.failures
 	probed, probeFails, probeCause, delivered := d.hooks.probed, d.hooks.probeFails, d.hooks.probeCause, d.hooks.delivered
 	listenFrom, tunnelFrom, stored := d.hooks.listenFrom, d.hooks.tunnelFrom, d.hooks.stored
+	noProbe, forwarder, forwarded, refused, refusedLast := d.hooks.noProbe, d.hooks.forwarder, d.hooks.forwarded, d.hooks.forwardRefused, d.hooks.forwardLast
 	d.hooks.mu.Unlock()
 	check = runtime.Check{Name: "webhooks", Status: runtime.CheckOK, Code: "listening"}
 	var current *config.Snapshot
@@ -619,6 +649,8 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	default:
 		check.Detail += "; public " + public + " (" + kind + ", from " + tunnelFrom + ")"
 		switch {
+		case noProbe:
+			check.Detail += "; not probed (settings.webhooks.probe is false)"
 		case probeFails >= tunnelProbeFailures:
 			check.Status, check.Code = runtime.CheckWarn, "tunnel_unreachable"
 			check.Detail += "; not answering: the last " + strconv.Itoa(probeFails) + " probes through it failed (" + probeCause + "), so webhooks are not arriving"
@@ -634,6 +666,13 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 		default:
 			check.Detail += "; not probed yet"
 		}
+	}
+	if forwarder != nil {
+		check.Detail += "; only forwarder " + forwarder.Name + " is accepted (" + strconv.Itoa(forwarded) + " forwarded, " + strconv.Itoa(refused) + " refused"
+		if refused > 0 {
+			check.Detail += ", last for " + refusedLast
+		}
+		check.Detail += ")"
 	}
 	if delivered.IsZero() {
 		check.Detail += "; no deliveries since serve started"

@@ -221,6 +221,12 @@ func WireBinding(b extension.RouteBinding) *RouteBinding {
 // the extension registered at configure. The extension verifies it and
 // pushes through ingress.deliver before answering, so a 2xx means durable
 // acceptance.
+//
+// ReceivedAt and ForwardID are the host's receipt (extension.WebhookReceipt):
+// when the delivery was first received, by the listener or by the forwarder
+// the operator configured in front of it, and that forwarder's delivery ID
+// ("" without one). The host passes a forwarder's claims only once its MAC
+// verified, and never its headers.
 type WebhookHandleParams struct {
 	Path       string              `json:"path"`
 	Method     string              `json:"method"`
@@ -228,6 +234,7 @@ type WebhookHandleParams struct {
 	Header     map[string][]string `json:"header,omitempty"`
 	Body       []byte              `json:"body,omitempty"`
 	ReceivedAt time.Time           `json:"received_at"`
+	ForwardID  string              `json:"forward_id,omitempty"`
 }
 type WebhookHandleResult struct {
 	Status int                 `json:"status"`

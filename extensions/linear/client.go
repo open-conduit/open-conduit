@@ -838,7 +838,8 @@ var deliveryID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 // ParseHook checks Linear's signature (hex HMAC-SHA256 of the body, header
 // Linear-Signature) and the delivery's signed webhookTimestamp, which must
-// be within MaxAge of now, and says what it is about. Push
+// be within MaxAge of now (the delivery's receipt, which a forwarder can
+// attest), and says what it is about. Push
 // reads the issue or comment back so it is normalized as reconcile would.
 func (c *Client) ParseHook(h http.Header, body []byte, secret string, now time.Time) (tracker.Hook, error) {
 	if !tracker.VerifyHMAC(secret, body, h.Get("Linear-Signature")) {

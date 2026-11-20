@@ -272,6 +272,39 @@
             "public_url": {
               "type": "string",
               "description": "A URL that already reaches the listener (no tunnel runs); services deliver webhooks to it. Can't be combined with tunnel."
+            },
+            "probe": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether the host probes the public URL every minute to check it reaches the listener. false is only for a static public_url: the daemon then makes no request through it, and whatever routes it is the operator's to watch."
+            },
+            "forwarder": {
+              "description": "A forwarder in front of the listener (a queue, an API gateway, an ingress tier) that receives deliveries, holds them while the daemon is down and forwards them with its MAC. When set, the listener accepts only requests the forwarder signed, judges each sender's freshness at the time the forwarder attests it received the delivery, and gives a package the forwarder's delivery ID.",
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+                  "description": "The forwarder's name, in logs, telemetry and doctor."
+                },
+                "secret": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Secret reference (keyring:, file:, env:, cmd: or a package's scheme) of the key the forwarder signs each request with."
+                },
+                "max_age_seconds": {
+                  "type": "integer",
+                  "minimum": 60,
+                  "maximum": 2592000,
+                  "default": 86400,
+                  "description": "How long ago the forwarder may attest it received a delivery; an older one is refused, so a captured request can't be replayed for ever."
+                }
+              },
+              "required": [
+                "name",
+                "secret"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

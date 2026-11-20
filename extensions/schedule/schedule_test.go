@@ -318,6 +318,25 @@ func TestWebhookIngress(t *testing.T) {
 	if len(pushed) != 1 || pushed[0].ID != "abc" {
 		t.Fatalf("pushed %+v", pushed)
 	}
+	// Behind a forwarder, a POST without a key of its own takes the
+	// forwarder's delivery ID, the same on each of its retries, and its
+	// receipt time; straight from a sender each POST is distinct.
+	held := now.Add(-time.Hour)
+	forwarded := func() {
+		r := httptest.NewRequestWithContext(extension.WithWebhookReceipt(context.Background(), extension.WebhookReceipt{ReceivedAt: held, ForwardID: "fw-1"}), http.MethodPost, "/deploy/"+token, strings.NewReader(`{"hi":1}`))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("forwarded: %d", w.Code)
+		}
+	}
+	forwarded()
+	forwarded()
+	post("/deploy/"+token, nil)
+	if len(pushed) != 4 || pushed[1].ID != "f-fw-1" || pushed[2].ID != "f-fw-1" || !pushed[1].ReceivedAt.Equal(held) || pushed[3].ID == "f-fw-1" || pushed[3].ID == "abc" {
+		t.Fatalf("pushed %+v", pushed[1:])
+	}
+	pushed = pushed[:1]
 	res, err := in.Push(context.Background(), src, pushed[0])
 	if err != nil || len(res.Events) != 1 || len(res.Observations) != 0 {
 		t.Fatalf("push %+v %v", res, err)

@@ -397,7 +397,13 @@ func (r *Remote) Webhook(path string, refused func(limit, length int64)) http.Ha
 			return
 		}
 		var out protocol.WebhookHandleResult
-		p := protocol.WebhookHandleParams{Path: path, Method: req.Method, Query: req.URL.RawQuery, Header: req.Header, Body: body, ReceivedAt: time.Now().UTC()}
+		// The listener's receipt: when it, or the forwarder it
+		// authenticated, received the delivery.
+		rc, ok := extension.WebhookReceiptFrom(req.Context())
+		if !ok {
+			rc.ReceivedAt = time.Now()
+		}
+		p := protocol.WebhookHandleParams{Path: path, Method: req.Method, Query: req.URL.RawQuery, Header: req.Header, Body: body, ReceivedAt: rc.ReceivedAt.UTC(), ForwardID: rc.ForwardID}
 		if err := r.p.Call(req.Context(), "webhook.handle", p, &out); err != nil {
 			http.Error(w, "extension unavailable", http.StatusServiceUnavailable)
 			return

@@ -63,7 +63,7 @@ func webhook(name string) http.Handler {
 			return
 		}
 		h := sdk.HostFrom(r.Context())
-		accepted, err := h.Deliver(r.Context(), name, protocol.Delivery{ID: r.Header.Get("X-Notes-Delivery"), ReceivedAt: time.Now().UTC(), Body: body})
+		accepted, err := h.Deliver(r.Context(), name, protocol.Delivery{ID: r.Header.Get("X-Notes-Delivery"), ReceivedAt: extension.WebhookReceivedAt(r, time.Now), Body: body})
 		if err != nil {
 			http.Error(w, "not accepted", http.StatusServiceUnavailable)
 			return

@@ -391,7 +391,7 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context, s
 			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		received := now()
+		received := extension.WebhookReceivedAt(r, now)
 		if hook.Signature != nil {
 			v, err := hook.Signature.parse()
 			if err != nil {
@@ -410,7 +410,13 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context, s
 		}
 		dk, ck := hook.Keys()
 		env := envelope{Hook: hook.Name, ContentType: r.Header.Get("Content-Type"), Body: body}
+		// Without a delivery key, the forwarder's ID for the delivery is
+		// the same on each of its retries; straight from a sender, each
+		// POST is its own delivery.
 		id := newDeliveryID(received)
+		if fid := extension.WebhookForwardID(r); fid != "" {
+			id = "f-" + digest(fid)[:40]
+		}
 		if dk.Set() {
 			v, err := dk.Value(r.Header, body)
 			if err != nil {
