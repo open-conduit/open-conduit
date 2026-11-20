@@ -129,7 +129,7 @@ Other rules:
 - Write nothing but protocol messages to stdout; `sdk.Serve` moves `os.Stdout` to stderr for you.
 - Log to stderr. The host keeps a bounded log at `<state>/logs/extensions/<name>.log`.
 - Exit when stdin closes.
-- Keep durable state in host KV, in recovery metadata, or in the private state directory (`Server.StateDir()`, `<state>/extensions/<name>`).
+- Keep durable state in host KV or in recovery metadata. Those are in the coordination store, so a backup bundle carries them in the same snapshot as the Work they describe, and they move with the store whatever its backend. The private state directory (`Server.StateDir()`, `<state>/extensions/<name>`) is a host-local cache: no bundle carries it, a new host starts with it empty, and after a restore it may hold files from after the bundle. Keep there only what the extension can rebuild, and check it against KV before trusting it.
 
 Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the certification runner checks a non-Go extension the same way.
 

@@ -31,16 +31,21 @@ open-conduit backup restore BUNDLE --to DIR --artifacts files --artifacts-locati
 
 ## Move to a new host
 
-Move the state with the config: copy the config file (and whatever its secret references need, such as keyring entries or environment variables), then carry the state across as a backup bundle.
+The bundle carries the config: the database holds every config generation, secret references included, and the daemon starts from the active one. It doesn't carry what the references point at (keyring entries, `secrets.json`, environment variables) or the packages you installed, so set those up on the new host first.
 
 ```sh
 open-conduit service stop                                      # on the old host
 open-conduit backup create ~/backups/open-conduit-move
-# copy ~/backups/open-conduit-move to the new host, then there:
+# copy ~/backups/open-conduit-move to the new host, set up the secrets and
+# install the same packages (open-conduit extension install), then there:
 open-conduit backup verify ~/backups/open-conduit-move
 open-conduit backup restore ~/backups/open-conduit-move --to ~/.local/state/open-conduit   # a directory that does not exist yet
 open-conduit service start
+open-conduit config export                                     # writes the config file from the restored generation
+open-conduit doctor                                            # secrets shows any reference that doesn't resolve
 ```
+
+The restore lists any `config_problems`: why the restored config wouldn't validate here, such as a type no installed package provides. Fix those before starting: otherwise the daemon starts from a config file at its path instead, or doesn't start.
 
 The bundle holds every Work, its waits and what each integration recorded, so conversations waiting on a reply carry on where they were. Don't run both daemons against the same tracker or workspace at once.
 

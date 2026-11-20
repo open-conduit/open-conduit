@@ -26,6 +26,25 @@ type BackupInfo struct {
 	Scopes           []string `json:"scopes,omitempty"`
 	// TokenFile is the fresh operator credential a restore wrote.
 	TokenFile string `json:"token_file,omitempty"`
+	// ConfigGeneration is the committed config generation a restore
+	// brought back (0 when the bundle holds none): the daemon starts from
+	// it, and `config export` writes it out as a file.
+	ConfigGeneration uint64 `json:"config_generation,omitempty"`
+	// ConfigProblems are why the restored generation doesn't validate
+	// against the packages installed here: a type no installed or bundled
+	// package provides (unknown_registration), a package that couldn't
+	// start, an entry a package rejects. With any, the daemon doesn't start
+	// from the generation: it publishes the config file over it when the
+	// file validates, and otherwise refuses to start.
+	ConfigProblems []ConfigEntry `json:"config_problems,omitempty"`
+}
+
+// ConfigEntry is one config diagnostic a restore reports, by its path in
+// the config document and its code (as config check reports them).
+type ConfigEntry struct {
+	Path    string `json:"path,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // StateCheck is one offline diagnosis line.
@@ -62,6 +81,10 @@ type StateReport struct {
 type RestoreOptions struct {
 	ArtifactBackend  string
 	ArtifactLocation string
+	// ConfigPath is the config file the restored directory will run with:
+	// its installed packages are the ones the restored generation is
+	// checked against.
+	ConfigPath string
 }
 
 // StateOps are the offline state-directory operations. Each takes the
@@ -85,9 +108,9 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC]")
+		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC] [--config FILE]")
 	}
-	f := newFlags("backup", "to", "artifacts", "artifacts-location")
+	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config")
 	pos, err := f.parse(args[1:])
 	if err != nil || len(pos) != 1 {
 		return usageError(o.errOut, "expected one path")
@@ -103,7 +126,7 @@ func (o *operator) backup(args []string) int {
 		if f.get("to") == "" {
 			return usageError(o.errOut, "backup restore needs --to DIR (an absent directory; restore never replaces a state directory)")
 		}
-		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location")}))
+		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config"))}))
 	}
 	return usageError(o.errOut, "expected backup create|verify|restore")
 }

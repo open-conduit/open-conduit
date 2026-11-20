@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -166,8 +167,36 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 		return info, err
 	}
 	defer store.Close()
-	info.Scopes, err = scopeIDs(ctx, store)
+	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
+		return info, err
+	}
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, o.ConfigPath)
 	return info, err
+}
+
+// restoredConfig reads the committed config generation a restore brought
+// back and validates it as the daemon's OpenConfig will at start, against
+// the packages installed beside configPath (the bundle carries the
+// generation, not the packages). It returns the generation and every
+// reason the daemon would refuse it, packages that couldn't start
+// included. A check that fails outright is reported as a problem too: the
+// directory is already published, and the operator still needs its token.
+func restoredConfig(ctx context.Context, store storage.Store, configPath string) (uint64, []cli.ConfigEntry, error) {
+	gen, normalized, err := management.StoredGeneration(ctx, store, func() time.Time { return time.Now().UTC() })
+	if err != nil || gen == 0 {
+		return 0, nil, err
+	}
+	diags, _, err := checkAgainstPackages(configPath, "", normalized, func(reg config.Registry) (*config.Snapshot, error) {
+		return config.Validate(normalized, reg)
+	})
+	if err != nil {
+		return gen, []cli.ConfigEntry{{Code: "unchecked", Message: "the restored generation could not be checked: " + err.Error()}}, nil
+	}
+	out := make([]cli.ConfigEntry, 0, len(diags))
+	for _, d := range diags {
+		out = append(out, cli.ConfigEntry{Path: d.Path, Code: d.Code, Message: d.Message})
+	}
+	return gen, out, nil
 }
 
 // RecoverOperator is the locked local credential reset (B05): it revokes

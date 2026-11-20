@@ -455,7 +455,7 @@ Provisional, like the rest of the protocol. Code:
   - The command runs in the extension directory, in its own process group.
   - The environment is the B05 baseline (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), plus the daemon variables the operator grants that package by name (`settings.extensions.<name>.pass_env`, [process environment](../extension-packaging/#process-environment)), those set. No credential or Open Conduit setting reaches it. A host built with the race detector, which only tests build, also passes `GORACE`, so a test's race settings, such as the short exit wait the test harnesses set, reach the race-built packages it starts.
   - stderr goes to a bounded log, `<state>/logs/extensions/<name>.log`. It is truncated with a marker at 1 MiB.
-  - The private state directory is `<state>/extensions/<name>`.
+  - The private state directory is `<state>/extensions/<name>`. It is a host-local cache, not in a backup bundle ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
 - **Handshake.**
   - `initialize` refuses the extension when there is no common version, or when the returned manifest differs from the file. The comparison is semantic, not byte-for-byte.
   - `configure` sends the generation's entries and `kv: {stored, declared}`. It checks that every registered source name, source namespace, family and webhook path stays in the extension's namespace and matches the manifest.
