@@ -229,6 +229,14 @@ type Provides struct {
 	// verifier, and the host asks it through credential.verify about each
 	// credential it didn't issue itself.
 	Verifiers []VerifierDecl `json:"verifiers,omitempty"`
+	// SecretSchemes are secret reference schemes the package resolves
+	// (extension.SecretProvider): a secret slot may then hold
+	// "<scheme>:<reference>", which config validation accepts only while a
+	// package declares the scheme, and the host asks the package for the
+	// value through secret.serve when the slot's authorised consumer needs
+	// it. Each scheme is the package's name or begins with it and "-", and
+	// none is a built-in form (BuiltinSecretSchemes).
+	SecretSchemes []SecretSchemeDecl `json:"secret_schemes,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
 	Tasks []TaskDecl `json:"tasks,omitempty"`
@@ -813,6 +821,19 @@ type VerifierDecl struct {
 	Type   string      `json:"type"`
 	Fields []FieldDecl `json:"fields,omitempty"`
 }
+
+// SecretSchemeDecl declares a secret reference scheme the package
+// resolves through secret.serve. Summary says in a line what a reference
+// of the scheme names ("a Vault KV path and field"), for the operator.
+type SecretSchemeDecl struct {
+	Scheme  string `json:"scheme"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// BuiltinSecretSchemes are the reference forms the host resolves itself. A
+// package can't declare one.
+var BuiltinSecretSchemes = []string{"keyring", "file", "env", "cmd"}
+
 type TaskDecl struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
@@ -1188,6 +1209,15 @@ func (m Manifest) Validate() error {
 		}
 		verifiers[x.Type] = true
 	}
+	for _, x := range p.SecretSchemes {
+		ident("secret scheme", x.Scheme)
+		if slices.Contains(BuiltinSecretSchemes, x.Scheme) {
+			fail("secret scheme %q is one the host resolves itself", x.Scheme)
+		}
+		if len([]rune(x.Summary)) > MaxTitle*2 || strings.ContainsAny(x.Summary, "\r\n") {
+			fail("secret scheme %q summary must be one line of at most %d characters", x.Scheme, MaxTitle*2)
+		}
+	}
 	for _, t := range p.Tasks {
 		ident("task", t.Name)
 		if t.IntervalSeconds < 1 {
@@ -1337,6 +1367,7 @@ func (m Manifest) Enabled() []string {
 	}
 	set("tunnels", len(p.Tunnels) > 0)
 	set("verifiers", len(p.Verifiers) > 0)
+	set("secret_schemes", len(p.SecretSchemes) > 0)
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)
 	set("checks", len(p.Checks) > 0)

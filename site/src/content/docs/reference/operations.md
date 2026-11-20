@@ -177,7 +177,7 @@ The extensions built into the daemon register these operations, each with the in
 
 ### AWS (`aws`)
 
-Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail.
+Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail, and secrets read from AWS Secrets Manager.
 
 #### `aws.credentials`
 

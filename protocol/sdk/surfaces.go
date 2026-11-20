@@ -344,6 +344,26 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.CredentialVerifyResult{Subject: got.Subject, Groups: got.Groups, ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano)}, nil
+	case "secret.serve":
+		var p protocol.SecretServeParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		v, ok := s.ext.Secrets[p.Scheme]
+		if !ok {
+			return nil, notFound(method)
+		}
+		value, err := v.Serve(ctx, extension.SecretRequest{Scheme: p.Scheme, Reference: p.Reference})
+		var refused *extension.SecretRefusal
+		switch {
+		case errors.As(err, &refused):
+			return protocol.SecretServeResult{Code: refused.Code}, nil
+		case err != nil:
+			return nil, err
+		case value == "":
+			return protocol.SecretServeResult{Code: "empty"}, nil
+		}
+		return protocol.SecretServeResult{Value: value}, nil
 	case "telemetry.export":
 		var p protocol.TelemetryExportParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

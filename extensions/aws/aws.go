@@ -12,6 +12,10 @@
 // works with no step by the agent. A person can gate a role with the human
 // extension's gate on the operation's input.
 //
+// It also serves the aws-sm secret reference scheme (SecretScheme), so a
+// secret slot can name an AWS Secrets Manager secret the daemon reads with
+// its own identity.
+//
 // It is an installed package on protocol/sdk alone, so a third party could
 // have written it.
 package aws
@@ -56,6 +60,9 @@ type Options struct {
 	HTTP *http.Client
 	// Ambient replaces the daemon's ambient identity (tests).
 	Ambient func(profile string) func(context.Context) (Keys, error)
+	// Getenv replaces the package's environment, which the secret
+	// provider reads its region and endpoint from (tests).
+	Getenv func(string) string
 }
 
 type entry struct {
@@ -103,7 +110,7 @@ func Build(o Options) *sdk.Extension {
 	st := &state{o: o, entries: map[string]*entry{}}
 	ext := sdk.New(Name, sdk.Version(Version), sdk.Command(protocol.HostRunCommand(Name)...),
 		sdk.Permissions(protocol.PermissionTelemetryCapture),
-		sdk.Summary("Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail."))
+		sdk.Summary("Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail, and secrets read from AWS Secrets Manager."))
 	ext.Manifest.Title = "AWS"
 	ext.Manifest.Provides.Connections = []protocol.TypeDecl{{Type: Name, Fields: []protocol.FieldDecl{
 		{Name: "region", Help: "the AWS region STS is called in, which every profile the run gets uses too, such as eu-west-2", Required: true},
@@ -118,6 +125,12 @@ func Build(o Options) *sdk.Extension {
 		{Name: "roles", Help: `[{"name": "read", "arn": "arn:aws:iam::111122223333:role/agent-read", "for_bindings": ["helper"], "duration": "15m", "tag_session": false, "external_id": ""}]: the roles a run may get credentials for, each only for the bindings it names; duration from 15m (the default) to 12h; tag_session sends the scope, binding and Work as session tags, which the role's trust policy must allow (sts:TagSession)`, Required: true},
 	}}}
 	ext.Manifest.Provides.RunEnvironment = true
+	ext.Manifest.Provides.SecretSchemes = []protocol.SecretSchemeDecl{{Scheme: SecretScheme, Summary: "an AWS Secrets Manager secret's name or ARN, with #key for one field of a JSON secret, read with the daemon's own AWS identity"}}
+	keys := (&Ambient{Getenv: o.Getenv, Now: o.Now}).Keys
+	if o.Ambient != nil {
+		keys = o.Ambient("")
+	}
+	ext.Secrets = map[string]extension.SecretProvider{SecretScheme: &secrets{o: o, keys: keys}}
 	tools{st}.register(ext)
 	ext.Check(Name, st.check)
 	ext.Check(Name+"-roles", st.checkRoles, sdk.Deep())

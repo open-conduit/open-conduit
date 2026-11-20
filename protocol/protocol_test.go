@@ -22,7 +22,7 @@ import (
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
-	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true, "oidc": true,
+	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true, "oidc": true, "aws": true,
 	"mcp": true,
 }
 
@@ -89,6 +89,7 @@ var useCases = map[string][]string{
 	"tunnel.run":                  {"ngrok", "cloudflared"},
 	"tunnel.url":                  {"ngrok", "cloudflared"},
 	"credential.verify":           {"oidc"},
+	"secret.serve":                {"aws"},
 	"kv.get":                      {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"kv.list":                     {"github", "slack", "linear", "jira", "introspection", "claude-code"},
 	"kv.commit":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -243,6 +244,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.SandboxProvider":         reflect.TypeFor[extension.SandboxProvider](),
 		"extension.TunnelProvider":          reflect.TypeFor[extension.TunnelProvider](),
 		"extension.CredentialVerifier":      reflect.TypeFor[extension.CredentialVerifier](),
+		"extension.SecretProvider":          reflect.TypeFor[extension.SecretProvider](),
 		"extension.ContainerBroker":         reflect.TypeFor[extension.ContainerBroker](),
 		"extension.SetupHost":               reflect.TypeFor[extension.SetupHost](),
 		"observability.Exporter":            reflect.TypeFor[observability.Exporter](),
@@ -346,6 +348,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true, Place: true}}
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
 	m.Provides.Verifiers = []protocol.VerifierDecl{{Type: "chat-idp"}}
+	m.Provides.SecretSchemes = []protocol.SecretSchemeDecl{{Scheme: "chat-vault"}}
 	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Sites = true, true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
@@ -362,6 +365,21 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	for _, method := range protocol.Methods {
 		if !slices.Contains(enabled, method.Name) {
 			t.Errorf("%s is unreachable (provides %q)", method.Name, method.Provides)
+		}
+	}
+}
+
+// A package can't declare a secret scheme the host resolves itself, even
+// when its name would let it.
+func TestBuiltinSecretSchemesAreReserved(t *testing.T) {
+	for _, scheme := range protocol.BuiltinSecretSchemes {
+		m := protocol.Manifest{Protocol: []int{1}, Name: scheme, Version: "1", Command: []string{"./x"}, Provides: protocol.Provides{SecretSchemes: []protocol.SecretSchemeDecl{{Scheme: scheme}}}}
+		if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "resolves itself") {
+			t.Errorf("%s: %v", scheme, err)
+		}
+		m.Provides.SecretSchemes[0].Scheme = scheme + "-x"
+		if err := m.Validate(); err != nil {
+			t.Errorf("%s-x: %v", scheme, err)
 		}
 	}
 }
@@ -413,6 +431,7 @@ func TestManifestRejections(t *testing.T) {
 		"page without actions":       {`"setup":`, `"pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": "start"}], "setup":`},
 		"foreign page":               {`"setup":`, `"actions": true, "pages": [{"id": "talk", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": "start"}], "setup":`},
 		"page undeclared kind":       {`"setup":`, `"actions": true, "pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.other", "start": "start"}], "setup":`},
+		"foreign secret scheme":      {`"setup":`, `"secret_schemes": [{"scheme": "vault"}], "setup":`},
 		"page without start":         {`"setup":`, `"actions": true, "pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": ""}], "setup":`},
 	}
 	for name, c := range cases {

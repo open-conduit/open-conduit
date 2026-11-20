@@ -50,11 +50,16 @@ type Exporter interface {
 // operator who made it (operator.actor) and needs no scope. A credential
 // record ("auth." prefix) is the host checking a bearer credential with a
 // trusted issuer: it precedes any operator, so it is anchored by the
-// issuer (auth.issuer) and needs no scope either.
+// issuer (auth.issuer) and needs no scope either. A secret record
+// ("secret." prefix) is the host resolving a provider-backed secret
+// reference, by reference and outcome, never value: it may precede any
+// Event (an attempt's start, doctor), so it is anchored by the reference's
+// scheme (secret.scheme) and needs no scope.
 func Validate(r Record) error {
 	c := r.Correlation
 	operator := strings.HasPrefix(r.Name, "operator.") && r.Attributes["operator.actor"] != "" ||
-		strings.HasPrefix(r.Name, "auth.") && r.Attributes["auth.issuer"] != ""
+		strings.HasPrefix(r.Name, "auth.") && r.Attributes["auth.issuer"] != "" ||
+		strings.HasPrefix(r.Name, "secret.") && r.Attributes["secret.scheme"] != ""
 	anchored := c.EventID != "" || strings.HasPrefix(r.Name, "ingress.") && r.Attributes["ingress.source"] != "" ||
 		strings.HasPrefix(r.Name, "provider.") && r.Attributes["provider.name"] != "" || operator
 	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" && !operator || !anchored || c.TraceID == "" {

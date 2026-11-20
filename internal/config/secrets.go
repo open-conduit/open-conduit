@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // KeyringService is the only keyring service Open Conduit reads.
@@ -49,12 +51,54 @@ type Keyring interface {
 	Get(service, name string) (string, error)
 }
 
-// Resolver resolves references lazily for one consumer. It keeps no cache.
+// Resolver resolves references lazily for one consumer. It caches nothing
+// for the built-in forms; a provider's answers are held in Cache, when set.
 type Resolver struct {
 	Keyring        Keyring // nil uses the platform keyring helper
 	SecretsFile    string  // owner-only secrets.json for file: references
 	LookupEnv      func(string) (string, bool)
-	CommandTimeout time.Duration // default 10s
+	CommandTimeout time.Duration // default 10s; also bounds a provider's answer
+	// Providers finds the running package that serves a provider scheme
+	// (manifest secret_schemes), with its name. A scheme it doesn't find
+	// fails as provider_unavailable: there is no fallback.
+	Providers func(scheme string) (p extension.SecretProvider, pkg string, ok bool)
+	// Observe, when set, is told of each provider-backed resolution, by
+	// reference and outcome, never value.
+	Observe func(context.Context, SecretResolution)
+	// Cache, when set, holds provider-served answers for a bounded
+	// lifetime, shared by every resolver For returns (SecretCache).
+	Cache *SecretCache
+
+	consumer string
+	fresh    bool
+}
+
+// SecretResolution is one provider-backed resolution as it is recorded:
+// the secret's name in its slot ("" when the caller has none), the
+// reference (which a record carries only as a digest, since reference text
+// is sensitive), the package that served it, the package it was resolved
+// for ("" for the host itself: an attempt's start, doctor) and the safe
+// failure code ("" when it resolved).
+type SecretResolution struct {
+	Name, Reference, Scheme, Provider, Consumer, Code string
+	Duration                                          time.Duration
+}
+
+// For returns a resolver that resolves for the package consumer, which
+// may never be served by a scheme it provides itself (provider_cycle).
+func (r *Resolver) For(consumer string) *Resolver {
+	c := *r
+	c.consumer = consumer
+	return &c
+}
+
+// Fresh returns a resolver that asks providers now rather than answering
+// from Cache, for a check of whether a reference resolves now (doctor,
+// GET /v1/secrets). It leaves the cache as it was.
+func (r *Resolver) Fresh() *Resolver {
+	c := *r
+	c.fresh = true
+	return &c
 }
 
 func (r *Resolver) lookup(k string) (string, bool) {
@@ -64,6 +108,12 @@ func (r *Resolver) lookup(k string) (string, bool) {
 	return os.LookupEnv(k)
 }
 func (r *Resolver) Resolve(ctx context.Context, ref string) (string, error) {
+	return r.ResolveNamed(ctx, "", ref)
+}
+
+// ResolveNamed resolves ref for the secret slot name, which a
+// provider-backed resolution's record names.
+func (r *Resolver) ResolveNamed(ctx context.Context, name, ref string) (string, error) {
 	if !ValidSecretRef(ref) {
 		return "", &secretError{code: "invalid_reference"}
 	}
@@ -108,11 +158,83 @@ func (r *Resolver) Resolve(ctx context.Context, ref string) (string, error) {
 			return "", &secretError{code: code}
 		}
 		v = out
+	default:
+		return r.provided(ctx, name, ref, scheme, rest)
 	}
 	if v == "" {
 		return "", &secretError{code: "empty"}
 	}
 	return v, nil
+}
+
+// provided asks the package serving scheme for a provider reference's value,
+// bounded by CommandTimeout, and records the outcome of each call it makes
+// (an answer from Cache is not a call). Every failure is a
+// safe code: the provider's own refusal code when it is one
+// (extension.ValidSecretCode), else provider_refused; provider_failed for
+// any other error, whose text is discarded.
+func (r *Resolver) provided(ctx context.Context, name, ref, scheme, rest string) (string, error) {
+	call := func(ctx context.Context) (string, string) {
+		start := time.Now()
+		res := SecretResolution{Name: name, Reference: ref, Scheme: scheme, Consumer: r.consumer}
+		v, code := r.serve(ctx, &res, scheme, rest)
+		if code == "" && v == "" {
+			code = "empty"
+		}
+		if code == "" && len(v) > maxSecretOutput {
+			v, code = "", "output_too_large"
+		}
+		res.Code, res.Duration = code, time.Since(start)
+		if r.Observe != nil {
+			r.Observe(ctx, res)
+		}
+		return v, code
+	}
+	var v, code string
+	if r.Cache != nil && !r.fresh {
+		v, code = r.Cache.do(ctx, r.consumer+"\x00"+ref, call)
+	} else {
+		v, code = call(ctx)
+	}
+	if code != "" {
+		return "", &secretError{code: code}
+	}
+	return v, nil
+}
+
+func (r *Resolver) serve(ctx context.Context, res *SecretResolution, scheme, rest string) (string, string) {
+	if r.Providers == nil {
+		return "", "provider_unavailable"
+	}
+	p, pkg, ok := r.Providers(scheme)
+	if !ok || p == nil {
+		return "", "provider_unavailable"
+	}
+	res.Provider = pkg
+	if pkg == r.consumer {
+		return "", "provider_cycle"
+	}
+	timeout := r.CommandTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	v, err := p.Serve(ctx, extension.SecretRequest{Scheme: scheme, Reference: rest})
+	var refused *extension.SecretRefusal
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "", "timeout"
+	case ctx.Err() != nil:
+		return "", "cancelled"
+	case errors.As(err, &refused) && extension.ValidSecretCode(refused.Code):
+		return "", refused.Code
+	case errors.As(err, &refused):
+		return "", "provider_refused"
+	case err != nil:
+		return "", "provider_failed"
+	}
+	return v, ""
 }
 
 // ResolveNames resolves only the named secrets of one consumer. A missing or
@@ -128,7 +250,7 @@ func (r *Resolver) ResolveNames(ctx context.Context, scope *EffectiveScope, name
 		if ref == "" {
 			return nil, &secretError{code: "unknown_secret", name: name}
 		}
-		v, err := r.Resolve(ctx, ref)
+		v, err := r.ResolveNamed(ctx, name, ref)
 		if err != nil {
 			return nil, &secretError{code: SecretCode(err), name: name}
 		}

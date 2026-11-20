@@ -68,6 +68,10 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 			switch c.Kind {
 			case protocol.ValidateConnection:
 				reg.Connections[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+				if reg.ConnectionOwners == nil {
+					reg.ConnectionOwners = map[string]string{}
+				}
+				reg.ConnectionOwners[c.Type] = x.Name()
 			case protocol.ValidateExtension:
 				reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings, Describe: c.Describe, Bindings: c.Bindings, Operations: c.Operations, Owner: x.Name(), Sandbox: c.Sandbox}
 			case protocol.ValidateRoute:
@@ -94,6 +98,12 @@ func packageRegistry(reg *config.Registry, xs []*installed) {
 					}
 				}
 			}
+		}
+		for _, sc := range x.m.Provides.SecretSchemes {
+			if reg.SecretSchemes == nil {
+				reg.SecretSchemes = map[string]string{}
+			}
+			reg.SecretSchemes[sc.Scheme] = x.Name()
 		}
 		reg.Operations = append(reg.Operations, x.Operations()...)
 		if reg.Toolsets == nil {

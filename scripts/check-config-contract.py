@@ -218,6 +218,11 @@ def main():
     command = copy.deepcopy(base)
     command['scopes'][0]['secret_refs']['temporary'] = 'cmd:printf token'
     assert not check(command)[0], 'valid cmd reference rejected'
+    # A provider scheme's reference passes the schema; whether a package
+    # declares the scheme is the host's check against its packages.
+    provided = copy.deepcopy(base)
+    provided['scopes'][0]['secret_refs']['temporary'] = 'vault:secret/data/app#token'
+    assert not check(provided)[0], 'valid provider reference rejected'
     mutations = [
         ('schema', lambda c: c.update(unrecognized=True)),
         ('schema', lambda c: c['settings'].update(causal_max_depth=0)),
@@ -225,6 +230,9 @@ def main():
         ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='literal-secret')),
         ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='cmd:printf token\n')),
         ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='cmd:printf\rtoken')),
+        ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='vault:secret/app token')),
+        ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='keyring:Bad')),
+        ('schema', lambda c: c['scopes'][0]['secret_refs'].update(temporary='Vault:secret/app')),
         ('scope_cycle', lambda c: c['scopes'][0].update(parent='child')),
         ('unknown_scope', lambda c: c['scopes'][1].update(parent='absent')),
         ('duplicate_name', lambda c: c['scopes'][0]['routes'].append(copy.deepcopy(c['scopes'][0]['routes'][0]))),
@@ -259,7 +267,7 @@ def main():
         raise AssertionError('duplicate keys accepted')
     except ValueError:
         pass
-    print('B05: schema valid; 5 valid examples, invalid capability, 7 sandbox or container and 17 other negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
+    print(f'B05: schema valid; 5 valid examples, invalid capability, 7 sandbox or container and {len(mutations)} other negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
 
 
 if __name__ == '__main__':

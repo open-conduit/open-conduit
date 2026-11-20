@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -63,7 +65,10 @@ func invalid(diags []Diagnostic) error {
 }
 
 // ValidSecretRef reports whether ref is an accepted reference form; it never
-// classifies a literal as a reference.
+// classifies a literal as a reference. Besides the built-in forms, a
+// reference may name a provider scheme ("vault:secret/app#token"): its
+// syntax is checked here, and whether an installed package declares the
+// scheme is checked against the Registry (Registry.SecretSchemes).
 func ValidSecretRef(ref string) bool {
 	scheme, rest, ok := strings.Cut(ref, ":")
 	switch {
@@ -75,8 +80,42 @@ func ValidSecretRef(ref string) bool {
 		return envPattern.MatchString(rest)
 	case scheme == "cmd":
 		return rest != "" && !strings.ContainsAny(rest, "\r\n")
+	case idPattern.MatchString(scheme):
+		return validProviderReference(rest)
 	}
 	return false
+}
+
+// maxProviderReference bounds a provider reference's text after the scheme.
+const maxProviderReference = 1024
+
+// validProviderReference is a provider reference's text after the scheme:
+// nonempty, at most maxProviderReference bytes, without spaces or control
+// characters, so it is one token the provider parses as its own.
+func validProviderReference(rest string) bool {
+	if rest == "" || len(rest) > maxProviderReference || !utf8.ValidString(rest) {
+		return false
+	}
+	for _, r := range rest {
+		if r <= ' ' || r == 0x7f || unicode.IsControl(r) || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// ProviderScheme returns the scheme of a valid reference that a package
+// resolves (not keyring:, file:, env: or cmd:), or "".
+func ProviderScheme(ref string) string {
+	if !ValidSecretRef(ref) {
+		return ""
+	}
+	scheme, _, _ := strings.Cut(ref, ":")
+	switch scheme {
+	case "keyring", "file", "env", "cmd":
+		return ""
+	}
+	return scheme
 }
 
 // DefaultKeptFinishedDays is settings.kept_finished_days when unset.
@@ -606,7 +645,7 @@ func (c *checker) secretRefs(n *node, path string, overlay bool) map[string]stri
 		case v.kind == kString && ValidSecretRef(v.str):
 			refs[k] = v.str
 		case v.kind == kString || v.kind == kBool:
-			c.fail(p, "invalid_value", "use keyring:name, file:name, env:NAME or cmd:command (no literals or line breaks)")
+			c.fail(p, "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
 		case v.kind != kNull:
 			c.fail(p, "invalid_type", "expected secret reference string")
 		}

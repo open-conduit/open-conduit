@@ -1,14 +1,16 @@
-// Package awstest is a fake AWS Security Token Service for tests and
-// certification, so neither needs an AWS account. It checks each
-// request's Signature Version 4 against the key pairs it knows, answers
-// sts:GetCallerIdentity and sts:AssumeRole in STS's XML, and records each
-// AssumeRole it served.
+// Package awstest is a fake AWS Security Token Service and Secrets Manager
+// for tests and certification, so neither needs an AWS account. It checks
+// each request's Signature Version 4 against the key pairs it knows,
+// answers sts:GetCallerIdentity and sts:AssumeRole in STS's XML and
+// secretsmanager:GetSecretValue in its JSON, and records each AssumeRole it
+// served.
 package awstest
 
 import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -44,6 +46,8 @@ type Server struct {
 	roles    map[string]bool
 	untagged map[string]bool // roles whose trust policy denies sts:TagSession
 	assumed  []Assumed
+	secrets  map[string]string // SecretString by secret ID
+	denied   map[string]bool   // secret IDs the keys may not read
 }
 
 type key struct {
@@ -52,7 +56,7 @@ type key struct {
 
 // New starts a fake for region.
 func New(region string) *Server {
-	s := &Server{Region: region, Now: time.Now, keys: map[string]key{}, roles: map[string]bool{}, untagged: map[string]bool{}}
+	s := &Server{Region: region, Now: time.Now, keys: map[string]key{}, roles: map[string]bool{}, untagged: map[string]bool{}, secrets: map[string]string{}, denied: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	return s
 }
@@ -73,6 +77,15 @@ func (s *Server) AddRole(roleARN string, tags bool) {
 	s.untagged[roleARN] = !tags
 }
 
+// AddSecret stores a secret the known keys may read, by its ID (a name or
+// an ARN); denied makes reading it an AccessDeniedException instead.
+func (s *Server) AddSecret(id, value string, denied bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secrets[id] = value
+	s.denied[id] = denied
+}
+
 // Assumed is every AssumeRole the fake has served, in order.
 func (s *Server) Assumed() []Assumed {
 	s.mu.Lock()
@@ -80,7 +93,7 @@ func (s *Server) Assumed() []Assumed {
 	return append([]Assumed(nil), s.assumed...)
 }
 
-var credentialRE = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([^/]+)/(\d{8})/([^/]+)/sts/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$`)
+var credentialRE = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([^/]+)/(\d{8})/([^/]+)/(sts|secretsmanager)/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$`)
 
 func (s *Server) fail(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "text/xml")
@@ -91,37 +104,46 @@ func (s *Server) fail(w http.ResponseWriter, status int, code string) {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	m := credentialRE.FindStringSubmatch(r.Header.Get("Authorization"))
-	if r.Method != http.MethodPost || m == nil {
-		s.fail(w, 403, "MissingAuthenticationToken")
+	secrets := r.Header.Get("X-Amz-Target") == "secretsmanager.GetSecretValue"
+	fail := s.fail
+	if secrets {
+		fail = jsonFail
+	}
+	if r.Method != http.MethodPost || m == nil || (m[4] == "secretsmanager") != secrets {
+		fail(w, 403, "MissingAuthenticationToken")
 		return
 	}
 	s.mu.Lock()
 	k, ok := s.keys[m[1]]
 	s.mu.Unlock()
 	if !ok {
-		s.fail(w, 403, "InvalidClientTokenId")
+		fail(w, 403, map[bool]string{false: "InvalidClientTokenId", true: "UnrecognizedClientException"}[secrets])
 		return
 	}
 	at, err := time.Parse("20060102T150405Z", r.Header.Get("X-Amz-Date"))
 	if err != nil || m[3] != s.Region || at.Format("20060102") != m[2] || s.Now().Sub(at).Abs() > 5*time.Minute {
-		s.fail(w, 403, "SignatureDoesNotMatch")
+		fail(w, 403, "SignatureDoesNotMatch")
 		return
 	}
-	if !strings.Contains(";"+m[4]+";", ";host;") || !strings.Contains(";"+m[4]+";", ";x-amz-date;") {
-		s.fail(w, 403, "SignatureDoesNotMatch")
+	if !strings.Contains(";"+m[5]+";", ";host;") || !strings.Contains(";"+m[5]+";", ";x-amz-date;") {
+		fail(w, 403, "SignatureDoesNotMatch")
 		return
 	}
 	// Sign the same request again and compare.
 	check, _ := http.NewRequest(r.Method, "http://"+r.Host+r.URL.RequestURI(), bytes.NewReader(body))
 	check.Host = r.Host
-	for _, name := range strings.Split(m[4], ";") {
+	for _, name := range strings.Split(m[5], ";") {
 		if name != "host" && name != "authorization" {
 			check.Header[http.CanonicalHeaderKey(name)] = r.Header.Values(name)
 		}
 	}
-	sigv4.Sign(check, body, sigv4.Key{ID: m[1], Secret: k.secret, Token: r.Header.Get("X-Amz-Security-Token")}, s.Region, "sts", at)
+	sigv4.Sign(check, body, sigv4.Key{ID: m[1], Secret: k.secret, Token: r.Header.Get("X-Amz-Security-Token")}, s.Region, m[4], at)
 	if check.Header.Get("Authorization") != r.Header.Get("Authorization") {
-		s.fail(w, 403, "SignatureDoesNotMatch")
+		fail(w, 403, "SignatureDoesNotMatch")
+		return
+	}
+	if secrets {
+		s.secret(w, body)
 		return
 	}
 	form, err := url.ParseQuery(string(body))
@@ -137,6 +159,38 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.assume(w, form)
 	default:
 		s.fail(w, 400, "InvalidAction")
+	}
+}
+
+// jsonFail is an error answer in Secrets Manager's JSON protocol, whose
+// message, like the real one, names what was asked for.
+func jsonFail(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": "refused for the request"})
+}
+
+// secret answers secretsmanager:GetSecretValue.
+func (s *Server) secret(w http.ResponseWriter, body []byte) {
+	var in struct {
+		SecretID string `json:"SecretId"`
+	}
+	if json.Unmarshal(body, &in) != nil || in.SecretID == "" {
+		jsonFail(w, 400, "InvalidParameterException")
+		return
+	}
+	s.mu.Lock()
+	v, ok := s.secrets[in.SecretID]
+	denied := s.denied[in.SecretID]
+	s.mu.Unlock()
+	switch {
+	case !ok:
+		jsonFail(w, 400, "ResourceNotFoundException")
+	case denied:
+		jsonFail(w, 400, "AccessDeniedException")
+	default:
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ARN": "arn:aws:secretsmanager:" + s.Region + ":111122223333:secret:" + in.SecretID, "Name": in.SecretID, "SecretString": v, "VersionId": "v1"})
 	}
 }
 

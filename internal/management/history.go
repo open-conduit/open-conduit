@@ -431,7 +431,7 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 	for _, cn := range snapshot.Connections {
 		for _, name := range sortedKeys(cn.SecretRefs) {
 			total++
-			if _, err := s.o.Resolver.Resolve(ctx, cn.SecretRefs[name]); err != nil {
+			if _, err := s.o.Resolver.Fresh().ResolveNamed(ctx, name, cn.SecretRefs[name]); err != nil {
 				failed = append(failed, fmt.Sprintf("connection %s secret %s: %s", cn.ID, name, secretFailure(cn.SecretRefs[name], err)))
 			}
 		}
@@ -443,7 +443,7 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 				continue
 			}
 			total++
-			if _, err := s.o.Resolver.Resolve(ctx, scope.SecretRefs[name]); err != nil {
+			if _, err := s.o.Resolver.Fresh().ResolveNamed(ctx, name, scope.SecretRefs[name]); err != nil {
 				failed = append(failed, fmt.Sprintf("scope %s secret %s: %s", id, name, secretFailure(scope.SecretRefs[name], err)))
 			}
 		}

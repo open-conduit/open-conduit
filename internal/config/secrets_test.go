@@ -93,7 +93,7 @@ func TestEnv(t *testing.T) {
 }
 
 func TestInvalidReferences(t *testing.T) {
-	for _, ref := range []string{"", "literal", "https://example", "vault:x", "env:", "env:1BAD", "keyring:Bad", "file:../x", "cmd:", "cmd:a\nb"} {
+	for _, ref := range []string{"", "literal", "Https://example", "vault:", "vault:a b", "env:", "env:1BAD", "keyring:Bad", "file:../x", "cmd:", "cmd:a\nb"} {
 		_, err := (&Resolver{}).Resolve(context.Background(), ref)
 		failure(t, err, "invalid_reference")
 		if ref != "" && strings.Contains(err.Error(), ref) {

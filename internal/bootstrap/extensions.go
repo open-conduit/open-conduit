@@ -629,7 +629,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return out
 		},
-		Secrets: d.scopedSecrets(extTypes, connTypes),
+		Secrets: d.scopedSecrets(m.Name, extTypes, connTypes),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 			accepted, added, err := d.ingress.Deliver(ctx, name, delivery)
 			if err == nil {
@@ -696,9 +696,11 @@ func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domai
 // scope: their selected secret names, or the secret names of a connection
 // of one of its types that one of them or one of the scope's bindings names
 // (B05, config.Snapshot.ExtensionConnection). It is the one host resolver
-// for every package.
-func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+// for every package, and resolves for pkg, so a provider package is never
+// asked for a credential of its own through a scheme it serves.
+func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+		resolver := d.resolver.For(pkg)
 		s, _ := d.extensionSnapshot()
 		if s == nil || s.Scopes[id] == nil {
 			return nil, extension.ErrUnauthorized
@@ -718,7 +720,7 @@ func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx con
 					return nil, extension.ErrUnauthorized
 				}
 			}
-			return d.resolver.ResolveNames(ctx, scope, names)
+			return resolver.ResolveNames(ctx, scope, names)
 		}
 		c, ok := s.ExtensionConnection(id, connection, extTypes, connTypes)
 		if !ok {
@@ -730,7 +732,7 @@ func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx con
 			if !ok || ref == "" {
 				return nil, extension.ErrUnauthorized
 			}
-			v, err := d.resolver.Resolve(ctx, ref)
+			v, err := resolver.ResolveNamed(ctx, n, ref)
 			if err != nil {
 				return nil, err
 			}
