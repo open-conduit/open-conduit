@@ -62,6 +62,10 @@ func copyOf[T any](v T) T {
 	}
 	return out
 }
+
+// SerialWriters: one Transact runs at a time (conformance.WriterAdmission).
+func (m *Memory) SerialWriters() bool { return true }
+
 func (m *Memory) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

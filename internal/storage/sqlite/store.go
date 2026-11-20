@@ -385,6 +385,11 @@ func (s *Store) rewrite(ctx context.Context, r struct{ key, statement string }) 
 	return err
 }
 
+// SerialWriters reports that a Store admits one writer at a time: every
+// Transact begins with BEGIN IMMEDIATE on its one write connection, which
+// the shared storage suite asks (conformance.WriterAdmission).
+func (s *Store) SerialWriters() bool { return true }
+
 // Transact runs fn in one write transaction. SQLite never sees the caller's
 // context: an interrupted statement can leave the transaction open on a
 // connection the pool then discards, and SQLite keeps that connection's write

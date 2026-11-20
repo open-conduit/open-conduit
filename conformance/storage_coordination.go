@@ -18,21 +18,37 @@ import (
 // compare as bytes, and a transaction aborted under contention commits
 // nothing and says so with ErrTransient.
 
+// WriterAdmission is how a backend under the storage suite says whether it
+// admits writers one at a time. A backend that serialises its writers
+// (the reference double, SQLite's BEGIN IMMEDIATE) holds a second writer
+// until the first ends; one that runs writers together lets the second
+// commit while the first is open, which the sequence case then reads as a
+// waiting reader would. The case needs to know which, rather than guess
+// from timing, and a store that says neither fails it.
+type WriterAdmission interface {
+	SerialWriters() bool
+}
+
 // writerWait bounds how long a second writer may take to commit while a
-// first holds its transaction open. A backend that serialises writers
-// holds the second until the first ends, so for it this is a deadline that
-// passes and the case moves on; one that runs writers together commits the
-// second at once, and the case then reads as a waiting reader would.
-const writerWait = 500 * time.Millisecond
+// first is open, on a backend that admits writers together: only a
+// failing backend reaches it.
+const writerWait = viewWait
 
 // sequenceVisibility: a reader that has seen sequence n has seen every
 // Event below n that will ever commit, so a waiting reader's cursor (a
 // Wait's AfterSequence, an Events page) never skips an Event. A first
 // writer accepts an Event and holds its transaction open; a second accepts
-// another. If the second commits while the first is open, a reader then
-// takes its cursor; once the first commits, the page after that cursor
-// must hold every Event the reader had not seen.
+// another. On a backend that admits writers together the second commits
+// while the first is open, and a reader then takes its cursor; once the
+// first commits, the page after that cursor must hold every Event the
+// reader had not seen. On one that serialises them the second waits, and
+// only the final check applies.
 func sequenceVisibility(s storage.Store) error {
+	admission, ok := s.(WriterAdmission)
+	if !ok {
+		return fmt.Errorf("sequence: the store does not say whether it admits writers one at a time (conformance.WriterAdmission)")
+	}
+	serial := admission.SerialWriters()
 	c := NewClock()
 	ctx := context.Background()
 	inside, release := make(chan struct{}), make(chan struct{})
@@ -62,9 +78,14 @@ func sequenceVisibility(s storage.Store) error {
 	var cursor uint64
 	seen := map[domain.ID]bool{}
 	secondDone := false
-	select {
-	case err := <-second:
-		secondDone = true
+	if !serial {
+		var err error
+		select {
+		case err = <-second:
+		case <-time.After(writerWait):
+			err = fmt.Errorf("sequence: a second writer waited for the first, on a store that admits writers together")
+		}
+		secondDone = err == nil
 		if err == nil {
 			err = storage.View(ctx, s, c.Now(), func(tx storage.Tx) error {
 				latest, err := tx.LatestSequence()
@@ -90,7 +111,6 @@ func sequenceVisibility(s storage.Store) error {
 			<-first
 			return err
 		}
-	case <-time.After(writerWait):
 	}
 	close(release)
 	if err := <-first; err != nil {

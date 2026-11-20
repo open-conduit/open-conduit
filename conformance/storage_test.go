@@ -236,6 +236,7 @@ type identityColumnTx struct {
 	accepted []domain.ID
 }
 
+func (s *identityColumn) SerialWriters() bool { return false }
 func (s *identityColumn) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	tx := &identityColumnTx{s: s, ctx: ctx, g: g}
 	err := fn(tx)

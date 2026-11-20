@@ -464,7 +464,10 @@ func TestProductionSchedulerHoldSurvivesTransientAborts(t *testing.T) {
 		// a tick only once the renewal before it is done, so the fourth
 		// is taken only by a holder still holding. One that lost the
 		// lease takes no more.
-		held := send() && send() && send() && send()
+		held := true
+		for i := 0; i < 4 && held; i++ {
+			held = send()
+		}
 		stop()
 		if tc.lost {
 			if held || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {

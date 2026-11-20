@@ -795,9 +795,9 @@ func (s *Scheduler) Hold(parent context.Context, ref domain.LeaseRef, ticks <-ch
 				continue
 			}
 			// A transient abort (storage.ErrTransient) says nothing about
-			// the lease: the store committed nothing and Retry has
-			// already rerun it. It is reported and the next tick renews
-			// again, so contention never ends a healthy attempt.
+			// the lease: the store committed nothing, so the lease is
+			// unchanged. It is reported and the next tick renews again,
+			// so contention never ends a healthy attempt.
 			if errors.Is(err, storage.ErrLeaseLost) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrInvalid) || errors.Is(err, storage.ErrNotFound) {
 				close(gone)
 				cancel(ErrLeaseLost)
