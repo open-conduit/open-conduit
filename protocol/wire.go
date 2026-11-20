@@ -75,10 +75,14 @@ type Event struct {
 	// Actor is who caused the Event, as kind:id, when the host knows. The
 	// host sets it; an Event an extension submits never carries one.
 	Actor string `json:"actor,omitempty"`
+	// Via is the client the Actor acted through, as kind:id, when a
+	// client credential acted for the Actor (a person signed in to it).
+	// The host sets it, as it sets Actor.
+	Via string `json:"via,omitempty"`
 }
 
 func FromEvent(e domain.Event) Event {
-	out := Event{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: FromPayload(e.Data), Actor: e.Actor}
+	out := Event{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: FromPayload(e.Data), Actor: e.Actor, Via: e.Via}
 	if e.CorrelationKey != nil {
 		k := fromKey(*e.CorrelationKey)
 		out.CorrelationKey = &k
@@ -86,7 +90,7 @@ func FromEvent(e domain.Event) Event {
 	return out
 }
 func (e Event) Domain() domain.Event {
-	out := domain.Event{ID: domain.ID(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: domain.ID(e.CausationID), WorkID: domain.ID(e.WorkID), ExecutionID: domain.ID(e.ExecutionID), Data: e.Data.Domain(), Actor: e.Actor}
+	out := domain.Event{ID: domain.ID(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: domain.ID(e.CausationID), WorkID: domain.ID(e.WorkID), ExecutionID: domain.ID(e.ExecutionID), Data: e.Data.Domain(), Actor: e.Actor, Via: e.Via}
 	if e.CorrelationKey != nil {
 		k := e.CorrelationKey.domain()
 		out.CorrelationKey = &k

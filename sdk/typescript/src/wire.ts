@@ -50,6 +50,9 @@ export const Event = t.object(
     // Who caused the Event, as kind:id, when the host knows. The host sets
     // it; an Event an extension submits never carries one.
     actor: t.optional(t.string()),
+    // The client the actor acted through, as kind:id, when a client
+    // credential acted for the actor (a person signed in to it).
+    via: t.optional(t.string()),
   },
   open,
 );

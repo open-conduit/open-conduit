@@ -78,7 +78,7 @@ func prior(tx storage.Tx, delivery string) (domain.AcceptedEvent, bool, error) {
 
 func (c *Control) acceptInTx(ctx context.Context, tx storage.Tx, scope domain.ID, m ManualEvent, typ string) (domain.AcceptedEvent, bool, error) {
 	now := c.now()
-	e := domain.Event{ID: manualEventID(m.DeliveryID), Type: typ, Source: ManualSource, DeliveryID: m.DeliveryID, OccurredAt: now, ReceivedAt: now, CorrelationKey: m.CorrelationKey, WorkID: m.WorkID, Data: m.Data, Actor: ActorFrom(ctx)}
+	e := domain.Event{ID: manualEventID(m.DeliveryID), Type: typ, Source: ManualSource, DeliveryID: m.DeliveryID, OccurredAt: now, ReceivedAt: now, CorrelationKey: m.CorrelationKey, WorkID: m.WorkID, Data: m.Data, Actor: ActorFrom(ctx), Via: ViaFrom(ctx)}
 	if m.CausationID != "" {
 		parent, err := tx.Event(m.CausationID)
 		if err != nil {

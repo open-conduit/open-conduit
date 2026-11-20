@@ -95,7 +95,7 @@ var helpGroups = []helpGroup{
 	}},
 	{"Maintain", []helpEntry{
 		{"auth", `  auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
-  auth operators | auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view or operate at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given
+  auth operators | auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view or operate at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given, and that may act for KIND:ID subjects with --act-for (operator: for operators, within both's authority)
   auth issuers | auth issuer set ID --type TYPE [--config JSON] [--groups JSON] [--grants JSON] | auth issuer remove ID   list, trust or stop trusting an identity provider issuer (admin); its credentials are recorded as operator:ID:SUBJECT, with the role --groups maps their groups to and the scoped roles --grants rows ({group, scope, role}) give them
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file`},
 		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)`},

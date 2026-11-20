@@ -231,6 +231,19 @@ func (b brokenActorTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	return b.Tx.AcceptEvent(e)
 }
 
+// brokenVia stores Events without the client their actor acted through,
+// as a store might that added Actor's column and missed Via's.
+type brokenVia struct{ storage.Store }
+type brokenViaTx struct{ storage.Tx }
+
+func (b brokenVia) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenViaTx{tx}) })
+}
+func (b brokenViaTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
+	e.Via = ""
+	return b.Tx.AcceptEvent(e)
+}
+
 // identityColumn allocates sequences as an identity column does under
 // concurrent writers: an Event takes its sequence when accepted and becomes
 // visible when its transaction ends, and other transactions run meanwhile,
@@ -396,6 +409,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 	}{
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
 		{"event_actor_round_trip", "event actor lost", func() storage.Store { return brokenActor{reference.New()} }},
+		{"event_actor_round_trip", "event via lost", func() storage.Store { return brokenVia{reference.New()} }},
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},

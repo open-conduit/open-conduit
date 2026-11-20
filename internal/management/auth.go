@@ -35,7 +35,13 @@ type operatorRecord struct {
 	// Grants are the operator's roles at scopes, each covering the
 	// scope's subtree. A credential with grants and no Role holds nothing
 	// daemon-wide.
-	Grants    []Grant `json:",omitempty"`
+	Grants []Grant `json:",omitempty"`
+	// ActFor is the kind of subject the credential may act for (see
+	// subject.go): a request naming kind:id is then recorded as that
+	// subject's and authorised as it, within the credential's own
+	// authority. "operator" trusts it to assert operator identities. Empty
+	// acts only as itself.
+	ActFor    string `json:",omitempty"`
 	Revoked   bool
 	CreatedAt time.Time
 	RevokedAt time.Time
@@ -115,7 +121,7 @@ func newTokenID(prefix string) (string, error) {
 
 // issueOperatorInTx stores only the digest of a fresh operator bearer. A
 // non-zero expires is when it stops authenticating.
-func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants []Grant, expires time.Time) (TokenFile, error) {
+func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants []Grant, actFor string, expires time.Time) (TokenFile, error) {
 	token, err := runtime.NewBearer()
 	if err != nil {
 		return TokenFile{}, err
@@ -125,7 +131,7 @@ func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants [
 		return TokenFile{}, err
 	}
 	digest := runtime.TokenDigest(token)
-	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, Grants: grants, CreatedAt: now, ExpiresAt: expires})
+	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, Grants: grants, ActFor: actFor, CreatedAt: now, ExpiresAt: expires})
 	if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 		return TokenFile{}, err
 	}
@@ -232,7 +238,7 @@ func BootstrapOperator(ctx context.Context, store storage.Store, now func() time
 				return ErrCredentialExists
 			}
 		}
-		file, err = issueOperatorInTx(tx, now(), "", "", nil, time.Time{})
+		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{})
 		return err
 	})
 	if err != nil {
@@ -251,7 +257,7 @@ func RecoverOperator(ctx context.Context, store storage.Store, now func() time.T
 			return err
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now(), "", "", nil, time.Time{})
+		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{})
 		return err
 	})
 	if err != nil {

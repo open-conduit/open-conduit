@@ -190,6 +190,19 @@ func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management
 	return management.ConfigCandidate{}, storage.ErrNotFound
 }
 
+// packageNamed reports whether a catalogued package, running or not, is
+// named kind: Host.Act vouches for kind's people as that package, so no
+// client credential may. The reservation never depends on which packages
+// happen to be running.
+func (d *daemon) packageNamed(kind string) bool {
+	for _, x := range d.catalogued() {
+		if x.Name() == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // pages are every catalogued package's pages, running or not, by the
 // package that declares them: a page is its manifest's, and a scope offers
 // it only once it has an entry of the page's type, which starts the

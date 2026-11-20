@@ -150,6 +150,7 @@ type wireEvent struct {
 	RoutedWorkID   string       `json:"routed_work_id,omitempty"`
 	Disposition    string       `json:"disposition,omitempty"`
 	Actor          string       `json:"actor,omitempty"`
+	Via            string       `json:"via,omitempty"`
 }
 type wireOutcome struct {
 	Kind    string       `json:"kind"`
@@ -347,7 +348,7 @@ func toDisplay(d *domain.WorkDisplay) *wireDisplay {
 }
 func toEvent(a domain.AcceptedEvent, scope domain.ID) wireEvent {
 	e := a.Event
-	out := wireEvent{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: ts(e.OccurredAt), ReceivedAt: ts(e.ReceivedAt), CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: payload(e.Data), ScopeID: string(scope), Sequence: u64(a.Sequence), Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition, Actor: e.Actor}
+	out := wireEvent{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: ts(e.OccurredAt), ReceivedAt: ts(e.ReceivedAt), CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: payload(e.Data), ScopeID: string(scope), Sequence: u64(a.Sequence), Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition, Actor: e.Actor, Via: e.Via}
 	if e.CorrelationKey != nil {
 		out.CorrelationKey = &wireKey{e.CorrelationKey.Source, e.CorrelationKey.ExternalID}
 	}

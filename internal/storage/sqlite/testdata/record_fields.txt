@@ -1,4 +1,4 @@
-format 6
+format 7
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -16,6 +16,7 @@ AcceptedEvent.Event.OccurredAt struct
 AcceptedEvent.Event.ReceivedAt struct
 AcceptedEvent.Event.Source string
 AcceptedEvent.Event.Type string
+AcceptedEvent.Event.Via string
 AcceptedEvent.Event.WorkID string
 AcceptedEvent.Routed bool
 AcceptedEvent.RoutedWorkID string
@@ -108,6 +109,7 @@ Timer.Event.OccurredAt struct
 Timer.Event.ReceivedAt struct
 Timer.Event.Source string
 Timer.Event.Type string
+Timer.Event.Via string
 Timer.Event.WorkID string
 Timer.FireAt struct
 Timer.ID string

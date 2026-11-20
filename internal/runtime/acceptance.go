@@ -53,9 +53,10 @@ func AcceptInTx(tx storage.Tx, scopeID domain.ID, event domain.Event) (domain.Ac
 	}
 	// Only the host says who did something: it stamps the operator on
 	// core.manual Events and the caller on core.action Events. Any other
-	// source's Actor (an extension's, a timer's copy) is dropped.
-	if event.Source != ManualSource && event.Source != extension.ActionSource {
-		event.Actor = ""
+	// source's Actor (an extension's, a timer's copy) is dropped, and so
+	// is the client it came through (Via), which never stands alone.
+	if event.Source != ManualSource && event.Source != extension.ActionSource || event.Actor == "" {
+		event.Actor, event.Via = "", ""
 	}
 	accepted, added, err := tx.AcceptEvent(event)
 	if err != nil {

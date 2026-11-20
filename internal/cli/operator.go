@@ -800,10 +800,10 @@ func (o *operator) auth(args []string) int {
 		defer cancel()
 		return o.emit(c.Operators(cx))
 	case "add":
-		f := newFlags("add", "out", "role", "grants", "ttl")
+		f := newFlags("add", "out", "role", "grants", "ttl", "act-for")
 		pos, err := f.parse(args[1:])
 		if err != nil || len(pos) != 1 || f.get("out") == "" {
-			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION]")
+			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]")
 		}
 		grants, ok := parseGrants(f.get("grants"))
 		if !ok {
@@ -827,7 +827,7 @@ func (o *operator) auth(args []string) int {
 		}
 		cx, cancel := ctx()
 		defer cancel()
-		file, err := c.IssueOperator(cx, client.OperatorRequest{Name: pos[0], Role: role, Grants: grants, TTL: f.get("ttl")})
+		file, err := c.IssueOperator(cx, client.OperatorRequest{Name: pos[0], Role: role, Grants: grants, TTL: f.get("ttl"), ActFor: f.get("act-for")})
 		if err != nil {
 			return o.emit(nil, err)
 		}
@@ -840,6 +840,9 @@ func (o *operator) auth(args []string) int {
 		}
 		if file.ExpiresAt != "" {
 			added["expires_at"] = file.ExpiresAt
+		}
+		if v := f.get("act-for"); v != "" {
+			added["act_for"] = v
 		}
 		return o.emit(added, nil)
 	case "issuers":

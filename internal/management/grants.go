@@ -55,9 +55,16 @@ func validScopeID(id domain.ID) bool {
 }
 
 // mayAnywhere reports whether the operator holds role somewhere: daemon
-// wide, or at least one grant of it.
+// wide, or at least one grant of it. Acting for an operator, so must that
+// operator.
 func (p principal) mayAnywhere(role string) bool {
-	if p.may(role) {
+	return p.ownMayAnywhere(role) && (p.subject == nil || !p.subject.operator || p.subject.ownMayAnywhere(role))
+}
+
+// ownMayAnywhere is mayAnywhere for p's own role and grants, never a
+// subject's.
+func (p principal) ownMayAnywhere(role string) bool {
+	if p.ownMay(role) {
 		return true
 	}
 	for _, g := range p.grants {
@@ -101,6 +108,37 @@ func reachIn(tx storage.Tx, grants []Grant, role string) (map[domain.ID]bool, er
 			}
 			id = next
 		}
+	}
+	return out, nil
+}
+
+// reachIn is the scopes p may act with role in, nil for every scope: its
+// own grants' reach unless it holds the role daemon-wide, and, acting for
+// an operator, only where that operator's reach overlaps it.
+func (p principal) reachIn(tx storage.Tx, role string) (map[domain.ID]bool, error) {
+	var out map[domain.ID]bool
+	for _, q := range []principal{p, p.acting()} {
+		if !q.operator || q.ownMay(role) {
+			continue
+		}
+		reach, err := reachIn(tx, q.grants, role)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = reach
+			continue
+		}
+		for id := range out {
+			if !reach[id] {
+				delete(out, id)
+			}
+		}
+	}
+	if out == nil && !p.may(role) {
+		// Neither holds the role daemon-wide, yet neither had grants to
+		// reach with: nothing is covered.
+		out = map[domain.ID]bool{}
 	}
 	return out, nil
 }
@@ -171,7 +209,7 @@ func (s *Server) authorizeScoped(c *call, rt *route, need string) error {
 		return nil
 	}
 	return s.read(c.ctx, func(tx storage.Tx) error {
-		reach, err := reachIn(tx, c.who.grants, need)
+		reach, err := c.who.reachIn(tx, need)
 		if err != nil {
 			return err
 		}
@@ -255,6 +293,9 @@ func targetScopeIn(tx storage.Tx, t target, c *call) (domain.ID, error) {
 }
 
 func forbiddenScope(p principal, role string, t target) error {
+	if p.subject != nil && p.subject.operator {
+		return fail(403, "forbidden_scope", "operator "+p.subject.name+", acting through "+p.caller().String()+", may not use "+role+" on this "+targetNames[t]+"'s scope: it takes a grant of it covering the scope for both")
+	}
 	return fail(403, "forbidden_scope", "operator "+p.name+" holds no grant of "+role+" covering this "+targetNames[t]+"'s scope")
 }
 
