@@ -588,7 +588,7 @@ func (s *Server) artifacts(c *call, keep func(domain.Execution) bool) ([]wireArt
 				return e
 			}
 			for _, a := range refs {
-				out = append(out, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, WorkID: string(x.WorkID), ExecutionID: string(x.ID), Segment: a.Segment})
+				out = append(out, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, SHA256: a.SHA256, WorkID: string(x.WorkID), ExecutionID: string(x.ID), Segment: a.Segment})
 			}
 		}
 		return nil
@@ -641,7 +641,7 @@ func (s *Server) artifactContent(c *call) (int, any, error) {
 	owner := ""
 	for _, a := range all {
 		if a.ID == c.params[0] {
-			ref = &domain.ArtifactRef{ID: a.ID, Size: a.Size, MediaType: a.MediaType}
+			ref = &domain.ArtifactRef{ID: a.ID, Size: a.Size, MediaType: a.MediaType, SHA256: a.SHA256}
 			owner = a.ExecutionID
 			break
 		}

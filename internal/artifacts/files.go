@@ -22,13 +22,33 @@ import (
 )
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var ErrClosed = errors.New("artifact store or writer closed")
-var ErrCorrupt = errors.New("artifact content is corrupt")
 
+// prefixPattern names a fan-out directory: objects/<first two hex
+// characters of the ID>/<ID>, so a listing page reads only the prefix
+// directories it covers rather than every object.
+var prefixPattern = regexp.MustCompile(`^[a-f0-9]{2}$`)
+var ErrClosed = errors.New("artifact store or writer closed")
+
+// ErrCorrupt is the contract's storage.ErrCorrupt.
+var ErrCorrupt = storage.ErrCorrupt
+
+// metadata is an object's meta.json. Ref carries the digest from record
+// format 7 on; SHA256 repeats it, and is the only digest an object
+// published before then has.
 type metadata struct {
 	Ref         storage.ArtifactRef
 	SHA256      string
 	PublishedAt time.Time
+}
+
+// matches reports whether ref names this object exactly. A ref without a
+// digest (recorded before digests) matches on its other fields, and is
+// verified against the digest the object stored.
+func (m metadata) matches(ref storage.ArtifactRef) bool {
+	if ref.SHA256 == "" {
+		ref.SHA256 = m.Ref.SHA256
+	}
+	return ref == m.Ref
 }
 
 // Store is an exclusively opened artifact directory. Pin blocks Delete/Collect
@@ -40,12 +60,61 @@ type Store struct {
 	active map[string]*writer
 	lock   *os.File
 	closed bool
+	// readOnly is a store OpenReadOnly opened: no lock, no writes.
+	readOnly bool
 	// fault is an internal test seam at flush/publication boundaries.
 	fault func(string) error
 }
 
-// Open creates private subdirectories and acquires an exclusive process lock.
-// Call Recover after opening to remove stale pre-publication streams.
+// Backend is the file store as a storage.ArtifactBackend, registered as
+// "files". A location is the absolute path of the store's directory.
+var Backend storage.ArtifactBackend = backend{}
+
+// BackendName is the name Backend is registered under.
+const BackendName = "files"
+
+func init() { storage.RegisterArtifactBackend(BackendName, Backend) }
+
+type backend struct{}
+
+func (backend) Open(ctx context.Context, location string) (storage.ArtifactStore, error) {
+	if !filepath.IsAbs(location) {
+		return nil, fmt.Errorf("artifacts: location %q is not an absolute path: %w", location, storage.ErrInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return Open(location)
+}
+
+// OpenReadOnly opens an existing store to read it without changing
+// anything in it: no directory is created, no object is moved to the
+// fan-out layout, no pending stream is removed and no lock is taken. It is
+// how a bundle's own artifacts are read (verify, restore), since a
+// published bundle is immutable and an older binary must still be able to
+// restore it. It finds an object in the fan-out layout or the flat one an
+// older store used. Create, Import and Delete return storage.ErrReadOnly;
+// List needs the fan-out layout.
+func OpenReadOnly(root string) (*Store, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{root, filepath.Join(root, "objects")} {
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+			return nil, fmt.Errorf("unsafe artifact directory permissions")
+		}
+	}
+	return &Store{root: root, readOnly: true, active: map[string]*writer{}}, nil
+}
+
+// Open creates private subdirectories and acquires an exclusive process
+// lock, then removes the unpublished streams a process that held it before
+// left behind: the lock proves no other process still owns them.
 func Open(root string) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -83,7 +152,16 @@ func Open(root string) (*Store, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	return &Store{root: root, lock: lock, active: map[string]*writer{}}, nil
+	s := &Store{root: root, lock: lock, active: map[string]*writer{}}
+	if err = s.fanOut(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	if err = s.cleanup(context.Background(), time.Time{}, nil, true); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 func privateDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
@@ -118,6 +196,84 @@ func syncDir(path string) error {
 	defer f.Close()
 	return f.Sync()
 }
+func (s *Store) objects() string { return filepath.Join(s.root, "objects") }
+
+// objectDir is where a valid ID's committed object lives.
+func (s *Store) objectDir(id string) string { return filepath.Join(s.objects(), id[:2], id) }
+
+// locate is where a valid ID's object is to be read: objectDir, or, in a
+// read-only store not yet fanned out, the flat objects/<ID>.
+func (s *Store) locate(id string) string {
+	dir := s.objectDir(id)
+	if !s.readOnly {
+		return dir
+	}
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return filepath.Join(s.objects(), id)
+	}
+	return dir
+}
+
+// prefixes lists the fan-out directories in name order, checking each.
+func (s *Store) prefixes() ([]string, error) {
+	entries, err := os.ReadDir(s.objects())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !prefixPattern.MatchString(entry.Name()) {
+			return nil, fmt.Errorf("artifacts: unexpected %q in objects: %w", entry.Name(), storage.ErrInvalid)
+		}
+		if err = privateDir(filepath.Join(s.objects(), entry.Name())); err != nil {
+			return nil, err
+		}
+		out = append(out, entry.Name())
+	}
+	return out, nil
+}
+
+// fanOut moves objects a store published before the fan-out layout, at
+// objects/<ID>, to objects/<prefix>/<ID>. Each move is one rename, so a
+// store interrupted partway is finished by the next open. It runs at Open,
+// under the lock.
+func (s *Store) fanOut() error {
+	entries, err := os.ReadDir(s.objects())
+	if err != nil {
+		return err
+	}
+	moved := map[string]bool{}
+	for _, entry := range entries {
+		id := entry.Name()
+		if !idPattern.MatchString(id) {
+			continue // a prefix directory; prefixes checks the rest
+		}
+		info, err := os.Lstat(filepath.Join(s.objects(), id))
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("artifacts: object %s: %w", id, storage.ErrInvalid)
+		}
+		if err = privateDir(filepath.Join(s.objects(), id[:2])); err != nil {
+			return err
+		}
+		if err = os.Rename(filepath.Join(s.objects(), id), s.objectDir(id)); err != nil {
+			return err
+		}
+		moved[id[:2]] = true
+	}
+	if len(moved) == 0 {
+		return nil
+	}
+	for prefix := range moved {
+		if err = syncDir(filepath.Join(s.objects(), prefix)); err != nil {
+			return err
+		}
+	}
+	return syncDir(s.objects())
+}
+
 func (s *Store) stage(name string) error {
 	if s.fault != nil {
 		return s.fault(name)
@@ -131,6 +287,14 @@ func (s *Store) available() error {
 		return ErrClosed
 	}
 	return nil
+}
+
+// writable is available, and refuses a read-only store.
+func (s *Store) writable() error {
+	if s.readOnly {
+		return storage.ErrReadOnly
+	}
+	return s.available()
 }
 func newID() (string, error) {
 	var b [32]byte
@@ -153,7 +317,7 @@ func (s *Store) create(ctx context.Context, id, mediaType string) (*writer, erro
 	}
 	s.gate.RLock()
 	defer s.gate.RUnlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(s.root, "pending", id)
@@ -173,12 +337,14 @@ func (s *Store) create(ctx context.Context, id, mediaType string) (*writer, erro
 }
 
 type writer struct {
-	mu       sync.Mutex
-	store    *Store
-	file     *os.File
-	dir      string
-	hash     hash.Hash
-	ref      storage.ArtifactRef
+	mu    sync.Mutex
+	store *Store
+	file  *os.File
+	dir   string
+	hash  hash.Hash
+	ref   storage.ArtifactRef
+	// expect is the digest an Import must arrive at; empty for Create.
+	expect   string
 	closed   bool
 	writeErr error
 }
@@ -246,7 +412,7 @@ func (w *writer) Commit(ctx context.Context) (ref storage.ArtifactRef, err error
 			w.abort()
 			if published != "" {
 				_ = os.RemoveAll(published)
-				_ = syncDir(filepath.Join(s.root, "objects"))
+				_ = syncDir(filepath.Dir(published))
 			}
 		}
 	}()
@@ -265,7 +431,12 @@ func (w *writer) Commit(ctx context.Context) (ref storage.ArtifactRef, err error
 	if err = w.file.Close(); err != nil {
 		return ref, err
 	}
-	m := metadata{Ref: w.ref, SHA256: hex.EncodeToString(w.hash.Sum(nil)), PublishedAt: time.Now().UTC()}
+	digest := hex.EncodeToString(w.hash.Sum(nil))
+	if w.expect != "" && digest != w.expect {
+		return ref, ErrCorrupt
+	}
+	w.ref.SHA256 = digest
+	m := metadata{Ref: w.ref, SHA256: digest, PublishedAt: time.Now().UTC()}
 	bytes, e := json.Marshal(m)
 	if e != nil {
 		return ref, e
@@ -291,7 +462,10 @@ func (w *writer) Commit(ctx context.Context) (ref storage.ArtifactRef, err error
 	if err = s.stage("publish"); err != nil {
 		return ref, err
 	}
-	destination := filepath.Join(s.root, "objects", w.ref.ID)
+	destination := s.objectDir(w.ref.ID)
+	if err = privateDir(filepath.Dir(destination)); err != nil {
+		return ref, err
+	}
 	// IDs are random and never reused. Existing immutable content is not replaced.
 	if _, e = os.Lstat(destination); e == nil {
 		return ref, storage.ErrConflict
@@ -305,7 +479,10 @@ func (w *writer) Commit(ctx context.Context) (ref storage.ArtifactRef, err error
 	if err = s.stage("directory_sync"); err != nil {
 		return ref, err
 	}
-	if err = syncDir(filepath.Join(s.root, "objects")); err != nil {
+	if err = syncDir(filepath.Dir(destination)); err != nil {
+		return ref, err
+	}
+	if err = syncDir(s.objects()); err != nil {
 		return ref, err
 	}
 	if err = syncDir(filepath.Join(s.root, "pending")); err != nil {
@@ -332,7 +509,7 @@ func (s *Store) readMetadata(id string) (metadata, error) {
 	if !idPattern.MatchString(id) {
 		return m, storage.ErrInvalid
 	}
-	dir := filepath.Join(s.root, "objects", id)
+	dir := s.locate(id)
 	info, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return m, storage.ErrNotFound
@@ -371,6 +548,13 @@ func (s *Store) readMetadata(id string) (metadata, error) {
 	if m.Ref.ID != id || m.Ref.Size < 0 || m.Ref.MediaType == "" || !idPattern.MatchString(m.SHA256) || m.PublishedAt.IsZero() {
 		return m, ErrCorrupt
 	}
+	switch m.Ref.SHA256 {
+	case "":
+		m.Ref.SHA256 = m.SHA256 // published before refs carried digests
+	case m.SHA256:
+	default:
+		return m, ErrCorrupt
+	}
 	return m, nil
 }
 func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
@@ -381,10 +565,10 @@ func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClose
 	if err != nil {
 		return nil, err
 	}
-	if m.Ref != ref {
+	if !m.matches(ref) {
 		return nil, storage.ErrInvalid
 	}
-	path := filepath.Join(s.root, "objects", ref.ID, "data")
+	path := filepath.Join(s.locate(ref.ID), "data")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -399,7 +583,7 @@ func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClose
 	if err != nil {
 		return nil, err
 	}
-	return &reader{file: f, ctx: ctx, hash: sha256.New(), expected: m.SHA256, size: ref.Size}, nil
+	return &reader{file: f, ctx: ctx, hash: sha256.New(), expected: m.Ref.SHA256, size: ref.Size}, nil
 }
 
 type reader struct {
@@ -436,7 +620,7 @@ func (s *Store) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	}
 	s.gate.Lock()
 	defer s.gate.Unlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return err
 	}
 	m, err := s.readMetadata(ref.ID)
@@ -446,13 +630,13 @@ func (s *Store) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	if err != nil {
 		return err
 	}
-	if m.Ref != ref {
+	if !m.matches(ref) {
 		return storage.ErrInvalid
 	}
-	if err = os.RemoveAll(filepath.Join(s.root, "objects", ref.ID)); err != nil {
+	if err = os.RemoveAll(s.objectDir(ref.ID)); err != nil {
 		return err
 	}
-	return syncDir(filepath.Join(s.root, "objects"))
+	return syncDir(filepath.Dir(s.objectDir(ref.ID)))
 }
 
 // Pinned holds retention/deletion while a database backup snapshot and files are
@@ -491,16 +675,30 @@ func (p *Pinned) Close() error {
 	return nil
 }
 
-// Import restores a selected immutable ID into a new isolated artifact store.
-// The caller must fully read the source; size and source read errors abort it.
+// Import restores a selected immutable ID into a new isolated artifact store
+// (storage.ArtifactStore.Import). It reads the source to its end; a short or
+// long source, a digest other than ref's, or a source read error publishes
+// nothing.
 func (s *Store) Import(ctx context.Context, ref storage.ArtifactRef, source io.Reader) error {
-	if ref.Size < 0 || ref.Size == int64(^uint64(0)>>1) {
+	if s.readOnly {
+		return storage.ErrReadOnly
+	}
+	if ref.Size < 0 || ref.Size == int64(^uint64(0)>>1) || (ref.SHA256 != "" && !storage.ValidDigest(ref.SHA256)) {
 		return storage.ErrInvalid
+	}
+	if _, err := s.readMetadata(ref.ID); err == nil {
+		return storage.ErrConflict
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
 	}
 	w, err := s.create(ctx, ref.ID, ref.MediaType)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return storage.ErrConflict // another import of the ID is under way
+		}
 		return err
 	}
+	w.expect = ref.SHA256
 	defer func() {
 		if !w.closed {
 			_ = w.Close()
@@ -517,9 +715,58 @@ func (s *Store) Import(ctx context.Context, ref storage.ArtifactRef, source io.R
 	return err
 }
 
-// Recover removes only stale unpublished streams. The exclusive directory lock
-// proves another process cannot still own them; active writers are preserved.
-func (s *Store) Recover(ctx context.Context) error { return s.cleanup(ctx, time.Time{}, nil, true) }
+// List pages committed objects in ID order (storage.ArtifactStore.List).
+// It reads only the fan-out directories from the cursor's prefix on, and
+// stops at the page's end, so a page costs the objects of the prefixes it
+// spans (about 1/256 of the store each), not the whole store.
+func (s *Store) List(ctx context.Context, after string, limit int) ([]storage.StoredArtifact, error) {
+	if limit < 1 || limit > 1000 {
+		return nil, storage.ErrInvalid
+	}
+	s.gate.RLock()
+	defer s.gate.RUnlock()
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	prefixes, err := s.prefixes()
+	if err != nil {
+		return nil, err
+	}
+	out := []storage.StoredArtifact{}
+	for _, prefix := range prefixes {
+		// IDs in a prefix directory all sort after after when the prefix
+		// does, and none does when it sorts before after's own prefix.
+		if len(after) >= 2 && prefix < after[:2] {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(s.objects(), prefix))
+		if err != nil {
+			return nil, err
+		}
+		// ReadDir sorts by name, which for hex IDs is byte order.
+		for _, entry := range entries {
+			if err = ctx.Err(); err != nil {
+				return nil, err
+			}
+			id := entry.Name()
+			if !idPattern.MatchString(id) || id[:2] != prefix {
+				return nil, fmt.Errorf("artifacts: unexpected %q in objects/%s: %w", id, prefix, storage.ErrInvalid)
+			}
+			if id <= after {
+				continue
+			}
+			m, err := s.readMetadata(id)
+			if err != nil {
+				return nil, fmt.Errorf("artifacts: object %s: %w", id, err)
+			}
+			out = append(out, storage.StoredArtifact{Ref: m.Ref, PublishedAt: m.PublishedAt})
+			if len(out) == limit {
+				return out, nil
+			}
+		}
+	}
+	return out, nil
+}
 
 // Collect deletes aged committed objects absent from liveIDs and stale pending
 // streams. The caller supplies a complete protected reference set; it must not
@@ -530,14 +777,56 @@ func (s *Store) Collect(ctx context.Context, before time.Time, liveIDs map[strin
 func (s *Store) cleanup(ctx context.Context, before time.Time, live map[string]bool, recovery bool) error {
 	s.gate.Lock()
 	defer s.gate.Unlock()
-	if err := s.available(); err != nil {
+	if err := s.writable(); err != nil {
 		return err
 	}
-	for _, name := range []string{"pending", "objects"} {
-		if recovery && name == "objects" {
+	// Unpublished streams: any a dead process left (recovery), or aged
+	// ones, never this store's own active writers.
+	pending := filepath.Join(s.root, "pending")
+	entries, err := os.ReadDir(pending)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		id := entry.Name()
+		if !idPattern.MatchString(id) {
+			return storage.ErrInvalid
+		}
+		s.mu.Lock()
+		_, active := s.active[id]
+		s.mu.Unlock()
+		if active {
 			continue
 		}
-		entries, err := os.ReadDir(filepath.Join(s.root, name))
+		path := filepath.Join(pending, id)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return storage.ErrInvalid
+		}
+		if !recovery && !info.ModTime().Before(before) {
+			continue
+		}
+		if err = os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	if err = syncDir(pending); err != nil || recovery {
+		return err
+	}
+	// Committed objects published before before that live doesn't hold.
+	prefixes, err := s.prefixes()
+	if err != nil {
+		return err
+	}
+	for _, prefix := range prefixes {
+		dir := filepath.Join(s.objects(), prefix)
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return err
 		}
@@ -546,43 +835,24 @@ func (s *Store) cleanup(ctx context.Context, before time.Time, live map[string]b
 				return err
 			}
 			id := entry.Name()
-			if !idPattern.MatchString(id) {
+			if !idPattern.MatchString(id) || id[:2] != prefix {
 				return storage.ErrInvalid
 			}
-			if name == "pending" {
-				s.mu.Lock()
-				_, active := s.active[id]
-				s.mu.Unlock()
-				if active {
-					continue
-				}
-			} else if live[id] {
+			if live[id] {
 				continue
 			}
-			path := filepath.Join(s.root, name, id)
-			info, err := os.Lstat(path)
+			m, err := s.readMetadata(id)
 			if err != nil {
 				return err
 			}
-			if !info.IsDir() {
-				return storage.ErrInvalid
-			}
-			when := info.ModTime()
-			if name == "objects" {
-				m, err := s.readMetadata(id)
-				if err != nil {
-					return err
-				}
-				when = m.PublishedAt
-			}
-			if !recovery && !when.Before(before) {
+			if !m.PublishedAt.Before(before) {
 				continue
 			}
-			if err = os.RemoveAll(path); err != nil {
+			if err = os.RemoveAll(s.objectDir(id)); err != nil {
 				return err
 			}
 		}
-		if err = syncDir(filepath.Join(s.root, name)); err != nil {
+		if err = syncDir(dir); err != nil {
 			return err
 		}
 	}
@@ -610,8 +880,10 @@ func (s *Store) Close() error {
 		}
 		w.mu.Unlock()
 	}
-	result = errors.Join(result, syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN), s.lock.Close())
+	if s.lock != nil {
+		result = errors.Join(result, syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN), s.lock.Close())
+	}
 	return result
 }
 
-var _ storage.Artifacts = (*Store)(nil)
+var _ storage.ArtifactStore = (*Store)(nil)

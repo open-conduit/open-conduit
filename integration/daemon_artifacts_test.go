@@ -36,7 +36,7 @@ func TestDaemonArtifactCleanup(t *testing.T) {
 	store := filepath.Join(d.state, "artifacts")
 	old := time.Now().Add(-48 * time.Hour).UTC()
 	// The referenced object is backdated so only the live set protects it.
-	metaPath := filepath.Join(store, "objects", referenced, "meta.json")
+	metaPath := filepath.Join(store, "objects", referenced[:2], referenced, "meta.json")
 	var meta map[string]any
 	b, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -63,11 +63,11 @@ func TestDaemonArtifactCleanup(t *testing.T) {
 		t.Fatalf("unfinished write survived restart: %v", err)
 	}
 	d.until("aged orphan collected", 20*time.Second, func() bool {
-		_, err := os.Stat(filepath.Join(store, "objects", aged))
+		_, err := os.Stat(filepath.Join(store, "objects", aged[:2], aged))
 		return os.IsNotExist(err)
 	})
 	for name, id := range map[string]string{"referenced": referenced, "recent": recent} {
-		if _, err = os.Stat(filepath.Join(store, "objects", id, "data")); err != nil {
+		if _, err = os.Stat(filepath.Join(store, "objects", id[:2], id, "data")); err != nil {
 			t.Fatalf("%s object was removed: %v", name, err)
 		}
 	}
@@ -83,7 +83,9 @@ func artifactID(t *testing.T) string {
 }
 
 // plantObject publishes an object no execution references, as an
-// interrupted Commit or an unattached publication leaves one.
+// interrupted Commit or an unattached publication leaves one. It plants
+// it where a store before the fan-out layout kept it (objects/<ID>), so
+// the restart also proves the daemon's open moves it.
 func plantObject(t *testing.T, store string, at time.Time) string {
 	t.Helper()
 	id := artifactID(t)

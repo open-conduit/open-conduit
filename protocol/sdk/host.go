@@ -311,7 +311,7 @@ func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (dom
 	if err := h.conn.Call(ctx, "artifact.commit", protocol.ArtifactTarget{Writer: created.Writer}, &ref); err != nil {
 		return domain.ArtifactRef{}, err
 	}
-	return domain.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+	return ref.Domain(), nil
 }
 
 // Capture records a named telemetry event in the host's telemetry events

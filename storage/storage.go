@@ -223,16 +223,29 @@ type Entry struct {
 	Value []byte
 }
 
-// Artifacts do not participate in coordination transactions. See contract docs.
+// Artifacts do not participate in coordination transactions. See contract
+// docs, and ArtifactStore for a backend's whole artifact store.
 type ArtifactRef = domain.ArtifactRef
 type ArtifactWriter interface {
 	io.WriteCloser
-	// Commit closes, publishes immutable content and returns its durable reference.
-	// Close without Commit aborts; unsuccessful Commit never yields a valid ref.
+	// Commit closes, publishes immutable content and returns its durable
+	// reference, with the content's size and SHA-256. Close without Commit
+	// aborts; unsuccessful Commit never yields a valid ref.
 	Commit(context.Context) (ArtifactRef, error)
 }
+
+// Artifacts is what every participant uses to publish and read content.
 type Artifacts interface {
 	Create(context.Context, string) (ArtifactWriter, error)
+	// Open streams committed content. The ref must be the one Commit
+	// returned: a different size, media type or digest is ErrInvalid, and
+	// an unknown or deleted ID ErrNotFound. Uncommitted content is never
+	// readable. The reader verifies the size and digest as it goes and
+	// returns ErrCorrupt in place of io.EOF when they don't match, so only
+	// a read to EOF proves the content.
 	Open(context.Context, ArtifactRef) (io.ReadCloser, error)
+	// Delete removes committed content. It is idempotent: an absent ID is
+	// nil. A ref that doesn't match the stored content is ErrInvalid and
+	// removes nothing.
 	Delete(context.Context, ArtifactRef) error
 }

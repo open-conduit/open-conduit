@@ -116,10 +116,15 @@ func verifySnapshot(ctx context.Context, path string) error {
 	}
 	return (&Store{db: db}).IntegrityCheck(ctx)
 }
+
+// readonlyDB opens a published snapshot to read. immutable tells SQLite
+// the file cannot change, so it takes no lock and writes no -shm or -wal
+// beside it: verifying or restoring a bundle leaves the bundle as it was.
 func readonlyDB(path string) (*sql.DB, error) {
 	u := url.URL{Scheme: "file", Path: path}
 	q := u.Query()
 	q.Set("mode", "ro")
+	q.Set("immutable", "1")
 	q.Add("_pragma", "foreign_keys(1)")
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())

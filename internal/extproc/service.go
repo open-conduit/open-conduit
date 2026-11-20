@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -1132,9 +1134,45 @@ func (s *Service) artifact(ctx context.Context, method string, raw json.RawMessa
 		if err != nil {
 			return nil, err
 		}
-		return protocol.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+		return protocol.FromArtifact(ref), nil
 	}
 	return struct{}{}, w.Close()
+}
+
+// completeArtifacts gives every ref in an executor's result the digest the
+// host's store holds for it, so each ref the runtime records carries one.
+// An extension built on an SDK that predates digests returns
+// artifact.commit's ref without its sha256; the host reads that content to
+// its end, which checks it against what the store recorded, and takes the
+// digest of what it read. A ref that doesn't name stored content is
+// refused, as a result naming content the host can't vouch for.
+func (s *Service) completeArtifacts(ctx context.Context, refs []domain.ArtifactRef) ([]domain.ArtifactRef, error) {
+	var out []domain.ArtifactRef
+	for i, ref := range refs {
+		if ref.SHA256 != "" {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(refs)
+		}
+		if s.deps.Artifacts == nil {
+			return nil, invalid("an artifact reference without its digest")
+		}
+		r, err := s.deps.Artifacts.Open(ctx, ref)
+		if err != nil {
+			return nil, invalid(fmt.Sprintf("artifact %s: %v", ref.ID, err))
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, r)
+		if err = errors.Join(err, r.Close()); err != nil {
+			return nil, invalid(fmt.Sprintf("artifact %s: %v", ref.ID, err))
+		}
+		out[i].SHA256 = hex.EncodeToString(h.Sum(nil))
+	}
+	if out == nil {
+		return refs, nil
+	}
+	return out, nil
 }
 
 // abandonWriters aborts every open artifact writer (the process died).
