@@ -689,3 +689,30 @@ func (t *transaction) Release(ref domain.LeaseRef) error {
 	x.UpdatedAt = t.now
 	return t.writeExecution(x, true)
 }
+
+func (t *transaction) ReferencedArtifacts(ids []string) ([]string, error) {
+	if err := storage.ValidReferenceQuery(ids); err != nil {
+		return nil, err
+	}
+	out := []string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := t.query("SELECT DISTINCT artifact_id FROM execution_artifacts WHERE artifact_id IN (?"+strings.Repeat(",?", len(ids)-1)+") ORDER BY artifact_id", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

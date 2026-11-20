@@ -199,6 +199,47 @@ func (b forgetfulArtifactsTx) Execution(id domain.ID) (domain.Execution, error) 
 	return x, err
 }
 
+// latestOnlyReferences answers ReferencedArtifacts from attempts' latest
+// artifacts alone, as a reverse index fed only from the latest list would.
+type latestOnlyReferences struct{ storage.Store }
+type latestOnlyReferencesTx struct{ storage.Tx }
+
+func (b latestOnlyReferences) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(latestOnlyReferencesTx{tx}) })
+}
+func (b latestOnlyReferencesTx) ReferencedArtifacts(ids []string) ([]string, error) {
+	xs, err := b.Tx.ListExecutions("")
+	if err != nil {
+		return nil, err
+	}
+	for i := range xs {
+		xs[i].EarlierArtifacts = nil
+	}
+	return storage.ReferencedIn(xs, ids)
+}
+
+// unsortedReferences reports each referenced ID once per time it was asked
+// for, in the query's order, as a lookup that never grouped its rows might.
+type unsortedReferences struct{ storage.Store }
+type unsortedReferencesTx struct{ storage.Tx }
+
+func (b unsortedReferences) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(unsortedReferencesTx{tx}) })
+}
+func (b unsortedReferencesTx) ReferencedArtifacts(ids []string) ([]string, error) {
+	found, err := b.Tx.ReferencedArtifacts(ids)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, id := range ids {
+		if slices.Contains(found, id) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // terminalWorkArtifacts refuses a finished attempt's stopped turn once its
 // Work is finished, as one guarded like PutExecution would.
 type terminalWorkArtifacts struct{ storage.Store }
@@ -422,6 +463,8 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "earlier", func() storage.Store { return forgetfulArtifacts{reference.New()} }},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "after the Work's cancel", func() storage.Store { return terminalWorkArtifacts{reference.New()} }},
+		{"referenced_artifacts_follow_attempts", "one latest and one earlier", func() storage.Store { return latestOnlyReferences{reference.New()} }},
+		{"referenced_artifacts_follow_attempts", `got ["b-latest" "a-earlier" "b-latest"]`, func() storage.Store { return unsortedReferences{reference.New()} }},
 		{"sequences_visible_in_order_to_a_waiting_reader", "was skipped", func() storage.Store {
 			return &identityColumn{inner: reference.New(), pending: map[domain.ID]bool{}}
 		}},

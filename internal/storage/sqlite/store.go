@@ -318,7 +318,36 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_work ON events(` + eventWork + `, sequence)`,
 	`CREATE INDEX IF NOT EXISTS events_routed_work ON events(` + routedWork + `, sequence)`,
 	`CREATE INDEX IF NOT EXISTS events_scope ON events(` + eventScope + `, sequence)`,
+	// execution_artifacts is ReferencedArtifacts' reverse lookup, the refs
+	// each attempt's record holds. Triggers keep it, so every binary that
+	// writes an attempt keeps it current, whether it knows the table or
+	// not; the backfill rewrite fills it for attempts written before it.
+	`CREATE TABLE IF NOT EXISTS execution_artifacts (artifact_id TEXT NOT NULL, execution_id TEXT NOT NULL, PRIMARY KEY(artifact_id,execution_id)) WITHOUT ROWID`,
+	`CREATE TRIGGER IF NOT EXISTS execution_artifacts_insert AFTER INSERT ON executions BEGIN ` + insertExecutionArtifacts + `; END`,
+	`CREATE TRIGGER IF NOT EXISTS execution_artifacts_update AFTER UPDATE OF record ON executions ` +
+		`WHEN ` + recordRefs("OLD") + ` IS NOT ` + recordRefs("NEW") + ` BEGIN ` +
+		`DELETE FROM execution_artifacts WHERE execution_id=OLD.id; ` + insertExecutionArtifacts + `; END`,
+	`CREATE TRIGGER IF NOT EXISTS execution_artifacts_delete AFTER DELETE ON executions BEGIN DELETE FROM execution_artifacts WHERE execution_id=OLD.id; END`,
 }
+
+// executionRefs selects (artifact ID, attempt ID) for every ref the record
+// of the attempt named row holds, latest or earlier: NEW in a trigger, or
+// every attempt in the backfill, where row is executions and from lists it.
+func executionRefs(row, from string) string {
+	refs := func(field string) string {
+		return `SELECT json_extract(r.value,'$.ID'), ` + row + `.id FROM ` + from + `json_each(CAST(` + row + `.record AS TEXT),'$.` + field + `') AS r ` +
+			`WHERE r.type='object' AND json_extract(r.value,'$.ID') IS NOT NULL`
+	}
+	return refs("Artifacts") + ` UNION ` + refs("EarlierArtifacts")
+}
+
+// recordRefs is the part of an attempt's record execution_artifacts
+// follows, so an update that leaves it alone (a lease renewal) skips it.
+func recordRefs(row string) string {
+	return `json_array(json_extract(CAST(` + row + `.record AS TEXT),'$.Artifacts'),json_extract(CAST(` + row + `.record AS TEXT),'$.EarlierArtifacts'))`
+}
+
+var insertExecutionArtifacts = `INSERT OR IGNORE INTO execution_artifacts(artifact_id,execution_id) ` + executionRefs("NEW", "")
 
 // eventWork and routedWork are the Work an event names and the Work it was
 // routed to. events_work and events_routed_work index them with the
@@ -351,6 +380,8 @@ const (
 // once per store: it and its metadata key commit in one transaction, so a
 // crash leaves it to run again and a later open skips it without a scan.
 var rewrites = []struct{ key, statement string }{
+	// Attempts written before execution_artifacts and its triggers.
+	{"backfill_execution_artifacts", `INSERT OR IGNORE INTO execution_artifacts(artifact_id,execution_id) ` + executionRefs("executions", "executions, ")},
 	// Turns were once declared under a source-named "<source>.status.v1"
 	// schema; the core now reads only domain.TurnSchema.
 	{"rewrite_turn_schema", `UPDATE executions SET record=CAST(json_set(CAST(record AS TEXT),'$.Outcome.Data.Schema','` + domain.TurnSchema + `') AS BLOB) ` +
