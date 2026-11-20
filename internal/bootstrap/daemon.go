@@ -359,6 +359,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer lock.Close()
+	// An in-place restore that stopped part way leaves the directory with
+	// some of each timeline: never serve it.
+	if err = restoreInterrupted(o.StateDir); err != nil {
+		return err
+	}
 	// List cursors are signed with a key kept in the state directory, so a
 	// client's cursor survives a restart.
 	if d.cursorKey, err = management.CursorKey(filepath.Join(o.StateDir, "private", "cursor.key")); err != nil {

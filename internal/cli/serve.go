@@ -55,6 +55,14 @@ type ServeRequest struct {
 	ManagementTrustedProxy                                                  bool
 	WebSubjectHeader                                                        string
 	WebTokenFile                                                            string
+	// Restore is a bundle to restore into StateDir in place before
+	// serving, once (serve --restore): a container restores from a mounted
+	// bundle with no shell and no separate job.
+	Restore string
+	// RestoreArtifacts and RestoreArtifactsLocation are --restore's
+	// artifact store, as backup restore's --artifacts and
+	// --artifacts-location.
+	RestoreArtifacts, RestoreArtifactsLocation string
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.
@@ -88,13 +96,41 @@ func (o *operator) serve(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: serve is not available in this binary")
 		return 1
 	}
+	if r.Restore != "" && !o.restoreBeforeServe(r) {
+		return 1
+	}
 	return o.env.Serve(r)
+}
+
+// restoreBeforeServe restores serve --restore's bundle into the state
+// directory in place, under the same lock the daemon then takes, and
+// reports what it did on stderr. A failed restore, or a restored directory
+// whose state check finds problems, stops the start.
+func (o *operator) restoreBeforeServe(r ServeRequest) bool {
+	if o.env.State == nil || o.env.State.RestoreInPlace == nil {
+		fmt.Fprintln(o.errOut, "open-conduit: serve --restore: offline state commands are not available in this binary")
+		return false
+	}
+	cx, cancel := offlineCtx()
+	defer cancel()
+	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, Once: true})
+	if err != nil {
+		fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", err)
+		return false
+	}
+	report, _ := json.Marshal(info)
+	fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", report)
+	if p := info.InPlace; p != nil && p.Check != nil && !p.Check.OK {
+		fmt.Fprintln(o.errOut, "open-conduit: serve --restore: the restored state directory has problems (in_place.check); not serving it")
+		return false
+	}
+	return true
 }
 
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -158,6 +194,11 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.ManagementTLSCert, r.ManagementTLSKey, r.ManagementClientCA = o.abs(fs.get("management-tls-cert")), o.abs(fs.get("management-tls-key")), o.abs(fs.get("management-client-ca"))
 	r.WebSignIn = WebSignInPath(r.StateDir)
 	r.NoUpdates = *noUpdates
+	r.Restore = o.abs(fs.get("restore"))
+	r.RestoreArtifacts, r.RestoreArtifactsLocation = fs.get("restore-artifacts"), fs.get("restore-artifacts-location")
+	if r.Restore == "" && (r.RestoreArtifacts != "" || r.RestoreArtifactsLocation != "") {
+		return ServeRequest{}, usageError(o.errOut, "--restore-artifacts and --restore-artifacts-location go with --restore BUNDLE")
+	}
 	r.NoTelemetry = *noTelemetry || optedOut(o.env.Getenv("OPEN_CONDUIT_NO_TELEMETRY")) || optedOut(o.env.Getenv("DO_NOT_TRACK"))
 	if r.ConfigPath == "" {
 		r.ConfigPath = o.abs(o.env.Getenv("OPEN_CONDUIT_CONFIG"))

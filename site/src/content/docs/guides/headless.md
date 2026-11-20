@@ -98,7 +98,7 @@ The volume must be writable by uid `10001`. The daemon creates its state and con
 
 The control socket is in the state directory, and its path must be at most 100 bytes. Move the state elsewhere with `OPEN_CONDUIT_DATA_DIR`, and keep it on the volume.
 
-[Backups](../backups/) work as on any host, into `backups/` in the state directory by default. Point `--backup-dir` at a second volume, or copy the bundles off with whatever the cluster already uses. A volume snapshot of a running daemon isn't a consistent backup; a bundle is.
+[Backups](../backups/) work as on any host, into `backups/` in the state directory by default. Point `--backup-dir` at a second volume, or copy the bundles off with whatever the cluster already uses. A volume snapshot of a running daemon isn't a consistent backup; a bundle is. To restore one, start the container with `serve --restore BUNDLE` and the bundle mounted: it restores in place before serving, once per bundle, with no shell or separate job ([in a container](../../architecture/recovery/#in-a-container)).
 
 ## Stopping and restarting
 

@@ -37,6 +37,40 @@ type BackupInfo struct {
 	// from the generation: it publishes the config file over it when the
 	// file validates, and otherwise refuses to start.
 	ConfigProblems []ConfigEntry `json:"config_problems,omitempty"`
+	// InPlace is what an in-place restore did to the state directory.
+	InPlace *InPlaceReport `json:"in_place,omitempty"`
+}
+
+// InPlaceReport is what `backup restore --in-place` (or `serve --restore`)
+// did to the daemon's own state directory.
+type InPlaceReport struct {
+	StateDir string `json:"state_dir"`
+	// AlreadyRestored is set when serve --restore found the directory
+	// already restored from this bundle and changed nothing.
+	AlreadyRestored bool `json:"already_restored,omitempty"`
+	// MovedAside is the before-restore-* directory the replaced state went
+	// to, and MovedItems what went there (paths relative to the state
+	// directory). Delete it once the restored instance has run for a while.
+	MovedAside string   `json:"moved_aside,omitempty"`
+	MovedItems []string `json:"moved_items,omitempty"`
+	// RemovedRuns are the executions whose toolbelt run directories and
+	// sockets were removed, since the restored database doesn't know them.
+	RemovedRuns []string `json:"removed_runs,omitempty"`
+	// RemovedStages are stages earlier restores left when they stopped
+	// before their swap began.
+	RemovedStages []string `json:"removed_stages,omitempty"`
+	// LaterTimeline is what stays in the directory from after the bundle,
+	// with what happens to each: reported, never deleted.
+	LaterTimeline []LaterEntry `json:"later_timeline,omitempty"`
+	// Check is the state check of the restored directory.
+	Check *StateReport `json:"check,omitempty"`
+}
+
+// LaterEntry is one part of the state directory an in-place restore left
+// in place, and what becomes of it.
+type LaterEntry struct {
+	Path string `json:"path"`
+	Note string `json:"note"`
 }
 
 // ConfigEntry is one config diagnostic a restore reports, by its path in
@@ -85,15 +119,22 @@ type RestoreOptions struct {
 	// its installed packages are the ones the restored generation is
 	// checked against.
 	ConfigPath string
+	// Once makes an in-place restore a no-op when the directory was
+	// already restored from this bundle (serve --restore, which runs on
+	// every start).
+	Once bool
 }
 
 // StateOps are the offline state-directory operations. Each takes the
 // state directory's exclusive daemon lock, so it refuses to run while a
 // daemon owns the directory.
 type StateOps struct {
-	Backup          func(ctx context.Context, stateDir, destination, build string) (BackupInfo, error)
-	Verify          func(ctx context.Context, bundle string) (BackupInfo, error)
-	Restore         func(ctx context.Context, bundle, destination string, o RestoreOptions) (BackupInfo, error)
+	Backup  func(ctx context.Context, stateDir, destination, build string) (BackupInfo, error)
+	Verify  func(ctx context.Context, bundle string) (BackupInfo, error)
+	Restore func(ctx context.Context, bundle, destination string, o RestoreOptions) (BackupInfo, error)
+	// RestoreInPlace restores a bundle into stateDir itself, moving the
+	// state it replaces aside.
+	RestoreInPlace  func(ctx context.Context, bundle, stateDir string, o RestoreOptions) (BackupInfo, error)
 	Check           func(ctx context.Context, stateDir string) (StateReport, error)
 	RecoverOperator func(ctx context.Context, stateDir, tokenPath string) error
 }
@@ -108,9 +149,10 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC] [--config FILE]")
+		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--config FILE]")
 	}
 	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config")
+	inPlace := f.fs.Bool("in-place", false, "")
 	pos, err := f.parse(args[1:])
 	if err != nil || len(pos) != 1 {
 		return usageError(o.errOut, "expected one path")
@@ -123,12 +165,31 @@ func (o *operator) backup(args []string) int {
 	case "verify":
 		return o.emit(o.env.State.Verify(cx, o.abs(pos[0])))
 	case "restore":
-		if f.get("to") == "" {
-			return usageError(o.errOut, "backup restore needs --to DIR (an absent directory; restore never replaces a state directory)")
+		ro := RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config"))}
+		switch {
+		case *inPlace && f.get("to") != "":
+			return usageError(o.errOut, "backup restore takes --to DIR (a new directory) or --in-place (the daemon's own), not both")
+		case *inPlace:
+			return o.restoredInPlace(o.env.State.RestoreInPlace(cx, o.abs(pos[0]), o.stateDir(), ro))
+		case f.get("to") == "":
+			return usageError(o.errOut, "backup restore needs --to DIR (an absent directory) or --in-place (the daemon's own state directory, with the daemon stopped)")
 		}
-		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config"))}))
+		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	}
 	return usageError(o.errOut, "expected backup create|verify|restore")
+}
+
+// restoredInPlace prints an in-place restore's report, and fails when the
+// restored directory's state check found problems.
+func (o *operator) restoredInPlace(info BackupInfo, err error) int {
+	if code := o.emit(info, err); code != 0 {
+		return code
+	}
+	if info.InPlace != nil && info.InPlace.Check != nil && !info.InPlace.Check.OK {
+		fmt.Fprintln(o.errOut, "open-conduit: the restored state directory has problems (in_place.check)")
+		return 1
+	}
+	return 0
 }
 
 // state implements `state check`.

@@ -17,17 +17,28 @@ open-conduit service start
 
 ## Restore
 
-`backup restore` writes a new state directory from a bundle; it never overwrites the current one. Point the daemon at it with `--data-dir`:
+Restore a bundle into the daemon's own state directory with the daemon stopped:
 
 ```sh
-open-conduit backup restore ~/backups/open-conduit-2026-10-26 --to ~/.local/state/open-conduit-restored
+open-conduit service stop
+open-conduit backup verify ~/backups/open-conduit-2026-10-26
+open-conduit backup restore ~/backups/open-conduit-2026-10-26 --in-place
+open-conduit service start
 ```
 
-The artifacts go to the restored directory's own `artifacts/`. To put them in another artifact store the binary is built with, name it and an empty location, and the restored directory's `storage.json` records it:
+`--in-place` moves the database, artifacts and operator token it replaces into a `before-restore-<time>/` directory in the state directory, puts the bundle's in their place, writes a fresh operator token and ends with `state check`. It reports what it moved aside and what stays from after the bundle (executor run directories, workspaces, extensions' caches), which it never deletes. Delete `before-restore-*` once the restored daemon has run for a while. The [recovery runbook](../../architecture/recovery/#restoring-after-a-bad-release-or-lost-state) has each step, and what to do if the restore stops part way.
+
+In a container, where the daemon is the container's process, start it with `serve --restore BUNDLE` and a mounted bundle: it restores in place before serving, once per bundle ([in a container](../../architecture/recovery/#in-a-container)).
+
+The artifacts go to the state directory's own `artifacts/`. To put them in another artifact store the binary is built with, name it and an empty location, and the restored `storage.json` records it:
 
 ```sh
-open-conduit backup restore BUNDLE --to DIR --artifacts files --artifacts-location /srv/open-conduit/artifacts
+open-conduit backup restore BUNDLE --in-place --artifacts files --artifacts-location /srv/open-conduit/artifacts
 ```
+
+When `storage.json` names an artifact store outside the state directory, `--in-place` refuses until you name one of these: it never moves the daemon onto the directory's own store unasked. Name `--artifacts files` alone to move the artifacts into the state directory on purpose.
+
+`backup restore BUNDLE --to DIR` writes a new directory instead, never over an existing one, to inspect a bundle or to restore on a new host (below).
 
 ## Move to a new host
 

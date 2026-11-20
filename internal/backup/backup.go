@@ -574,6 +574,10 @@ type Info struct {
 	Artifacts int
 	// Omitted counts references whose expired content the bundle leaves out.
 	Omitted int
+	// DatabaseSHA256 is the snapshot's digest, which names the bundle's
+	// coordination state: an in-place restore records it, so a
+	// restore-then-serve entry point restores a bundle once.
+	DatabaseSHA256 string
 }
 
 // Inspect reads and checks a bundle's manifest. It does not verify the
@@ -583,7 +587,7 @@ func Inspect(bundle string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
+	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
 }
 
 // openEmpty opens the store a restore imports into and refuses one that
