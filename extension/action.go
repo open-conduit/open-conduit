@@ -30,13 +30,14 @@ const ActionSource = "core.action"
 // management API, including the creation of Work an operator starts.
 const ManualSource = "core.manual"
 
-// CallerOperator is the kind of the local operator: the owner of the
-// management socket.
+// CallerOperator is the kind of an operator of the management API.
 const CallerOperator = "operator"
 
-// Caller is who invokes an action. The local management API always calls
-// as {Kind: CallerOperator, ID: "local"}; surfaces with real identities
-// carry their own. Providers refuse callers they do not recognise.
+// Caller is who invokes an action. The management API calls as the
+// operator whose credential made the request, {Kind: CallerOperator, ID:
+// <operator name>}, or as the person a client says it acts for; other
+// surfaces carry their own identities. Providers refuse callers they do
+// not recognise.
 type Caller struct {
 	Kind, ID string
 }
@@ -49,7 +50,8 @@ func (c Caller) String() string {
 	return c.Kind + ":" + c.ID
 }
 
-// LocalOperator is the caller of every management API invocation.
+// LocalOperator is the owner's own operator, whose credential is the one in
+// the daemon's state directory. Other operators call as their own names.
 var LocalOperator = Caller{Kind: CallerOperator, ID: "local"}
 
 // ActionTarget is what an action applies to: a scope, and the Work in it
