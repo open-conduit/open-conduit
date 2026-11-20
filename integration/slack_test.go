@@ -1839,3 +1839,45 @@ func TestSlackPromptWithoutPressesIsAnsweredByReply(t *testing.T) {
 		t.Fatalf("a reply after the answer was taken: %+v", got)
 	}
 }
+
+// A prompt whose post's answer was lost stays attempted until its marker
+// search finds it, and holds the reply cursor meanwhile: a reply that
+// answers it before it is recovered is answered once it is. (Deliver
+// marks a prompt attempted before posting it; only a post Slack refused
+// outright goes back to pending, and nothing was posted then.)
+func TestSlackReplyToALostPromptIsAnswered(t *testing.T) {
+	e := newSlackEnv(t, `,"receiver":"none"`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}}}, nil
+	}
+	var got []extension.ActRequest
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
+	}
+	e.fake.FailNextPost("lost")
+	e.converge()
+	if res := e.converge(); res.Posted != 0 || res.Recovered != 0 {
+		t.Fatalf("the lost prompt was settled before its search: %+v", res)
+	}
+	ts := e.fake.Reply(slChannel, root, slAlice, "approve")
+	e.sync()
+	e.reconcile()
+	e.route()
+	e.converge()
+	if len(got) != 1 || got[0].Caller != slAlice || got[0].Key != "reply/"+slAlice+"/"+ts {
+		t.Fatalf("the reply to the lost prompt: %+v", got)
+	}
+	// Recovered later, it isn't answered again.
+	e.fake.Advance(time.Minute)
+	e.sync()
+	e.converge()
+	e.converge()
+	if len(got) != 1 {
+		t.Fatalf("answered again once recovered: %+v", got)
+	}
+}

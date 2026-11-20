@@ -121,6 +121,13 @@ func (p *Projector) answerReplies(ctx context.Context, limit int) (int, []string
 		if err != nil {
 			return err
 		}
+		// A pending prompt was never posted: Deliver marks one attempted
+		// before posting it, and only a post Slack refused outright (a
+		// rate limit, a credential) goes back to pending. So nobody can
+		// have replied to it, and it doesn't hold the cursor, which a
+		// prompt held pending for good (its identity's scope missing)
+		// would otherwise hold forever. One whose answer was lost stays
+		// attempted, and holds it.
 		for _, row := range rows {
 			var rec intentRecord
 			if json.Unmarshal(row.Value, &rec) == nil && rec.Replies != nil && !rec.Answered && !rec.Closed && rec.State != IntentFailed && rec.State != IntentPending {
