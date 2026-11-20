@@ -29,7 +29,7 @@ On GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub
 
 - **GitHub App name:** the name people will see, followed by `[bot]`, for example `acme-agents`.
 - **Homepage URL:** anything, such as the repository's URL.
-- **Webhook:** clear **Active**. Open Conduit gets events from the repository's own webhook, or by reconciling, not from the App.
+- **Webhook:** clear **Active**. Open Conduit gets events from the repository's own webhook, or by reconciling, not from the App. To have the App deliver events for every repository it's installed on instead, leave it **Active**: set the **Webhook URL** to `<public URL>/github/<connection>` and a **Webhook secret**, subscribe to the events the repository hook takes (issues, issue comments, pull requests, reviews, review comments, check runs and suites, statuses), and add that secret to the connection as `webhook_secret` in its `secret_refs`. A delivery for a repository no entry watches is answered 421 ([one webhook for a connection](../../architecture/github-extension/#one-webhook-for-a-connection)). Turn `manage_webhook` off on its entries.
 - **Repository permissions:**
   - **Contents:** Read and write
   - **Issues:** Read and write

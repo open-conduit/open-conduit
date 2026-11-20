@@ -101,12 +101,43 @@ func VerifyDelivery(secret string, h http.Header, body []byte, received time.Tim
 	return Verified{}, nil
 }
 
+// Routed is what a webhook route made of a verified callback.
+type Routed struct {
+	// Entries is how many configured entries the callback was for, each of
+	// which accepted it. None is answered 421 Misdirected Request.
+	Entries int
+	// Duplicate is true when every one of them had already accepted it
+	// (Slack's retry of a callback).
+	Duplicate bool
+}
+
+// receipt is the JSON body of a 200 for a callback.
+type receipt struct {
+	Entries   int  `json:"entries"`
+	Duplicate bool `json:"duplicate"`
+}
+
 // WebhookHandler serves one entry's Events API Request URL. It verifies the
 // signature before parsing, echoes URL verification, and hands a callback to
 // push, which must durably accept it before returning (200). A failure
 // answers 503 so Slack retries; reconcile recovers what retries miss. It
 // never mounts management APIs or forwards credentials.
 func WebhookHandler(secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) error, now func() time.Time) http.Handler {
+	return RoutedHandler(secret, func(ctx context.Context, d extension.Delivery) (Routed, error) {
+		return Routed{Entries: 1}, push(ctx, d)
+	}, now)
+}
+
+// RoutedHandler serves an Events API Request URL whose callbacks route
+// decides among entries. It verifies the signature before parsing (401
+// before any entry sees the callback) and echoes URL verification, then
+// hands a callback to route, which must durably accept it in every entry it
+// is for before returning. It answers 200 with a receipt ({"entries": n,
+// "duplicate": bool}) once every entry accepted; 421 when the callback is
+// for no entry, with X-Slack-No-Retry so Slack doesn't retry a misroute;
+// and 503 when an entry didn't accept it, so Slack retries and the entries
+// that had accepted deduplicate.
+func RoutedHandler(secret func(context.Context) (string, error), route func(context.Context, extension.Delivery) (Routed, error), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -140,12 +171,22 @@ func WebhookHandler(secret func(context.Context) (string, error), push func(cont
 			_, _ = io.WriteString(w, v.Challenge)
 			return
 		}
-		if v.Delivery.ID != "" {
-			if err := push(r.Context(), v.Delivery); err != nil {
-				http.Error(w, "not accepted", http.StatusServiceUnavailable)
-				return
-			}
+		if v.Delivery.ID == "" {
+			w.WriteHeader(http.StatusOK)
+			return
 		}
+		routed, err := route(r.Context(), v.Delivery)
+		switch {
+		case err != nil:
+			http.Error(w, "not accepted", http.StatusServiceUnavailable)
+			return
+		case routed.Entries == 0:
+			w.Header().Set("X-Slack-No-Retry", "1")
+			http.Error(w, "no configured entry is for this callback", http.StatusMisdirectedRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(receipt{Entries: routed.Entries, Duplicate: routed.Duplicate})
 	})
 }

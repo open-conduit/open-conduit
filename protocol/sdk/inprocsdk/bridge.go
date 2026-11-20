@@ -611,6 +611,14 @@ func (b *Bridge) configure(ctx context.Context, h *sdk.Host, p protocol.Configur
 			out.WebhookPaths = append(out.WebhookPaths, "/"+s.Name)
 		}
 	}
+	if p, ok := b.x.(inproc.WebhookPather); ok && hooks {
+		for _, path := range p.WebhookPaths() {
+			full := "/" + b.x.Name() + "/" + path
+			if !slices.Contains(out.WebhookPaths, full) && w.Webhook(path) != nil {
+				out.WebhookPaths = append(out.WebhookPaths, full)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -673,6 +681,9 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 		Deliver: func(ctx context.Context, source string, d extension.Delivery) error {
 			_, err := h.Deliver(ctx, source, protocol.FromDelivery(d))
 			return err
+		},
+		DeliverAdded: func(ctx context.Context, source string, d extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
+			return h.DeliverAdded(ctx, source, protocol.FromDelivery(d))
 		},
 		Authorize: func(kind string, from, to domain.ID) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

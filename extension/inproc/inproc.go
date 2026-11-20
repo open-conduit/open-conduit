@@ -209,6 +209,11 @@ type Host struct {
 	// sources (Ingester) by its registration name, acknowledged once it is
 	// durably accepted.
 	Deliver func(ctx context.Context, source string, d extension.Delivery) error
+	// DeliverAdded is Deliver that also answers the delivery's accepted
+	// Events and, for each, whether this delivery added it: false for one
+	// already accepted from the same source and delivery ID, such as a
+	// sender's retry. nil when the host doesn't offer it.
+	DeliverAdded func(ctx context.Context, source string, d extension.Delivery) ([]domain.AcceptedEvent, []bool, error)
 	// Authorize answers whether scope from may use scope to's events or
 	// tracker, by kind, under the operator's authorization config: "read"
 	// (authorization.read_scopes, a cross-scope wait or read) or "file"
@@ -476,6 +481,15 @@ type Ingester interface {
 // pushes what it accepts through Host.Deliver.
 type Webhooker interface {
 	Webhook(path string) http.Handler
+}
+
+// WebhookPather Webhookers serve paths besides their sources' names, such
+// as one URL a connection's sender delivers every entry's deliveries to.
+// WebhookPaths are those paths below /<Name>/ ("app" for /<Name>/app),
+// read after each Configure; each one Webhook answers is served, with the
+// paths beneath it.
+type WebhookPather interface {
+	WebhookPaths() []string
 }
 
 // Targeter extensions resolve named wait targets in a scope, by kind

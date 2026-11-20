@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -20,7 +22,7 @@ import (
 
 // The GitHub extension's own entries (#357): each enabled scope's `github`
 // entry registers an ingress pair (webhook push on the listener when it
-// names a webhook_secret, and reconcile), its projector converges tracker
+// names a webhook_secret or its connection does, and reconcile), its projector converges tracker
 // labels and marked comments, a manage_webhook entry has its repository
 // webhook pointed at the public URL, and the github.* tools join every
 // generation's toolbelt, all through the public in-process contract.
@@ -49,6 +51,24 @@ type entry struct {
 	ingress    *Ingress
 	projector  *Projector
 	projection string // the last projection pass's code
+	// shared is whether the entry's connection names a webhook_secret, so
+	// the connection's webhook route delivers its repository's deliveries.
+	shared bool
+}
+
+// unmatched records the deliveries a webhook route verified that no entry
+// was for, for the github check.
+type unmatched struct {
+	count             int
+	at                time.Time
+	event, repository string
+}
+
+// sharedMemo is the read memo of a delivery being delivered to several
+// entries, with how many deliveries of it are in progress.
+type sharedMemo struct {
+	m    *memo
+	refs int
 }
 
 type hook struct {
@@ -72,6 +92,11 @@ type registry struct {
 	public  string
 	codes   map[string]string
 	next    int // the entry the next projection pass starts at
+	// unmatched is by route ("github/<connection>" or an entry's name).
+	unmatched map[string]*unmatched
+	// memos are the deliveries a connection's webhook route is delivering,
+	// by delivery ID.
+	memos map[string]*sharedMemo
 	// converge stands in for an entry's projector in tests.
 	converge func(ctx context.Context, e *entry, limit int) (ProjectionResult, error)
 }
@@ -80,22 +105,24 @@ type registry struct {
 // own entries.
 func New() *Extension {
 	x := NewExtension(nil)
-	x.own = &registry{entries: map[string]*entry{}, failed: map[string]string{}, hooks: map[string]*hook{}, codes: map[string]string{}}
+	x.own = &registry{entries: map[string]*entry{}, failed: map[string]string{}, hooks: map[string]*hook{}, codes: map[string]string{},
+		unmatched: map[string]*unmatched{}, memos: map[string]*sharedMemo{}}
 	return x
 }
 
 var (
-	_ inproc.Operator     = (*Extension)(nil)
-	_ inproc.Declarer     = (*Extension)(nil)
-	_ inproc.Router       = (*Extension)(nil)
-	_ inproc.Ingester     = (*Extension)(nil)
-	_ inproc.Webhooker    = (*Extension)(nil)
-	_ inproc.Tooled       = (*Extension)(nil)
-	_ inproc.Tasker       = (*Extension)(nil)
-	_ inproc.Actor        = (*Extension)(nil)
-	_ inproc.Annotator    = (*Extension)(nil)
-	_ inproc.Renderer     = (*Extension)(nil)
-	_ inproc.SegmentEnder = (*Extension)(nil)
+	_ inproc.Operator      = (*Extension)(nil)
+	_ inproc.Declarer      = (*Extension)(nil)
+	_ inproc.Router        = (*Extension)(nil)
+	_ inproc.Ingester      = (*Extension)(nil)
+	_ inproc.Webhooker     = (*Extension)(nil)
+	_ inproc.WebhookPather = (*Extension)(nil)
+	_ inproc.Tooled        = (*Extension)(nil)
+	_ inproc.Tasker        = (*Extension)(nil)
+	_ inproc.Actor         = (*Extension)(nil)
+	_ inproc.Annotator     = (*Extension)(nil)
+	_ inproc.Renderer      = (*Extension)(nil)
+	_ inproc.SegmentEnder  = (*Extension)(nil)
 
 	_ inproc.Executing = (*Extension)(nil)
 
@@ -313,14 +340,15 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 		if t != nil {
 			t.ObserveChecks(ctx, obs)
 		}
-	}})
+	}, Memo: x.sharedMemo})
 	projector, err := NewProjector(ProjectorOptions{Store: h.Store, Client: client, Settings: settings, Now: x.now, Writers: x.clients, Scope: scope, Act: h.Act})
 	if err != nil {
 		return err
 	}
 	x.own.mu.Lock()
 	x.own.entries[settings.Namespace] = &entry{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...),
-		connection: e.Connection.ID, conn: connectionKey(e.Connection), client: client, ingress: in, projector: projector}
+		connection: e.Connection.ID, conn: connectionKey(e.Connection), client: client, ingress: in, projector: projector,
+		shared: slices.Contains(e.Connection.Secrets, SecretWebhook)}
 	x.own.mu.Unlock()
 	return nil
 }
@@ -348,7 +376,7 @@ func (x *Extension) follow(e *entry, c *protocol.ConnectionEntry) bool {
 		return false
 	}
 	x.own.mu.Lock()
-	e.conn = key
+	e.conn, e.shared = key, slices.Contains(c.Secrets, SecretWebhook)
 	x.own.mu.Unlock()
 	if h := x.svc(); h.Log != nil {
 		h.Log.Info("github connection change applied", "name", e.name, "connection", c.ID)
@@ -387,16 +415,177 @@ func (x *Extension) Sources() []inproc.Source {
 }
 
 // Webhook serves an entry's webhook (POST /github/<scope>/<entry>) when it
-// names a webhook_secret.
+// names a webhook_secret, and a connection's (POST /github/<connection>)
+// when the connection names one: the one URL of a GitHub App's or an
+// organisation's webhook, which delivers each delivery to every entry of
+// the connection whose repository it is about.
 func (x *Extension) Webhook(path string) http.Handler {
+	if !strings.Contains(path, "/") {
+		return x.connectionWebhook(path)
+	}
 	for _, e := range x.list() {
 		if e.name == Type+"/"+path && e.ingress.Settings().WebhookSecret != "" {
 			src := e
-			push := func(ctx context.Context, d extension.Delivery) error { return x.svc().Deliver(ctx, src.name, d) }
-			return WebhookHandler(x.webhookSecret(src), push, x.now)
+			route := func(ctx context.Context, d extension.Delivery) (Routed, error) {
+				event, repo, err := Target(d)
+				if err != nil {
+					return Routed{}, err
+				}
+				if !src.ingress.For(repo) && (event != "ping" || repo != "") {
+					x.recordUnmatched(src.name, event, repo)
+					return Routed{}, nil
+				}
+				return x.deliver(ctx, []*entry{src}, d)
+			}
+			return RoutedHandler(x.webhookSecret(src), route, x.now)
 		}
 	}
 	return nil
+}
+
+// WebhookPaths are the connections' webhook routes: each connection of an
+// entry that names a webhook_secret.
+func (x *Extension) WebhookPaths() []string {
+	var out []string
+	for _, e := range x.list() {
+		x.own.mu.Lock()
+		shared := e.shared
+		x.own.mu.Unlock()
+		if shared && !slices.Contains(out, e.connection) {
+			out = append(out, e.connection)
+		}
+	}
+	return out
+}
+
+// connectionWebhook serves the webhook of connection conn, verified with
+// its webhook_secret, or nil when none of its entries' connection names one.
+func (x *Extension) connectionWebhook(conn string) http.Handler {
+	var entries []*entry
+	for _, e := range x.list() {
+		if x.own == nil || e.connection != conn {
+			continue
+		}
+		x.own.mu.Lock()
+		shared := e.shared
+		x.own.mu.Unlock()
+		if shared {
+			entries = append(entries, e)
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	// Any of the entries resolves the connection's secret: each is
+	// authorized for its own connection.
+	first := entries[0]
+	secret := func(ctx context.Context) (string, error) { return x.secrets(first.scope, conn)(ctx, SecretWebhook) }
+	route := func(ctx context.Context, d extension.Delivery) (Routed, error) {
+		event, repo, err := Target(d)
+		if err != nil {
+			return Routed{}, err
+		}
+		var to []*entry
+		for _, e := range entries {
+			if repo != "" && e.ingress.For(repo) {
+				to = append(to, e)
+			}
+		}
+		if len(to) == 0 {
+			if event == "ping" && repo == "" {
+				return Routed{Acknowledged: true}, nil
+			}
+			x.recordUnmatched(Type+"/"+conn, event, repo)
+			return Routed{}, nil
+		}
+		return x.deliver(ctx, to, d)
+	}
+	return RoutedHandler(secret, route, x.now)
+}
+
+// deliver hands a verified delivery to each entry in turn, sharing one
+// read memo among them. Every entry is tried even after one fails, so a
+// redelivery finds the rest already accepted; any failure fails the whole.
+func (x *Extension) deliver(ctx context.Context, to []*entry, d extension.Delivery) (Routed, error) {
+	if x.own != nil && len(to) > 1 {
+		x.own.mu.Lock()
+		sm := x.own.memos[d.ID]
+		if sm == nil {
+			sm = &sharedMemo{m: newMemo()}
+			x.own.memos[d.ID] = sm
+		}
+		sm.refs++
+		x.own.mu.Unlock()
+		defer func() {
+			x.own.mu.Lock()
+			if sm.refs--; sm.refs == 0 {
+				delete(x.own.memos, d.ID)
+			}
+			x.own.mu.Unlock()
+		}()
+	}
+	h := x.svc()
+	out := Routed{Entries: len(to), Duplicate: true}
+	var failed error
+	for _, e := range to {
+		if h.DeliverAdded == nil {
+			out.Duplicate = false
+			if err := h.Deliver(ctx, e.name, d); err != nil {
+				failed = err
+			}
+			continue
+		}
+		accepted, added, err := h.DeliverAdded(ctx, e.name, d)
+		if err != nil {
+			failed = err
+			if h.Log != nil {
+				h.Log.Warn("github delivery not accepted", "name", e.name, "delivery", d.ID)
+			}
+			continue
+		}
+		if len(accepted) == 0 || slices.Contains(added, true) {
+			out.Duplicate = false
+		}
+	}
+	if failed != nil {
+		return Routed{}, failed
+	}
+	return out, nil
+}
+
+// sharedMemo is the read memo of a delivery the connection's webhook route
+// is delivering to several entries (IngressOptions.Memo), or nil.
+func (x *Extension) sharedMemo(delivery string) *memo {
+	if x.own == nil {
+		return nil
+	}
+	x.own.mu.Lock()
+	defer x.own.mu.Unlock()
+	if sm := x.own.memos[delivery]; sm != nil {
+		return sm.m
+	}
+	return nil
+}
+
+// recordUnmatched records a verified delivery that no entry of route was for:
+// one about a repository none is configured for, or an App-level event
+// (installation) the entries don't consume.
+func (x *Extension) recordUnmatched(route, event, repo string) {
+	if h := x.svc(); h.Log != nil {
+		h.Log.Warn("github delivery for no configured entry", "route", route, "event", event, "repository", repo)
+	}
+	if x.own == nil {
+		return
+	}
+	x.own.mu.Lock()
+	defer x.own.mu.Unlock()
+	u := x.own.unmatched[route]
+	if u == nil {
+		u = &unmatched{}
+		x.own.unmatched[route] = u
+	}
+	u.count++
+	u.at, u.event, u.repository = x.now(), event, repo
 }
 
 // webhookSecret resolves an entry's webhook_secret among its selected
@@ -480,7 +669,10 @@ func (x *Extension) manageHooks(ctx context.Context) error {
 	code := ""
 	for _, e := range x.list() {
 		s := e.ingress.Settings()
-		if !s.ManageWebhook || s.WebhookSecret == "" {
+		r.mu.Lock()
+		shared := e.shared
+		r.mu.Unlock()
+		if !s.ManageWebhook || s.WebhookSecret == "" || shared {
 			continue
 		}
 		target := public + "/" + e.name
@@ -689,8 +881,22 @@ func (x *Extension) hookItems(raise func(status, code string)) map[string]string
 	r := x.own
 	for _, e := range x.list() {
 		s := e.ingress.Settings()
+		r.mu.Lock()
+		shared := e.shared
+		r.mu.Unlock()
+		var items []string
+		if shared {
+			items = append(items, "POST /"+Type+"/"+e.connection+" (the connection's webhook)")
+			if s.ManageWebhook {
+				raise(inproc.CheckWarn, "manage_webhook_ignored")
+				items = append(items, "manage_webhook ignored: the connection's webhook delivers this repository's deliveries; turn it off")
+			}
+		}
 		if s.WebhookSecret == "" {
-			out[s.Namespace] = "no webhook_secret (not mounted; reconcile only)"
+			if !shared {
+				items = append(items, "no webhook_secret (not mounted; reconcile only)")
+			}
+			out[s.Namespace] = strings.Join(items, "; ")
 			continue
 		}
 		item := "POST /" + e.name
@@ -709,10 +915,28 @@ func (x *Extension) hookItems(raise func(status, code string)) map[string]string
 					raise(inproc.CheckWarn, "hook_delivery_failing")
 				}
 			}
-		case s.ManageWebhook:
+		case s.ManageWebhook && !shared:
 			item += "; hook pending"
 		}
-		out[s.Namespace] = item
+		out[s.Namespace] = strings.Join(append(items, item), "; ")
+	}
+	return out
+}
+
+// unmatchedItems are the webhook routes' deliveries that no entry was for.
+func (x *Extension) unmatchedItems() []string {
+	if x.own == nil {
+		return nil
+	}
+	x.own.mu.Lock()
+	defer x.own.mu.Unlock()
+	var out []string
+	for route, u := range x.own.unmatched {
+		what := u.event
+		if u.repository != "" {
+			what += " for " + u.repository
+		}
+		out = append(out, fmt.Sprintf("POST /%s: %d deliveries for no configured entry (answered 421), the last %s at %s", route, u.count, what, u.at.UTC().Format(time.RFC3339)))
 	}
 	return out
 }

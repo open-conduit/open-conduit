@@ -275,6 +275,7 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 		}
 		check.Items = append(check.Items, e.Settings.Namespace+": "+strings.Join(notes, "; "))
 	}
+	check.Items = append(check.Items, x.unmatchedItems()...)
 	sort.Strings(check.Items)
 	return check
 }

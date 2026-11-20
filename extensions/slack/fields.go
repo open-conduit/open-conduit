@@ -9,6 +9,7 @@ func connectionFields() []protocol.FieldDecl {
 		{Name: "api_url", Default: "https://slack.com/api"},
 		{Name: SecretBotToken, Help: "xoxb-…", Required: true, Secret: true},
 		{Name: SecretAppToken, Help: "xapp-… for Socket Mode", Secret: true},
+		{Name: SecretSigning, Help: "verifies the connection's Events API Request URL (POST /slack/<connection>) for its receiver http entries", Secret: true},
 	}
 }
 
@@ -26,8 +27,8 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "claim_from", Help: "registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time", Default: "registration"},
 		{Name: "history_hours"},
 		{Name: "refresh_minutes"},
-		{Name: "receiver", Default: "socket", Options: []string{"socket", "events", "none"}},
-		{Name: "signing_secret"},
+		{Name: "receiver", Default: "socket", Options: []string{"socket", "http", "none"}},
+		{Name: "signing_secret", Help: "names a selected scope secret that verifies the entry's own route (POST /slack/<scope>/<entry>); without it, receiver http takes the connection's"},
 		{Name: "projection", Help: `{"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)}`},
 		{Name: "post"},
 		{Name: "progress", Help: `{"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed`},

@@ -108,6 +108,10 @@ func (x *acme) Webhook(path string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 }
 
+// WebhookPaths declare a connection's route besides the entries', and one
+// Webhook doesn't answer, which is left out.
+func (*acme) WebhookPaths() []string { return []string{"app-hook", "gone"} }
+
 func (*acme) Operations() []string { return []string{"acme.ping"} }
 
 func (*acme) Declarations() []extension.Operation {
@@ -172,7 +176,8 @@ func TestNewRefusesAnIncompleteBase(t *testing.T) {
 
 // The manifest takes what the surfaces say, with tasks named after the
 // package; the extension starts once, at the first configure; its sources
-// and their webhook paths come back from configure; its operation, task,
+// and their webhook paths, with the paths it declares besides them, come
+// back from configure; its operation, task,
 // check and config validation are served.
 func TestBridgeServesTheInprocContract(t *testing.T) {
 	x := &acme{}
@@ -208,7 +213,7 @@ func TestBridgeServesTheInprocContract(t *testing.T) {
 				t.Fatalf("source %+v", s)
 			}
 		}
-		if !slices.Equal(names, []string{"acme/eng/plain", "acme/eng/with-hook"}) || !slices.Equal(res.WebhookPaths, []string{"/acme/eng/with-hook"}) {
+		if !slices.Equal(names, []string{"acme/eng/plain", "acme/eng/with-hook"}) || !slices.Equal(res.WebhookPaths, []string{"/acme/eng/with-hook", "/acme/app-hook"}) {
 			t.Fatalf("sources %v webhook paths %v", names, res.WebhookPaths)
 		}
 	}

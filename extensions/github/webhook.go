@@ -65,11 +65,45 @@ func VerifyDelivery(secret string, h http.Header, body []byte, received time.Tim
 	return extension.Delivery{ID: id, ReceivedAt: received.UTC(), ContentType: DeliveryContentType, Body: wrapped}, nil
 }
 
+// Routed is what a webhook route made of a verified delivery.
+type Routed struct {
+	// Entries is how many configured entries the delivery was for, each of
+	// which accepted it. None is answered 421 Misdirected Request.
+	Entries int
+	// Duplicate is true when every one of them had already accepted it
+	// (the same source and delivery ID, a sender's redelivery).
+	Duplicate bool
+	// Acknowledged answers a delivery that is for no entry 202 all the
+	// same: the ping GitHub sends to an App's or organisation's webhook to
+	// check its URL, which carries no repository.
+	Acknowledged bool
+}
+
+// receipt is the JSON body of a 202.
+type receipt struct {
+	Entries   int  `json:"entries"`
+	Duplicate bool `json:"duplicate"`
+}
+
 // WebhookHandler serves one repository's webhook route. It verifies the
 // signature before parsing, then hands the delivery to push, which must
 // durably accept it before returning (202). It never mounts management APIs
 // or forwards credentials; listener and tunnel exposure belong to the host.
 func WebhookHandler(secret func(context.Context) (string, error), push func(context.Context, extension.Delivery) error, now func() time.Time) http.Handler {
+	return RoutedHandler(secret, func(ctx context.Context, d extension.Delivery) (Routed, error) {
+		return Routed{Entries: 1}, push(ctx, d)
+	}, now)
+}
+
+// RoutedHandler serves a webhook route whose deliveries route decides
+// among entries. It verifies the signature before parsing (401 before any
+// entry sees the delivery), then hands the delivery to route, which must
+// durably accept it in every entry it is for before returning. It answers
+// 202 with a receipt ({"entries": n, "duplicate": bool}) once every entry
+// accepted, 421 when the delivery is for no entry (so the sender's delivery
+// log shows the misroute), and 503 when an entry didn't accept it, so the
+// sender redelivers and the entries that had accepted deduplicate.
+func RoutedHandler(secret func(context.Context) (string, error), route func(context.Context, extension.Delivery) (Routed, error), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -98,11 +132,18 @@ func WebhookHandler(secret func(context.Context) (string, error), push func(cont
 			http.Error(w, "invalid delivery", http.StatusBadRequest)
 			return
 		}
-		if err := push(r.Context(), d); err != nil {
+		routed, err := route(r.Context(), d)
+		switch {
+		case err != nil:
 			// Not acknowledged: GitHub may redeliver, and reconcile recovers state.
 			http.Error(w, "not accepted", http.StatusServiceUnavailable)
 			return
+		case routed.Entries == 0 && !routed.Acknowledged:
+			http.Error(w, "no configured entry is for this delivery", http.StatusMisdirectedRequest)
+			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(receipt{Entries: routed.Entries, Duplicate: routed.Duplicate})
 	})
 }

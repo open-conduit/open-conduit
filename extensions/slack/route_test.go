@@ -272,8 +272,10 @@ func TestReceiverConfig(t *testing.T) {
 	if s, err := slack.ParseExtension([]byte(base+`}`), nil); err != nil || s.Receiver != slack.ReceiverSocket {
 		t.Fatalf("default receiver: %+v %v", s, err)
 	}
-	if _, err := slack.ParseExtension([]byte(base+`,"receiver":"http"}`), nil); err == nil {
-		t.Fatal("http receiver without signing_secret")
+	// Without its own signing_secret, an http entry takes its connection's
+	// Request URL.
+	if s, err := slack.ParseExtension([]byte(base+`,"receiver":"http"}`), nil); err != nil || s.Receiver != slack.ReceiverHTTP {
+		t.Fatalf("http receiver on the connection's route: %v", err)
 	}
 	if s, err := slack.ParseExtension([]byte(base+`,"receiver":"http","signing_secret":"sig"}`), []string{"sig"}); err != nil || s.Receiver != slack.ReceiverHTTP {
 		t.Fatalf("http receiver: %v", err)

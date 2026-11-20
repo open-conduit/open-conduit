@@ -13,6 +13,7 @@ func connectionFields() []protocol.FieldDecl {
 		{Name: SecretToken, Help: "token auth (cmd:gh auth token for the gh login)", Secret: true},
 		{Name: SecretAppPrivateKey, Help: "app auth", Secret: true},
 		{Name: SecretBotPrivateKey, Help: "the bot App", Secret: true},
+		{Name: SecretWebhook, Help: "verifies the connection's webhook (POST /github/<connection>), such as the App's", Secret: true},
 	}
 }
 
