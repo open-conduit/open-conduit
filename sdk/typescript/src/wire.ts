@@ -1025,6 +1025,8 @@ export const Provides = t.object(
     webhooks: t.optional(t.boolean()),
     webhook_max_bytes: t.optional(t.integer()),
     checks: t.optional(t.array(CheckDecl)),
+    // A directory, relative to the manifest, of prompt material the host offers agent executors.
+    playbooks: t.optional(t.string()),
   },
   open,
 );
