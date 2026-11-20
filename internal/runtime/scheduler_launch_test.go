@@ -478,7 +478,16 @@ func TestProductionSchedulerHoldSurvivesTransientAborts(t *testing.T) {
 		stop()
 		if tc.lost {
 			if held || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
-				t.Fatalf("control: a conflicting renewal kept the lease (cause %v)", context.Cause(ctx))
+				// Say what the renewals reported instead, so a failure on
+				// a loaded runner shows why the conflict didn't reach them.
+				var got []error
+				for len(reported) > 0 {
+					got = append(got, <-reported)
+				}
+				store.mu.Lock()
+				left := store.fails
+				store.mu.Unlock()
+				t.Fatalf("control: a conflicting renewal kept the lease (cause %v; reported %v; %d injected failures left)", context.Cause(ctx), got, left)
 			}
 			continue
 		}
