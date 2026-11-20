@@ -91,7 +91,7 @@ func (s *Server) listSecrets(c *call) (int, any, error) {
 		}
 		if s.o.Resolver == nil {
 			w.Failure = "no_resolver"
-		} else if _, rerr := s.o.Resolver.Resolve(c.ctx, ref); rerr != nil {
+		} else if _, rerr := s.o.Resolver.Fresh().Resolve(c.ctx, ref); rerr != nil {
 			w.Failure = config.SecretCode(rerr)
 		} else {
 			w.Resolves = true

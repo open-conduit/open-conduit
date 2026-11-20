@@ -3,8 +3,11 @@ package config
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/extension"
@@ -227,5 +230,150 @@ func TestResolveNamesRecordsTheSecretsName(t *testing.T) {
 	// Only the provider-backed resolution is recorded, under its name.
 	if len(got) != 1 || got[0].Name != "token" || got[0].Consumer != "github" || got[0].Code != "" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// countingProvider counts its calls and, with gate set, blocks each until
+// gate is closed.
+type countingProvider struct {
+	mu    sync.Mutex
+	calls int
+	gate  chan struct{}
+	err   error
+}
+
+func (p *countingProvider) Serve(ctx context.Context, r extension.SecretRequest) (string, error) {
+	p.mu.Lock()
+	p.calls++
+	gate := p.gate
+	p.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	if p.err != nil {
+		return "", p.err
+	}
+	return "v-" + r.Reference, nil
+}
+
+func (p *countingProvider) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func cachedResolver(p extension.SecretProvider, now *time.Time, records *int) *Resolver {
+	return &Resolver{
+		Providers: func(string) (extension.SecretProvider, string, bool) { return p, "vault", true },
+		Observe:   func(context.Context, SecretResolution) { *records++ },
+		Cache:     &SecretCache{Now: func() time.Time { return *now }},
+	}
+}
+
+// A consumer that resolves on every inbound request (a webhook's signature
+// check) asks the provider once per lifetime, not once per request.
+func TestProviderAnswersAreCachedForABoundedLifetime(t *testing.T) {
+	p := &countingProvider{}
+	now, records := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), 0
+	r := cachedResolver(p, &now, &records)
+	ctx := context.Background()
+	for range 50 {
+		if v, err := r.For("github").Resolve(ctx, "vault:kv/hook"); err != nil || v != "v-kv/hook" {
+			t.Fatalf("%q, %v", v, err)
+		}
+	}
+	if p.count() != 1 || records != 1 {
+		t.Fatalf("%d calls and %d records for 50 resolutions, want 1", p.count(), records)
+	}
+	// Another consumer has its own entry.
+	_, _ = r.For("slack").Resolve(ctx, "vault:kv/hook")
+	if p.count() != 2 {
+		t.Fatalf("another consumer shared the entry")
+	}
+	now = now.Add(DefaultSecretTTL)
+	_, _ = r.For("github").Resolve(ctx, "vault:kv/hook")
+	if p.count() != 3 {
+		t.Fatalf("an expired entry answered")
+	}
+	// A config apply drops every entry.
+	r.Cache.Reset()
+	_, _ = r.For("github").Resolve(ctx, "vault:kv/hook")
+	if p.count() != 4 {
+		t.Fatalf("an entry outlived Reset")
+	}
+	// A check of whether it resolves now always asks.
+	_, _ = r.For("github").Fresh().Resolve(ctx, "vault:kv/hook")
+	if p.count() != 5 {
+		t.Fatalf("Fresh answered from the cache")
+	}
+}
+
+func TestProviderRefusalsAreCachedBriefly(t *testing.T) {
+	p := &countingProvider{err: &extension.SecretRefusal{Code: "not_found"}}
+	now, records := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), 0
+	r := cachedResolver(p, &now, &records)
+	for range 20 {
+		_, err := r.Resolve(context.Background(), "vault:kv/missing")
+		failure(t, err, "not_found")
+	}
+	if p.count() != 1 {
+		t.Fatalf("%d calls for 20 refused resolutions", p.count())
+	}
+	now = now.Add(DefaultSecretFailureTTL)
+	p.mu.Lock()
+	p.err = nil
+	p.mu.Unlock()
+	if v, err := r.Resolve(context.Background(), "vault:kv/missing"); err != nil || v == "" || p.count() != 2 {
+		t.Fatalf("a refusal outlived its lifetime: %q, %v, %d calls", v, err, p.count())
+	}
+}
+
+func TestConcurrentResolutionsShareOneProviderCall(t *testing.T) {
+	p := &countingProvider{gate: make(chan struct{})}
+	now, records := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), 0
+	r := cachedResolver(p, &now, &records)
+	const n = 20
+	results := make(chan string, n)
+	for range n {
+		go func() {
+			v, _ := r.Resolve(context.Background(), "vault:kv/hook")
+			results <- v
+		}()
+	}
+	// A caller that leaves early is cancelled and doesn't fail the rest.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := r.Resolve(ctx, "vault:kv/hook")
+	failure(t, err, "cancelled")
+	close(p.gate)
+	for range n {
+		if v := <-results; v != "v-kv/hook" {
+			t.Fatalf("a shared call answered %q", v)
+		}
+	}
+	if p.count() != 1 {
+		t.Fatalf("%d provider calls for %d concurrent resolutions", p.count(), n)
+	}
+}
+
+// A call in flight across a Reset doesn't store what it answers.
+func TestResetDiscardsACallInFlight(t *testing.T) {
+	p := &countingProvider{gate: make(chan struct{})}
+	now, records := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), 0
+	r := cachedResolver(p, &now, &records)
+	done := make(chan struct{})
+	go func() { _, _ = r.Resolve(context.Background(), "vault:kv/hook"); close(done) }()
+	for p.count() == 0 {
+		runtime.Gosched()
+	}
+	r.Cache.Reset()
+	close(p.gate)
+	<-done
+	p.mu.Lock()
+	p.gate = nil
+	p.mu.Unlock()
+	_, _ = r.Resolve(context.Background(), "vault:kv/hook")
+	if p.count() != 2 {
+		t.Fatalf("an answer from before Reset was cached")
 	}
 }

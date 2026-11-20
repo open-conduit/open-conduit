@@ -51,7 +51,8 @@ type Keyring interface {
 	Get(service, name string) (string, error)
 }
 
-// Resolver resolves references lazily for one consumer. It keeps no cache.
+// Resolver resolves references lazily for one consumer. It caches nothing
+// for the built-in forms; a provider's answers are held in Cache, when set.
 type Resolver struct {
 	Keyring        Keyring // nil uses the platform keyring helper
 	SecretsFile    string  // owner-only secrets.json for file: references
@@ -64,8 +65,12 @@ type Resolver struct {
 	// Observe, when set, is told of each provider-backed resolution, by
 	// reference and outcome, never value.
 	Observe func(context.Context, SecretResolution)
+	// Cache, when set, holds provider-served answers for a bounded
+	// lifetime, shared by every resolver For returns (SecretCache).
+	Cache *SecretCache
 
 	consumer string
+	fresh    bool
 }
 
 // SecretResolution is one provider-backed resolution as it is recorded:
@@ -84,6 +89,15 @@ type SecretResolution struct {
 func (r *Resolver) For(consumer string) *Resolver {
 	c := *r
 	c.consumer = consumer
+	return &c
+}
+
+// Fresh returns a resolver that asks providers now rather than answering
+// from Cache, for a check of whether a reference resolves now (doctor,
+// GET /v1/secrets). It leaves the cache as it was.
+func (r *Resolver) Fresh() *Resolver {
+	c := *r
+	c.fresh = true
 	return &c
 }
 
@@ -154,23 +168,33 @@ func (r *Resolver) ResolveNamed(ctx context.Context, name, ref string) (string, 
 }
 
 // provided asks the package serving scheme for a provider reference's value,
-// bounded by CommandTimeout, and records the outcome. Every failure is a
+// bounded by CommandTimeout, and records the outcome of each call it makes
+// (an answer from Cache is not a call). Every failure is a
 // safe code: the provider's own refusal code when it is one
 // (extension.ValidSecretCode), else provider_refused; provider_failed for
 // any other error, whose text is discarded.
 func (r *Resolver) provided(ctx context.Context, name, ref, scheme, rest string) (string, error) {
-	start := time.Now()
-	res := SecretResolution{Name: name, Reference: ref, Scheme: scheme, Consumer: r.consumer}
-	v, code := r.serve(ctx, &res, scheme, rest)
-	if code == "" && v == "" {
-		code = "empty"
+	call := func(ctx context.Context) (string, string) {
+		start := time.Now()
+		res := SecretResolution{Name: name, Reference: ref, Scheme: scheme, Consumer: r.consumer}
+		v, code := r.serve(ctx, &res, scheme, rest)
+		if code == "" && v == "" {
+			code = "empty"
+		}
+		if code == "" && len(v) > maxSecretOutput {
+			v, code = "", "output_too_large"
+		}
+		res.Code, res.Duration = code, time.Since(start)
+		if r.Observe != nil {
+			r.Observe(ctx, res)
+		}
+		return v, code
 	}
-	if code == "" && len(v) > maxSecretOutput {
-		v, code = "", "output_too_large"
-	}
-	res.Code, res.Duration = code, time.Since(start)
-	if r.Observe != nil {
-		r.Observe(ctx, res)
+	var v, code string
+	if r.Cache != nil && !r.fresh {
+		v, code = r.Cache.do(ctx, r.consumer+"\x00"+ref, call)
+	} else {
+		v, code = call(ctx)
 	}
 	if code != "" {
 		return "", &secretError{code: code}

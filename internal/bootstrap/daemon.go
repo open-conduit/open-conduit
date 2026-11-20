@@ -410,7 +410,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err != nil {
 		return err
 	}
-	d.resolver.Providers, d.resolver.Observe = d.secretProvider, d.observeSecret
+	d.resolver.Providers, d.resolver.Observe, d.resolver.Cache = d.secretProvider, d.observeSecret, &config.SecretCache{Now: d.now}
 	defer func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -500,6 +500,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 			return
 		}
 		d.current.Store(next)
+		// Nothing a provider served under the last generation outlives it.
+		if d.resolver.Cache != nil {
+			d.resolver.Cache.Reset()
+		}
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
 		d.log.Info("configuration generation activated", "generation", g)

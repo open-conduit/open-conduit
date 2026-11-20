@@ -105,7 +105,7 @@ The package also serves the `aws-sm` secret reference scheme ([secrets](../confi
 }
 ```
 
-`aws-sm:<secret>` is the secret's `SecretString`, and `aws-sm:<secret>#<key>` one string field of a `SecretString` that is a JSON object. `<secret>` is the secret's name or its ARN. The host asks the package for the value only when the slot's consumer needs it (`secret.serve`), and keeps it no longer than that attempt, so a rotation in Secrets Manager reaches the next attempt with no step in Open Conduit, and each read is in CloudTrail as `GetSecretValue`.
+`aws-sm:<secret>` is the secret's `SecretString`, and `aws-sm:<secret>#<key>` one string field of a `SecretString` that is a JSON object. `<secret>` is the secret's name or its ARN. The host asks the package for the value only when the slot's consumer needs it (`secret.serve`), and holds the answer for at most a minute per consumer and reference ([secrets](../config-management/#secrets-and-process-environment)), so a webhook check that resolves on every delivery costs one `GetSecretValue` a minute, not one per request, and a rotation in Secrets Manager reaches consumers within that minute with no step in Open Conduit. Each read is in CloudTrail as `GetSecretValue`.
 
 The package reads with the daemon's own AWS identity, never a connection's, so the credentials it serves can't depend on a secret it serves: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in its environment, else whatever the AWS CLI's credential chain finds (a profile, an instance profile, a container role, or web identity for EKS IRSA). The package's environment is the sanitized baseline, so grant it what that identity needs with `settings.extensions.aws.pass_env`:
 

@@ -18,9 +18,10 @@ type SecretRequest struct {
 // against a secrets manager (Vault, a cloud provider's), with its own
 // identity. It owns the manager's protocol, its authentication and its
 // errors. The host owns everything else, as for the built-in forms: it asks
-// only when a slot's authorised consumer needs the value, keeps the value
-// no longer than one attempt epoch, registers it for redaction, records
-// each resolution by name and outcome, never value, and fails closed
+// only when a slot's authorised consumer needs the value, holds its answer
+// for a bounded lifetime (so a consumer resolving on every request asks
+// once), registers it for redaction, records each call by name and
+// outcome, never value, and fails closed
 // with no fallback when the provider refuses, errs or is down.
 //
 // Serve returns the value, or a SecretRefusal with a safe code when the
