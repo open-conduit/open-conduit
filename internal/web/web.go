@@ -13,8 +13,10 @@
 // and never hands it to the browser. It listens only on loopback, answers
 // only to the names it was told it is served on (so a rebound DNS name
 // cannot reach it), lets a browser in only through its sign-in URL (kept
-// across restarts when Options.SignIn is set), and requires a per-process
-// CSRF token on every change.
+// across restarts when Options.SignIn is set), and requires a CSRF token
+// bound to the browser's session on every change. Behind a sign-in proxy
+// it trusts to pass each person's own credential (Options.SubjectHeader),
+// it acts for that person on every call, never as itself.
 package web
 
 import (
@@ -118,6 +120,16 @@ type Options struct {
 	// Service restarts the background service after an update; nil (or
 	// one that isn't running) leaves the restart to the operator.
 	Service Service
+	// SubjectHeader is the request header a sign-in proxy in front of the
+	// view puts the signed-in person's own credential in: an identity
+	// provider's token (oauth2-proxy's X-Forwarded-Access-Token, say), or
+	// "Authorization" for one sent as a bearer. When it is set, every call
+	// the view makes for a request acts for that person
+	// (client.WithSubjectToken), so the daemon records and authorises it
+	// as them, through the view's credential, which needs --act-for
+	// operator; a request without the header is refused, never served as
+	// the view. Empty acts as the view's own credential, for everyone.
+	SubjectHeader string
 }
 
 const (
@@ -129,9 +141,9 @@ const (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-// Server serves the view. Its CSRF secret lives only as long as the
-// process; its login token and session key do too unless Options.SignIn
-// keeps them.
+// Server serves the view. Its CSRF secret, from which each session's form
+// token is made, lives only as long as the process; its login token and
+// session key do too unless Options.SignIn keeps them.
 type Server struct {
 	src   Source
 	opts  Options
@@ -165,7 +177,7 @@ type Server struct {
 	tcache map[string]string
 	tat    time.Time
 
-	// receipts are this process's interventions, newest first (actions.go).
+	// receipts are each session's interventions, newest first (actions.go).
 	receipts receiptLog
 }
 
@@ -188,6 +200,9 @@ func New(src Source, opts Options) (*Server, error) {
 	}
 	if strings.ContainsAny(opts.Host, ":/ ") {
 		return nil, fmt.Errorf("host %q must be a bare name, without a port or scheme", opts.Host)
+	}
+	if h := opts.SubjectHeader; h != "" && (strings.ContainsAny(h, ": \t") || http.CanonicalHeaderKey(h) == "Cookie") {
+		return nil, fmt.Errorf("subject header %q must be a header name, such as X-Forwarded-Access-Token", h)
 	}
 	in := SignIn{Login: secret(), Session: secret()}
 	if opts.SignIn != nil {
@@ -410,15 +425,51 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "not signed in, or signed in too long ago: open the sign-in URL open-conduit web url prints", http.StatusUnauthorized)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionKey{}, v.nonce)
+		if h := s.opts.SubjectHeader; h != "" {
+			// Behind a sign-in proxy, every call acts for the person it
+			// signed in. Without their credential there is no one to act
+			// for, and the view never falls back to its own.
+			token := strings.TrimSpace(r.Header.Get(h))
+			if strings.EqualFold(http.CanonicalHeaderKey(h), "Authorization") {
+				token = strings.TrimSpace(strings.TrimPrefix(token, "Bearer "))
+			}
+			if token == "" {
+				http.Error(w, "the sign-in proxy sent no credential for you in "+h+": this view acts only for the person signed in", http.StatusUnauthorized)
+				return
+			}
+			ctx = client.WithSubjectToken(ctx, token)
+		}
 		if now.Sub(v.seen) >= sessionRefresh {
 			// Seen again: the idle expiry starts over, the absolute one
 			// does not.
 			v.seen = now
 			s.setSession(w, v.encode(key))
 		}
-		next(w, r)
+		next(w, r.WithContext(ctx))
 	}
 }
+
+// sessionKey carries the signed-in session's nonce on a request's context.
+type sessionKey struct{}
+
+// sessionNonce is the nonce of the session r was signed in with, "" outside
+// authed.
+func sessionNonce(ctx context.Context) string {
+	n, _ := ctx.Value(sessionKey{}).(string)
+	return n
+}
+
+// formToken is the CSRF token of the session r was signed in with: the
+// process's secret bound to the session, so a token one person's page
+// shows never works for another's browser.
+func (s *Server) formToken(r *http.Request) string {
+	return sessionMAC(s.csrf, "form."+sessionNonce(r.Context()))
+}
+
+// shared reports whether what a call reads is the same for every browser,
+// so the view may cache it: not when it acts for each person signed in.
+func (s *Server) shared() bool { return s.opts.SubjectHeader == "" }
 
 // signOutEverywhere voids every session by changing the key that signs
 // them, keeping the new key for the next process too. The sign-in URL
@@ -457,7 +508,7 @@ func (s *Server) changed(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		if !same(r.PostFormValue("csrf"), s.csrf) {
+		if sessionNonce(r.Context()) == "" || !same(r.PostFormValue("csrf"), s.formToken(r)) {
 			http.Error(w, "stale or missing form token: reload the page", http.StatusForbidden)
 			return
 		}

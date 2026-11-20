@@ -296,6 +296,9 @@ func (s *Server) observeOperator(c *call, name, target, store string, err error)
 	at := s.o.Now()
 	trace := digest("operator", c.who.actor(), name, target, at.UTC().Format(time.RFC3339Nano))
 	attrs := map[string]string{"operator.actor": c.who.actor(), "operator.outcome": outcome, "record_id": trace}
+	if via := c.who.via(); via != "" {
+		attrs["operator.via"] = via
+	}
 	if target != "" {
 		attrs["operator.target"] = target
 	}

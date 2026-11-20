@@ -566,7 +566,7 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	cl, errs := s.closedFor(ctx, parseRunsQuery(q), wantClosed(q))
 	p.Err = strings.Join(slices.Concat(wd.Errs, errs), "\n")
-	d := runsView(wd, cl, q, p, s.opts.Now(), s.sourceLabel)
+	d := runsView(wd, cl, q, p, s.opts.Now(), s.labeler(ctx))
 	if d.Total == 0 && len(wd.Errs) == 0 {
 		if h, err := s.src.Health(ctx); err == nil {
 			g, _ := strconv.Atoi(h.ConfigGeneration)
@@ -633,6 +633,9 @@ const facetsTTL = 30 * time.Second
 // closedFacets is what closed Work can be filtered on, read at most
 // facetsTTL ago.
 func (s *Server) closedFacets(ctx context.Context) (client.WorkFacets, error) {
+	if !s.shared() {
+		return s.src.WorkFacets(ctx, url.Values{"state": {closedStates}})
+	}
 	s.fmu.Lock()
 	defer s.fmu.Unlock()
 	now := s.opts.Now()

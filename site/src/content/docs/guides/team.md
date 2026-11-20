@@ -150,7 +150,22 @@ The view marks its cookies `Secure` when a request arrives by its bare name, as 
 
 Once signed in to the proxy, a person opens the view's own sign-in URL once to start a session. `open-conduit web url --host conduit.example.com` prints its token; use it as `https://conduit.example.com/login?token=…`.
 
-**Everyone who uses the web view acts as you.** The view holds the owner's token, so whatever anyone does there is recorded as `operator:local`, with the `admin` role. The proxy decides who gets in, but not what they may do once inside. Give the view only to people you would trust with the server. Everyone else should use the CLI with their own credential, as in step 3.
+**By default, everyone who uses the web view acts as you.** The view holds the owner's token, so whatever anyone does there is recorded as `operator:local`, with the `admin` role. The proxy decides who gets in, but not what they may do once inside. Give such a view only to people you would trust with the server.
+
+### Or let each person act as themselves
+
+When your proxy signs people in with an identity provider the daemon trusts (see [step 3](#or-let-your-identity-provider-decide)), it can pass each person's own token to the view, and the view then acts for that person on every call. Everything they do is recorded as them (`operator:corp:<subject>`), through the view, and they may do only what their groups allow, and nothing the view's own credential doesn't. The view holds a credential of its own that may act for operators, not yours:
+
+```sh
+open-conduit auth add web-console --role admin --act-for operator --out ~/.config/open-conduit/web-console.token
+open-conduit service install --web --web-host conduit.example.com \
+  --web-subject-header X-Forwarded-Access-Token \
+  --web-token-file ~/.config/open-conduit/web-console.token
+```
+
+With oauth2-proxy, `--pass-access-token` sends the token in `X-Forwarded-Access-Token`; if your provider's access token isn't a JWT the `oidc` package can check, use `--pass-authorization-header` and `--web-subject-header Authorization` to send the ID token instead. Once the header is set, the view refuses any request that comes without it, rather than acting as itself, and the daemon refuses a token it can't verify. It reads nothing it caches for one person on behalf of another, and each browser's form token and list of recent changes are its own. The view's role (`admin` above) is the most anyone can do through it: someone in `platform-admins` through a view issued `--role operate` can't apply config.
+
+People still open the view's sign-in URL once, as above. A named operator can be acted for too: a frontend of your own, with a credential issued `--act-for operator`, sends `Open-Conduit-Subject: operator:alice` and acts with alice's role and grants. A frontend can also act for people of its own kind, who have no role: issued `--act-for acme-ui`, it sends `Open-Conduit-Subject: acme-ui:alice`, and alice may answer and approve (actions) but nothing else, so a `human` entry's `responders` can name `acme-ui:alice`. The [HTTP API reference](../../reference/http-api/#acting-for-someone) has the detail.
 
 ## 5. Runs on other machines
 

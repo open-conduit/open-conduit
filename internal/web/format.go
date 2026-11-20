@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -86,14 +87,36 @@ func titleOf(titles map[string]string, s string) string {
 	return s
 }
 
+// labeler gives sources' display names for one request, read under its
+// ctx. Shared by every browser, they come from sourceLabel's cache; acting
+// for each person, they are read once for the request and never kept.
+func (s *Server) labeler(ctx context.Context) func(string) string {
+	if s.shared() {
+		return func(name string) string { return s.sourceLabel(ctx, name) }
+	}
+	titles := sync.OnceValue(func() map[string]string {
+		ctx, cancel := context.WithTimeout(ctx, callTimeout)
+		defer cancel()
+		out := map[string]string{}
+		if ts, err := s.src.Extensions(ctx); err == nil {
+			for _, t := range ts {
+				out[t.Name] = t.Title
+			}
+		}
+		return out
+	})
+	return func(name string) string { return titleOf(titles(), name) }
+}
+
 // sourceLabel is the source's display name, from the extensions' titles,
-// cached briefly; a daemon too old to list them gives none.
-func (s *Server) sourceLabel(name string) string {
+// cached briefly; a daemon too old to list them gives none. The read is
+// under ctx but outlives its cancellation, since its result is kept.
+func (s *Server) sourceLabel(ctx context.Context, name string) string {
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	now := s.opts.Now()
 	if s.tat.IsZero() || now.Sub(s.tat) > worldTTL || now.Before(s.tat) {
-		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callTimeout)
 		defer cancel()
 		s.tcache = map[string]string{}
 		if ts, err := s.src.Extensions(ctx); err == nil {

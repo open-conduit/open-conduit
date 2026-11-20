@@ -13,7 +13,10 @@ import (
 // The rest of the fake Source: lists over the fake's Work, Events and
 // configuration, and the controls the redesign added.
 
-func (f *fake) Health(context.Context) (client.Health, error) {
+func (f *fake) Health(ctx context.Context) (client.Health, error) {
+	if _, token := client.SubjectFrom(ctx); token != "" {
+		f.record("as " + token)
+	}
 	if f.health != nil {
 		return *f.health, f.healthErr
 	}
@@ -126,7 +129,9 @@ func (f *fake) WorkConfigCandidate(_ context.Context, work string) (client.Confi
 	return *f.candidate, nil
 }
 func (f *fake) Pages(context.Context) ([]client.ExtensionPage, error) { return f.pages, nil }
-func (f *fake) Extensions(context.Context) ([]client.ExtensionTitle, error) {
+func (f *fake) Extensions(ctx context.Context) ([]client.ExtensionTitle, error) {
+	_, token := client.SubjectFrom(ctx)
+	f.record("extensions as " + token)
 	return f.titles, nil
 }
 func (f *fake) ApplyConfigText(_ context.Context, text []byte, hash, generation, _ string) (client.ConfigApplied, error) {

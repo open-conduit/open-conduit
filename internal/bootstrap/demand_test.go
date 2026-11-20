@@ -116,3 +116,20 @@ func TestFirstRunSetupWantedOnlyWithoutAConfigFile(t *testing.T) {
 		t.Fatalf("with a config file: %v", want)
 	}
 }
+
+// A package's name is reserved as a subject kind whether or not its process
+// is running: Host.Act vouches for that kind's people as the package, so a
+// client credential may never act for them (issue #687).
+func TestPackageNamesAreReservedRunningOrNot(t *testing.T) {
+	d := &daemon{}
+	d.external.catalogue = []*installed{{m: protocol.Manifest{Name: "slack"}}}
+	if d.runningRemote("slack") != nil {
+		t.Fatal("the catalogued package is running")
+	}
+	if !d.packageNamed("slack") {
+		t.Fatal("a catalogued package that isn't running is not reserved")
+	}
+	if d.packageNamed("acme-ui") {
+		t.Fatal("a kind no package has is reserved")
+	}
+}

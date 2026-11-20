@@ -203,15 +203,19 @@ func finishedArtifacts(s storage.Store) error {
 	return check("a later turn's after the Work's cancel", fenced.Revision+2, second, first)
 }
 
-// eventActor checks that an Event's Actor, part of its immutable envelope,
-// survives acceptance and every read, in the accepting transaction and after.
+// eventActor checks that an Event's Actor and the client it acted through
+// (Via), part of its immutable envelope, survive acceptance and every read,
+// in the accepting transaction and after.
 func eventActor(s storage.Store) error {
 	c := NewClock()
 	e := event("acted", c.Now())
-	e.Actor = "operator:alice"
+	e.Actor, e.Via = "operator:alice", "operator:acme-ui"
 	check := func(where string, got domain.AcceptedEvent) error {
 		if got.Event.Actor != e.Actor {
 			return fmt.Errorf("event actor lost %s: got %q, want %q", where, got.Event.Actor, e.Actor)
+		}
+		if got.Event.Via != e.Via {
+			return fmt.Errorf("event via lost %s: got %q, want %q", where, got.Event.Via, e.Via)
 		}
 		return nil
 	}

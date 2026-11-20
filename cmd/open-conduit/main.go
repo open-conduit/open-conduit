@@ -167,7 +167,7 @@ func serveWeb(r cli.WebRequest) error {
 		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost (%s):\n%s\n", urls[0], web.AddressWarning, urls[1])
 		return err
 	}
-	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.SignIn)}))
+	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.SignIn), SubjectHeader: r.SubjectHeader}))
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,13 @@ func webReady(ctx context.Context, r cli.ServeRequest) func() {
 }
 
 func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
-	token, err := client.ReadTokenFile(filepath.Join(r.StateDir, "private", "operator.token"))
+	// Acting for each person a sign-in proxy passes, the view holds its
+	// own credential, which may act for operators, not the owner's.
+	tokenFile := filepath.Join(r.StateDir, "private", "operator.token")
+	if r.WebTokenFile != "" {
+		tokenFile = r.WebTokenFile
+	}
+	token, err := client.ReadTokenFile(tokenFile)
 	if err != nil {
 		return err
 	}
@@ -215,7 +221,7 @@ func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
 	if err != nil {
 		return err
 	}
-	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.WebSignIn)}))
+	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.WebSignIn), SubjectHeader: r.WebSubjectHeader}))
 	if err != nil {
 		return err
 	}

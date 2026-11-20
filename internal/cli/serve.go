@@ -37,7 +37,10 @@ type ServeRequest struct {
 	NoTelemetry bool
 	// Web serves the web view from the daemon's process on WebAddr, named
 	// WebHost (the web command's defaults when empty), signed in through
-	// WebSignIn.
+	// WebSignIn. WebSubjectHeader makes it act for the person a sign-in
+	// proxy passes the credential of in that header, with the credential
+	// in WebTokenFile, which may act for operators, in place of the
+	// owner's (web.Options.SubjectHeader).
 	Web                         bool
 	WebAddr, WebHost, WebSignIn string
 	// ManagementAddr opens the management listener on a TCP address, with
@@ -46,6 +49,8 @@ type ServeRequest struct {
 	// proxy that terminates TLS. Off unless ManagementAddr is set.
 	ManagementAddr, ManagementTLSCert, ManagementTLSKey, ManagementClientCA string
 	ManagementTrustedProxy                                                  bool
+	WebSubjectHeader                                                        string
+	WebTokenFile                                                            string
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.
@@ -85,7 +90,7 @@ func (o *operator) serve(args []string) int {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -139,7 +144,11 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	}
 	// --web-addr or --web-host alone also turn the view on.
 	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
-	r.Web = *web || r.WebAddr != "" || r.WebHost != ""
+	r.WebSubjectHeader, r.WebTokenFile = fs.get("web-subject-header"), o.abs(fs.get("web-token-file"))
+	if (r.WebSubjectHeader == "") != (r.WebTokenFile == "") {
+		return ServeRequest{}, usageError(o.errOut, "--web-subject-header and --web-token-file go together: the view acts for the person the proxy passes, with a credential issued --act-for operator")
+	}
+	r.Web = *web || r.WebAddr != "" || r.WebHost != "" || r.WebSubjectHeader != ""
 	r.ManagementAddr, r.ManagementTrustedProxy = fs.get("management-addr"), *trustedProxy
 	r.ManagementTLSCert, r.ManagementTLSKey, r.ManagementClientCA = o.abs(fs.get("management-tls-cert")), o.abs(fs.get("management-tls-key")), o.abs(fs.get("management-client-ca"))
 	r.WebSignIn = WebSignInPath(r.StateDir)

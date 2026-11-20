@@ -68,12 +68,12 @@ func (s *Server) parse() error {
 		"until":       func(t time.Time) string { return until(t, now()) },
 		"at":          func(t time.Time) string { return clockTime(t, now()) },
 		"poolName":    poolName,
-		"source":      s.sourceLabel,
+		"source":      s.labeler(context.Background()),
 		"now":         now,
 		"pageHref":    pageHref,
 		"sessionHref": sessionHref,
 	}
-	for k, v := range s.actionFuncs() {
+	for k, v := range s.actionFuncs(context.Background()) {
 		funcs[k] = v
 	}
 	for k, f := range workFuncs {
@@ -90,18 +90,32 @@ func (s *Server) parse() error {
 	return nil
 }
 
+// template is the page's template for drawing r: a copy whose functions
+// that call the daemon do so under r's context, so they act for the person
+// r is for and stop with it. The parsed templates are only ever copied,
+// never executed (html/template copies only one that hasn't run).
+func (s *Server) template(name string, r *http.Request) *template.Template {
+	t, err := s.pages[name].Clone()
+	if err != nil {
+		panic("web: page template " + name + " executed: " + err.Error())
+	}
+	funcs := s.actionFuncs(r.Context())
+	funcs["source"] = s.labeler(r.Context())
+	return t.Funcs(funcs)
+}
+
 // render draws a page in the shell. The status line reads the daemon's
 // health and slots; when the daemon does not answer, the page is the
 // unreachable page with status 502.
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p *page, data any) {
-	p.CSRF, p.Back = s.csrf, r.URL.RequestURI()
+	p.CSRF, p.Back = s.formToken(r), r.URL.RequestURI()
 	p.Flash, p.FlashErr = takeFlash(w, r)
 	s.shell(r.Context(), p)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if p.Down {
 		w.WriteHeader(http.StatusBadGateway)
 	}
-	if err := s.pages[name].Execute(w, map[string]any{"Page": p, "Data": data}); err != nil {
+	if err := s.template(name, r).Execute(w, map[string]any{"Page": p, "Data": data}); err != nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 	}
 }

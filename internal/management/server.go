@@ -129,6 +129,11 @@ type Options struct {
 	// that type calls it (PUT /auth/issuers/{id}); a credential check
 	// never does, so an unauthenticated request can't start a process.
 	StartVerifier func(ctx context.Context, typ string)
+	// ExtensionKind reports whether an installed package acts for people
+	// of kind itself (Host.Act's caller kind is the package's name), so
+	// no client credential may be let act for that kind (optional: without
+	// it no kind is a package's).
+	ExtensionKind func(kind string) bool
 }
 
 type Server struct {
@@ -253,12 +258,48 @@ type principal struct {
 	// grants are the operator's roles at scopes, each covering its
 	// scope's subtree, beside its daemon-wide role (see Grant).
 	grants []Grant
+	// actFor is the kind of subject the credential may act for ("" for
+	// none; see subject.go).
+	actFor string
+	// kind is a subject's caller kind when it is not an operator (an
+	// acme-ui:alice the client vouches for); "" is an operator.
+	kind string
+	// subject is who the request acts for, when the client names one:
+	// what it does is recorded as the subject's, through the client, and
+	// is authorised as both. nil acts as the client itself.
+	subject *principal
 }
 
-// may reports whether the operator's daemon-wide role is at least role.
-func (p principal) may(role string) bool { return roleRank[p.role] >= roleRank[role] }
+// may reports whether the operator's daemon-wide role is at least role:
+// the client's own and, acting for an operator, that operator's too.
+func (p principal) may(role string) bool {
+	return p.ownMay(role) && (p.subject == nil || !p.subject.operator || p.subject.ownMay(role))
+}
+
+// ownMay reports whether p's own daemon-wide role, never a subject's, is
+// at least role.
+func (p principal) ownMay(role string) bool { return roleRank[p.role] >= roleRank[role] }
 
 func forbiddenRole(p principal, role string) error {
+	through := ""
+	if sub := p.subject; sub != nil && sub.operator && (!sub.ownMay(role) && p.ownMay(role) || !sub.ownMayAnywhere(role)) {
+		// The subject is what lacks the role: name it, and the client it
+		// came through.
+		p, through = *sub, " (acting through "+p.caller().String()+")"
+	}
+	return withThrough(forbiddenOwnRole(p, role), through)
+}
+
+// withThrough adds to a refusal's message the client a subject's request
+// came through.
+func withThrough(err error, through string) error {
+	if api, ok := err.(*apiError); ok && through != "" {
+		api.message += through
+	}
+	return err
+}
+
+func forbiddenOwnRole(p principal, role string) error {
 	if p.role == "" && len(p.grants) > 0 {
 		return fail(403, "forbidden_role", "operator "+p.name+" holds "+role+" only at the scopes it is granted, and this needs "+role+" daemon-wide or a grant of it")
 	}
@@ -268,12 +309,35 @@ func forbiddenRole(p principal, role string) error {
 	return fail(403, "forbidden_role", "operator "+p.name+" has role "+p.role+"; this needs "+role)
 }
 
-// actor is the operator as kind:id, as recorded on what it does.
-func (p principal) actor() string { return p.caller().String() }
+// actor is who the request acts as, kind:id, as recorded on what it does:
+// the subject the client names, else the operator itself.
+func (p principal) actor() string { return p.acting().caller().String() }
 
-// caller is the operator as an action caller.
+// via is the client a subject's request came through, kind:id, recorded
+// beside the actor; "" when the operator acts as itself.
+func (p principal) via() string {
+	if p.subject == nil {
+		return ""
+	}
+	return p.caller().String()
+}
+
+// acting is the subject the request acts for, else p.
+func (p principal) acting() principal {
+	if p.subject != nil {
+		return *p.subject
+	}
+	return p
+}
+
+// caller is p itself as an action caller (never its subject's: see
+// acting).
 func (p principal) caller() extension.Caller {
-	return extension.Caller{Kind: extension.CallerOperator, ID: p.name}
+	kind := p.kind
+	if kind == "" {
+		kind = extension.CallerOperator
+	}
+	return extension.Caller{Kind: kind, ID: p.name}
 }
 
 // keyPrefix namespaces the operator's Idempotency-Keys, which handlers
@@ -283,12 +347,20 @@ func (p principal) caller() extension.Caller {
 // subject's digest instead: fixed-length hex, so no subject and key can
 // make another's prefixed key, and the prefixed key stays within a
 // delivery ID's 256 characters.
+//
+// Acting for a subject, the prefix adds the subject's digest, so the same
+// key from two people through one client is two requests.
 func (p principal) keyPrefix() string {
-	if p.issuer == "" {
-		return p.actor()
+	prefix := p.caller().String()
+	if p.issuer != "" {
+		sum := sha256.Sum256([]byte(strings.TrimPrefix(p.name, p.issuer+":")))
+		prefix = extension.CallerOperator + ":" + p.issuer + ":" + hex.EncodeToString(sum[:])
 	}
-	sum := sha256.Sum256([]byte(strings.TrimPrefix(p.name, p.issuer+":")))
-	return extension.CallerOperator + ":" + p.issuer + ":" + hex.EncodeToString(sum[:])
+	if p.subject != nil {
+		sum := sha256.Sum256([]byte(p.subject.caller().String()))
+		prefix += "/for:" + hex.EncodeToString(sum[:16])
+	}
+	return prefix
 }
 
 // local is the owner's own credential, which keeps the request keys and
@@ -349,6 +421,24 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 	if !ok || token == "" || len(token) > maxBearer {
 		return principal{}, fail(401, "unauthenticated", "missing or invalid bearer token")
 	}
+	p, found, err := s.issuedOperator(ctx, token)
+	if err != nil || found {
+		return p, err
+	}
+	known, err := s.o.Toolbelt.Known(ctx, token)
+	if err != nil {
+		return principal{}, err
+	}
+	if known {
+		return principal{token: token}, nil
+	}
+	// Not a credential the host issued: a trusted issuer's, or none.
+	return s.verifyIssued(ctx, token)
+}
+
+// issuedOperator is the operator credential the host issued with token,
+// if it issued one: refused once it is revoked or expired.
+func (s *Server) issuedOperator(ctx context.Context, token string) (principal, bool, error) {
 	digest := runtime.TokenDigest(token)
 	var record operatorRecord
 	found := false
@@ -363,27 +453,16 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 		found = true
 		return json.Unmarshal(b, &record)
 	})
-	if err != nil {
-		return principal{}, err
+	if err != nil || !found {
+		return principal{}, false, err
 	}
-	if found {
-		if record.Revoked {
-			return principal{}, fail(401, "unauthenticated", "credential revoked")
-		}
-		if record.expired(s.o.Now()) {
-			return principal{}, fail(401, "unauthenticated", "credential expired")
-		}
-		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role(), grants: record.Grants}, nil
+	if record.Revoked {
+		return principal{}, true, fail(401, "unauthenticated", "credential revoked")
 	}
-	known, err := s.o.Toolbelt.Known(ctx, token)
-	if err != nil {
-		return principal{}, err
+	if record.expired(s.o.Now()) {
+		return principal{}, true, fail(401, "unauthenticated", "credential expired")
 	}
-	if known {
-		return principal{token: token}, nil
-	}
-	// Not a credential the host issued: a trusted issuer's, or none.
-	return s.verifyIssued(ctx, token)
+	return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role(), grants: record.Grants, actFor: record.ActFor}, true, nil
 }
 
 // maxBearer is the longest bearer credential the host reads: room for an
@@ -688,6 +767,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	if who.operator == (scopedExecution(ctx) != "") {
 		return fail(403, "wrong_credential_class", "credential class not permitted for this endpoint")
 	}
+	// A client acting for a subject is checked for the right to, and the
+	// route for being one a subject may take, before anything else: a
+	// subject's request never falls back to the client's own authority.
+	if who, err = s.actFor(ctx, r, who, matched); err != nil {
+		return err
+	}
 	// An operator's role is checked where the route is served, before
 	// anything is read or written: fail closed. One who holds it only at
 	// some scopes is checked against the route's target below, once the
@@ -703,9 +788,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return errLocalOnly(matched, params)
 	}
 	// Everything an operator does is recorded as theirs: the host stamps the
-	// credential's principal, never anything the request says.
+	// credential's principal, never anything the request says. Acting for a
+	// subject, it is the subject's, through the client: both checked above.
 	if who.operator {
 		ctx = runtime.WithActor(ctx, who.actor())
+		if via := who.via(); via != "" {
+			ctx = runtime.WithVia(ctx, via)
+		}
 	}
 	c := &call{ctx: ctx, r: r, w: w, who: who, params: params}
 	if matched.mutation {
@@ -738,8 +827,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 			return fail(400, "invalid_idempotency_key", "Idempotency-Key must be 1-128 printable ASCII characters")
 		}
 		// A named operator's keys are their own: the same key from two
-		// operators is two requests, never one replayed to the other.
-		if c.key != "" && who.operator && !who.local() {
+		// operators is two requests, never one replayed to the other. So
+		// are a subject's, through the owner's credential too.
+		if c.key != "" && who.operator && (!who.local() || who.subject != nil) {
 			c.key = who.keyPrefix() + "/" + c.key
 		}
 		if matched.idem {
@@ -788,9 +878,14 @@ func (s *Server) idempotent(c *call, rt *route) error {
 	}
 	sum := sha256.Sum256(canonical)
 	hash := hex.EncodeToString(sum[:])
+	// The slot is the client's and, acting for a subject, the subject's:
+	// one person's key never replays another's answer.
 	principalID := "operator"
-	if !c.who.local() {
-		principalID = c.who.actor()
+	if !c.who.local() || c.who.subject != nil {
+		principalID = c.who.caller().String()
+	}
+	if c.who.subject != nil {
+		principalID += "\x00for\x00" + c.who.subject.caller().String()
 	}
 	slot := hex.EncodeToString(func() []byte {
 		h := sha256.Sum256([]byte(principalID + "\x00" + c.r.Method + "\x00" + c.r.URL.Path + "\x00" + c.key))

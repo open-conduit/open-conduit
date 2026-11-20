@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,15 +26,17 @@ type invoked struct {
 }
 
 type fake struct {
-	runs    []client.Run
-	work    map[string]client.Work
-	waits   []client.Wait
-	actions map[string][]client.Action
-	panels  map[string][]client.Panel
-	scopes  []client.Scope
-	config  *client.Config
-	live    map[string]client.LiveRun
-	content map[string]string
+	// recordScopes records every scope list, with the subject it was for.
+	recordScopes bool
+	runs         []client.Run
+	work         map[string]client.Work
+	waits        []client.Wait
+	actions      map[string][]client.Action
+	panels       map[string][]client.Panel
+	scopes       []client.Scope
+	config       *client.Config
+	live         map[string]client.LiveRun
+	content      map[string]string
 
 	events  []client.Event
 	health  *client.Health
@@ -133,7 +136,10 @@ func (f *fake) WorkRuntime(_ context.Context, id string) (client.Work, error) {
 func (f *fake) Waits(context.Context, url.Values) (client.Page[client.Wait], error) {
 	return client.Page[client.Wait]{Items: f.waits}, nil
 }
-func (f *fake) Scopes(context.Context, url.Values) (client.Page[client.Scope], error) {
+func (f *fake) Scopes(ctx context.Context, _ url.Values) (client.Page[client.Scope], error) {
+	if _, token := client.SubjectFrom(ctx); token != "" || f.recordScopes {
+		f.record("scopes as " + token)
+	}
 	return client.Page[client.Scope]{Items: f.scopes}, nil
 }
 func (f *fake) Config(context.Context) (client.Config, error) {
@@ -245,7 +251,15 @@ func do(h http.Handler, method, target string, form url.Values, signedIn *Server
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if signedIn != nil {
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: signedIn.newSession()})
+		session := testSession(signedIn)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
+		if form != nil && form.Get("csrf") == signedIn.csrf {
+			// A test's form carries the process's secret: post it as the
+			// token this session's pages show.
+			form.Set("csrf", signedIn.sessionToken(session))
+			req.Body = io.NopCloser(strings.NewReader(form.Encode()))
+			req.ContentLength = int64(len(form.Encode()))
+		}
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -333,7 +347,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	if w := do(h, "POST", "/actions", form, s); w.Code != http.StatusForbidden {
 		t.Fatalf("no csrf: %d", w.Code)
 	}
-	form.Set("csrf", s.csrf)
+	form.Set("csrf", s.sessionToken(testSession(s)))
 	if w := do(h, "POST", "/actions", form, nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("not signed in: %d", w.Code)
 	}
@@ -341,7 +355,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	req.Host = "open-conduit.localhost:7420"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://attacker.example")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || len(f.invoked) != 0 {
@@ -353,7 +367,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	req.Host = "open-conduit.localhost:7420"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://open-conduit.localhost:7420")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
@@ -366,7 +380,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	req.Host = "open-conduit.localhost"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://open-conduit.localhost")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
@@ -384,7 +398,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	// The outcome shows once on the page it returns to.
 	req = httptest.NewRequest("GET", "/work?id=wrk_1", nil)
 	req.Host = "open-conduit.localhost:7420"
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 	for _, c := range w.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -415,7 +429,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 		req.Host = "open-conduit.localhost:7420"
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Origin", "http://attacker.example")
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
@@ -510,3 +524,119 @@ type cookieJar struct{ cookies []*http.Cookie }
 
 func (j *cookieJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.cookies = append(j.cookies, cs...) }
 func (j *cookieJar) Cookies(*url.URL) []*http.Cookie          { return j.cookies }
+
+// sessionToken is the form token the pages of the session cookie value
+// signs show.
+func (s *Server) sessionToken(cookie string) string {
+	v, ok := decodeSession(s.sess, cookie, s.opts.Now())
+	if !ok {
+		panic("undecodable test session")
+	}
+	return sessionMAC(s.csrf, "form."+v.nonce)
+}
+
+// testSessions are each test Server's one browser session, so a test's
+// requests are one person's, as a browser's are.
+var testSessions sync.Map
+
+// testSession is s's test browser's session cookie value.
+func testSession(s *Server) string {
+	v, _ := testSessions.LoadOrStore(s, s.newSession())
+	return v.(string)
+}
+
+// testNonce is the nonce of s's test browser's session.
+func testNonce(s *Server) string {
+	v, _ := decodeSession(s.sess, testSession(s), s.opts.Now())
+	return v.nonce
+}
+
+// TestActsForTheSignedInPerson: behind a sign-in proxy that passes each
+// person's credential, every call acts for that person, a request without
+// one is refused rather than served as the view, and the view caches no
+// one's reads for another.
+func TestActsForTheSignedInPerson(t *testing.T) {
+	if _, err := New(newFake(), Options{Addr: addr, SubjectHeader: "X-Token: x"}); err == nil {
+		t.Fatal("a subject header that isn't a header name was accepted")
+	}
+	f := newFake()
+	f.recordScopes = true
+	s, err := New(f, Options{Addr: addr, SubjectHeader: "X-Forwarded-Access-Token", Now: func() time.Time { return time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler(addr)
+	as := func(token string, target ...string) *httptest.ResponseRecorder {
+		path := "/"
+		if len(target) > 0 {
+			path = target[0]
+		}
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "open-conduit.localhost:7420"
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: testSession(s)})
+		if token != "" {
+			req.Header.Set("X-Forwarded-Access-Token", token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if w := as(""); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "X-Forwarded-Access-Token") {
+		t.Fatalf("no credential from the proxy: %d %s", w.Code, w.Body)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("called the daemon for no one: %v", f.calls)
+	}
+	for _, token := range []string{"tok-alice", "tok-bob"} {
+		f.calls = nil
+		if w := as(token); w.Code != http.StatusOK {
+			t.Fatalf("%s: %d", token, w.Code)
+		}
+		// The Work page's controls read the scope's bindings, and the
+		// runs page labels sources, both as the person.
+		if w := as(token, "/work?id=wrk_1"); w.Code != http.StatusOK {
+			t.Fatalf("%s's Work page: %d", token, w.Code)
+		}
+		if !slices.Contains(f.calls, "scopes as "+token) {
+			t.Fatalf("%s's Work page never read the scope's bindings as them: %v", token, f.calls)
+		}
+		works := 0
+		for _, c := range f.calls {
+			if strings.HasPrefix(c, "as ") && c != "as "+token {
+				t.Fatalf("%s's page called as %s", token, c)
+			}
+			if strings.HasPrefix(c, "works") {
+				works++
+			}
+		}
+		for _, c := range f.calls {
+			if (strings.HasPrefix(c, "extensions as") || strings.HasPrefix(c, "scopes as")) && !strings.HasSuffix(c, " as "+token) {
+				t.Fatalf("%s's page read the extensions as %q", token, c)
+			}
+		}
+		if !slices.Contains(f.calls, "extensions as "+token) {
+			t.Fatalf("%s's page never labelled a source as them: %v", token, f.calls)
+		}
+		if !slices.Contains(f.calls, "as "+token) || works == 0 {
+			t.Fatalf("%s's page: %v", token, f.calls)
+		}
+	}
+	// What one person read is never what another is shown.
+	f.calls = nil
+	for _, token := range []string{"tok-alice", "tok-bob"} {
+		ctx := client.WithSubjectToken(context.Background(), token)
+		s.cachedWorld(ctx, false)
+		if _, err := s.closedFacets(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reads := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "works") || strings.HasPrefix(c, "facets") {
+			reads++
+		}
+	}
+	if reads < 4 {
+		t.Fatalf("a cached read served another person: %v", f.calls)
+	}
+}

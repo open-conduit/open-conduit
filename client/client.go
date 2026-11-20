@@ -95,6 +95,9 @@ type Event struct {
 	// Actor is who caused the Event, as kind:id ("operator:alice"), when
 	// the host knows.
 	Actor string `json:"actor,omitempty"`
+	// Via is the client the Actor acted through ("operator:acme-ui"),
+	// when a client credential acted for the Actor.
+	Via string `json:"via,omitempty"`
 	// Route is present on a list asked for it (EventsWithRoutes).
 	Route *EventRoute `json:"route,omitempty"`
 }
@@ -479,6 +482,56 @@ func ReadTokenFile(path string) (TokenFile, error) {
 	return f, nil
 }
 
+// SubjectHeader and SubjectTokenHeader name the subject a request acts
+// for: kind:id, or the subject's own operator credential.
+const (
+	SubjectHeader      = "Open-Conduit-Subject"
+	SubjectTokenHeader = "Open-Conduit-Subject-Token"
+)
+
+type subjectKey struct{}
+
+type actingFor struct{ name, token string }
+
+// WithSubject returns ctx under which every request this client makes acts
+// for subject, kind:id ("acme-ui:alice", "operator:alice"), rather than
+// as the client's own credential. The daemon refuses it unless the
+// credential may act for that kind (auth add --act-for), records the
+// subject as the actor and the credential as what it came through, and
+// authorises the request as both. A subject of the credential's own kind
+// may only invoke actions.
+func WithSubject(ctx context.Context, subject string) context.Context {
+	return context.WithValue(ctx, subjectKey{}, actingFor{name: subject})
+}
+
+// WithSubjectToken is WithSubject for a subject named by its own operator
+// credential (an identity provider's token, say): the subject is whoever
+// the daemon verifies it as. The credential needs --act-for operator.
+func WithSubjectToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, subjectKey{}, actingFor{token: token})
+}
+
+// SubjectFrom is the subject WithSubject or WithSubjectToken put on ctx:
+// its name or its credential, both empty when ctx acts as the client.
+func SubjectFrom(ctx context.Context) (name, token string) {
+	s, _ := ctx.Value(subjectKey{}).(actingFor)
+	return s.name, s.token
+}
+
+// authorize sets req's bearer credential, and the subject its context
+// acts for, if any.
+func authorize(req *http.Request, token string) {
+	req.Header.Set("Authorization", "Bearer "+token)
+	if s, ok := req.Context().Value(subjectKey{}).(actingFor); ok {
+		if s.name != "" {
+			req.Header.Set(SubjectHeader, s.name)
+		}
+		if s.token != "" {
+			req.Header.Set(SubjectTokenHeader, s.token)
+		}
+	}
+}
+
 // Do performs one request and decodes the data envelope into out.
 func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body any, idempotencyKey string, out any) error {
 	return c.do(ctx, method, path, query, body, idempotencyKey, nil, out)
@@ -503,7 +556,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	for k, v := range header {
 		req.Header[k] = v
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	authorize(req, c.token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -759,7 +812,7 @@ func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	authorize(req, c.token)
 	if byteRange != "" {
 		req.Header.Set("Range", byteRange)
 	}
@@ -1305,10 +1358,13 @@ type Operator struct {
 	// Grants.
 	Role string `json:"role"`
 	// Grants are its roles at scopes, each covering the scope's subtree.
-	Grants    []Grant `json:"grants,omitempty"`
-	TokenID   string  `json:"token_id"`
-	CreatedAt string  `json:"created_at"`
-	RevokedAt string  `json:"revoked_at,omitempty"`
+	Grants []Grant `json:"grants,omitempty"`
+	// ActFor is the kind of subject the credential may act for, empty for
+	// none.
+	ActFor    string `json:"act_for,omitempty"`
+	TokenID   string `json:"token_id"`
+	CreatedAt string `json:"created_at"`
+	RevokedAt string `json:"revoked_at,omitempty"`
 	// ExpiresAt is when an expiring credential stops authenticating;
 	// empty never expires.
 	ExpiresAt string `json:"expires_at,omitempty"`
@@ -1353,6 +1409,9 @@ type OperatorRequest struct {
 	Role   string  `json:"role,omitempty"`
 	Grants []Grant `json:"grants,omitempty"`
 	TTL    string  `json:"ttl,omitempty"`
+	// ActFor lets the credential act for subjects of this one kind
+	// (WithSubject); "operator" trusts it to assert operator identities.
+	ActFor string `json:"act_for,omitempty"`
 }
 
 // IssueOperator issues the credential req describes, returned once.

@@ -1202,7 +1202,7 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		}
 		// The replacement keeps the caller's expiry: rotating never
 		// extends how long a credential lasts.
-		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ExpiresAt)
+		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ActFor, r.ExpiresAt)
 		return err
 	})
 	if err != nil {
@@ -1277,12 +1277,15 @@ type wireOperator struct {
 	Name string `json:"name"`
 	// Role is the daemon-wide role, "" for an operator that holds only
 	// grants.
-	Role      string  `json:"role"`
-	Grants    []Grant `json:"grants"`
-	TokenID   string  `json:"token_id"`
-	CreatedAt string  `json:"created_at"`
-	RevokedAt string  `json:"revoked_at,omitempty"`
-	ExpiresAt string  `json:"expires_at,omitempty"`
+	Role   string  `json:"role"`
+	Grants []Grant `json:"grants"`
+	// ActFor is the kind of subject the credential may act for, "" for
+	// none.
+	ActFor    string `json:"act_for,omitempty"`
+	TokenID   string `json:"token_id"`
+	CreatedAt string `json:"created_at"`
+	RevokedAt string `json:"revoked_at,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 // listOperators is GET /auth/operators: every operator credential, active or
@@ -1299,7 +1302,7 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 			if err = json.Unmarshal(row.Value, &r); err != nil {
 				return err
 			}
-			o := wireOperator{Name: r.name(), Role: r.role(), Grants: readGrants(r.Grants), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
+			o := wireOperator{Name: r.name(), Role: r.role(), Grants: readGrants(r.Grants), ActFor: r.ActFor, TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
 			if r.Revoked {
 				o.RevokedAt = ts(r.RevokedAt)
 			}
@@ -1333,16 +1336,23 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 // its Idempotency-Keys, which are the operator's, not the session's.
 // grants give the operator view or operate at scopes, each covering the
 // scope's subtree; with grants, role (the daemon-wide one) may be left
-// out, and the operator then holds nothing beyond its grants.
+// out, and the operator then holds nothing beyond its grants. act_for
+// lets the credential act for subjects of that one kind (see subject.go).
 func (s *Server) addOperator(c *call) (int, any, error) {
 	var in struct {
 		Name   string  `json:"name"`
 		Role   string  `json:"role"`
 		Grants []Grant `json:"grants"`
+		ActFor string  `json:"act_for"`
 		TTL    string  `json:"ttl"`
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
+	}
+	if in.ActFor != "" {
+		if err := s.checkActFor(in.ActFor); err != nil {
+			return 0, nil, err
+		}
 	}
 	if !ValidRole(in.Role) && (in.Role != "" || len(in.Grants) == 0) {
 		return 0, nil, fail(400, "malformed", "role must be admin, operate or view, or left out when grants are given")
@@ -1383,7 +1393,7 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 			}
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, expires)
+		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, in.ActFor, expires)
 		return err
 	})
 	if err != nil {
@@ -1391,6 +1401,9 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 	}
 	c.w.Header().Set("Cache-Control", "no-store")
 	out := map[string]any{"name": in.Name, "role": in.Role, "grants": readGrants(in.Grants), "token_id": file.TokenID, "token": file.Token}
+	if in.ActFor != "" {
+		out["act_for"] = in.ActFor
+	}
 	if !expires.IsZero() {
 		out["expires_at"] = ts(expires)
 	}

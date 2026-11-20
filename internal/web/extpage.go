@@ -446,15 +446,23 @@ type navPage struct{ ID, Title, Href string }
 // navPages are the extension pages for the navigation, cached briefly:
 // every page draws them.
 func (s *Server) navPages(ctx context.Context) []navPage {
+	read := func() []navPage {
+		var out []navPage
+		for _, p := range s.extensionPages(ctx) {
+			out = append(out, navPage{ID: p.ID, Title: p.Title, Href: pageHref(p.ID)})
+		}
+		return out
+	}
+	// Acting for each person, each reads their own, without the lock, so
+	// no one's page waits on another's call.
+	if !s.shared() {
+		return read()
+	}
 	s.pmu.Lock()
 	defer s.pmu.Unlock()
 	now := s.opts.Now()
 	if s.pat.IsZero() || now.Sub(s.pat) > worldTTL || now.Before(s.pat) {
-		s.pcache = nil
-		for _, p := range s.extensionPages(ctx) {
-			s.pcache = append(s.pcache, navPage{ID: p.ID, Title: p.Title, Href: pageHref(p.ID)})
-		}
-		s.pat = now
+		s.pcache, s.pat = read(), now
 	}
 	return s.pcache
 }

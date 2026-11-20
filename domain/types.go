@@ -90,6 +90,11 @@ type Event struct {
 	// credential for core.manual Events and from the caller for
 	// core.action Events, never from the request. Empty otherwise.
 	Actor string `json:",omitempty"`
+	// Via is the client the Actor acted through, as kind:id
+	// ("operator:acme-ui"), when a client credential acted for the Actor
+	// (a person signed in to it), which the host checked it may. Empty
+	// when the Actor acted for itself, and whenever Actor is.
+	Via string `json:",omitempty"`
 }
 
 // AcceptedEvent adds storage metadata without changing the immutable envelope.

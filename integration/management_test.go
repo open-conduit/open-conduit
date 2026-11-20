@@ -90,6 +90,9 @@ type managementHarness struct {
 	// verifiers are the credential verifier types trusted issuers name,
 	// as the running packages' declared verifiers are.
 	verifiers map[string]management.Verifier
+	// packages are the installed packages' names, which act for their own
+	// kind of people (Host.Act), so no client credential may.
+	packages map[string]bool
 }
 
 // upstreamFunc is a function as an http.RoundTripper.
@@ -219,7 +222,8 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 			v, ok := h.verifiers[typ]
 			return v, ok
 		},
-		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		Actions:       func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		ExtensionKind: func(kind string) bool { return h.packages[kind] },
 		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
 			if h.attach == nil {
 				return management.AttachSpec{}, management.ErrAttachUnsupported
