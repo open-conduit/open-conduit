@@ -237,14 +237,6 @@ export const ConfigureParams = t.object(
 );
 export type ConfigureParams = Infer<typeof ConfigureParams>;
 
-export const ConfigureResult = t.object(
-  {
-    kv_version: t.integer(),
-  },
-  open,
-);
-export type ConfigureResult = Infer<typeof ConfigureResult>;
-
 export const ValidateParams = t.object(
   {
     kind: t.string(),
@@ -513,6 +505,396 @@ export const ArtifactRef = t.object(
 );
 export type ArtifactRef = Infer<typeof ArtifactRef>;
 
+// Ingress: sources, deliveries, push and reconcile (protocol.Source and on).
+
+/** A source's namespace (its correlation keys' source) in a scope. */
+export const Source = t.object(
+  {
+    namespace: t.string(),
+    scope_id: t.string(),
+  },
+  open,
+);
+export type Source = Infer<typeof Source>;
+
+/** One delivery of a push (a webhook's body); body is base64. */
+export const Delivery = t.object(
+  {
+    id: t.string(),
+    received_at: t.string(),
+    content_type: t.optional(t.string()),
+    body: t.optional(t.string()),
+  },
+  open,
+);
+export type Delivery = Infer<typeof Delivery>;
+
+export const EventFamily = t.object(
+  {
+    type: t.string(),
+    re_derivable: t.boolean(),
+    loss: t.optional(t.string()),
+  },
+  open,
+);
+export type EventFamily = Infer<typeof EventFamily>;
+
+/** What a source holds of one object now: its ID, version and the Event it maps to. */
+export const Observation = t.object(
+  {
+    id: t.string(),
+    version: t.string(),
+    event: Event,
+  },
+  open,
+);
+export type Observation = Infer<typeof Observation>;
+
+export const PushResult = t.object(
+  {
+    observations: t.optional(t.array(Observation)),
+    // Only for families declared not re-derivable.
+    events: t.optional(t.array(Event)),
+  },
+  open,
+);
+export type PushResult = Infer<typeof PushResult>;
+
+export const Scan = t.object(
+  {
+    source: Source,
+    scan_id: t.optional(t.string()),
+    cursor: t.optional(t.string()),
+    checkpoint: t.optional(t.string()),
+  },
+  open,
+);
+export type Scan = Infer<typeof Scan>;
+
+/**
+ * One page of a reconcile. complete certifies the scan covered the whole
+ * source across its pages; false with no next_cursor is a partial scan,
+ * never proof that anything is gone.
+ */
+export const Snapshot = t.object(
+  {
+    scan_id: t.string(),
+    observations: t.optional(t.array(Observation)),
+    next_cursor: t.optional(t.string()),
+    complete: t.boolean(),
+    checkpoint: t.optional(t.string()),
+  },
+  open,
+);
+export type Snapshot = Infer<typeof Snapshot>;
+
+/** A source an entry registers at configure. */
+export const SourceDecl = t.object(
+  {
+    name: t.string(),
+    source: Source,
+    interval_seconds: t.integer(),
+    families: t.array(EventFamily),
+  },
+  open,
+);
+export type SourceDecl = Infer<typeof SourceDecl>;
+
+export const ConfigureResult = t.object(
+  {
+    sources: t.optional(t.array(SourceDecl)),
+    // Each under /<name>/; a path covers the paths beneath it.
+    webhook_paths: t.optional(t.array(t.string())),
+    kv_version: t.integer(),
+  },
+  open,
+);
+export type ConfigureResult = Infer<typeof ConfigureResult>;
+
+export const IngressPushParams = t.object(
+  {
+    name: t.string(),
+    source: Source,
+    delivery: Delivery,
+  },
+  open,
+);
+export type IngressPushParams = Infer<typeof IngressPushParams>;
+
+export const IngressReconcileParams = t.object(
+  {
+    name: t.string(),
+    scan: Scan,
+  },
+  open,
+);
+export type IngressReconcileParams = Infer<typeof IngressReconcileParams>;
+
+export const IngressDeliverParams = t.object(
+  {
+    name: t.string(),
+    delivery: Delivery,
+  },
+  open,
+);
+export type IngressDeliverParams = Infer<typeof IngressDeliverParams>;
+
+/** A delivery's accepted Events; added[i] is false for one already accepted (a retry). */
+export const IngressDeliverResult = t.object(
+  {
+    accepted: t.nullable(t.array(AcceptedEvent)),
+    added: t.nullable(t.array(t.boolean())),
+  },
+  open,
+);
+export type IngressDeliverResult = Infer<typeof IngressDeliverResult>;
+
+/** One HTTP request on a webhook path the extension registered; body is base64. */
+export const WebhookHandleParams = t.object(
+  {
+    path: t.string(),
+    method: t.string(),
+    query: t.optional(t.string()),
+    header: t.optional(t.record(t.array(t.string()))),
+    body: t.optional(t.string()),
+    received_at: t.string(),
+    forward_id: t.optional(t.string()),
+  },
+  open,
+);
+export type WebhookHandleParams = Infer<typeof WebhookHandleParams>;
+
+export const WebhookHandleResult = t.object(
+  {
+    status: t.integer(),
+    header: t.optional(t.record(t.array(t.string()))),
+    body: t.optional(t.string()),
+  },
+  open,
+);
+export type WebhookHandleResult = Infer<typeof WebhookHandleResult>;
+
+// Routing.
+
+export const Route = t.object(
+  {
+    name: t.string(),
+    handler: t.string(),
+    binding: t.string(),
+    active_policy: t.optional(t.string()),
+    config: Payload,
+  },
+  open,
+);
+export type Route = Infer<typeof Route>;
+
+/** A scope as an extension sees it: never its secret references. */
+export const Scope = t.object(
+  {
+    id: t.string(),
+    name: t.string(),
+    parent_id: t.optional(t.string()),
+    bindings: t.optional(t.array(t.any())),
+    routes: t.optional(t.array(Route)),
+    config: Payload,
+    revision: t.integer(),
+    created_at: t.string(),
+    updated_at: t.string(),
+  },
+  open,
+);
+export type Scope = Infer<typeof Scope>;
+
+export const RouteInput = t.object(
+  {
+    event: AcceptedEvent,
+    scope: Scope,
+    work: t.optional(Work),
+    route: Route,
+  },
+  open,
+);
+export type RouteInput = Infer<typeof RouteInput>;
+
+/**
+ * A route's answer for one Event. On a match with no work, create_id and
+ * kind open new Work; attach_keys add correlation keys to it; display
+ * replaces what the Work shows. deliver is absent to queue the Event on
+ * the route's binding, "none" to only attach, "current" to queue it on the
+ * binding the Work runs on.
+ */
+export const RouteDecision = t.object(
+  {
+    match: t.boolean(),
+    create_id: t.optional(t.string()),
+    kind: t.optional(t.string()),
+    attach_keys: t.optional(t.array(Key)),
+    reason: t.optional(t.string()),
+    display: t.optional(Display),
+    context: t.optional(Payload),
+    grants: t.optional(t.array(t.string())),
+    successor: t.optional(t.boolean()),
+    deliver: t.optional(t.string()),
+  },
+  open,
+);
+export type RouteDecision = Infer<typeof RouteDecision>;
+
+/** A sample Event a route handler offers for a route trace (routes.decisions). */
+export const RouteSample = t.object(
+  {
+    id: t.string(),
+    title: t.string(),
+    event: Event,
+  },
+  open,
+);
+export type RouteSample = Infer<typeof RouteSample>;
+
+export const RouteMatchParams = t.object(
+  {
+    handler: t.string(),
+    input: RouteInput,
+  },
+  open,
+);
+export type RouteMatchParams = Infer<typeof RouteMatchParams>;
+
+export const RouteSamplesParams = t.object(
+  {
+    handler: t.string(),
+    scope: Scope,
+    route: Route,
+    now: t.string(),
+  },
+  open,
+);
+export type RouteSamplesParams = Infer<typeof RouteSamplesParams>;
+
+export const RouteSamplesResult = t.object(
+  {
+    samples: t.array(RouteSample),
+  },
+  open,
+);
+export type RouteSamplesResult = Infer<typeof RouteSamplesResult>;
+
+export const WorkKindTriggerParams = t.object(
+  {
+    kind: t.string(),
+    inputs: t.nullable(t.array(Event)),
+  },
+  open,
+);
+export type WorkKindTriggerParams = Infer<typeof WorkKindTriggerParams>;
+
+export const WorkKindTriggerResult = t.object(
+  {
+    index: t.integer(),
+  },
+  open,
+);
+export type WorkKindTriggerResult = Infer<typeof WorkKindTriggerResult>;
+
+// Wait and emit operations.
+
+/**
+ * What a wait suspends the Work until: an Event of one of types (any, when
+ * empty) on one of keys (every key the Work owns, when empty), or timeout.
+ */
+export const WaitRequest = t.object(
+  {
+    keys: t.optional(t.array(Key)),
+    types: t.optional(t.array(t.string())),
+    timeout: t.optional(t.string()),
+    after_sequence: t.optional(t.integer()),
+    description: t.optional(t.string()),
+  },
+  open,
+);
+export type WaitRequest = Infer<typeof WaitRequest>;
+
+/**
+ * A subscription to Events on another key (another Work's, or one no Work
+ * owns yet), aliased into the waiting Work as alias_type Events.
+ */
+export const Dependency = t.object(
+  {
+    id: t.string(),
+    source_scope_id: t.optional(t.string()),
+    source_key: Key,
+    types: t.optional(t.array(t.string())),
+    alias_type: t.string(),
+    filter: Payload,
+    label: t.optional(t.string()),
+    from_now: t.optional(t.boolean()),
+  },
+  open,
+);
+export type Dependency = Infer<typeof Dependency>;
+
+export const WaitPlan = t.object(
+  {
+    wait: WaitRequest,
+    dependencies: t.optional(t.array(Dependency)),
+    output: Payload,
+  },
+  open,
+);
+export type WaitPlan = Infer<typeof WaitPlan>;
+
+export const EmitPlan = t.object(
+  {
+    event: Event,
+    cause: t.optional(t.string()),
+    once: t.optional(t.string()),
+    commit_id: t.optional(t.string()),
+  },
+  open,
+);
+export type EmitPlan = Infer<typeof EmitPlan>;
+
+/** The Event an emission accepted, as its commit receives it. */
+export const Emitted = t.object(
+  {
+    event: AcceptedEvent,
+    added: t.boolean(),
+    root: t.string(),
+    depth: t.integer(),
+  },
+  open,
+);
+export type Emitted = Infer<typeof Emitted>;
+
+/** A KV write an emission's commit makes; value is base64. */
+export const EmitRecord = t.object(
+  {
+    namespace: t.string(),
+    key: t.string(),
+    value: t.string(),
+  },
+  open,
+);
+export type EmitRecord = Infer<typeof EmitRecord>;
+
+export const EmitCommit = t.object(
+  {
+    records: t.optional(t.array(EmitRecord)),
+    output: Payload,
+  },
+  open,
+);
+export type EmitCommit = Infer<typeof EmitCommit>;
+
+export const EmitCommitParams = t.object(
+  {
+    commit_id: t.string(),
+    emitted: Emitted,
+  },
+  open,
+);
+export type EmitCommitParams = Infer<typeof EmitCommitParams>;
+
 // The manifest (open-conduit-extension.json): the fields this SDK writes.
 
 export const Family = t.object(
@@ -531,6 +913,8 @@ export type Family = Infer<typeof Family>;
 export const ExtensionDecl = t.object(
   {
     type: t.string(),
+    // The entry registers ingress sources at configure.
+    ingress: t.optional(t.boolean()),
   },
   open,
 );
@@ -550,6 +934,30 @@ export const OperationDecl = t.object(
   open,
 );
 export type OperationDecl = Infer<typeof OperationDecl>;
+
+export const RouteDecl = t.object(
+  {
+    handler: t.string(),
+    // Its routes carry config, checked through validate with kind route.
+    config: t.optional(t.boolean()),
+    // It offers sample Events for a route trace through route.samples.
+    samples: t.optional(t.boolean()),
+  },
+  open,
+);
+export type RouteDecl = Infer<typeof RouteDecl>;
+
+export const WorkKindDecl = t.object(
+  {
+    kind: t.string(),
+    standing: t.optional(t.boolean()),
+    trigger: t.optional(t.boolean()),
+    timed: t.optional(t.boolean()),
+    run_once: t.optional(t.boolean()),
+  },
+  open,
+);
+export type WorkKindDecl = Infer<typeof WorkKindDecl>;
 
 export const ToolsetOperation = t.object(
   {
@@ -596,9 +1004,13 @@ export const Provides = t.object(
   {
     extensions: t.optional(t.array(ExtensionDecl)),
     families: t.optional(t.array(Family)),
+    routes: t.optional(t.array(RouteDecl)),
+    work_kinds: t.optional(t.array(WorkKindDecl)),
     operations: t.optional(t.array(OperationDecl)),
     toolsets: t.optional(t.array(ToolsetDecl)),
     tasks: t.optional(t.array(TaskDecl)),
+    webhooks: t.optional(t.boolean()),
+    webhook_max_bytes: t.optional(t.integer()),
     checks: t.optional(t.array(CheckDecl)),
   },
   open,

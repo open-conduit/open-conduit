@@ -12,6 +12,7 @@ import {
   ArtifactRef,
   type Event,
   EventAcceptResult,
+  IngressDeliverResult,
   type KVCheck,
   type KVDelete,
   KVGetResult,
@@ -71,6 +72,16 @@ export interface Batch {
   checks?: KVCheck[];
   puts?: Put[];
   deletes?: KVDelete[];
+}
+
+/** A delivery to push to a source: a webhook's body, say. */
+export interface DeliveryInput {
+  /** The sender's delivery ID: a retry carries the same one. */
+  id: string;
+  /** When it was received (default now). */
+  receivedAt?: string;
+  contentType?: string;
+  body?: Value;
 }
 
 /** One Event derived from parent, committed atomically with the batch. */
@@ -196,6 +207,38 @@ export class Host {
       EventAcceptResult,
       signal,
     );
+  }
+
+  /**
+   * Hands a delivery (a verified webhook's body) to the source registered
+   * as name. The host calls the source's push with it and answers once its
+   * Events are durably accepted: added[i] is false for an Event it already
+   * had, such as a sender's retry.
+   */
+  async deliver(
+    name: string,
+    delivery: DeliveryInput,
+    signal?: AbortSignal,
+  ): Promise<{ accepted: AcceptedEvent[]; added: boolean[] }> {
+    const out = await this.call(
+      "ingress.deliver",
+      {
+        name,
+        delivery: {
+          id: delivery.id,
+          received_at: delivery.receivedAt ?? new Date().toISOString(),
+          ...(delivery.contentType
+            ? { content_type: delivery.contentType }
+            : {}),
+          ...(delivery.body === undefined
+            ? {}
+            : { body: base64(toBytes(delivery.body)) }),
+        },
+      },
+      IngressDeliverResult,
+      signal,
+    );
+    return { accepted: out.accepted ?? [], added: out.added ?? [] };
   }
 
   /** Accepted Events of the configured scopes after a sequence. */
@@ -435,11 +478,11 @@ function batchFields(b: Batch): {
   };
 }
 
-function toBytes(v: Value): Uint8Array {
+export function toBytes(v: Value): Uint8Array {
   return typeof v === "string" ? new TextEncoder().encode(v) : v;
 }
 
-function base64(b: Uint8Array): string {
+export function base64(b: Uint8Array): string {
   return Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("base64");
 }
 
