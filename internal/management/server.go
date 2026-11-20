@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -627,7 +628,7 @@ func APIRoutes() []APIRoute {
 			}
 			parts[j] = p
 		}
-		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern), Target: targetNames[rt.target]}
+		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern, nil), Target: targetNames[rt.target]}
 		if rt.pattern[0] == "toolbelt" {
 			// Served only to an execution's token, on its own socket.
 			e.Role = "execution"
@@ -656,9 +657,17 @@ func APIRoutes() []APIRoute {
 // issuing operators' credentials, trusting an issuer or changing its group
 // table, and every secrets route, listing included, need admin; every other control needs operate. Revoking another
 // operator's credential needs admin too, which revoke checks itself.
-func requiredRole(rt *route, parts []string) string {
+//
+// query is the request's, nil for the route's own least role (the
+// schema): doctor with check_secrets=true resolves every secret reference,
+// running cmd: and keyring: ones, so like the secrets routes it needs
+// admin.
+func requiredRole(rt *route, parts []string, query url.Values) string {
 	path := strings.Join(rt.pattern, "/")
 	if path == "config/export" || rt.pattern[0] == "secrets" {
+		return RoleAdmin
+	}
+	if path == "doctor" && slices.Contains(query["check_secrets"], "true") {
 		return RoleAdmin
 	}
 	if !rt.mutation {
@@ -788,7 +797,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	// anything is read or written: fail closed. One who holds it only at
 	// some scopes is checked against the route's target below, once the
 	// body is read.
-	need := requiredRole(matched, parts)
+	need := requiredRole(matched, parts, r.URL.Query())
 	scoped := who.operator && !who.may(need)
 	if scoped && (matched.target == targetDaemon || matched.target == targetUnset || !who.mayAnywhere(need)) {
 		return forbiddenRole(who, need)
