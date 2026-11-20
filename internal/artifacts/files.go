@@ -51,8 +51,10 @@ func (m metadata) matches(ref storage.ArtifactRef) bool {
 	return ref == m.Ref
 }
 
-// Store is an exclusively opened artifact directory. Pin blocks Delete/Collect
-// while a consistent coordination snapshot and its referenced files are copied.
+// Store is an exclusively opened artifact directory. Nothing outside it
+// relies on its locks: retention and collection go through the
+// storage.ArtifactStore contract, and a backup holds content from
+// retention in coordination (runtime.HoldRetention), not here.
 type Store struct {
 	root   string
 	gate   sync.RWMutex
@@ -157,7 +159,7 @@ func Open(root string) (*Store, error) {
 		_ = s.Close()
 		return nil, err
 	}
-	if err = s.cleanup(context.Background(), time.Time{}, nil, true); err != nil {
+	if err = s.recover(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
@@ -639,42 +641,6 @@ func (s *Store) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	return syncDir(filepath.Dir(s.objectDir(ref.ID)))
 }
 
-// Pinned holds retention/deletion while a database backup snapshot and files are
-// captured. Call Close after copying. Open must be used on this lease (rather
-// than reentering Store.Open while a writer waits for the retention gate).
-type Pinned struct {
-	store  *Store
-	mu     sync.Mutex
-	closed bool
-}
-
-func (s *Store) Pin() (*Pinned, error) {
-	s.gate.RLock()
-	if err := s.available(); err != nil {
-		s.gate.RUnlock()
-		return nil, err
-	}
-	return &Pinned{store: s}, nil
-}
-func (p *Pinned) Open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return nil, ErrClosed
-	}
-	return p.store.open(ctx, ref)
-}
-func (p *Pinned) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return ErrClosed
-	}
-	p.closed = true
-	p.store.gate.RUnlock()
-	return nil
-}
-
 // Import restores a selected immutable ID into a new isolated artifact store
 // (storage.ArtifactStore.Import). It reads the source to its end; a short or
 // long source, a digest other than ref's, or a source read error publishes
@@ -768,20 +734,16 @@ func (s *Store) List(ctx context.Context, after string, limit int) ([]storage.St
 	return out, nil
 }
 
-// Collect deletes aged committed objects absent from liveIDs and stale pending
-// streams. The caller supplies a complete protected reference set; it must not
-// race coordination attachment. Pending streams owned by this Store are kept.
-func (s *Store) Collect(ctx context.Context, before time.Time, liveIDs map[string]bool) error {
-	return s.cleanup(ctx, before, liveIDs, false)
-}
-func (s *Store) cleanup(ctx context.Context, before time.Time, live map[string]bool, recovery bool) error {
+// recover removes the unpublished streams in pending/ that are not this
+// store's own active writers: those a process that held the store before
+// left, which Open runs once it holds the lock that proves no other process
+// still owns them.
+func (s *Store) recover(ctx context.Context) error {
 	s.gate.Lock()
 	defer s.gate.Unlock()
 	if err := s.writable(); err != nil {
 		return err
 	}
-	// Unpublished streams: any a dead process left (recovery), or aged
-	// ones, never this store's own active writers.
 	pending := filepath.Join(s.root, "pending")
 	entries, err := os.ReadDir(pending)
 	if err != nil {
@@ -809,54 +771,11 @@ func (s *Store) cleanup(ctx context.Context, before time.Time, live map[string]b
 		if !info.IsDir() {
 			return storage.ErrInvalid
 		}
-		if !recovery && !info.ModTime().Before(before) {
-			continue
-		}
 		if err = os.RemoveAll(path); err != nil {
 			return err
 		}
 	}
-	if err = syncDir(pending); err != nil || recovery {
-		return err
-	}
-	// Committed objects published before before that live doesn't hold.
-	prefixes, err := s.prefixes()
-	if err != nil {
-		return err
-	}
-	for _, prefix := range prefixes {
-		dir := filepath.Join(s.objects(), prefix)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if err = ctx.Err(); err != nil {
-				return err
-			}
-			id := entry.Name()
-			if !idPattern.MatchString(id) || id[:2] != prefix {
-				return storage.ErrInvalid
-			}
-			if live[id] {
-				continue
-			}
-			m, err := s.readMetadata(id)
-			if err != nil {
-				return err
-			}
-			if !m.PublishedAt.Before(before) {
-				continue
-			}
-			if err = os.RemoveAll(s.objectDir(id)); err != nil {
-				return err
-			}
-		}
-		if err = syncDir(dir); err != nil {
-			return err
-		}
-	}
-	return nil
+	return syncDir(pending)
 }
 func (s *Store) Close() error {
 	s.gate.Lock()

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -190,57 +189,32 @@ func TestCancellationAndCorruption(t *testing.T) {
 		t.Fatal(e)
 	}
 }
-func TestRetentionRecoveryAndPinnedBackup(t *testing.T) {
+
+// Recovery, as Open runs it, removes what a writer left in pending/ but
+// keeps this store's own active writers and every committed object.
+func TestRecoveryKeepsActiveWritersAndObjects(t *testing.T) {
 	s := store(t)
 	live := publish(t, s, "retained")
-	orphan := publish(t, s, "orphaned")
 	active, e := s.Create(ctx, "text/plain")
 	if e != nil {
 		t.Fatal(e)
 	}
 	io.WriteString(active, "still writing")
-	// Recovery, as Open runs it, keeps this store's own active writers.
-	if e = s.cleanup(ctx, time.Time{}, nil, true); e != nil {
+	left := filepath.Join(s.root, "pending", strings.Repeat("b", 64))
+	if e = os.Mkdir(left, 0o700); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.recover(ctx); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = active.Write([]byte(" more")); e != nil {
 		t.Fatal("recovery removed active writer:", e)
 	}
-	if e = s.Collect(ctx, time.Now().Add(time.Hour), map[string]bool{live.ID: true}); e != nil {
-		t.Fatal(e)
+	if _, e = os.Lstat(left); !os.IsNotExist(e) {
+		t.Fatalf("recovery kept a stream no writer owns: %v", e)
 	}
 	if content(t, s, live) != "retained" {
-		t.Fatal("live removed")
-	}
-	if _, e = s.Open(ctx, orphan); !errors.Is(e, storage.ErrNotFound) {
-		t.Fatal(e)
-	}
-	pin, e := s.Pin()
-	if e != nil {
-		t.Fatal(e)
-	}
-	target := store(t)
-	r, e := pin.Open(ctx, live)
-	if e != nil {
-		t.Fatal(e)
-	}
-	started, done := make(chan struct{}), make(chan error, 1)
-	go func() { close(started); done <- s.Delete(ctx, live) }()
-	<-started
-	// Import while the deletion writer waits proves a pinned Open does not
-	// recursively acquire RWMutex and deadlock behind that writer.
-	if e = target.Import(ctx, live, r); e != nil {
-		t.Fatal(e)
-	}
-	r.Close()
-	if e = pin.Close(); e != nil {
-		t.Fatal(e)
-	}
-	if e = <-done; e != nil {
-		t.Fatal(e)
-	}
-	if content(t, target, live) != "retained" {
-		t.Fatal("backup bytes differ")
+		t.Fatal("recovery removed a committed object")
 	}
 	active.Close()
 }
