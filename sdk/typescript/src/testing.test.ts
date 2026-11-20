@@ -34,6 +34,7 @@ function desk(): Extension {
         const ticket = JSON.parse(text(d.body)) as {
           id: string;
           status: string;
+          schema?: string;
         };
         return {
           observations: [
@@ -43,6 +44,9 @@ function desk(): Extension {
               event: {
                 type: `desk.ticket.${ticket.status}`,
                 delivery_id: `${ticket.id}@${ticket.status}`,
+                ...(ticket.schema
+                  ? { data: { schema: ticket.schema, data: { id: ticket.id } } }
+                  : {}),
                 correlation_key: {
                   source: source.namespace,
                   external_id: ticket.id,
@@ -105,6 +109,45 @@ function desk(): Extension {
       }),
     })
     .family({ type: "desk.ticket.noted", re_derivable: false, loss: "notes" })
+    .schema("desk.ticket", 1, 2)
+    .emit("desk.say", {
+      input: t.object({ schema: t.string() }),
+      handler: ({ schema }) => ({
+        event: {
+          type: "desk.ticket.noted",
+          delivery_id: schema,
+          data: { schema, data: { said: true } },
+        },
+      }),
+    })
+    .operation("desk.derive", {
+      input: t.object({ parent: t.string(), schema: t.string() }),
+      handler: async ({ parent, schema }, { host }) => {
+        const r = await host.accept({
+          scopeId: "s1",
+          parent,
+          event: {
+            type: "desk.ticket.noted",
+            source: "desk",
+            delivery_id: `derived/${schema}`,
+            data: { schema, data: {} },
+          },
+        });
+        return { added: r.added };
+      },
+    })
+    .operation("desk.query", {
+      input: t.object({ query: t.record(t.any()) }),
+      handler: async ({ query }, { host }) => ({
+        ids: (
+          await host.call(
+            "state.works",
+            query,
+            t.array(t.object({ id: t.string() }, { open: true })),
+          )
+        ).map((w) => w.id),
+      }),
+    })
     .operation("desk.token", {
       input: t.object({}),
       handler: async (_in, { host, authority }) => {
@@ -315,4 +358,159 @@ test("an operation's own refusal reaches the test as it reaches an agent", async
     host.operation("desk.nope"),
     (e: unknown) => e instanceof ProtocolError && e.code === Code.Undeclared,
   );
+});
+
+const work = (id: string, o: Record<string, unknown> = {}) => ({
+  id,
+  kind: "desk.ticket",
+  scope_id: "s1",
+  state: "running",
+  correlation_keys: null,
+  context: {},
+  revision: 1,
+  created_at: testStart,
+  updated_at: testStart,
+  ...o,
+});
+
+test("state.works filters by source and executor, as the host's query does", async (t) => {
+  const host = await configured({
+    works: [
+      work("w1", {
+        latest_executor: "claude",
+        correlation_keys: [{ source: "desk", external_id: "T-1" }],
+      }),
+      work("w2", {
+        latest_executor: "codex",
+        correlation_keys: [{ source: "github", external_id: "1" }],
+      }),
+      // With no subject key, a Work's source is its kind.
+      work("w3", { latest_executor: "claude" }),
+    ],
+  });
+  t.after(() => host.close());
+  const ids = async (query: Record<string, unknown>) =>
+    (await host.operation("desk.query", { query })).output;
+  assert.deepEqual(await ids({ executor: "claude" }), { ids: ["w1", "w3"] });
+  assert.deepEqual(await ids({ sources: ["desk"] }), { ids: ["w1"] });
+  assert.deepEqual(await ids({ sources: ["desk.ticket", "github"] }), {
+    ids: ["w2", "w3"],
+  });
+});
+
+test("state.works orders by instant, not by how the time is written", async (t) => {
+  const host = await configured({
+    works: [
+      work("a", { created_at: "2026-10-24T12:00:00.500Z" }),
+      // Earlier, though it sorts after as a string.
+      work("b", { created_at: "2026-10-24T12:00:00Z" }),
+    ],
+  });
+  t.after(() => host.close());
+  assert.deepEqual((await host.operation("desk.query", { query: {} })).output, {
+    ids: ["b", "a"],
+  });
+  assert.deepEqual(
+    (await host.operation("desk.query", { query: { order: "-created" } }))
+      .output,
+    {
+      ids: ["a", "b"],
+    },
+  );
+});
+
+test("state.works caps a page at MaxWorksPage", async (t) => {
+  const works = Array.from({ length: 1001 }, (_, i) =>
+    work(`w${String(i).padStart(4, "0")}`),
+  );
+  const host = await configured({ works });
+  t.after(() => host.close());
+  const out = (await host.operation("desk.query", { query: { limit: 5000 } }))
+    .output as { ids: string[] };
+  assert.equal(out.ids.length, 1000);
+});
+
+test("a malformed works query is refused, as the host refuses it", async (t) => {
+  const host = await configured({ works: [work("w1")] });
+  t.after(() => host.close());
+  for (const query of [
+    { order: "bogus-updated" },
+    { limit: -1 },
+    { states: ["paused"] },
+  ]) {
+    await assert.rejects(
+      host.operation("desk.query", { query }),
+      (e: unknown) => e instanceof ProtocolError && e.code === Code.Invalid,
+      JSON.stringify(query),
+    );
+  }
+});
+
+test("an emitted payload must name the current version of a declared schema", async (t) => {
+  const host = await configured();
+  t.after(() => host.close());
+  const out = await host.operation("desk.say", { schema: "desk.ticket.v2" });
+  assert.equal(out.event?.event.data?.schema, "desk.ticket.v2");
+  for (const schema of [
+    "desk.ticket.v1",
+    "desk.ticket.v3",
+    "desk.other.v1",
+    "acme.ticket.v2",
+    "desk.ticket",
+  ]) {
+    await assert.rejects(
+      host.operation("desk.say", { schema }),
+      (e: unknown) => e instanceof ProtocolError && e.code === Code.Schema,
+      schema,
+    );
+  }
+  assert.equal(host.events().length, 1);
+});
+
+test("event.accept refuses a payload of an undeclared schema", async (t) => {
+  const host = await configured({
+    events: [
+      {
+        scopeId: "s1",
+        event: { type: "desk.ticket.opened", source: "desk", delivery_id: "p" },
+      },
+    ],
+  });
+  t.after(() => host.close());
+  const parent = host.events()[0]!.event.id!;
+  assert.deepEqual(
+    (await host.operation("desk.derive", { parent, schema: "desk.ticket.v2" }))
+      .output,
+    { added: true },
+  );
+  await assert.rejects(
+    host.operation("desk.derive", { parent, schema: "desk.ticket.v1" }),
+    (e: unknown) => e instanceof ProtocolError && e.code === Code.Schema,
+  );
+});
+
+test("a delivery whose observations carry an undeclared schema accepts nothing", async (t) => {
+  const host = await configured();
+  t.after(() => host.close());
+  await assert.rejects(
+    host.push("desk/s1", {
+      id: "d1",
+      body: JSON.stringify({
+        id: "T-7",
+        status: "opened",
+        schema: "desk.nope.v1",
+      }),
+    }),
+    (e: unknown) => e instanceof ProtocolError && e.code === Code.Schema,
+  );
+  assert.equal(host.events().length, 0);
+  await host.push("desk/s1", {
+    id: "d2",
+    body: JSON.stringify({
+      id: "T-7",
+      status: "opened",
+      schema: "desk.ticket.v2",
+    }),
+  });
+  assert.equal(host.events().length, 1);
 });

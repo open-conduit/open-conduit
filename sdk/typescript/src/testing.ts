@@ -584,6 +584,7 @@ export class TestHost {
         "the host assigns an emission's identity, source and causation",
       );
     if (!e.delivery_id) throw invalid("an emission needs a delivery ID");
+    this.#checkWrite(e.data);
     const event: Event = {
       ...e,
       id: `emit/${digest(`${a.execution_id}\x00${e.delivery_id}`)}`,
@@ -697,45 +698,8 @@ export class TestHost {
           .slice(0, limit)
           .map((e) => ({ ...e.accepted, scope_id: e.scopeId }));
       }
-      case "state.works": {
-        const p = params(StateParams, raw);
-        if (p.scope_id && !this.#scopes.has(p.scope_id))
-          throw unauthorized("scope is not configured for this extension");
-        const byUpdated = p.order?.endsWith("updated") ?? false;
-        const desc = p.order?.startsWith("-") ?? false;
-        const at = (w: Work) => (byUpdated ? w.updated_at : w.created_at);
-        const cmp = (a: Work, b: Work) =>
-          at(a) === at(b) ? (a.id < b.id ? -1 : 1) : at(a) < at(b) ? -1 : 1;
-        const after = (w: Work) => {
-          if (!p.cursor) return true;
-          const c = cmp(w, {
-            ...w,
-            created_at: p.cursor.at,
-            updated_at: p.cursor.at,
-            id: p.cursor.id,
-          });
-          return desc ? c < 0 : c > 0;
-        };
-        const selected = this.#works
-          .filter(
-            (w) =>
-              this.#scopes.has(w.scope_id) &&
-              (!p.scope_id || w.scope_id === p.scope_id) &&
-              (!p.states?.length || p.states.includes(w.state)) &&
-              (!p.kind || w.kind === p.kind) &&
-              (!p.parent_id || w.parent_id === p.parent_id) &&
-              (!p.updated_since || w.updated_at >= p.updated_since) &&
-              (!p.correlation ||
-                (w.correlation_keys ?? []).some(
-                  (k) =>
-                    k.source === p.correlation!.source &&
-                    k.external_id === p.correlation!.external_id,
-                )),
-          )
-          .sort((a, b) => (desc ? cmp(b, a) : cmp(a, b)))
-          .filter(after);
-        return p.limit && p.limit > 0 ? selected.slice(0, p.limit) : selected;
-      }
+      case "state.works":
+        return this.#queryWorks(params(StateParams, raw));
       case "state.pending": {
         const p = params(StateParams, raw);
         const w = this.#works.find(
@@ -802,6 +766,90 @@ export class TestHost {
     );
   }
 
+  /** state.works as the host answers it (StateParams.Query, storage.SelectWorks). */
+  #queryWorks(p: StateParams): Work[] {
+    if (p.scope_id && !this.#scopes.has(p.scope_id))
+      throw unauthorized("scope is not configured for this extension");
+    const order = p.order ?? "";
+    if (
+      !["", "created", "-created", "updated", "-updated"].includes(order) ||
+      (p.limit ?? 0) < 0 ||
+      (p.states ?? []).some((s) => !workStates.includes(s)) ||
+      (p.updated_since !== undefined &&
+        Number.isNaN(Date.parse(p.updated_since))) ||
+      (p.cursor !== undefined && Number.isNaN(Date.parse(p.cursor.at)))
+    )
+      throw invalid("malformed works query");
+    const limit = Math.min(p.limit ?? 0, MaxWorksPage);
+    const byUpdated = order.endsWith("updated");
+    const desc = order.startsWith("-");
+    // A Work's position: its time as an instant, then its ID.
+    const key = (at: string, id: string) => ({ at: Date.parse(at), id });
+    const keyOf = (w: Work) =>
+      key(byUpdated ? w.updated_at : w.created_at, w.id);
+    const cmp = (
+      a: { at: number; id: string },
+      b: { at: number; id: string },
+    ) => (a.at !== b.at ? a.at - b.at : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const since =
+      p.updated_since === undefined ? undefined : Date.parse(p.updated_since);
+    const cursor =
+      p.cursor === undefined ? undefined : key(p.cursor.at, p.cursor.id);
+    const selected = this.#works
+      .filter(
+        (w) =>
+          this.#scopes.has(w.scope_id) &&
+          (!p.states?.length || p.states.includes(w.state)) &&
+          (!p.scope_id || w.scope_id === p.scope_id) &&
+          (!p.kind || w.kind === p.kind) &&
+          (!p.parent_id || w.parent_id === p.parent_id) &&
+          (!p.sources?.length || p.sources.includes(workSource(w))) &&
+          (!p.executor || w.latest_executor === p.executor) &&
+          (since === undefined || Date.parse(w.updated_at) >= since) &&
+          (!p.correlation ||
+            (w.correlation_keys ?? []).some(
+              (k) =>
+                k.source === p.correlation!.source &&
+                k.external_id === p.correlation!.external_id,
+            )),
+      )
+      .sort((a, b) =>
+        desc ? cmp(keyOf(b), keyOf(a)) : cmp(keyOf(a), keyOf(b)),
+      )
+      .filter(
+        (w) =>
+          cursor === undefined ||
+          (desc ? cmp(keyOf(w), cursor) < 0 : cmp(keyOf(w), cursor) > 0),
+      );
+    return limit > 0 ? selected.slice(0, limit) : selected;
+  }
+
+  /**
+   * The host's write rule (Manifest.CheckWrite): a payload an extension
+   * writes is absent, or names the current version of one of its own
+   * declared schemas.
+   */
+  #checkWrite(data: { schema?: string; data?: unknown } | undefined): void {
+    const schema = data?.schema ?? "";
+    const value = data?.data;
+    if (schema === "" && (value === undefined || value === null)) return;
+    const name = this.#ext.manifest.name;
+    if (!inNamespace(name, schema, "."))
+      throw new ProtocolError(
+        Code.Schema,
+        `schema "${schema}" is outside namespace "${name}"`,
+      );
+    const m = /^(.+)\.v([1-9][0-9]{0,8})$/.exec(schema);
+    const decl =
+      m && this.#ext.manifest.provides.schemas?.find((d) => d.name === m[1]);
+    const current = decl ? decl.versions[decl.versions.length - 1] : undefined;
+    if (!m || current === undefined || Number(m[2]) !== current)
+      throw new ProtocolError(
+        Code.Schema,
+        `schema "${schema}" is not the current version of a schema the extension declares`,
+      );
+  }
+
   async #deliver(
     p: IngressDeliverParams,
   ): Promise<{ accepted: AcceptedEvent[]; added: boolean[] }> {
@@ -821,10 +869,13 @@ export class TestHost {
       }),
     );
     const out = { accepted: [] as AcceptedEvent[], added: [] as boolean[] };
-    for (const e of [
+    const events = [
       ...(pushed.events ?? []),
       ...(pushed.observations ?? []).map((o) => o.event),
-    ]) {
+    ];
+    // Checked before any is accepted, so a refused delivery accepts nothing.
+    for (const e of events) this.#checkWrite(e.data);
+    for (const e of events) {
       const r = this.#accept(
         src.source.scope_id,
         { ...e, source: e.source || src.source.namespace },
@@ -849,6 +900,7 @@ export class TestHost {
       throw unauthorized("source is outside the extension's namespace");
     if (e.causation_id || e.execution_id)
       throw unauthorized("causation and execution are assigned by the host");
+    this.#checkWrite(e.data);
     this.#checkBatch(p.checks ?? [], p.records ?? [], p.deletes ?? []);
     if (!this.#scopes.has(p.scope_id))
       throw unauthorized("scope is not configured for this extension");
@@ -980,6 +1032,27 @@ export class TestHost {
     if (m === undefined) this.#kv.set(ns, (m = new Map()));
     m.set(key, new Uint8Array(value));
   }
+}
+
+/** The Work states a query may name (domain.WorkState). */
+const workStates = [
+  "ready",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "cancelled",
+];
+
+/** The most Work one state.works page holds (protocol.MaxWorksPage). */
+const MaxWorksPage = 1000;
+
+/** storage.WorkSource: the source of a Work's subject key, or its kind. */
+function workSource(w: Work): string {
+  return (
+    (w.correlation_keys ?? []).find((k) => k.source !== "core.work")?.source ??
+    w.kind
+  );
 }
 
 /** protocol.Namespace (sep ".") and protocol.SourceNamespace (sep "/"). */
