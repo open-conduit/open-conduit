@@ -124,12 +124,8 @@ func (p *slPresses) press(path, secret string, payload []byte, at time.Time) *ht
 // detached from their requests.
 func (p *slPresses) settle(what string, cond func() bool) {
 	p.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			p.t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if !eventually(10*time.Second, cond) {
+		p.t.Fatalf("timed out waiting for %s", what)
 	}
 }
 
