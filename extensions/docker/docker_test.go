@@ -300,3 +300,33 @@ case "$*" in *"--entrypoint claude good@"*) printf '2.1.0 (Claude Code)\nmore\n'
 		t.Errorf("an image without claude probed: %v", err)
 	}
 }
+
+// TestListIncludesFormerHostLabels (#724): the provider lists containers
+// under the host's former labels (an upgraded daemon's path hash) as well
+// as its own, each in its own query, since Docker ANDs filters on one
+// label key. The control: without a former label it queries its own only.
+func TestListIncludesFormerHostLabels(t *testing.T) {
+	queried := func(former []string) []string {
+		dir := t.TempDir()
+		log := filepath.Join(dir, "ps.log")
+		bin := filepath.Join(dir, "docker")
+		script := `case "$3" in info) echo 'daemon-1|28.0.0|linux';; ps) echo "$@" >> '` + log + `';; esac`
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := New(Options{Docker: bin, Host: "host-1", FormerHosts: former, QueryTimeout: time.Second, Contexts: func() []string { return []string{"default"} }, Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH")} }})
+		if _, err := p.List(context.Background(), extension.ResourceOwner{ExecutionID: "x"}); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(log)
+		return strings.Split(strings.TrimSpace(string(raw)), "\n")
+	}
+	got := queried([]string{"path-hash"})
+	if len(got) != 2 || !strings.Contains(got[0], "label="+extension.ContainerLabelHost+"=host-1") || !strings.Contains(got[1], "label="+extension.ContainerLabelHost+"=path-hash") ||
+		strings.Contains(got[0], "path-hash") || !strings.Contains(got[1], "label="+extension.ContainerLabelExecution+"=x") {
+		t.Fatalf("queries %q, want one for the host's label and one for the former label, each for the execution", got)
+	}
+	if got := queried(nil); len(got) != 1 || strings.Contains(got[0], "path-hash") {
+		t.Fatalf("control: queries %q, want the host's label alone", got)
+	}
+}

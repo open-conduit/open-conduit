@@ -67,6 +67,9 @@ type Options struct {
 	// (protocol.InitializeParams.ContainerDirs and ContainerHost).
 	ContainerDirs map[string]string
 	ContainerHost string
+	// ContainerFormerHosts are the host's former container labels
+	// (protocol.InitializeParams.ContainerFormerHosts).
+	ContainerFormerHosts []string
 	// Env are variables the host itself sets in the process's environment,
 	// on top of the sanitized baseline and the grant: host switches a
 	// surface's packages read (never a secret).
@@ -453,7 +456,7 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 	ctx, cancel := context.WithTimeout(ctx, p.o.HandshakeTimeout)
 	defer cancel()
 	var init protocol.InitializeResult
-	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs, ResourceDirs: p.o.ResourceDirs, ConfigDir: p.o.ConfigDir, ContainerDirs: p.o.ContainerDirs, ContainerHost: p.o.ContainerHost}, &init)
+	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs, ResourceDirs: p.o.ResourceDirs, ConfigDir: p.o.ConfigDir, ContainerDirs: p.o.ContainerDirs, ContainerHost: p.o.ContainerHost, ContainerFormerHosts: p.o.ContainerFormerHosts}, &init)
 	if errors.Is(err, protocol.ErrIncompatible) {
 		return p.refuse(err)
 	}

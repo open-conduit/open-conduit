@@ -89,8 +89,12 @@ type Options struct {
 	// executor's wrapper (RunHelper), to which its arguments are appended:
 	// the package's own `run` (`open-conduit extension-run docker run`).
 	Helper []string
-	// Host is this daemon's ContainerLabelHost value.
-	Host string
+	// Host is this daemon's ContainerLabelHost value, and FormerHosts the
+	// labels it made containers under before
+	// (extension.ContainerHosts.Former): what carries one is listed as
+	// the host's too, but nothing new is labelled with one.
+	Host        string
+	FormerHosts []string
 	// UID and GID the container runs as (the operator's when zero and
 	// UserSet is false).
 	UID, GID int
@@ -739,7 +743,7 @@ func (p *Provider) createNetwork(ctx context.Context, dctx string, args []string
 	if made, lerr := p.objects(ctx, dctx, objectNetwork, "label="+labelNetwork); lerr == nil {
 		n := 0
 		for _, o := range made {
-			if o.labels[extension.ContainerLabelHost] == p.o.Host {
+			if p.hosts().Owns(o.labels[extension.ContainerLabelHost]) {
 				n++
 			}
 		}
@@ -975,11 +979,24 @@ func (p *Provider) inspect(ctx context.Context, dctx, id string) (extension.Cont
 	return st, nil
 }
 
-func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]extension.ContainerState, error) {
-	filters := []string{"--filter", "label=" + extension.ContainerLabelHost + "=" + p.o.Host}
-	if owner.ExecutionID != "" {
-		filters = append(filters, "--filter", "label="+extension.ContainerLabelExecution+"="+string(owner.ExecutionID))
+// hosts are the host labels this provider lists as the host's.
+func (p *Provider) hosts() extension.ContainerHosts {
+	return extension.ContainerHosts{Host: p.o.Host, Former: p.o.FormerHosts}
+}
+
+// hostLabels are the host's labels, its own first: a filter takes one, as
+// Docker ANDs a key's filters.
+func (p *Provider) hostLabels() []string {
+	out := []string{p.o.Host}
+	for _, f := range p.o.FormerHosts {
+		if f != "" && f != p.o.Host {
+			out = append(out, f)
+		}
 	}
+	return out
+}
+
+func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]extension.ContainerState, error) {
 	seen := map[string]bool{}
 	var out []extension.ContainerState
 	for _, dctx := range p.o.Contexts() {
@@ -991,11 +1008,19 @@ func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]e
 		if err != nil {
 			return nil, err
 		}
-		ids, err := p.docker(ctx, dctx, append([]string{"ps", "--all", "--quiet", "--no-trunc"}, filters...)...)
-		if err != nil {
-			return nil, err
+		var ids []string
+		for _, host := range p.hostLabels() {
+			filters := []string{"--filter", "label=" + extension.ContainerLabelHost + "=" + host}
+			if owner.ExecutionID != "" {
+				filters = append(filters, "--filter", "label="+extension.ContainerLabelExecution+"="+string(owner.ExecutionID))
+			}
+			out, err := p.docker(ctx, dctx, append([]string{"ps", "--all", "--quiet", "--no-trunc"}, filters...)...)
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, strings.Fields(string(out))...)
 		}
-		for _, id := range strings.Fields(string(ids)) {
+		for _, id := range ids {
 			st, err := p.inspect(ctx, dctx, id)
 			if notFound(err) {
 				continue
@@ -1039,9 +1064,13 @@ const (
 func (p *Provider) made(ctx context.Context, dctx, daemon string) ([]extension.ContainerState, error) {
 	var out []extension.ContainerState
 	for _, kind := range []string{objectVolume, objectNetwork} {
-		objects, err := p.objects(ctx, dctx, kind, "label="+extension.ContainerLabelHost+"="+p.o.Host)
-		if err != nil {
-			return nil, err
+		var objects []object
+		for _, host := range p.hostLabels() {
+			made, err := p.objects(ctx, dctx, kind, "label="+extension.ContainerLabelHost+"="+host)
+			if err != nil {
+				return nil, err
+			}
+			objects = append(objects, made...)
 		}
 		for _, o := range objects {
 			if o.labels[extension.ContainerLabelExecution] == "" {
@@ -1109,7 +1138,7 @@ func (p *Provider) removeObject(ctx context.Context, dctx, kind, name string) er
 		if o.name != name {
 			continue
 		}
-		if o.labels[extension.ContainerLabelHost] != p.o.Host || o.labels[extension.ContainerLabelExecution] == "" {
+		if !p.hosts().Owns(o.labels[extension.ContainerLabelHost]) || o.labels[extension.ContainerLabelExecution] == "" {
 			return fmt.Errorf("%s %s is not one this host made for an execution", kind, name)
 		}
 		args := []string{kind, "rm", name}

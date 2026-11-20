@@ -198,6 +198,9 @@ type Server struct {
 	// (protocol.InitializeParams.ContainerDirs and ContainerHost).
 	containers    map[string]string
 	containerHost string
+	// containerFormer are the host's former container labels
+	// (protocol.InitializeParams.ContainerFormerHosts).
+	containerFormer []string
 
 	mu       sync.Mutex
 	ready    bool
@@ -541,7 +544,7 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 	}
 	s.mu.Lock()
 	s.ready, s.state, s.executors, s.resources, s.configDir = true, p.StateDir, p.ExecutorDirs, p.ResourceDirs, p.ConfigDir
-	s.containers, s.containerHost = p.ContainerDirs, p.ContainerHost
+	s.containers, s.containerHost, s.containerFormer = p.ContainerDirs, p.ContainerHost, append([]string(nil), p.ContainerFormerHosts...)
 	s.mu.Unlock()
 	return protocol.InitializeResult{ProtocolVersion: v, Manifest: manifest}, nil
 }
@@ -576,6 +579,16 @@ func (s *Server) ContainerHost() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.containerHost
+}
+
+// ContainerFormerHosts are the labels the host made containers under before
+// and named at initialize (protocol.InitializeParams.ContainerFormerHosts):
+// a container carrying one is the host's too, but no new one is labelled
+// with one.
+func (s *Server) ContainerFormerHosts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.containerFormer...)
 }
 
 // ConfigDir is the directory of the operator's config file the host named

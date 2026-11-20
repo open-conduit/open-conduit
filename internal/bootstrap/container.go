@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -33,9 +35,42 @@ type containerState struct {
 	last      time.Time
 	// reconciling is set while a reconcile pass runs off the loop.
 	reconciling atomic.Bool
+	// hosts are this installation's container labels (containerHosts).
+	hosts atomic.Pointer[extension.ContainerHosts]
 }
 
-func (d *daemon) openContainers() {
+// openContainers loads this installation's container labels, making its
+// ID on first start.
+func (d *daemon) openContainers(ctx context.Context) error {
+	hosts, err := d.loadContainerHosts(ctx)
+	if err != nil {
+		return fmt.Errorf("the container host label: %w", err)
+	}
+	d.containers.hosts.Store(&hosts)
+	return nil
+}
+
+// containerHostNamespace and containerHostKey keep the installation's
+// container labels in the coordination store, so a backup bundle carries
+// them and a restored installation keeps its ID.
+const (
+	containerHostNamespace = "container"
+	containerHostKey       = "host"
+)
+
+// containerHostRecord is the stored labels.
+type containerHostRecord struct {
+	// Host is the installation's ID, random and made once: every container
+	// the daemon makes carries it (extension.ContainerLabelHost), so two
+	// daemons sharing a container daemon, a remote or a cloud account
+	// never touch each other's containers, wherever their state is.
+	Host string `json:"host"`
+	// Former are labels the daemon made containers under before it had
+	// one: the hash of its state directory's path older versions used.
+	// They stay recognised: nothing can prove no container carries one
+	// (a provider may be down or ignore former labels), and a pinned run
+	// under one would fail its recovery once it was dropped.
+	Former []string `json:"former,omitempty"`
 }
 
 // adoptLegacyContainerDirs moves what a container provider kept in process
@@ -83,13 +118,82 @@ func adoptLegacyContainerDirs(state string) (int, error) {
 	return moved, nil
 }
 
-// containerHost is this daemon's ContainerLabelHost value: a hash of its
-// state directory, so two daemons sharing a container daemon never touch
-// each other's containers.
-func (d *daemon) containerHost() string {
-	sum := sha256.Sum256([]byte(filepath.Clean(d.o.StateDir)))
+// legacyContainerHost is the label older versions gave every container: a
+// hash of the state directory's path, which two installations at the same
+// path on different machines share.
+func legacyContainerHost(state string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(state)))
 	return hex.EncodeToString(sum[:8])
 }
+
+// loadContainerHosts reads the installation's container labels, making
+// them on first use: a random ID and, when the store already holds
+// executions (an upgrade from a release that labelled by path), the path
+// hash as a former label, since a daemon upgraded mid-run still has
+// containers under it. They are kept in the store, so a restored backup
+// keeps the ID: it is the same installation.
+func (d *daemon) loadContainerHosts(ctx context.Context) (extension.ContainerHosts, error) {
+	var hosts extension.ContainerHosts
+	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		raw, err := tx.Get(containerHostNamespace, containerHostKey)
+		if err == nil {
+			var r containerHostRecord
+			if err := json.Unmarshal(raw, &r); err != nil || !validContainerHost(r.Host) {
+				return fmt.Errorf("the stored container host label is unreadable")
+			}
+			hosts = extension.ContainerHosts{Host: r.Host, Former: r.Former}
+			return nil
+		}
+		if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		id := make([]byte, 16)
+		if _, err := rand.Read(id); err != nil {
+			return err
+		}
+		hosts = extension.ContainerHosts{Host: hex.EncodeToString(id)}
+		xs, err := tx.ListExecutions("")
+		if err != nil {
+			return err
+		}
+		if len(xs) > 0 {
+			hosts.Former = []string{legacyContainerHost(d.o.StateDir)}
+		}
+		return putContainerHosts(tx, hosts)
+	})
+	return hosts, err
+}
+
+// validContainerHost is whether a label is one the host makes: hex, so it
+// fits a label filter and a name.
+func validContainerHost(s string) bool {
+	if len(s) < 16 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+func putContainerHosts(tx storage.Tx, hosts extension.ContainerHosts) error {
+	raw, err := json.Marshal(containerHostRecord{Host: hosts.Host, Former: hosts.Former})
+	if err != nil {
+		return err
+	}
+	return tx.Put(containerHostNamespace, containerHostKey, raw)
+}
+
+// containerHosts are this daemon's container labels: its installation's
+// ID, which labels every container it makes, and any former label it still
+// recognises (loadContainerHosts).
+func (d *daemon) containerHosts() extension.ContainerHosts {
+	if h := d.containers.hosts.Load(); h != nil {
+		return *h
+	}
+	return extension.ContainerHosts{}
+}
+
+// containerHost is this daemon's ContainerLabelHost value.
+func (d *daemon) containerHost() string { return d.containerHosts().Host }
 
 // containerRecords is the host-owned directory an execution's container
 // records (the signals the host sent) are kept in.
@@ -144,21 +248,23 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		return runtime.ContainerBinding{}, fmt.Errorf("%w: the Work's home: %v", extension.ErrSandboxUnavailable, err)
 	}
 	home, _ := os.UserHomeDir()
+	hosts := d.containerHosts()
 	b := extension.BindContainer(extension.ContainerBinding{
-		Provider:  p,
-		Owner:     extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID},
-		Config:    domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
-		Host:      d.containerHost(),
-		Segment:   state.SegmentNumber(),
-		Protected: d.protectedPaths(),
-		Shared:    shared,
-		RunRoot:   filepath.Join(d.o.StateDir, "executors", state.Executor, "runs"),
-		Toolbelt:  socket,
-		TokenFile: tokenFile(socket, d.endpoints.TokenFile(state.ExecutionID)),
-		Env:       env,
-		Records:   d.containerRecords(state.ExecutionID),
-		Home:      home,
-		WorkHome:  workHome,
+		Provider:    p,
+		Owner:       extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID},
+		Config:      domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
+		Host:        hosts.Host,
+		FormerHosts: hosts.Former,
+		Segment:     state.SegmentNumber(),
+		Protected:   d.protectedPaths(),
+		Shared:      shared,
+		RunRoot:     filepath.Join(d.o.StateDir, "executors", state.Executor, "runs"),
+		Toolbelt:    socket,
+		TokenFile:   tokenFile(socket, d.endpoints.TokenFile(state.ExecutionID)),
+		Env:         env,
+		Records:     d.containerRecords(state.ExecutionID),
+		Home:        home,
+		WorkHome:    workHome,
 		Pin: func(c extension.ContainerPin) error {
 			c.Provider = desc.Provider
 			return pin(c)
@@ -334,8 +440,9 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	}
 	sort.Strings(names)
 	var errs []error
+	hosts := d.containerHosts()
 	for _, name := range names {
-		removed, err := extension.ReconcileContainersKeeping(ctx, providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
+		removed, err := extension.ReconcileHostContainers(ctx, providers[name], hosts, func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
 			var keep map[domain.ID]extension.ContainerKeep
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 				keep = map[domain.ID]extension.ContainerKeep{}

@@ -32,6 +32,10 @@ type ContainerBinding struct {
 	// segment's number, for the labels.
 	Host    string
 	Segment int
+	// FormerHosts are labels this daemon made containers under before
+	// (ContainerHosts.Former): a recovering segment's pinned container
+	// may carry one.
+	FormerHosts []string
 	// Protected, Shared, RunRoot, Toolbelt, Records and MaxScan are as in
 	// SandboxBinding: the shared launch checks (GuardLaunch) use them.
 	// Records also holds the record of every signal and stop the host
@@ -601,7 +605,7 @@ func (c *BoundContainer) provePinned(st ContainerState) error {
 		return errors.New("the pinned container is gone")
 	case st.Ref.ID != pin.ID:
 		return errors.New("the container is not the pinned one")
-	case st.Ref.Labels[ContainerLabelHost] != c.b.Host || st.Ref.Labels[ContainerLabelExecution] != string(c.b.Owner.ExecutionID) || st.Ref.Labels[ContainerLabelDigest] != pin.Digest:
+	case !(ContainerHosts{Host: c.b.Host, Former: c.b.FormerHosts}).Owns(st.Ref.Labels[ContainerLabelHost]) || st.Ref.Labels[ContainerLabelExecution] != string(c.b.Owner.ExecutionID) || st.Ref.Labels[ContainerLabelDigest] != pin.Digest:
 		return errors.New("the container's labels are not the pinned ones")
 	case st.Image != pin.Image:
 		return errors.New("the container does not run the pinned image")
@@ -784,8 +788,41 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 // leaves out is gone (ContainerKeepNone). It returns how many entries it
 // removed. A running attach is always kept: an operator's attach runs
 // beside a finished execution until they exit, and their detach removes
-// it then.
+// it then. It is ReconcileHostContainers with no former labels.
 func ReconcileContainersKeeping(ctx context.Context, p ContainerProvider, host string, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
+	return ReconcileHostContainers(ctx, p, ContainerHosts{Host: host}, keep)
+}
+
+// ContainerHosts are the host labels (ContainerLabelHost) a daemon owns:
+// Host, its installation's, which it labels every new container with, and
+// Former, labels it made containers under before (an upgrade's path hash),
+// still recognised but never given to a new container.
+type ContainerHosts struct {
+	Host   string
+	Former []string
+}
+
+// Owns reports whether label is one of the daemon's.
+func (h ContainerHosts) Owns(label string) bool {
+	return label != "" && (label == h.Host || h.former(label))
+}
+
+func (h ContainerHosts) former(label string) bool {
+	for _, f := range h.Former {
+		if f != "" && f == label {
+			return true
+		}
+	}
+	return false
+}
+
+// ReconcileHostContainers is ReconcileContainersKeeping over every label
+// the daemon owns. Under its own label, an execution keep leaves out is
+// gone. Under a former label only an execution keep reports is the
+// daemon's: another installation once shared that label (a state
+// directory at the same path), so an execution it doesn't know is left
+// alone. It returns how many entries it removed.
+func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts ContainerHosts, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {
 		return 0, err
@@ -794,7 +831,7 @@ func ReconcileContainersKeeping(ctx context.Context, p ContainerProvider, host s
 	seen := map[domain.ID]bool{}
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
-		if st.Ref.Labels[ContainerLabelHost] == host && id != "" && !seen[id] {
+		if hosts.Owns(st.Ref.Labels[ContainerLabelHost]) && id != "" && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
@@ -810,12 +847,15 @@ func ReconcileContainersKeeping(ctx context.Context, p ContainerProvider, host s
 	var errs []error
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
-		if st.Ref.Labels[ContainerLabelHost] != host || id == "" {
+		label := st.Ref.Labels[ContainerLabelHost]
+		if !hosts.Owns(label) || id == "" {
 			continue
 		}
+		former := label != hosts.Host
 		attach := st.Ref.Labels[ContainerLabelSegment] == ContainerSegmentAttach
-		switch k := kept[id]; {
-		case k == ContainerKeepAll, k == ContainerKeepAttach && attach, st.Running && attach:
+		k, known := kept[id]
+		switch {
+		case former && !known, k == ContainerKeepAll, k == ContainerKeepAttach && attach, st.Running && attach:
 			continue
 		}
 		if err := p.Remove(ctx, st.Ref); err != nil {

@@ -64,8 +64,11 @@ type Options struct {
 	// wrapper (RunHelper), to which its arguments are appended: the
 	// package's own `run` (`open-conduit extension-run ssh run`).
 	Helper []string
-	// Host is this daemon's ContainerLabelHost value.
-	Host string
+	// Host is this daemon's ContainerLabelHost value, and FormerHosts the
+	// labels it made runs under before (extension.ContainerHosts.Former):
+	// a run carrying one is listed as the host's too.
+	Host        string
+	FormerHosts []string
 	// Dir is a host-owned directory for the provider's own files: the
 	// known_hosts file each remote is pinned by.
 	Dir string
@@ -88,6 +91,11 @@ type Provider struct {
 	o      Options
 	mu     sync.Mutex
 	health map[string]time.Time
+}
+
+// hosts are the host labels this provider lists as the host's.
+func (p *Provider) hosts() extension.ContainerHosts {
+	return extension.ContainerHosts{Host: p.o.Host, Former: p.o.FormerHosts}
 }
 
 // New returns the provider.
@@ -516,7 +524,7 @@ func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]e
 		sort.Strings(ids)
 		for _, id := range ids {
 			st := states[id]
-			if st.Gone || st.Ref.Labels[extension.ContainerLabelHost] != p.o.Host {
+			if st.Gone || !p.hosts().Owns(st.Ref.Labels[extension.ContainerLabelHost]) {
 				continue
 			}
 			if owner.ExecutionID != "" && st.Ref.Labels[extension.ContainerLabelExecution] != string(owner.ExecutionID) {
