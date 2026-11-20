@@ -79,6 +79,7 @@ func owner(tx storage.Tx, e domain.Event) (domain.Work, error) {
 func (r *Runtime) Route(id domain.ID) error {
 	var input extension.RouteInput
 	if err := r.tx(nil, func(tx storage.Tx) error {
+		input = extension.RouteInput{}
 		a, err := tx.Event(id)
 		if err != nil {
 			return err

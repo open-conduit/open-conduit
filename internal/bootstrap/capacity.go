@@ -79,15 +79,20 @@ func (d *daemon) waitingOnCapacity(ctx context.Context) map[domain.ID]string {
 	if len(waiting) == 0 {
 		return waiting
 	}
-	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		for id := range waiting {
-			if w, err := tx.Work(id); err != nil || w.State != domain.WorkReady {
-				delete(waiting, id)
+	var still map[domain.ID]string
+	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		still = map[domain.ID]string{}
+		for id, code := range waiting {
+			if w, err := tx.Work(id); err == nil && w.State == domain.WorkReady {
+				still[id] = code
 			}
 		}
 		return nil
 	})
-	return waiting
+	if err != nil {
+		return waiting
+	}
+	return still
 }
 
 // capacityCheck reports each pool's running attempts against its limit and

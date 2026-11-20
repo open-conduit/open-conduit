@@ -366,10 +366,12 @@ func (e *Executor) TaskStart(ctx context.Context, a extension.Authority, in doma
 	}
 	now := e.o.Now().UTC()
 	dir := e.taskDir(id)
-	rec := taskRecord{ID: id, Name: input.Name, Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Trigger: a.TriggerID,
+	fresh := taskRecord{ID: id, Name: input.Name, Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Trigger: a.TriggerID,
 		Nonce: nonce, State: TaskRunning, Log: filepath.Join(dir, "log"), Started: now, Deadline: now.Add(time.Duration(input.Minutes) * time.Minute)}
+	var rec taskRecord
 	var existing bool
 	err = e.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		rec, existing = fresh, false
 		var old taskRecord
 		if found, err := getJSON(tx, e.o.Namespace, taskPrefix+id, &old); err != nil {
 			return err
@@ -899,17 +901,18 @@ func (e *Executor) announceTask(ctx context.Context, host TaskHost, t taskRecord
 		if found, err := getJSON(tx, e.o.Namespace, taskPrefix+t.ID, &cur); err != nil || !found || cur.State != TaskRunning {
 			return err
 		}
-		t.Published = host.Accept != nil && t.Trigger != ""
-		if t.Published {
+		ended := t
+		ended.Published = host.Accept != nil && t.Trigger != ""
+		if ended.Published {
 			// A refusal by the causal limits is recorded by the host for
 			// the operator; the task has still ended.
 			if _, _, err := host.Accept(tx, t.Scope, t.Trigger, ev); errors.Is(err, inproc.ErrCausalLimit) {
-				t.Published = false
+				ended.Published = false
 			} else if err != nil {
 				return err
 			}
 		}
-		return putJSON(tx, e.o.Namespace, taskPrefix+t.ID, t)
+		return putJSON(tx, e.o.Namespace, taskPrefix+t.ID, ended)
 	})
 	if errors.Is(err, inproc.ErrCausalLimit) {
 		err = nil // over the protocol the refusal arrives at commit

@@ -168,6 +168,7 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 	var x domain.Execution
 	var stale bool
 	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		stale = false
 		var e error
 		event, e = tx.Event(eventID)
 		if e != nil {
@@ -255,6 +256,7 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 	ref := domain.LeaseRef{ExecutionID: x.ID, Owner: x.Lease.Owner, Epoch: x.Lease.Epoch}
 	var intent string
 	err = s.transact(ctx, &ref, func(tx storage.Tx) error {
+		intent = ""
 		a, e := tx.Event(eventID)
 		if e != nil {
 			return e
@@ -458,6 +460,7 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 	for _, phase := range phases {
 		var ids []domain.ID
 		err = s.transact(ctx, nil, func(tx storage.Tx) error {
+			ids = nil
 			var cursor string
 			e := getJSON(tx, timerNamespace, "poll_"+phase, &cursor)
 			if e != nil && !errors.Is(e, storage.ErrNotFound) {

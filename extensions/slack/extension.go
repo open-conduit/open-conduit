@@ -269,11 +269,15 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 	if x.h.Store == nil {
 		return codeError("slack_state_unavailable")
 	}
+	var reg Registration
 	if err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
-		return x.book.Register(tx, settings.Namespace, settings.StartChannels(), x.now())
+		var err error
+		reg, err = Register(tx, settings.Namespace, settings.StartChannels(), x.now())
+		return err
 	}); err != nil {
 		return codeError("slack_state_unavailable")
 	}
+	x.book.Load(reg)
 	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...), settings: settings, client: client, projector: projector}
 	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings),
 		StartPoint: func(channel string) (time.Time, bool) { return settings.StartPoint(x.book, channel) },
@@ -336,8 +340,9 @@ func (x *Extension) startSockets(context.Context) error {
 // history window. It only reads durable state.
 func (x *Extension) activeThreads(s Settings) func(context.Context) (map[string][]string, error) {
 	return func(ctx context.Context) (map[string][]string, error) {
-		out := map[string][]string{}
+		var out map[string][]string
 		err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+			out = map[string][]string{}
 			works, err := tx.ListWorks()
 			for _, w := range works {
 				if string(w.ScopeID) != s.Scope || w.State.Terminal() {
@@ -363,8 +368,9 @@ func (x *Extension) activeThreads(s Settings) func(context.Context) (map[string]
 // durable state.
 func (x *Extension) unowned(s Settings) func(context.Context, string, []string) (map[string]bool, error) {
 	return func(ctx context.Context, channel string, threads []string) (map[string]bool, error) {
-		out := map[string]bool{}
+		var out map[string]bool
 		err := storage.View(ctx, x.h.Store, x.now(), func(tx storage.Tx) error {
+			out = map[string]bool{}
 			for _, t := range threads {
 				_, err := tx.WorkByCorrelation(domain.CorrelationKey{Source: s.Namespace, ExternalID: ThreadKey(channel, t)})
 				switch {

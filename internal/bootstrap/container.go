@@ -251,8 +251,9 @@ func (d *daemon) sweepHomes(ctx context.Context) error {
 			works[name] = domain.ID(strings.TrimSpace(string(raw)))
 		}
 	}
-	done := map[domain.ID]bool{}
+	var done map[domain.ID]bool
 	err = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		done = map[domain.ID]bool{}
 		for _, id := range works {
 			w, err := tx.Work(id)
 			switch {
@@ -335,8 +336,9 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	var errs []error
 	for _, name := range names {
 		removed, err := extension.ReconcileContainersKeeping(ctx, providers[name], d.containerHost(), func(ids []domain.ID) (map[domain.ID]extension.ContainerKeep, error) {
-			keep := map[domain.ID]extension.ContainerKeep{}
+			var keep map[domain.ID]extension.ContainerKeep
 			err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+				keep = map[domain.ID]extension.ContainerKeep{}
 				for _, id := range ids {
 					x, err := tx.Execution(id)
 					if errors.Is(err, storage.ErrNotFound) {
@@ -506,6 +508,7 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string) error {
 	var pin *extension.ContainerPin
 	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		pin = nil
 		xs, err := tx.ListExecutions(w.ID)
 		if err != nil {
 			return err

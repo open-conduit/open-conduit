@@ -546,6 +546,7 @@ func (s *Service) kvGet(ctx context.Context, p protocol.KVGetParams) (protocol.K
 		return out, err
 	}
 	err := s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
+		out = protocol.KVGetResult{}
 		v, err := tx.Get(p.Namespace, p.Key)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil
@@ -565,6 +566,7 @@ func (s *Service) kvList(ctx context.Context, p protocol.KVListParams) (protocol
 		return out, err
 	}
 	err := s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
+		out.Entries = []protocol.KVEntry{}
 		rows, err := tx.List(p.Namespace, p.Prefix)
 		for _, r := range rows {
 			out.Entries = append(out.Entries, protocol.KVEntry{Key: r.Key, Value: r.Value, Version: Version(r.Value)})
@@ -700,6 +702,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 	notFound := protocol.Errorf(protocol.CodeNotFound, "not found")
 	var out any
 	err := s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
+		out = nil
 		switch method {
 		case "state.work":
 			w, err := tx.Work(domain.ID(p.ID))
@@ -931,6 +934,7 @@ func (s *Service) accept(ctx context.Context, p protocol.EventAcceptParams) (pro
 	}
 	var refusal error
 	err = s.deps.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		out, refusal = protocol.EventAcceptResult{}, nil
 		parent, err := s.parentInTx(tx, scope, p.Parent)
 		if err != nil {
 			return err

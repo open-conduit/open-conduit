@@ -71,6 +71,7 @@ func stopFollowupDelay(n int) time.Duration {
 // when there is none).
 func (s *Scheduler) StopFollowupStatus(ctx context.Context, id domain.ID) (f StopFollowup, ok bool, err error) {
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		f, ok = StopFollowup{}, false
 		e := getJSON(tx, stopFollowupNamespace, identity(string(id)), &f)
 		if errors.Is(e, storage.ErrNotFound) {
 			return nil

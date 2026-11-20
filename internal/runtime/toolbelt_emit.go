@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -47,7 +48,13 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 	ref := a.Lease
 	now := t.now()
 	var refusal error
+	// Commit is pure and deterministic, so a rerun of the transaction over
+	// the same emission reuses its answer rather than asking again: for an
+	// out-of-process extension each ask is an emit.commit call.
+	var asked *extension.Emitted
+	var answer extension.EmitCommit
 	err = t.store.Transact(ctx, storage.Guard{Now: now, Lease: &ref}, func(tx storage.Tx) error {
+		out, refusal = extension.ToolResult{}, nil
 		_, x, w, _, e := t.authorizedInTx(tx, digest)
 		if e != nil {
 			return e
@@ -144,9 +151,14 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		// A plan without Commit accepts its Event and writes nothing.
 		var commit extension.EmitCommit
 		if plan.Commit != nil {
-			if commit, er = plan.Commit(extension.Emitted{Event: accepted, Added: added, Root: info.Root, Depth: info.Depth}); er != nil {
-				return er
+			em := extension.Emitted{Event: accepted, Added: added, Root: info.Root, Depth: info.Depth}
+			if asked == nil || !reflect.DeepEqual(*asked, em) {
+				if answer, er = plan.Commit(em); er != nil {
+					return er
+				}
+				asked = &em
 			}
+			commit = answer
 		}
 		for _, r := range commit.Records {
 			if !ownedNamespace(r.Namespace, owner, ".") || r.Key == "" || len(r.Key) > 512 {

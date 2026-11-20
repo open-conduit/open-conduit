@@ -150,21 +150,30 @@ func (b *Book) ForeignChannels(namespace string) []string {
 	return out
 }
 
+// Registration is the entry's records Register read in its transaction:
+// the start point of each channel it registered and the threads marked
+// foreign. The caller puts them in the book once tx has committed (Load).
+type Registration struct {
+	starts  map[string]time.Time
+	foreign []string
+}
+
 // Register records, once, the start point of each of the entry's channels
-// that has none, and loads the entry's records into the book. A channel
+// that has none, and reads the entry's records for the book. A channel
 // registered before keeps its first start point, so neither a restart nor
 // a config change moves it. A channel's first start point is now, or, when
 // Work here already holds one of its threads (the entry ran before start
 // points were recorded), when the earliest such Work was created, so a
-// message missed during the upgrade is still claimed.
-func (b *Book) Register(tx storage.Tx, namespace string, channels []string, now time.Time) error {
+// message missed during the upgrade is still claimed. It changes nothing
+// outside tx: a transaction that runs again reads them afresh.
+func Register(tx storage.Tx, namespace string, channels []string, now time.Time) (Registration, error) {
 	starts := map[string]time.Time{}
 	var earliest map[string]time.Time
 	for _, ch := range channels {
 		if _, err := tx.Get(ClaimNamespace, startKey(namespace, ch)); errors.Is(err, storage.ErrNotFound) {
 			var err error
 			if earliest, err = earliestWork(tx, namespace); err != nil {
-				return err
+				return Registration{}, err
 			}
 			break
 		}
@@ -176,7 +185,7 @@ func (b *Book) Register(tx storage.Tx, namespace string, channels []string, now 
 		switch {
 		case err == nil:
 			if json.Unmarshal(raw, &rec) != nil || rec.At.IsZero() {
-				return storage.ErrInvalid
+				return Registration{}, storage.ErrInvalid
 			}
 		case errors.Is(err, storage.ErrNotFound):
 			at := now.UTC()
@@ -186,29 +195,37 @@ func (b *Book) Register(tx storage.Tx, namespace string, channels []string, now 
 			rec = claimRecord{Namespace: namespace, Channel: ch, At: at}
 			data, err := json.Marshal(rec)
 			if err != nil {
-				return err
+				return Registration{}, err
 			}
 			if err := tx.Put(ClaimNamespace, key, data); err != nil {
-				return err
+				return Registration{}, err
 			}
 		default:
-			return err
+			return Registration{}, err
 		}
 		starts[key] = rec.At
 	}
 	entries, err := tx.List(ClaimNamespace, foreignPrefix(namespace))
 	if err != nil {
-		return err
+		return Registration{}, err
 	}
+	r := Registration{starts: starts}
+	for _, e := range entries {
+		r.foreign = append(r.foreign, e.Key)
+	}
+	return r, nil
+}
+
+// Load puts a committed registration's records in the book.
+func (b *Book) Load(r Registration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for k, t := range starts {
+	for k, t := range r.starts {
 		b.starts[k] = t
 	}
-	for _, e := range entries {
-		b.foreign[e.Key] = true
+	for _, k := range r.foreign {
+		b.foreign[k] = true
 	}
-	return nil
 }
 
 // earliestWork is, per channel, when the earliest Work holding one of the

@@ -153,7 +153,9 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 		return extension.ToolResult{}, extension.ErrUnauthorized
 	}
 	var out extension.ToolResult
+	handle := false
 	err := t.Store.Transact(ctx, storage.Guard{Now: t.Now(), Lease: &a.Lease}, func(tx storage.Tx) error {
+		out, handle = extension.ToolResult{}, false
 		w, err := tx.Work(a.WorkID)
 		if err != nil {
 			return err
@@ -301,12 +303,10 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 			}
 			out.Wait = &saved
 		default:
-			// This fixture permits pure handlers only. External writes must run outside
-			// coordination transactions in real toolbelt implementations.
-			a.Operations = append([]string(nil), a.Operations...)
-			a.EventTypes = append([]string(nil), a.EventTypes...)
-			out.Output, err = t.operations[c.Operation].Handler(ctx, a, c.Input)
-			return err
+			// A handler runs once the call is authorized, outside the
+			// transaction: a transaction may run again, and an operation's
+			// effect must not.
+			handle = true
 		}
 		return nil
 	})
@@ -315,6 +315,13 @@ func (t *Toolbelt) Call(ctx context.Context, token string, c extension.ToolCall)
 	}
 	if err != nil {
 		return extension.ToolResult{}, err
+	}
+	if handle {
+		a.Operations = append([]string(nil), a.Operations...)
+		a.EventTypes = append([]string(nil), a.EventTypes...)
+		if out.Output, err = t.operations[c.Operation].Handler(ctx, a, c.Input); err != nil {
+			return extension.ToolResult{}, err
+		}
 	}
 	return out, nil
 }

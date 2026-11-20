@@ -181,6 +181,7 @@ func (d *daemon) startReady(ctx context.Context) {
 		timed = d.timedKinds()
 	}
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		ready, idle = nil, nil
 		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State != domain.WorkReady {
@@ -234,6 +235,7 @@ func (d *daemon) startReady(ctx context.Context) {
 func (d *daemon) dispatchControls(ctx context.Context, c *components) {
 	var running []domain.ID
 	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		running = nil
 		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State == domain.WorkRunning {
@@ -646,8 +648,9 @@ func (d *daemon) collectArtifacts(ctx context.Context) {
 	if d.artifacts == nil {
 		return
 	}
-	live := map[string]bool{}
+	var live map[string]bool
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		live = map[string]bool{}
 		xs, err := tx.ListExecutions("")
 		if err != nil {
 			return err

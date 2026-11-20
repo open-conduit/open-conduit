@@ -46,8 +46,9 @@ type EnsureResult struct {
 // pass after a crash repeats only what did not commit.
 func Ensure(ctx context.Context, store storage.Store, now time.Time, armer Armer, entries []Entry) (EnsureResult, error) {
 	var res EnsureResult
-	current := map[domain.ID]domain.Timer{}
+	var current map[domain.ID]domain.Timer
 	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		current = map[domain.ID]domain.Timer{}
 		all, err := tx.ListTimers()
 		for _, t := range all {
 			if strings.HasPrefix(string(t.ID), "schedule/") && t.Event.Type == TypeSlot {

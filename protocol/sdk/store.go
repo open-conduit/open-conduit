@@ -29,7 +29,9 @@ var ErrReadOnly = errors.New("sdk: core records are read-only over the protocol"
 //     Reads carry version tokens; the writes of one Transact commit as a
 //     single kv.commit batch whose preconditions are the versions (or
 //     absence) of every key the callback read, so a concurrent change to a
-//     key it read is storage.ErrConflict and nothing is applied. Conflict
+//     key it read applies nothing and is storage.ErrTransient: running the
+//     whole transaction again rereads the keys, which storage.Retry does
+//     (wrap the Store in it; the in-process bridge does). Conflict
 //     detection covers keys read, not prefix ranges: a key added under a
 //     listed prefix by another writer is not detected (weaker than the
 //     host's serializable transactions; documented in the SDK guide).
@@ -152,6 +154,9 @@ func (s *Store) Transact(ctx context.Context, _ storage.Guard, fn func(storage.T
 		}
 	}
 	r, err := s.h.CommitBatch(ctx, b)
+	if errors.Is(err, storage.ErrConflict) && tx.moved(b.Checks) {
+		return fmt.Errorf("%w: a key the transaction read changed before it committed", storage.ErrTransient)
+	}
 	if err != nil {
 		return err
 	}
@@ -171,6 +176,27 @@ func refusedEmissions(r protocol.KVCommitResult) int {
 		}
 	}
 	return n
+}
+
+// moved reports whether a key a refused commit checked has changed since
+// the callback read it: kv.commit answers conflict for a failed check and
+// for other clashes (an Emission's identity) alike, and only the first is
+// cured by rereading.
+func (t *storeTx) moved(checks []protocol.KVCheck) bool {
+	for _, c := range checks {
+		_, version, err := t.h.Get(t.ctx, c.Namespace, c.Key)
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			if !c.Absent {
+				return true
+			}
+		case err != nil:
+			return false
+		case c.Absent || version != c.Version:
+			return true
+		}
+	}
+	return false
 }
 
 func (t *storeTx) read(k kvKey) ([]byte, bool, error) {

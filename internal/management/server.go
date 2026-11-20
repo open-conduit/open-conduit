@@ -450,6 +450,7 @@ func (s *Server) issuedOperator(ctx context.Context, token string) (principal, b
 	var record operatorRecord
 	found := false
 	err := s.read(ctx, func(tx storage.Tx) error {
+		record, found = operatorRecord{}, false
 		b, err := tx.Get(authNamespace, "operator/"+digest)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil
@@ -913,6 +914,7 @@ func (s *Server) idempotent(c *call, rt *route) error {
 	}())
 	var prior *idemRecord
 	if err = s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+		prior = nil
 		b, e := tx.Get(idempotencyNamespace, slot)
 		if errors.Is(e, storage.ErrNotFound) {
 			return nil

@@ -946,6 +946,7 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 	var scopes []domain.Scope
 	var duplicate bool
 	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		sub, duplicate = subscription{}, false
 		var old subscription
 		er := getJSON(tx, subscriptionNamespace, identity(request.Namespace)+"/"+identity(request.ID), &old)
 		if er == nil {
@@ -971,7 +972,9 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 	if duplicate {
 		return s.authorizeAlias(ctx, sub)
 	}
+	requested := request
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		request = requested
 		wait, er := tx.Wait(request.WaitID)
 		if er != nil {
 			return er
@@ -1074,8 +1077,10 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 			return er
 		}
 		// An unanswered filter leaves the subscription installed, stopped
-		// before that Event: the next pass asks again.
-		_, er = s.reconcileSubscriptionInTx(tx, key, &sub)
+		// before that Event: the next pass asks again. The scan advances
+		// its own copy, so a rerun scans from the start again.
+		scanned := sub
+		_, er = s.reconcileSubscriptionInTx(tx, key, &scanned)
 		return er
 	})
 }
@@ -1098,6 +1103,7 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 	var rows []storage.Entry
 	var cursor string
 	if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		cursor = ""
 		var er error
 		rows, er = tx.List(subscriptionNamespace, "")
 		if er != nil {
@@ -1165,7 +1171,9 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 		if err := s.authorizeAlias(ctx, sub); err != nil {
 			return err
 		}
+		var failed []*DependencyFilterError
 		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			failed = nil
 			for _, old := range scopes {
 				current, er := tx.Scope(old.ID)
 				if er != nil {
@@ -1182,16 +1190,17 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			if !current.Active {
 				return nil
 			}
-			failed, er := s.reconcileSubscriptionInTx(tx, row.Key, &current)
-			for _, f := range failed {
-				unanswered = append(unanswered, f)
-				if f.Held && f.Unreachable {
-					down[f.Namespace] = true
-				}
-			}
+			var er error
+			failed, er = s.reconcileSubscriptionInTx(tx, row.Key, &current)
 			return er
 		}); err != nil {
 			return err
+		}
+		for _, f := range failed {
+			unanswered = append(unanswered, f)
+			if f.Held && f.Unreachable {
+				down[f.Namespace] = true
+			}
 		}
 	}
 	if skipped > 0 {

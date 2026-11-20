@@ -50,16 +50,23 @@ func (s *instrumentedStore) diagnostic(code string) {
 
 func (s *instrumentedStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	var records []observability.Record
+	// Diagnostics are reported once the transaction commits, and only the
+	// last run's: a run that aborted reported nothing.
+	var diagnostics []string
 	err := s.inner.Transact(ctx, g, func(tx storage.Tx) error {
+		records, diagnostics = nil, nil
 		r := &recorder{Tx: tx, at: g.Now}
 		if err := fn(r); err != nil {
 			return err
 		}
-		records = r.resolveSafely(s.diagnostic)
+		records = r.resolveSafely(func(code string) { diagnostics = append(diagnostics, code) })
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+	for _, code := range diagnostics {
+		s.diagnostic(code)
 	}
 	observeAll(ctx, s.o.Observer, records, s.diagnostic)
 	return nil

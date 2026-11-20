@@ -67,7 +67,7 @@ type bound struct {
 // own, so it may read issues but not change them.
 func (t tools) bind(ctx context.Context, a extension.Authority) (*bound, error) {
 	var w domain.Work
-	if err := sdk.NewStore(sdk.HostFrom(ctx)).Transact(ctx, storage.Guard{Now: t.st.o.Now()}, func(tx storage.Tx) error {
+	if err := storage.Retry(sdk.NewStore(sdk.HostFrom(ctx)), storage.DefaultRetry).Transact(ctx, storage.Guard{Now: t.st.o.Now()}, func(tx storage.Tx) error {
 		var err error
 		w, err = tx.Work(a.WorkID)
 		return err

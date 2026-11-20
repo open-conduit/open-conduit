@@ -65,14 +65,16 @@ func (s *Server) listSecrets(c *call) (int, any, error) {
 	for _, n := range names {
 		found[key{config.StoreFile, n}] = true
 	}
+	var entries []storage.Entry
 	if err = s.read(c.ctx, func(tx storage.Tx) error {
-		entries, e := tx.List(secretsNamespace, config.StoreKeyring+"/")
-		for _, en := range entries {
-			found[key{config.StoreKeyring, strings.TrimPrefix(en.Key, config.StoreKeyring+"/")}] = true
-		}
+		var e error
+		entries, e = tx.List(secretsNamespace, config.StoreKeyring+"/")
 		return e
 	}); err != nil {
 		return 0, nil, err
+	}
+	for _, en := range entries {
+		found[key{config.StoreKeyring, strings.TrimPrefix(en.Key, config.StoreKeyring+"/")}] = true
 	}
 	snapshot, _ := s.o.Config.Current()
 	refs := secretReferences(snapshot)
@@ -189,6 +191,7 @@ func (s *Server) deleteSecret(c *call) (int, any, error) {
 		}
 		indexed := false
 		if e := s.read(c.ctx, func(tx storage.Tx) error {
+			indexed = false
 			_, e := tx.Get(secretsNamespace, config.StoreKeyring+"/"+name)
 			if errors.Is(e, storage.ErrNotFound) {
 				return nil

@@ -137,11 +137,12 @@ func (h *Host) CancelWork(ctx context.Context, work domain.ID, expected domain.R
 	return domain.ID(out.EventID), err
 }
 
-// Update reads a key, applies fn and commits with a version check, retrying
-// on conflict. fn returns nil to delete.
+// Update reads a key, applies fn and commits with a version check: a
+// Transact of the connection's Store under storage.Retry, so a concurrent
+// change to the key reruns fn over the new value. fn returns nil to delete.
 func (h *Host) Update(ctx context.Context, namespace, key string, fn func(old []byte, found bool) ([]byte, error)) error {
-	for attempt := 0; attempt < 16; attempt++ {
-		old, version, err := h.Get(ctx, namespace, key)
+	return storage.Retry(NewStore(h), storage.DefaultRetry).Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		old, err := tx.Get(namespace, key)
 		found := err == nil
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			return err
@@ -150,18 +151,11 @@ func (h *Host) Update(ctx context.Context, namespace, key string, fn func(old []
 		if err != nil {
 			return err
 		}
-		check := protocol.KVCheck{Namespace: namespace, Key: key, Version: version, Absent: !found}
-		b := protocol.KVCommitParams{Checks: []protocol.KVCheck{check}}
 		if value == nil {
-			b.Deletes = []protocol.KVDelete{{Namespace: namespace, Key: key}}
-		} else {
-			b.Puts = []protocol.KVPut{{Namespace: namespace, Key: key, Value: value}}
+			return tx.Delete(namespace, key)
 		}
-		if err = h.Commit(ctx, b); !errors.Is(err, storage.ErrConflict) {
-			return err
-		}
-	}
-	return storage.ErrConflict
+		return tx.Put(namespace, key, value)
+	})
 }
 
 // Accept derives one Event from parent (an accepted Event in a configured

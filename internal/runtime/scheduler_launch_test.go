@@ -397,7 +397,9 @@ func TestProductionSchedulerHoldEndsOnLostLease(t *testing.T) {
 }
 
 // abortingRenewals fails the next renewals with err, committing nothing, as
-// a backend under contention aborts a transaction.
+// a backend under contention aborts a transaction. A renewal it fails
+// fails on every run, so a rerun (storage.Retry) cannot save it and each
+// failed renewal counts once.
 type abortingRenewals struct {
 	storage.Store
 	mu    sync.Mutex
@@ -406,19 +408,24 @@ type abortingRenewals struct {
 }
 
 func (s *abortingRenewals) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
-	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(abortingRenewalsTx{tx, s}) })
+	var aborted bool
+	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(abortingRenewalsTx{tx, s, &aborted}) })
 }
 
 type abortingRenewalsTx struct {
 	storage.Tx
-	s *abortingRenewals
+	s       *abortingRenewals
+	aborted *bool
 }
 
 func (t abortingRenewalsTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 	t.s.mu.Lock()
 	defer t.s.mu.Unlock()
-	if t.s.fails > 0 {
+	if !*t.aborted && t.s.fails > 0 {
 		t.s.fails--
+		*t.aborted = true
+	}
+	if *t.aborted {
 		return t.s.err
 	}
 	return t.Tx.Renew(ref, ttl)

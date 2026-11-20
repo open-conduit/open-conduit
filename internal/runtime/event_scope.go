@@ -24,7 +24,9 @@ func (r *Router) BackfillEventScopes(ctx context.Context) (int, error) {
 	given := 0
 	for after := uint64(0); ; {
 		var page []domain.AcceptedEvent
+		recorded := 0
 		err := r.transact(ctx, nil, func(tx storage.Tx) error {
+			recorded = 0
 			var e error
 			page, e = tx.ScopeEvents([]domain.ID{""}, after, eventScopeBackfillPage)
 			if e != nil {
@@ -40,7 +42,7 @@ func (r *Router) BackfillEventScopes(ctx context.Context) (int, error) {
 				}
 				switch e = tx.SetEventScope(a.Event.ID, scope); {
 				case e == nil:
-					given++
+					recorded++
 				case !errors.Is(e, storage.ErrNotFound):
 					return e
 				}
@@ -50,6 +52,7 @@ func (r *Router) BackfillEventScopes(ctx context.Context) (int, error) {
 		if err != nil {
 			return given, err
 		}
+		given += recorded
 		if len(page) < eventScopeBackfillPage {
 			return given, nil
 		}

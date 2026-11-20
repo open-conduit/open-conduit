@@ -116,6 +116,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 func scopeIDs(ctx context.Context, store storage.Store) ([]string, error) {
 	var out []string
 	err := store.Transact(ctx, storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error {
+		out = nil
 		scopes, err := tx.ListScopes()
 		for _, s := range scopes {
 			out = append(out, string(s.ID))
@@ -237,6 +238,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	}
 	var refs, missing, timerCount int
 	err = store.View(ctx, func(tx storage.Tx) error {
+		scopes, refs, missing, timerCount = map[string]*cli.ScopeState{}, 0, 0, 0
 		ss, err := tx.ListScopes()
 		if err != nil {
 			return err

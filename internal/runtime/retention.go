@@ -167,6 +167,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 	now := s.now()
 	finishedBefore := now.Add(-s.options.KeptFinished)
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		result.Expired = nil
 		if e := indexRetentionPending(tx); e != nil {
 			return e
 		}

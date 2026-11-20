@@ -423,7 +423,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		_ = meter.Shutdown(shutdown)
 		_ = logger.Shutdown(shutdown)
 	}()
-	var coord storage.Store = faultStore(store, d.log)
+	coord := storage.Retry(faultStore(store, d.log), d.retryPolicy())
 	if d.coord, err = runtime.Instrument(coord, runtime.TelemetryOptions{Observer: d.pipeline, Diagnostic: func(code string) { d.report("telemetry", "", code) }}); err != nil {
 		return err
 	}
@@ -716,6 +716,19 @@ func (d *daemon) poke() {
 	case d.nudge <- struct{}{}:
 	default:
 	}
+}
+
+// retryPolicy is storage.DefaultRetry for the daemon's store, logging a
+// transaction that ran out of attempts: SQLite stayed busy past its busy
+// timeout on every run, which is contention worth an operator's notice.
+func (d *daemon) retryPolicy() storage.RetryPolicy {
+	p := storage.DefaultRetry
+	p.Observe = func(n int, final bool, err error) {
+		if final {
+			d.log.Warn("storage transaction aborted on every attempt", "attempts", n, "error", err.Error())
+		}
+	}
+	return p
 }
 
 // report logs a diagnostic once per subject until its code changes, so a

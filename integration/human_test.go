@@ -1312,9 +1312,10 @@ func TestHumanGateGrant(t *testing.T) {
 	}
 }
 
-// conflicting is a store whose next n transactions are refused as a
-// concurrent writer's (the extension's own sync settling the same ask)
-// would be over the protocol: nothing is applied.
+// conflicting is a store whose next n transactions abort as one that
+// loses a race with a concurrent writer (the extension's own sync settling
+// the same ask) does over the protocol: nothing is applied, and the abort
+// is storage.ErrTransient.
 type conflicting struct {
 	storage.Store
 	n int
@@ -1323,14 +1324,14 @@ type conflicting struct {
 func (c *conflicting) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	if c.n > 0 {
 		c.n--
-		return storage.ErrConflict
+		return storage.ErrTransient
 	}
 	return c.Store.Transact(ctx, g, fn)
 }
 
-// A gate whose transaction loses a race with a concurrent write tries again
-// rather than refusing the call as gate_failed; one that keeps losing still
-// fails closed.
+// A gate whose transaction loses a race with a concurrent write runs again
+// under the host's storage.Retry rather than refusing the call as
+// gate_failed; one that keeps losing still fails closed.
 func TestHumanGateRetriesAConflict(t *testing.T) {
 	h := newHumanHarness(t, "persistent", gated)
 	ctx := context.Background()
@@ -1339,7 +1340,7 @@ func TestHumanGateRetriesAConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &conflicting{Store: h.f.Store, n: 2}
-	tools, err := hu.NewTools(hu.Options{Store: store, Now: h.f.Clock.Now, Entry: func(domain.ID) (hu.Entry, bool) { return hu.Entry{Name: "decisions", Config: c}, true }})
+	tools, err := hu.NewTools(hu.Options{Store: storage.Retry(store, storage.RetryPolicy{Attempts: 5}), Now: h.f.Clock.Now, Entry: func(domain.ID) (hu.Entry, bool) { return hu.Entry{Name: "decisions", Config: c}, true }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1349,7 +1350,7 @@ func TestHumanGateRetriesAConflict(t *testing.T) {
 		t.Fatalf("a gate that lost two races: %+v %v", plan, err)
 	}
 	store.n = 100
-	if _, err := tools.Gate(ctx, a, call); !errors.Is(err, storage.ErrConflict) {
+	if _, err := tools.Gate(ctx, a, call); !errors.Is(err, storage.ErrTransient) {
 		t.Fatalf("control: a gate that never wins: %v", err)
 	}
 }

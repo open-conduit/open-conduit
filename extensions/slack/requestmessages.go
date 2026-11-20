@@ -278,6 +278,7 @@ func (p *Projector) sendRequestMessage(ctx context.Context, w wanted) (bool, err
 	key := requestMessageKey(w.ID)
 	var rec requestMessage
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = requestMessage{}
 		found, err := p.get(tx, key, &rec)
 		if err != nil || found {
 			return err
@@ -323,6 +324,9 @@ func (p *Projector) sendRequestMessage(ctx context.Context, w wanted) (bool, err
 			map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": "<" + rec.Link + "|Open the conversation it was asked in>"}}},
 			w.blocks[len(w.blocks)-1])
 	}
+	// The callback compares against rec as it was read, so the record it
+	// moves to is kept apart and becomes rec only once it has committed.
+	var attempted requestMessage
 	if err := p.transact(ctx, func(tx storage.Tx) error {
 		var cur requestMessage
 		if _, err := p.get(tx, key, &cur); err != nil {
@@ -332,11 +336,12 @@ func (p *Projector) sendRequestMessage(ctx context.Context, w wanted) (bool, err
 			return storage.ErrConflict
 		}
 		cur.State, cur.Attempts, cur.AttemptedAt, cur.Link = messageAttempted, cur.Attempts+1, p.o.Now().UTC(), rec.Link
-		rec = cur
+		attempted = cur
 		return p.put(tx, key, cur)
 	}); err != nil {
 		return false, err
 	}
+	rec = attempted
 	channel, ts, err := p.o.Client.PostMessageIn(ctx, Post{Channel: w.User, Text: w.text, Blocks: raws(blocks), Metadata: Marker(w.Work, "", w.ID)})
 	var limit *RateLimitError
 	var refused *APIError

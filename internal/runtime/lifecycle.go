@@ -231,6 +231,7 @@ type ChildRequest struct {
 func (r *Router) CreateChild(ctx context.Context, ref domain.LeaseRef, request ChildRequest) (out domain.Work, err error) {
 	var rejected error
 	err = r.transact(ctx, &ref, func(tx storage.Tx) error {
+		rejected = nil
 		x, e := tx.Execution(ref.ExecutionID)
 		if e != nil {
 			return e
@@ -269,6 +270,7 @@ func (r *Router) CreateChild(ctx context.Context, ref domain.LeaseRef, request C
 func (r *Router) CreateSuccessor(ctx context.Context, predecessor, trigger domain.ID, request ChildRequest) (out domain.Work, err error) {
 	var rejected error
 	err = r.transact(ctx, nil, func(tx storage.Tx) error {
+		rejected = nil
 		old, e := tx.Work(predecessor)
 		if e != nil {
 			return e

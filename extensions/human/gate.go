@@ -60,7 +60,7 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 	var decided error
 	var granted *Grant
 	allowed := false
-	err := transact(ctx, t.o.Store, storage.Guard{Now: now}, func(tx storage.Tx) error {
+	err := t.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		allowed, decided, rec, granted = false, nil, Ask{}, nil
 		w, err := tx.Work(a.WorkID)
 		if err != nil || w.ScopeID != a.ScopeID {
@@ -192,27 +192,6 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			AliasType: TypeAnswered, Filter: filterPayload(rec), Label: "a person's approval"}},
 		Output: domain.Payload{Schema: SchemaTool, Data: out},
 	}, nil
-}
-
-// conflictRetries is how many times a gate's transaction is tried when a
-// concurrent write (the extension's own sync settling the same ask) moves
-// a key it read.
-const conflictRetries = 5
-
-// transact is store.Transact, tried again on storage.ErrConflict. Over the
-// protocol a transaction is optimistic: a key it read that another writer
-// changes refuses the commit with ErrConflict and applies nothing, and a
-// gate's callback reads afresh each time, so trying again is safe. Without
-// it the conflict reached the toolbelt as gate_failed, refusing a call a
-// person had approved.
-func transact(ctx context.Context, store storage.Store, g storage.Guard, fn func(storage.Tx) error) error {
-	var err error
-	for i := 0; i < conflictRetries; i++ {
-		if err = store.Transact(ctx, g, fn); !errors.Is(err, storage.ErrConflict) {
-			return err
-		}
-	}
-	return err
 }
 
 // Grant is an approval's life (a gate's valid_for): the approval it came

@@ -300,6 +300,7 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 	}
 	delivery := "reconcile/" + key
 	err = c.transact(ctx, func(tx storage.Tx) error {
+		sources = nil
 		if old, dup, e := prior(tx, delivery); e != nil || dup {
 			if e != nil {
 				return e
@@ -417,6 +418,7 @@ func (c *Control) InterruptWork(ctx context.Context, workID domain.ID, expected 
 	delivery := "interrupt/" + key
 	var intentID string
 	err = c.transact(ctx, func(tx storage.Tx) error {
+		intentID = ""
 		if old, dup, e := prior(tx, delivery); e != nil || dup {
 			if e != nil {
 				return e

@@ -362,6 +362,7 @@ func (t *Tools) resolve(ctx context.Context, a extension.Authority, in domain.Pa
 	}
 	var done Report
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		done = Report{}
 		rows, err := tx.List(Namespace, "report/"+string(a.ScopeID)+"/")
 		if err != nil {
 			return err

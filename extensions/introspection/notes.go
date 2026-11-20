@@ -93,8 +93,10 @@ func (t *Tools) note(ctx context.Context, a extension.Authority, kind, area, bod
 	}
 	suffix := "/" + digest(string(a.ExecutionID), kind, seed)[:12]
 	at := t.o.Now().UTC()
-	key := kind + "/" + at.Format("20060102T150405.000Z") + suffix
+	fresh := kind + "/" + at.Format("20060102T150405.000Z") + suffix
+	var key string
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		key = fresh
 		rows, err := tx.List(NotesNamespace, kind+"/")
 		if err != nil {
 			return err

@@ -61,7 +61,11 @@ type UploadState struct {
 // LookupUpload reads an upload's durable record (State is "" when unknown).
 func (p *Projector) LookupUpload(ctx context.Context, id string) (UploadState, error) {
 	var rec uploadRecord
-	err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, uploadKey(id), &rec); return e })
+	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = uploadRecord{}
+		_, e := p.get(tx, uploadKey(id), &rec)
+		return e
+	})
 	return UploadState{State: rec.State, File: rec.File, Code: rec.Code}, err
 }
 
@@ -76,6 +80,7 @@ func (p *Projector) Upload(ctx context.Context, in UploadIntent) (string, error)
 	key, sum := uploadKey(in.ID), digest(string(in.Content))
 	var rec uploadRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = uploadRecord{}
 		found, err := p.get(tx, key, &rec)
 		if err != nil {
 			return err
@@ -119,6 +124,9 @@ func (p *Projector) Upload(ctx context.Context, in UploadIntent) (string, error)
 		// The reserved file is never shared; a retry reserves another.
 		return rec.State, err
 	}
+	// The callback compares against rec as it was read, so the record it
+	// moves to becomes rec only once it has committed.
+	var attempted uploadRecord
 	err = p.transact(ctx, func(tx storage.Tx) error {
 		var cur uploadRecord
 		if _, err := p.get(tx, key, &cur); err != nil {
@@ -128,12 +136,13 @@ func (p *Projector) Upload(ctx context.Context, in UploadIntent) (string, error)
 			return storage.ErrConflict
 		}
 		cur.State, cur.File, cur.Attempts, cur.AttemptedAt = IntentAttempted, file, cur.Attempts+1, p.o.Now().UTC()
-		rec = cur
+		attempted = cur
 		return p.put(tx, key, cur)
 	})
 	if err != nil {
 		return IntentPending, err
 	}
+	rec = attempted
 	return p.complete(ctx, key, rec, false)
 }
 
@@ -152,6 +161,7 @@ func (p *Projector) share(ctx context.Context, key string, rec uploadRecord) (st
 	if p.o.Settings.Projection.DryRun {
 		return rec.State, nil
 	}
+	var attempted uploadRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		var cur uploadRecord
 		if _, err := p.get(tx, key, &cur); err != nil {
@@ -161,12 +171,13 @@ func (p *Projector) share(ctx context.Context, key string, rec uploadRecord) (st
 			return storage.ErrConflict
 		}
 		cur.Attempts, cur.AttemptedAt = cur.Attempts+1, p.o.Now().UTC()
-		rec = cur
+		attempted = cur
 		return p.put(tx, key, cur)
 	})
 	if err != nil {
 		return IntentAttempted, err
 	}
+	rec = attempted
 	return p.complete(ctx, key, rec, true)
 }
 

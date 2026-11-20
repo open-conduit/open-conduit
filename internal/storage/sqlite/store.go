@@ -398,6 +398,13 @@ func (s *Store) SerialWriters() bool { return true }
 // The caller's cancellation is checked between statements and before COMMIT
 // instead, and the transaction is rolled back before the connection goes back.
 func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	if rerun {
+		return rerunTransact(ctx, g, s.transact, fn)
+	}
+	return s.transact(ctx, g, fn)
+}
+
+func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	if g.Now.IsZero() || fn == nil {
 		return storage.ErrInvalid
 	}
@@ -445,6 +452,13 @@ func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.T
 // SQLite never sees the caller's context: it is checked between statements,
 // and the transaction is rolled back before the connection goes back.
 func (s *Store) View(ctx context.Context, fn func(storage.Tx) error) error {
+	if rerun {
+		return rerunView(ctx, s.view, fn)
+	}
+	return s.view(ctx, fn)
+}
+
+func (s *Store) view(ctx context.Context, fn func(storage.Tx) error) error {
 	if fn == nil {
 		return storage.ErrInvalid
 	}

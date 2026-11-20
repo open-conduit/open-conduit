@@ -89,6 +89,7 @@ func (s *Server) listScopes(c *call) (int, any, error) {
 	}
 	var items []keyed
 	err = s.read(c.ctx, func(tx storage.Tx) error {
+		items = nil
 		scopes, e := tx.ListScopes()
 		for _, sc := range scopes {
 			if !c.sees(sc.ID) {
@@ -188,9 +189,11 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 			return 0, nil, fail(400, "invalid_filter", "after_sequence must be a decimal string")
 		}
 	}
-	out := []any{}
-	next := ""
+	var out []any
+	var next string
+	start := after
 	err = s.read(c.ctx, func(tx storage.Tx) error {
+		out, next, after = []any{}, "", start
 		bound := uint64(0)
 		if q.cursor != nil {
 			last, _ := strconv.ParseUint(q.cursor.Last, 10, 64)
@@ -422,6 +425,7 @@ func (s *Server) listExecutions(c *call) (int, any, error) {
 	}
 	var items []keyed
 	err = s.read(c.ctx, func(tx storage.Tx) error {
+		items = nil
 		xs, e := tx.ListExecutions(domain.ID(q.filters["work_id"]))
 		if e != nil {
 			return e
@@ -558,6 +562,7 @@ func (s *Server) artifacts(c *call, keep func(domain.Execution) bool) ([]wireArt
 	var out []wireArtifact
 	var xs []domain.Execution
 	err := s.read(c.ctx, func(tx storage.Tx) error {
+		out = nil
 		var e error
 		xs, e = tx.ListExecutions("")
 		if e != nil {
@@ -1337,8 +1342,9 @@ type wireOperator struct {
 // listOperators is GET /auth/operators: every operator credential, active or
 // revoked, by name. It never shows a token.
 func (s *Server) listOperators(c *call) (int, any, error) {
-	out := []wireOperator{}
+	var out []wireOperator
 	err := s.read(c.ctx, func(tx storage.Tx) error {
+		out = []wireOperator{}
 		rows, err := tx.List(authNamespace, "operator/")
 		if err != nil {
 			return err
@@ -1464,6 +1470,7 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 func (s *Server) SweepOperators(ctx context.Context, grace time.Duration, limit int) (int, error) {
 	deleted := 0
 	err := s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+		deleted = 0
 		rows, err := tx.List(authNamespace, "operator/")
 		if err != nil {
 			return err

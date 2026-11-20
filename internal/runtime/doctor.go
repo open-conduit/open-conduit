@@ -86,6 +86,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	// daemon's writes. Its cost follows what is outstanding (live attempts,
 	// unconfirmed holds, unreleased retention), not the whole history.
 	err := storage.View(ctx, store, now, func(tx storage.Tx) error {
+		expired, holds, retention, overBudget, parked = nil, nil, nil, nil, 0
 		xs, err := heldCandidates(tx)
 		if err != nil {
 			return err
@@ -212,6 +213,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 func (s *Scheduler) PinnedExecutorCheck(ctx context.Context) Check {
 	var missing []string
 	err := storage.View(ctx, s.store, s.now(), func(tx storage.Tx) error {
+		missing = nil
 		xs, err := heldCandidates(tx)
 		if err != nil {
 			return err
@@ -249,6 +251,7 @@ func (s *Scheduler) PinnedExecutorCheck(ctx context.Context) Check {
 func routingCheck(ctx context.Context, store storage.Store, now time.Time, age time.Duration, limit func([]string) []string) Check {
 	var stuck []string
 	err := storage.View(ctx, store, now, func(tx storage.Tx) error {
+		stuck = nil
 		events, err := tx.UnroutedEvents(0, 0)
 		if err != nil {
 			return err

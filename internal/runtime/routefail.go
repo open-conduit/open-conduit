@@ -184,7 +184,10 @@ func routeConfigError(event domain.ID, route domain.Route, code string, err erro
 // backoff reports a not-yet-due retry of event as a RouteError.
 func (r *Router) backoff(ctx context.Context, event domain.ID) error {
 	var f RouteFailure
-	err := r.transact(ctx, nil, func(tx storage.Tx) error { return getJSON(tx, routeFailureNamespace, routeFailureKey(event), &f) })
+	err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		f = RouteFailure{}
+		return getJSON(tx, routeFailureNamespace, routeFailureKey(event), &f)
+	})
 	if errors.Is(err, storage.ErrNotFound) {
 		return nil
 	}
@@ -201,7 +204,9 @@ func (r *Router) backoff(ctx context.Context, event domain.ID) error {
 // the Event as failed. A failure inside the backoff of the last one (an
 // earlier input evaluated again in another's batch) is not counted again.
 func (r *Router) fail(ctx context.Context, re *RouteError) error {
+	attempts := re.Attempts
 	return r.transact(ctx, nil, func(tx storage.Tx) error {
+		re.Attempts, re.DeadLettered = attempts, false
 		a, e := tx.Event(re.EventID)
 		if e != nil {
 			return e

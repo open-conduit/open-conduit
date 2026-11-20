@@ -17,8 +17,9 @@ import (
 // budgetEvents lists the core.budget.* Events accepted so far, by type.
 func budgetEvents(t *testing.T, read func(func(storage.Tx) error)) map[string][]runtime.BudgetNotice {
 	t.Helper()
-	out := map[string][]runtime.BudgetNotice{}
+	var out map[string][]runtime.BudgetNotice
 	read(func(tx storage.Tx) error {
+		out = map[string][]runtime.BudgetNotice{}
 		events, err := tx.Events(0, 0)
 		for _, a := range events {
 			if !strings.HasPrefix(a.Event.Type, "core.budget.") {

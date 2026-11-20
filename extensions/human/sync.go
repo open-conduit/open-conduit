@@ -32,6 +32,7 @@ func Sync(ctx context.Context, store storage.Store, now time.Time) (SyncResult, 
 	var res SyncResult
 	var ids []string
 	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		ids = nil
 		rows, err := tx.List(Namespace, "ask/")
 		if err != nil {
 			return err
@@ -50,11 +51,20 @@ func Sync(ctx context.Context, store storage.Store, now time.Time) (SyncResult, 
 		return res, err
 	}
 	for _, id := range ids {
+		// One ask's counts are set afresh by each run of its transaction
+		// and added to the pass's only once that run commits.
+		var one SyncResult
 		if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-			return settle(tx, id, now, &res)
+			one = SyncResult{}
+			return settle(tx, id, now, &one)
 		}); err != nil {
 			return res, err
 		}
+		res.Answered += one.Answered
+		res.Expired += one.Expired
+		res.Withdrawn += one.Withdrawn
+		res.Late += one.Late
+		res.Escalated = append(res.Escalated, one.Escalated...)
 	}
 	return res, nil
 }

@@ -52,6 +52,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Bridge serves one in-process extension.
@@ -642,7 +643,7 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 	// The directories come from the Host serving the call, not b.srv: the
 	// server serves initialize and configure before Attach records it.
 	host := inproc.Host{
-		Store: sdk.NewStore(h),
+		Store: storage.Retry(sdk.NewStore(h), storage.DefaultRetry),
 		Now:   time.Now,
 		Log:   slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("extension", b.x.Name()),
 		Secrets: func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error) {

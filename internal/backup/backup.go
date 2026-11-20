@@ -77,11 +77,12 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		}
 		defer pin.Close()
 		database := filepath.Join(stage, snapshotName)
-		refs := map[string]domain.ArtifactRef{}
-		live := map[string]bool{}
+		var refs map[string]domain.ArtifactRef
+		var live map[string]bool
 		// References are read from the snapshot's own state, not the live
 		// database, so the bundle copies exactly what its snapshot names.
 		err = db.Snapshot(ctx, database, func(tx storage.Tx) error {
+			refs, live = map[string]domain.ArtifactRef{}, map[string]bool{}
 			xs, err := tx.ListExecutions("")
 			if err != nil {
 				return err

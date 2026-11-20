@@ -209,8 +209,10 @@ func TestStartPointsAreRecordedOnce(t *testing.T) {
 	tx := &kvTx{kv: map[string][]byte{}, works: []domain.Work{{ID: "w", CreatedAt: earlier,
 		CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: slack.ThreadKey(chanA, slack.TS(earlier))}}}}}
 	b := slack.NewBook()
-	if err := b.Register(tx, ns, []string{chanA, chanB}, first); err != nil {
+	if reg, err := slack.Register(tx, ns, []string{chanA, chanB}, first); err != nil {
 		t.Fatal(err)
+	} else {
+		b.Load(reg)
 	}
 	if at, ok := b.StartPoint(ns, chanA); !ok || !at.Equal(earlier) {
 		t.Fatalf("upgraded channel's start point %v %v, want its earliest Work's creation %v", at, ok, earlier)
@@ -222,8 +224,10 @@ func TestStartPointsAreRecordedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := slack.NewBook()
-	if err := restarted.Register(tx, ns, []string{chanB}, first.Add(time.Hour)); err != nil {
+	if reg, err := slack.Register(tx, ns, []string{chanB}, first.Add(time.Hour)); err != nil {
 		t.Fatal(err)
+	} else {
+		restarted.Load(reg)
 	}
 	if at, _ := restarted.StartPoint(ns, chanB); !at.Equal(first) {
 		t.Fatalf("a restart moved the start point to %v", at)
@@ -231,8 +235,10 @@ func TestStartPointsAreRecordedOnce(t *testing.T) {
 	if !restarted.Foreign(ns, chanB, "1794597426.185892") || restarted.ForeignCount(ns, chanB) != 1 {
 		t.Fatal("a restart lost the marked thread")
 	}
-	if err := b.Register(tx, ns, []string{slack.DirectStart}, first.Add(time.Minute)); err != nil {
+	if reg, err := slack.Register(tx, ns, []string{slack.DirectStart}, first.Add(time.Minute)); err != nil {
 		t.Fatal(err)
+	} else {
+		b.Load(reg)
 	}
 	if at, ok := b.StartPoint(ns, "D0ANYONE"); !ok || !at.Equal(first.Add(time.Minute)) {
 		t.Fatalf("a direct message's start point %v %v, want the entry's registration with direct messages", at, ok)

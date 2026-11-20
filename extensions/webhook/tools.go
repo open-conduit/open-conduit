@@ -51,7 +51,8 @@ func read(ctx context.Context, a extension.Authority, in ReadInput, now func() t
 	}
 	var found domain.AcceptedEvent
 	mine := false
-	err := sdk.NewStore(sdk.HostFrom(ctx)).Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+	err := storage.Retry(sdk.NewStore(sdk.HostFrom(ctx)), storage.DefaultRetry).Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		found, mine = domain.AcceptedEvent{}, false
 		w, err := tx.Work(a.WorkID)
 		if err != nil || w.ScopeID != a.ScopeID {
 			return extension.ErrUnauthorized

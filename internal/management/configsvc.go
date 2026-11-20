@@ -132,6 +132,7 @@ func StoredGeneration(ctx context.Context, store storage.Store, now func() time.
 	var active activation
 	var normalized []byte
 	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		active, normalized = activation{}, nil
 		b, err := tx.Get(configNamespace, "active")
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil

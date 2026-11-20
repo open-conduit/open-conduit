@@ -376,6 +376,7 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 	}
 	var asked bool
 	err = storage.View(ctx, t.store, t.now(), func(tx storage.Tx) error {
+		asked = false
 		w, e := tx.Work(a.WorkID)
 		if e != nil || w.ParentID == "" {
 			return e
@@ -778,6 +779,7 @@ func (t *Toolbelt) revokeInTx(tx storage.Tx, digest string) (time.Time, error) {
 // without validating it. Management uses it only for class separation.
 func (t *Toolbelt) Known(ctx context.Context, token string) (known bool, err error) {
 	err = t.store.Transact(ctx, storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		known = false
 		_, e := tx.Get(tokenNamespace, TokenDigest(token))
 		if errors.Is(e, storage.ErrNotFound) {
 			return nil
@@ -790,6 +792,7 @@ func (t *Toolbelt) Known(ctx context.Context, token string) (known bool, err err
 
 func (t *Toolbelt) load(ctx context.Context, token string) (record tokenRecord, err error) {
 	err = t.store.Transact(ctx, storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		record = tokenRecord{}
 		return getJSON(tx, tokenNamespace, TokenDigest(token), &record)
 	})
 	if errors.Is(err, storage.ErrNotFound) {
@@ -857,6 +860,7 @@ func (t *Toolbelt) recoveringRefusal(ctx context.Context, record tokenRecord, er
 	a := record.Authority
 	adoptable := false
 	_ = t.store.Transact(context.WithoutCancel(ctx), storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		adoptable = false
 		x, e := tx.Execution(a.ExecutionID)
 		if e != nil {
 			return e
@@ -1150,6 +1154,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	}
 	var refusal error
 	err = t.store.Transact(ctx, storage.Guard{Now: now, Lease: &ref}, func(tx storage.Tx) error {
+		out, refusal = extension.ToolResult{}, nil
 		_, x, w, state, e := t.authorizedInTx(tx, digest)
 		if e != nil {
 			return e

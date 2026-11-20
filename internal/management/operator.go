@@ -70,6 +70,7 @@ type workDetail struct {
 func (s *Server) detail(ctx context.Context, w domain.Work, extensions bool) (workDetail, error) {
 	out := workDetail{wireWork: toWork(w)}
 	err := s.read(ctx, func(tx storage.Tx) error {
+		out.Hold, out.Inputs = nil, 0
 		h, held, e := runtime.HoldInTx(tx, w.ID)
 		if held {
 			out.Hold = &wireHold{EventID: string(h.EventID), Reason: h.Reason, At: ts(h.At), Kind: h.Kind}
@@ -264,6 +265,7 @@ type attachTarget struct {
 func (s *Server) attachTarget(c *call) (attachTarget, error) {
 	var t attachTarget
 	err := s.read(c.ctx, func(tx storage.Tx) error {
+		t = attachTarget{}
 		var e error
 		if t.work, e = tx.Work(domain.ID(c.params[0])); e != nil {
 			return e
