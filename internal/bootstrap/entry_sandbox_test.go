@@ -42,7 +42,7 @@ func TestEntrySandboxPlansWithTheEntrysPolicy(t *testing.T) {
 	jail := &jailProvider{}
 	d := &daemon{o: Options{StateDir: state}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	d.openSandboxes()
-	d.sandboxes.providers["jail"] = jail
+	d.sandboxes.providers.set(map[string]extension.SandboxProvider{"jail": jail})
 	sb := &config.Sandbox{Provider: "jail", Config: json.RawMessage(`{"network":{"allow":["api.example.com"]}}`)}
 	d.publishGeneration(&config.Snapshot{Scopes: map[domain.ID]*config.EffectiveScope{
 		"org": {ID: "org", Enabled: true, Extensions: []config.Extension{

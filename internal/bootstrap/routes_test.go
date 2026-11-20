@@ -79,7 +79,7 @@ func TestAdmitTrace(t *testing.T) {
 	if err = ingress.Register(ctx, "chat/eng", extension.Source{Namespace: "chat/eng", ScopeID: "eng"}, familyIngress{[]string{"chat.message"}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	d := &daemon{ingress: ingress, packages: []*installed{{m: protocol.Manifest{Name: introspection.Type}}}}
+	d := &daemon{ingress: ingress, external: externalState{catalogue: []*installed{{m: protocol.Manifest{Name: introspection.Type}}}}}
 	for name, c := range map[string]struct {
 		scope domain.ID
 		e     domain.Event

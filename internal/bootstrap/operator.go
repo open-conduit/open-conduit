@@ -389,7 +389,7 @@ func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extensio
 // attach returns the attach command of the Work's executor registration,
 // through the optional public extension.AttachExecutor.
 func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
-	a, ok := d.executors[executor].(extension.AttachExecutor)
+	a, ok := d.executorMap()[executor].(extension.AttachExecutor)
 	if !ok {
 		return management.AttachSpec{}, management.ErrAttachUnsupported
 	}
@@ -407,7 +407,7 @@ func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (ma
 // live returns a running attempt's output so far from its executor
 // registration, through the optional public extension.LiveExecutor.
 func (d *daemon) live(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
-	l, ok := d.executors[executor].(extension.LiveExecutor)
+	l, ok := d.executorMap()[executor].(extension.LiveExecutor)
 	if !ok {
 		return nil, management.ErrLiveUnsupported
 	}

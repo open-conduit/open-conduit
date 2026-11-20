@@ -33,6 +33,10 @@ type ExtensionPackage struct {
 	// Bundled marks a package that ships with the binary; one installed
 	// under the same name replaces it.
 	Bundled bool `json:"bundled,omitempty"`
+	// Running is whether the daemon runs the package, when a daemon
+	// answers (`extension list`): it runs the packages its configuration
+	// uses. Absent when none does.
+	Running *bool `json:"running,omitempty"`
 }
 
 // ExtensionPermission is one permission a package declares.
@@ -241,6 +245,9 @@ func (o *operator) extension(args []string) int {
 		return 0
 	case "list":
 		l, err := ops.List(path)
+		if err == nil {
+			o.markRunning(l.Packages)
+		}
 		if err != nil || bools["json"] {
 			return o.emit(l, err)
 		}
@@ -257,7 +264,14 @@ func (o *operator) extension(args []string) int {
 			if p.Bundled {
 				prev = " (bundled with open-conduit)"
 			}
-			fmt.Fprintf(w, "  %s\t%s%s\tprotocol %v\t%s\n", p.Name, p.Version, prev, p.Protocol, strings.Join(p.Provides, ", "))
+			state := ""
+			if p.Running != nil {
+				state = "\tnot running"
+				if *p.Running {
+					state = "\trunning"
+				}
+			}
+			fmt.Fprintf(w, "  %s\t%s%s%s\tprotocol %v\t%s\n", p.Name, p.Version, prev, state, p.Protocol, strings.Join(p.Provides, ", "))
 			if len(p.Permissions) > 0 {
 				fmt.Fprintf(w, "  \t\t\tpermissions: %s\n", permissionNames(p.Permissions))
 			}
@@ -449,4 +463,27 @@ func (o *operator) validateConfig(path string, data []byte) ([]client.Detail, er
 		return o.env.ValidateConfig(data)
 	}
 	return nil, nil
+}
+
+// markRunning sets which of the packages the daemon runs, when a daemon
+// answers; with none, the list stays as the files on disk give it.
+func (o *operator) markRunning(pkgs []ExtensionPackage) {
+	c, _, err := o.client()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	listed, err := c.Extensions(ctx)
+	if err != nil {
+		return
+	}
+	running := map[string]bool{}
+	for _, x := range listed {
+		running[x.Name] = x.Running
+	}
+	for i := range pkgs {
+		r := running[pkgs[i].Name]
+		pkgs[i].Running = &r
+	}
 }

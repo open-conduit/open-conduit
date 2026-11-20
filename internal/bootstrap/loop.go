@@ -82,6 +82,8 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.runPackageTasks(ctx)
 		d.reconcileContainers(ctx)
 		d.reconcileResources(c)
+		d.drainPackages(ctx)
+		d.reapValidation()
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)
 		d.retentionPass(ctx, c, &lastSweep)
@@ -483,7 +485,7 @@ func (d *daemon) stopAttempt(ctx context.Context, c *components, id domain.ID, e
 	if epoch != state.Epoch {
 		return
 	}
-	s, ok := d.executors[state.Executor].(extension.StopExecutor)
+	s, ok := d.executorMap()[state.Executor].(extension.StopExecutor)
 	if !ok {
 		d.report("stop", id, "executor_cannot_prove_stop")
 		return

@@ -61,7 +61,7 @@ func (d *daemon) admitTrace(scope domain.ID, e domain.Event) error {
 	if err != nil {
 		return err
 	}
-	for _, x := range d.packages {
+	for _, x := range d.catalogued() {
 		if !x.ownsFamily(e.Type) {
 			continue
 		}

@@ -41,7 +41,7 @@ func TestContainerReconcileRunsOffTheLoop(t *testing.T) {
 	clock := conformance.NewClock()
 	p := &hungProvider{release: make(chan struct{})}
 	d := &daemon{o: Options{StateDir: t.TempDir(), ResourceInterval: time.Second}, now: clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)), reported: map[string]string{}, reportedAt: map[string]time.Time{}}
-	d.containers.providers = map[string]extension.ContainerProvider{"hung": p}
+	d.containers.providers.set(map[string]extension.ContainerProvider{"hung": p})
 	returned := make(chan struct{})
 	go func() {
 		d.reconcileContainers(context.Background())

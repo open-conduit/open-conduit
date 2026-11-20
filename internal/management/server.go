@@ -100,9 +100,10 @@ type Options struct {
 	// Pages are the pages extensions contribute to the web view (GET
 	// /pages; optional: without it there are none).
 	Pages func() []Page
-	// Titles are the extensions' display names by name (GET /extensions;
-	// optional: without it each shows as its name).
-	Titles func() map[string]string
+	// Extensions are the installed extension packages (GET /extensions;
+	// optional: without it there are none, and each source shows as its
+	// name): each one's display name, version and whether it is running.
+	Extensions func() []Extension
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -234,6 +235,24 @@ func (s *Server) observeCredential(ctx context.Context, r issuerRecord, credenti
 
 func issuedPrincipal(r issuerRecord, v verified, token string) principal {
 	return principal{operator: true, token: token, name: r.ID + ":" + v.subject, role: r.role(v.groups), grants: grantsOf(r.Grants, v.groups), issuer: r.ID}
+}
+
+// IssuerTypes are the verifier types the stored trusted issuers name, in
+// order and each once, so the host can start the packages that verify
+// their credentials.
+func IssuerTypes(ctx context.Context, store storage.Store, now func() time.Time) ([]string, error) {
+	var out []string
+	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		issuers, err := listIssuers(tx)
+		for _, r := range issuers {
+			if !slices.Contains(out, r.Type) {
+				out = append(out, r.Type)
+			}
+		}
+		return err
+	})
+	sort.Strings(out)
+	return out, err
 }
 
 func listIssuers(tx storage.Tx) ([]issuerRecord, error) {

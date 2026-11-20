@@ -31,9 +31,11 @@ import (
 // resource, sandbox, container and tunnel providers are registered where
 // the package starts (extensions.go).
 //
-// Offline (config validation) r is nil: offline starts the package to
-// validate its declared types when a config object of one needs checking;
-// with neither, they accept any config and nothing runs.
+// A catalogue entry (demand.go) and an offline one (config validation)
+// have no r: a catalogue entry asks the package's running process, when it
+// has one, else its validation process; offline starts the package to
+// validate its declared types when a config object of one needs checking.
+// With none of these, they accept any config and nothing runs.
 type installed struct {
 	m protocol.Manifest
 	r *extproc.Remote
@@ -129,10 +131,48 @@ func (x *installed) validator(kind, typ string) func(json.RawMessage, []string) 
 	switch {
 	case x.r != nil:
 		return x.r.Validator(kind, typ)
+	case x.d != nil && x.offline != nil:
+		return func(raw json.RawMessage, secretNames []string) error {
+			r, err := x.remote()
+			if err != nil {
+				return err
+			}
+			return r.Validator(kind, typ)(raw, secretNames)
+		}
 	case x.offline != nil:
 		return x.offline.validator(kind, typ)
 	}
 	return nil
+}
+
+// asked reports whether the package can be asked anything: it runs, or it
+// can start to validate.
+func (x *installed) asked() bool { return x.r != nil || x.offline != nil }
+
+// validated are the remotes whose answers about the config objects they
+// validated (described, work kinds, bindings, entry operations) count: the
+// package's running process, then its validation process, which keeps its
+// answers once stopped. They are never called.
+func (x *installed) validated() []*extproc.Remote {
+	if x.r != nil {
+		return []*extproc.Remote{x.r}
+	}
+	var out []*extproc.Remote
+	if x.d != nil {
+		if r := x.d.runningRemote(x.m.Name); r != nil {
+			out = append(out, r)
+		}
+	}
+	if x.offline != nil {
+		if x.d == nil {
+			if x.offline.started && x.offline.r != nil {
+				out = append(out, x.offline.r)
+			}
+		} else if r := x.offline.validated(); r != nil {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Types are the manifest's connection, extension and configurable route
@@ -169,6 +209,14 @@ func (x *installed) bindingCheck(handler string) func(extension.RouteBinding) er
 	switch {
 	case x.r != nil:
 		return x.r.BindingCheck(handler)
+	case x.d != nil && x.offline != nil:
+		return func(b extension.RouteBinding) error {
+			r, err := x.remote()
+			if err != nil {
+				return err
+			}
+			return r.BindingCheck(handler)(b)
+		}
 	case x.offline != nil:
 		return x.offline.bindingCheck(handler)
 	}
@@ -190,12 +238,18 @@ func (x *installed) Playbooks() map[string]string {
 // with one of its entries (provides.entry_gated).
 func (x *installed) entryGated() bool { return x.m.Provides.EntryGated }
 
-// remote is the running package, started on first use offline.
+// remote is the running package: for a catalogue entry its running
+// process, else its validation process, started on first use, as offline.
 func (x *installed) remote() (*extproc.Remote, error) {
-	switch {
-	case x.r != nil:
+	if x.r != nil {
 		return x.r, nil
-	case x.offline != nil:
+	}
+	if x.d != nil {
+		if r := x.d.runningRemote(x.m.Name); r != nil {
+			return r, nil
+		}
+	}
+	if x.offline != nil {
 		return x.offline.remote()
 	}
 	return nil, errNoPackage
@@ -270,6 +324,10 @@ func (x *installed) providerTypes(reg *config.Registry) {
 		}
 		reg.ResourceConfig[r.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 		typ := r.Type
+		if !x.asked() {
+			// No package to ask (manifestSnapshot): no package check.
+			continue
+		}
 		if r.ModeDefault {
 			if reg.ResourceModeDefault == nil {
 				reg.ResourceModeDefault = map[string]func(json.RawMessage) string{}
@@ -672,11 +730,7 @@ func declaredSettings(decls []protocol.SettingDecl) func(json.RawMessage) []exte
 // calls the package.
 func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []config.Entry) func(json.RawMessage) []config.Entry {
 	return func(raw json.RawMessage) []config.Entry {
-		r := x.r
-		if r == nil && x.offline != nil && x.offline.started {
-			r = x.offline.r
-		}
-		if r != nil {
+		for _, r := range x.validated() {
 			if lines, ok := r.Described(kind, typ, raw); ok && len(lines) > 0 {
 				out := make([]config.Entry, len(lines))
 				for i, l := range lines {
@@ -698,14 +752,13 @@ func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []
 // package; validation does, before a binding's work_kinds are checked.
 func (x *installed) workKinds(handler string) func(json.RawMessage) []extension.WorkKind {
 	return func(raw json.RawMessage) []extension.WorkKind {
-		r := x.r
-		if r == nil && x.offline != nil && x.offline.started {
-			r = x.offline.r
+		var kinds []protocol.WorkKind
+		for _, r := range x.validated() {
+			if k, ok := r.WorkKinds(handler, raw); ok {
+				kinds = k
+				break
+			}
 		}
-		if r == nil {
-			return nil
-		}
-		kinds, _ := r.WorkKinds(handler, raw)
 		out := make([]extension.WorkKind, 0, len(kinds))
 		for _, k := range kinds {
 			out = append(out, extension.WorkKind{Kind: k.Kind, Description: k.Description})
@@ -720,15 +773,12 @@ func (x *installed) workKinds(handler string) func(json.RawMessage) []extension.
 // package; validation does, before the names are checked.
 func (x *installed) bindings(typ string) func(json.RawMessage) []string {
 	return func(raw json.RawMessage) []string {
-		r := x.r
-		if r == nil && x.offline != nil && x.offline.started {
-			r = x.offline.r
+		for _, r := range x.validated() {
+			if names, ok := r.Bindings(typ, raw); ok {
+				return names
+			}
 		}
-		if r == nil {
-			return nil
-		}
-		names, _ := r.Bindings(typ, raw)
-		return names
+		return nil
 	}
 }
 
@@ -743,15 +793,12 @@ func (x *installed) entryOperations(decl protocol.ExtensionDecl) func(json.RawMe
 		return nil
 	}
 	return func(raw json.RawMessage) []extension.EntryOperationDecl {
-		r := x.r
-		if r == nil && x.offline != nil && x.offline.started {
-			r = x.offline.r
+		for _, r := range x.validated() {
+			if ops, ok := r.EntryOperations(decl.Type, raw); ok {
+				return ops
+			}
 		}
-		if r == nil {
-			return nil
-		}
-		ops, _ := r.EntryOperations(decl.Type, raw)
-		return ops
+		return nil
 	}
 }
 
@@ -776,9 +823,24 @@ func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []config.E
 
 // verifier finds the credential verifier of a type among the running
 // packages (manifest verifiers), with its check of a trusted issuer's
-// config (validate, kind verifier). A type no running package provides is
-// not found, so its issuer's credentials are refused.
+// config (validate, kind verifier). A catalogued package that provides it
+// but isn't running is started for it and kept running. A type no package
+// provides, or whose package can't start, is not found, so its issuer's
+// credentials are refused.
 func (d *daemon) verifier(typ string) (management.Verifier, bool) {
+	if v, ok := d.runningVerifier(typ); ok {
+		return v, true
+	}
+	for _, c := range d.catalogued() {
+		if slices.ContainsFunc(c.m.Provides.Verifiers, func(v protocol.VerifierDecl) bool { return v.Type == typ }) {
+			d.startOnDemand(d.lifetime(), c.Name())
+			return d.runningVerifier(typ)
+		}
+	}
+	return management.Verifier{}, false
+}
+
+func (d *daemon) runningVerifier(typ string) (management.Verifier, bool) {
 	for _, x := range d.extensionPackages() {
 		if x.r == nil {
 			continue

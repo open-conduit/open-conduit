@@ -21,11 +21,10 @@ const SandboxConfigSchema = "core.config.sandbox.v1"
 // sandboxState is the host side of the process sandbox providers (B09):
 // the packages' declared ones (manifest sandboxes), by type.
 type sandboxState struct {
-	providers map[string]extension.SandboxProvider
+	providers providerSet[extension.SandboxProvider]
 }
 
 func (d *daemon) openSandboxes() {
-	d.sandboxes.providers = map[string]extension.SandboxProvider{}
 	// The processes packages ran for their entries ran under the last
 	// daemon's packages, which have gone with it.
 	_ = os.RemoveAll(d.entriesDir())
@@ -63,7 +62,7 @@ func (d *daemon) entrySandbox(m protocol.Manifest) extension.EntrySandbox {
 		if desc == nil {
 			return extension.SandboxPlan{}, "", fmt.Errorf("%w: entry %s names no sandbox in scope %s", extension.ErrSandboxUnavailable, entry, scope)
 		}
-		p := d.sandboxes.providers[desc.Provider]
+		p := d.sandboxes.providers.all()[desc.Provider]
 		if p == nil {
 			return extension.SandboxPlan{}, "", fmt.Errorf("%w: sandbox provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 		}
@@ -132,7 +131,7 @@ func (d *daemon) bindSandbox(ctx context.Context, state runtime.AttemptState, re
 	if !state.Capabilities.Sandbox {
 		return nil, nil, fmt.Errorf("%w: executor %s can't run in a sandbox", extension.ErrSandboxUnavailable, state.Executor)
 	}
-	p := d.sandboxes.providers[desc.Provider]
+	p := d.sandboxes.providers.all()[desc.Provider]
 	if p == nil {
 		return nil, nil, fmt.Errorf("%w: sandbox provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 	}

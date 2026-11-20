@@ -187,6 +187,17 @@ func validType(s string) bool {
 	}
 	return true
 }
+
+// Unregister removes a source's registration from this runtime instance,
+// as when the package that declared it stops. What the store holds for it
+// (its source, checkpoint and history) stays, so registering the name
+// again resumes where it left off. An unknown name is no error.
+func (i *Ingress) Unregister(name string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	delete(i.registrations, name)
+}
+
 func (i *Ingress) registration(name string) (ingressRegistration, error) {
 	i.mu.RLock()
 	defer i.mu.RUnlock()

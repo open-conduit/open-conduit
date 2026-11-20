@@ -34,11 +34,13 @@ import (
 // types and validators, route handlers, toolbelt operations, configure,
 // tasks, checks, actions, annotations, prompt rendering and telemetry
 // export all come from it. Its resource, sandbox, container and tunnel
-// providers are registered here as it starts. Nothing here names an
-// extension: every decision reads the manifest. Packages are
-// read only at start, so install, update and removal take effect at the
-// next serve; configuration changes reach running packages through
-// configure on every apply and tunnel URL change.
+// providers are registered as it starts (publishRunning). Nothing here
+// names an extension: every decision reads the manifest. Only the packages
+// something needs run (demand.go): the rest stay in the catalogue, which
+// validates their config through a validation process. Packages are
+// discovered only at start, so install, update and removal take effect at
+// the next serve; configuration changes reach running packages through
+// configure on every apply and tunnel URL change, and start or stop them.
 
 type externalState struct {
 	root string
@@ -47,9 +49,31 @@ type externalState struct {
 	// its apply holds the configuration lock.
 	current atomic.Pointer[generationSnapshot]
 
-	mu       sync.Mutex
+	// change serialises starting and stopping packages and the
+	// generation builds that follow (lock order: the configuration's lock,
+	// then change, then mu).
+	change sync.Mutex
+
+	mu sync.Mutex
+	// catalogue are the discovered, admitted packages, running or not, in
+	// discovery order (catalogued); found and order index them by name.
+	catalogue []*installed
+	found     map[string]extproc.Found
+	order     map[string]int
+	// packages are the running ones, in discovery order.
 	packages []*installed
 	byName   map[string]*installed
+	// executors and pools are the running packages' executors and their
+	// capacity pools (publishRunning).
+	executors map[string]extension.Executor
+	pools     map[string]string
+	// retiring are the running packages the configuration no longer uses,
+	// kept for live executions (drainPackages); onDemand those started for
+	// a surface the host asked of them.
+	retiring map[string]*retiring
+	onDemand map[string]bool
+	draining bool
+	drained  time.Time
 	failed   []extproc.Diagnostic
 	sources  map[string]bool      // registered ingress names
 	tasks    map[string]time.Time // last start by package/task
@@ -234,11 +258,10 @@ func (e manifestExecutor) VersionProbe(raw json.RawMessage) ([]string, []string)
 // (extension.FolderConfigurer); the config unchanged otherwise. A package
 // that cannot start refuses it, so the binding is never stored unadapted.
 func (e manifestExecutor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
-	if !e.decl.FolderConfig {
+	// With no package to ask (manifestSnapshot), the config stands as
+	// written.
+	if !e.decl.FolderConfig || e.x == nil {
 		return raw, nil
-	}
-	if e.x == nil {
-		return nil, errNoPackage
 	}
 	r, err := e.x.remote()
 	if err != nil {
@@ -380,13 +403,24 @@ func (o *offlinePackages) diagnostics() []config.Diagnostic {
 
 // offlinePackage is one installed package started on first use to
 // validate config offline.
+//
+// The daemon keeps one per catalogued package, for a package that isn't
+// running: env gives it the grant the package would start with, and it is
+// stopped once idle (close) and starts again when next asked. last keeps
+// the remote it ran, so what the package said when it validated a config
+// object is still known after it stops.
 type offlinePackage struct {
 	f       extproc.Found
 	passEnv []string
+	env     func() []string
+
+	mu      sync.Mutex
 	started bool
 	r       *extproc.Remote
+	last    *extproc.Remote
 	dir     string
 	err     error
+	used    time.Time
 }
 
 func (p *offlinePackage) validator(kind, typ string) func(json.RawMessage, []string) error {
@@ -411,11 +445,32 @@ func (p *offlinePackage) bindingCheck(handler string) func(extension.RouteBindin
 
 // remote starts the package on first use.
 func (p *offlinePackage) remote() (*extproc.Remote, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if !p.started {
 		p.started = true
 		p.start()
+		if p.r != nil {
+			p.last = p.r
+		}
 	}
+	p.used = time.Now()
 	return p.r, p.err
+}
+
+// validated is the remote that last validated config, running or stopped,
+// whose answers about the objects it validated are kept; nil before any.
+func (p *offlinePackage) validated() *extproc.Remote {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last
+}
+
+// idle reports whether the package runs and has gone unused for d.
+func (p *offlinePackage) idle(now time.Time, d time.Duration) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.started && now.Sub(p.used) >= d
 }
 
 func (p *offlinePackage) start() {
@@ -427,33 +482,43 @@ func (p *offlinePackage) start() {
 	// An empty generation, with the KV layout reported current so the
 	// package never migrates: there is no store to migrate.
 	kv := p.f.Manifest.KVVersion
+	passEnv := p.passEnv
+	if p.env != nil {
+		passEnv = p.env()
+	}
 	p.r, p.err = extproc.Load(ctx, p.f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: filepath.Join(p.dir, "state"), Host: protocol.HostInfo{Name: "open-conduit"},
-		PassEnv:   func() []string { return p.passEnv },
+		PassEnv:   func() []string { return passEnv },
 		Configure: func() protocol.ConfigureParams { return protocol.ConfigureParams{KV: protocol.KVState{Stored: kv}} }})
 }
 
+// close stops the package and removes its state; it starts afresh when
+// next asked.
 func (p *offlinePackage) close() {
-	if p.r != nil {
-		_ = p.r.Process().Close()
+	p.mu.Lock()
+	r, dir := p.r, p.dir
+	p.started, p.r, p.dir, p.err = false, nil, "", nil
+	p.mu.Unlock()
+	if r != nil {
+		_ = r.Process().Close()
 	}
-	if p.dir != "" {
-		_ = os.RemoveAll(p.dir)
+	if dir != "" {
+		_ = os.RemoveAll(dir)
 	}
 }
 
-// openExtensions discovers, admits and starts the packages, adds them to
-// the packages composition iterates and registers their executors and
-// providers. It runs before the
-// configuration opens, so the packages' validators can check it; the first
-// configure carries an empty generation, and configureExtensions sends the
-// real one once the configuration and ingress exist.
+// openExtensions discovers and admits the packages into the catalogue. It
+// starts none: startPackages does, for the packages something needs
+// (demand.go). It runs before the configuration opens, so the catalogue's
+// validators can check it.
 func (d *daemon) openExtensions(ctx context.Context) {
 	x := &d.external
 	x.root = extensionsRoot(d.o.ConfigPath)
 	x.byName, x.tasks, x.running = map[string]*installed{}, map[string]time.Time{}, map[string]bool{}
+	x.found, x.order, x.retiring = map[string]extproc.Found{}, map[string]int{}, map[string]*retiring{}
 	if x.sources == nil {
 		x.sources = map[string]bool{}
 	}
+	d.publishRunning()
 	found, errs := discoverPackages(d.o.ConfigPath, "")
 	for _, err := range errs {
 		name, _, _ := strings.Cut(err.Error(), ":")
@@ -463,89 +528,45 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		return
 	}
 	x.startGrants = d.startGrants(ctx)
-	if err := extproc.CheckConflicts(found, takenNames(registry(d.executors))); err != nil {
+	if err := extproc.CheckConflicts(found, takenNames(registry(nil))); err != nil {
 		for _, f := range found {
 			x.failed = append(x.failed, extproc.Diagnose(f.Manifest.Name, err, extproc.Paths{}))
 		}
 		d.log.Error("installed extensions refused: registration conflict", "error", err)
 		return
 	}
-	// Each package is its own process: start them all at once, so the
-	// daemon's start (and with it the adoption of attempts a graceful
-	// restart released) takes the slowest handshake, not their sum. They
-	// join in discovery order.
-	loaded := make([]*extproc.Remote, len(found))
-	failures := make([]error, len(found))
-	var wg sync.WaitGroup
-	for i, f := range found {
-		deps, opts := d.extensionDeps(f.Manifest), d.extensionOptions(f, extproc.StatePaths(d.o.StateDir, f.Manifest.Name))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			loaded[i], failures[i] = extproc.Load(ctx, f, deps, opts)
-		}()
-	}
-	wg.Wait()
 	for i, f := range found {
 		name := f.Manifest.Name
-		paths := extproc.StatePaths(d.o.StateDir, name)
-		r, err := loaded[i], failures[i]
-		if err != nil {
-			diag := extproc.Diagnose(name, err, paths)
-			x.failed = append(x.failed, diag)
-			d.log.Error("extension not started", "extension", name, "code", diag.Code, "hint", diag.Hint, "docs", diag.Docs)
-			continue
-		}
-		pkg := &installed{m: f.Manifest, r: r, d: d, dir: f.Dir}
-		x.mu.Lock()
-		x.packages = append(x.packages, pkg)
-		x.byName[name] = pkg
-		x.mu.Unlock()
-		// Nothing reads the list concurrently yet: the loop, servers and
-		// configuration start after this.
-		d.packages = append(d.packages, pkg)
-		for _, refused := range packageExecutors([]*installed{pkg}, d.executors, d.pools) {
-			d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", refused)
-			d.report("executor_pool", domain.ID(refused), "unknown_pool")
-		}
-		for _, res := range f.Manifest.Provides.Resources {
-			if p, ok := r.Provider(res.Type); ok {
-				d.resources.providers[res.Type] = p
-			}
-		}
-		for _, s := range f.Manifest.Provides.Sandboxes {
-			if p, ok := r.Sandbox(s.Type); ok {
-				d.sandboxes.providers[s.Type] = p
-			}
-		}
-		for _, c := range f.Manifest.Provides.Containers {
-			if p, ok := r.Container(c.Type); ok {
-				d.containers.providers[c.Type] = p
-			}
-		}
-		for _, t := range f.Manifest.Provides.Tunnels {
-			if p, ok := r.Tunnel(t.Type); ok {
-				d.hooks.addTunnel(t.Type, p)
-			}
-		}
-		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version, "pass_env", strings.Join(r.Process().PassedEnv(), ","))
+		v := &offlinePackage{f: f, env: func() []string { return d.packagePassEnv(name) }}
+		x.catalogue = append(x.catalogue, &installed{m: f.Manifest, d: d, dir: f.Dir, offline: v})
+		x.found[name], x.order[name] = f, i
 	}
+}
+
+// configRegistry is the serve registry: the host's own registrations and
+// every catalogued package's declared types and executors, each validated
+// by the package itself, through its running process or, when it isn't
+// running, a validation process.
+func (d *daemon) configRegistry() config.Registry {
+	executors := map[string]extension.Executor{}
+	cat := d.catalogued()
+	for _, x := range cat {
+		for _, e := range x.m.Provides.Executors {
+			executors[e.Name] = manifestExecutor{decl: e, x: x}
+		}
+	}
+	reg := registry(executors)
+	for _, x := range cat {
+		x.providerTypes(&reg)
+	}
+	packageRegistry(&reg, cat)
+	return reg
 }
 
 func (d *daemon) extensionPackages() []*installed {
 	d.external.mu.Lock()
 	defer d.external.mu.Unlock()
 	return append([]*installed(nil), d.external.packages...)
-}
-
-// installedRegistry adds the running packages' declared types, validated
-// through their validate method, to the serve registry.
-func (d *daemon) installedRegistry(reg *config.Registry) {
-	xs := d.extensionPackages()
-	for _, x := range xs {
-		x.providerTypes(reg)
-	}
-	packageRegistry(reg, xs)
 }
 
 // usesExtension reports whether a scope's configuration uses one of the
@@ -1025,9 +1046,28 @@ func (d *daemon) extensionCheck(context.Context) runtime.Check {
 	}
 	d.external.mu.Lock()
 	failed := append([]extproc.Diagnostic(nil), d.external.failed...)
+	retiringFor := map[string]int{}
+	for name, r := range d.external.retiring {
+		retiringFor[name] = len(r.ids)
+	}
 	d.external.mu.Unlock()
 	packages := d.extensionPackages()
-	if len(packages) == 0 && len(failed) == 0 {
+	running := map[string]bool{}
+	for _, x := range packages {
+		running[x.Name()] = true
+	}
+	// The installed packages nothing needs are listed as such, so doctor
+	// shows what is installed as well as what runs.
+	unfailed := func(name string) bool {
+		return !slices.ContainsFunc(failed, func(f extproc.Diagnostic) bool { return f.Extension == name })
+	}
+	var idle []string
+	for _, c := range d.catalogued() {
+		if !running[c.Name()] && unfailed(c.Name()) {
+			idle = append(idle, fmt.Sprintf("%s %s: not running (nothing uses it)", c.Name(), c.m.Version))
+		}
+	}
+	if len(packages) == 0 && len(failed) == 0 && len(idle) == 0 {
 		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_installed", "no extension packages are installed"
 		return check
 	}
@@ -1052,11 +1092,15 @@ func (d *daemon) extensionCheck(context.Context) runtime.Check {
 		}
 		env, pending := grantItem(p.PassedEnv(), d.packagePassEnv(m.Name), p.Options().Environ)
 		item += env
+		if n, ok := retiringFor[m.Name]; ok {
+			item += fmt.Sprintf(", unused: stops once the %d live execution(s) that may need it finish", n)
+		}
 		if pending {
 			raise(runtime.CheckWarn, "extension_grant_pending")
 		}
 		check.Items = append(check.Items, item)
 	}
+	check.Items = append(check.Items, idle...)
 	sort.Strings(check.Items)
 	return check
 }
