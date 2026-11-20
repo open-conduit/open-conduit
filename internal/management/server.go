@@ -622,24 +622,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return fail(404, "not_found", "this socket serves only toolbelt calls")
 	}
 	// The management listener serves operators on other machines: never
-	// the toolbelt, and a client that keeps failing authentication is
-	// refused for a while before its bearer is even read.
+	// the toolbelt. A client that keeps failing authentication is refused
+	// for a while, but only its failures: a credential that authenticates
+	// is served, so an attacker sharing its address can't hold it out.
 	rc := remote(ctx)
-	if rc != nil {
-		if toolbeltPath(parts) {
-			return fail(404, "not_found", "the management listener serves no toolbelt calls; an execution reaches its toolbelt on its own socket")
-		}
-		if wait := rc.network.limiter.blocked(rc.client); wait > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
-			return fail(429, "too_many_auth_failures", "too many failed authentications from this client; retry later")
-		}
+	if rc != nil && toolbeltPath(parts) {
+		return fail(404, "not_found", "the management listener serves no toolbelt calls; an execution reaches its toolbelt on its own socket")
 	}
 	who, err := s.authenticate(ctx, r)
 	if err != nil {
 		var api *apiError
 		if rc != nil && errors.As(err, &api) && api.status == 401 {
-			if rc.network.limiter.fail(rc.client) && rc.network.OnThrottle != nil {
+			wait, first := rc.network.limiter.fail(rc.client)
+			if first && rc.network.OnThrottle != nil {
 				rc.network.OnThrottle(rc.client)
+			}
+			if wait > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+				return fail(429, "too_many_auth_failures", "too many failed authentications from this client; check the credential, then retry later")
 			}
 		}
 		return err

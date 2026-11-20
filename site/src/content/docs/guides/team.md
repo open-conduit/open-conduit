@@ -82,7 +82,7 @@ export OPEN_CONDUIT_CLIENT_CERT="$HOME/alice.crt" OPEN_CONDUIT_CLIENT_KEY="$HOME
 open-conduit work list
 ```
 
-Every call still needs her credential, and her role and grants decide what it may do, exactly as on the socket. A client that fails to authenticate 10 times in a minute is refused for the rest of that minute. `work attach` and `container attach` run on the daemon's machine, so over the network they say what to run there instead.
+Every call still needs her credential, and her role and grants decide what it may do, exactly as on the socket. Once a client has failed to authenticate 10 times in a minute, its further failures are refused for the rest of that minute and logged; a good credential from the same address is still served. `work attach` and `container attach` run on the daemon's machine, so over the network they say what to run there instead.
 
 ### Or relay the socket over SSH
 

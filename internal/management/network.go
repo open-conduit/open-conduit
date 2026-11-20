@@ -188,9 +188,9 @@ type Network struct {
 	OnThrottle func(client string)
 }
 
-// Authentication-failure limits: a client that fails authentication
-// AuthFailureLimit times within AuthFailureWindow is refused (429) until
-// the window ends. At most maxTrackedClients are tracked.
+// Authentication-failure limits: once a client has failed authentication
+// AuthFailureLimit times within AuthFailureWindow, its further failures are
+// refused (429) until the window ends. At most maxTrackedClients are tracked.
 const (
 	AuthFailureLimit  = 10
 	AuthFailureWindow = time.Minute
@@ -270,69 +270,81 @@ type failures struct {
 }
 
 // failureLimiter counts each client's failed authentications in a fixed
-// window.
+// window. Only failures are counted and refused: a request whose
+// credential authenticates is always served, so a client sharing an
+// address with an attacker (behind a load balancer or a NAT) is never held
+// out.
 type failureLimiter struct {
 	now  func() time.Time
 	mu   sync.Mutex
 	seen map[string]*failures
 }
 
-// blocked reports how long client is still refused, or 0.
-func (l *failureLimiter) blocked(client string) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	f := l.seen[client]
-	if f == nil {
-		return 0
+// overflowClient is the key every new client shares while the table is
+// full of clients at their limit, so a flood of addresses can neither
+// evict a blocked client nor get unlimited failures.
+const overflowClient = "*"
+
+// limiterKey is the client's key: its address, or for IPv6 its /64, which
+// a single host can usually draw addresses from at will.
+func limiterKey(client string) string {
+	ip := net.ParseIP(client)
+	if ip == nil || ip.To4() != nil {
+		return client
 	}
-	left := f.since.Add(AuthFailureWindow).Sub(l.now())
-	if left <= 0 {
-		delete(l.seen, client)
-		return 0
-	}
-	if f.count < AuthFailureLimit {
-		return 0
-	}
-	return left
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
-// fail counts one failed authentication, reporting whether it took the
-// client to its limit for the first time this window.
-func (l *failureLimiter) fail(client string) bool {
+// fail counts one failed authentication by client. It returns how long
+// the client is refused, 0 while it is under the limit, and whether this
+// failure took it to the limit for the first time this window.
+func (l *failureLimiter) fail(client string) (time.Duration, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	f := l.seen[client]
+	key := limiterKey(client)
+	f := l.seen[key]
+	if f == nil && len(l.seen) >= maxTrackedClients && !l.evict(now) {
+		key = overflowClient
+		f = l.seen[key]
+	}
 	if f == nil || !now.Before(f.since.Add(AuthFailureWindow)) {
-		if f == nil && len(l.seen) >= maxTrackedClients {
-			l.evict(now)
-		}
 		f = &failures{since: now}
-		l.seen[client] = f
+		l.seen[key] = f
 	}
 	f.count++
-	if f.count >= AuthFailureLimit && !f.warned {
-		f.warned = true
-		return true
+	if f.count <= AuthFailureLimit {
+		return 0, false
 	}
-	return false
+	first := !f.warned
+	f.warned = true
+	return f.since.Add(AuthFailureWindow).Sub(now), first
 }
 
-// evict drops ended windows, and with none ended, the oldest window.
-func (l *failureLimiter) evict(now time.Time) {
-	oldest, at := "", now
+// evict makes room for one client: it drops every ended window, and with
+// none ended, the oldest window still under the limit. A client at its
+// limit is never dropped; with every window at its limit, it reports false.
+func (l *failureLimiter) evict(now time.Time) bool {
+	oldest, at := "", time.Time{}
+	freed := false
 	for k, f := range l.seen {
 		if !now.Before(f.since.Add(AuthFailureWindow)) {
 			delete(l.seen, k)
+			freed = true
 			continue
 		}
-		if f.since.Before(at) || oldest == "" {
+		if k != overflowClient && f.count <= AuthFailureLimit && (oldest == "" || f.since.Before(at)) {
 			oldest, at = k, f.since
 		}
 	}
-	if len(l.seen) >= maxTrackedClients {
-		delete(l.seen, oldest)
+	if freed {
+		return true
 	}
+	if oldest == "" {
+		return false
+	}
+	delete(l.seen, oldest)
+	return true
 }
 
 // CursorKey is the key list cursors are signed with, kept at path (an

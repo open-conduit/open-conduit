@@ -165,8 +165,9 @@ func TestManagementNetworkListenerMutualTLS(t *testing.T) {
 
 // Over the network every call still needs an operator credential; the
 // toolbelt is not served, attach is refused with the command to run on the
-// daemon's machine, and a client that keeps failing authentication is
-// refused until its window ends, even with a good credential.
+// daemon's machine, and a client that keeps failing authentication has its
+// failures refused until its window ends, while a good credential from it
+// is still served.
 func TestManagementNetworkListenerRefusals(t *testing.T) {
 	h := newManagementHarness(t)
 	dir := t.TempDir()
@@ -208,15 +209,13 @@ func TestManagementNetworkListenerRefusals(t *testing.T) {
 	if _, err = wrong.Scopes(ctx, nil); apiCode(err) != "too_many_auth_failures" {
 		t.Fatalf("after the limit = %v, want too_many_auth_failures", err)
 	}
-	if _, err = c.Scopes(ctx, nil); apiCode(err) != "too_many_auth_failures" {
-		t.Fatalf("a good credential from a refused client = %v, want too_many_auth_failures", err)
-	}
-	// The socket is never limited.
-	if _, err = h.operatorClient().Scopes(ctx, nil); err != nil {
-		t.Fatalf("socket refused while the network client is limited: %v", err)
+	// A credential that authenticates is served from the same client: an
+	// attacker sharing an address (a load balancer, a NAT) can't hold it out.
+	if _, err = c.Scopes(ctx, nil); err != nil {
+		t.Fatalf("a good credential from a limited client = %v, want served", err)
 	}
 	h.clock.Advance(management.AuthFailureWindow)
-	if _, err = c.Scopes(ctx, nil); err != nil {
+	if _, err = wrong.Scopes(ctx, nil); apiCode(err) != "unauthenticated" {
 		t.Fatalf("still refused after the window: %v", err)
 	}
 }
@@ -247,10 +246,13 @@ func TestManagementNetworkListenerTrustedProxy(t *testing.T) {
 	for i := 0; i < management.AuthFailureLimit; i++ {
 		get("203.0.113.7", "wrong")
 	}
-	if code := get("203.0.113.7", ownerToken(t, h)); code != http.StatusTooManyRequests {
+	if code := get("203.0.113.7", "wrong"); code != http.StatusTooManyRequests {
 		t.Fatalf("the limited client got %d", code)
 	}
-	if code := get("198.51.100.1, 203.0.113.9", ownerToken(t, h)); code != http.StatusOK {
+	if code := get("198.51.100.1, 203.0.113.9", "wrong"); code != http.StatusUnauthorized {
 		t.Fatalf("another client behind the proxy got %d", code)
+	}
+	if code := get("203.0.113.7", ownerToken(t, h)); code != http.StatusOK {
+		t.Fatalf("a good credential from the limited client got %d", code)
 	}
 }

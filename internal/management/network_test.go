@@ -2,6 +2,7 @@ package management
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,30 +54,86 @@ func TestFailureLimiter(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	l := &failureLimiter{now: func() time.Time { return now }, seen: map[string]*failures{}}
 	reported := 0
+	var wait time.Duration
 	for i := 0; i < AuthFailureLimit+3; i++ {
-		if l.blocked("a") > 0 {
-			break
-		}
-		if l.fail("a") {
+		var first bool
+		wait, first = l.fail("192.0.2.1")
+		if first {
 			reported++
 		}
+		if i < AuthFailureLimit && wait != 0 {
+			t.Fatalf("refused after %d failures", i+1)
+		}
 	}
-	if reported != 1 || l.blocked("a") <= 0 {
-		t.Fatalf("reported %d times, blocked %v", reported, l.blocked("a"))
+	if reported != 1 || wait <= 0 {
+		t.Fatalf("reported %d times, refused for %v", reported, wait)
 	}
-	if l.blocked("b") != 0 {
+	if wait, _ = l.fail("192.0.2.2"); wait != 0 {
 		t.Fatal("another client was refused")
 	}
 	now = now.Add(AuthFailureWindow)
-	if l.blocked("a") != 0 {
+	if wait, _ = l.fail("192.0.2.1"); wait != 0 {
 		t.Fatal("still refused after the window")
 	}
-	// Tracking is bounded.
-	for i := 0; i < maxTrackedClients+10; i++ {
-		l.fail(strings.Repeat("x", 1) + time.Duration(i).String())
+}
+
+// IPv6 clients are keyed by their /64, so rotating addresses within it
+// doesn't reset the count.
+func TestFailureLimiterIPv6Prefix(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := &failureLimiter{now: func() time.Time { return now }, seen: map[string]*failures{}}
+	var wait time.Duration
+	for i := 0; i <= AuthFailureLimit; i++ {
+		wait, _ = l.fail(fmt.Sprintf("2001:db8:1:2::%x", i+1))
 	}
-	if len(l.seen) > maxTrackedClients {
+	if wait <= 0 {
+		t.Fatal("rotating addresses in one /64 escaped the limit")
+	}
+	if wait, _ = l.fail("2001:db8:1:3::1"); wait != 0 {
+		t.Fatal("another /64 was refused")
+	}
+}
+
+// With the table full of clients at their limit, a blocked client stays
+// blocked and new clients share one overflow window, so a flood of
+// addresses neither evicts a blocked client nor gets unlimited failures.
+// A client under its limit is evicted before one at it.
+func TestFailureLimiterFullTable(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := &failureLimiter{now: func() time.Time { return now }, seen: map[string]*failures{}}
+	for i := 0; i < maxTrackedClients; i++ {
+		for j := 0; j <= AuthFailureLimit; j++ {
+			l.fail(fmt.Sprintf("10.%d.%d.1", i/256, i%256))
+		}
+	}
+	var wait time.Duration
+	for i := 0; i <= AuthFailureLimit; i++ {
+		wait, _ = l.fail(fmt.Sprintf("172.16.%d.%d", i/256, i%256))
+	}
+	if wait <= 0 {
+		t.Fatal("new clients in a full table escaped the limit")
+	}
+	if wait, _ = l.fail("10.0.0.1"); wait <= 0 {
+		t.Fatal("a blocked client was evicted")
+	}
+	if len(l.seen) > maxTrackedClients+1 {
 		t.Fatalf("tracked %d clients", len(l.seen))
+	}
+
+	// One client under its limit in a full table is the one evicted.
+	l = &failureLimiter{now: func() time.Time { return now }, seen: map[string]*failures{}}
+	l.fail("192.0.2.9")
+	for i := 1; i < maxTrackedClients; i++ {
+		for j := 0; j <= AuthFailureLimit; j++ {
+			l.fail(fmt.Sprintf("10.%d.%d.1", i/256, i%256))
+		}
+	}
+	l.fail("198.51.100.1")
+	if _, ok := l.seen["192.0.2.9"]; ok {
+		t.Fatal("the client under its limit was kept")
+	}
+	if _, ok := l.seen["198.51.100.1"]; !ok {
+		t.Fatal("the new client was not tracked")
 	}
 }
 
