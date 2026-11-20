@@ -109,6 +109,14 @@ type ContainerPlan struct {
 // ContainerCreated is a container created and not started: its reference,
 // the daemon it was created on, and the argv and environment the
 // executor's wrapper runs to start it, attached, and wait for its exit.
+//
+// Argv and Env reach the run: the wrapper runs with them, beside the
+// executor. A credential the provider resolves for its connection
+// (ContainerConfig.Connection) never goes in them, nor in the plan, the
+// labels or the reference: a helper that must reach the provider's API
+// from there reads a short-lived, narrow credential the provider writes to
+// its own owner-only records. The host refuses a launch that carries one
+// (ContainerBinding.Withheld).
 type ContainerCreated struct {
 	Ref       ContainerRef
 	Daemon    string
@@ -262,11 +270,19 @@ const ContainerConfigSchema = "core.config.container.v1"
 // pinned by digest. Write and Read are host paths the container may write
 // or read ({workspace}, {run} and ~ expand); Network.Allow the outbound
 // hosts; Limits its resources. Provider holds the provider's own settings.
+//
+// Connection names the connection the provider reaches its API with (a
+// cloud account, a registry login, a cluster): one of a type the
+// provider's package declares, granted by the binding's scope. The
+// provider resolves its secrets with secret.resolve, in the owner's scope,
+// when it needs them; the host gives them to no one else, and never to the
+// run (ContainerCreated).
 type ContainerConfig struct {
-	Image   string   `json:"image"`
-	Write   []string `json:"write,omitempty"`
-	Read    []string `json:"read,omitempty"`
-	Network struct {
+	Image      string   `json:"image"`
+	Connection string   `json:"connection,omitempty"`
+	Write      []string `json:"write,omitempty"`
+	Read       []string `json:"read,omitempty"`
+	Network    struct {
 		Allow []string `json:"allow,omitempty"`
 	} `json:"network,omitzero"`
 	Limits   ContainerLimits `json:"limits,omitzero"`
@@ -282,6 +298,9 @@ type ContainerLimits struct {
 }
 
 var imageDigest = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+
+// connectionID is the shape of a connection's id in config.
+var connectionID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // ParseContainerConfig reads a binding's container config strictly. An
 // image not pinned by digest is refused, as is a path that isn't absolute
@@ -300,6 +319,9 @@ func ParseContainerConfig(raw []byte) (ContainerConfig, error) {
 		if !strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "~/") && p != "~" && !strings.HasPrefix(p, "{workspace}") && !strings.HasPrefix(p, "{run}") {
 			return ContainerConfig{}, fmt.Errorf("container path %q must be absolute, under ~, or start with {workspace} or {run}", p)
 		}
+	}
+	if c.Connection != "" && !connectionID.MatchString(c.Connection) {
+		return ContainerConfig{}, fmt.Errorf("container connection %q must be a connection id", c.Connection)
 	}
 	for _, h := range c.Network.Allow {
 		if h == "" || strings.ContainsAny(h, "/ ") {

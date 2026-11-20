@@ -80,7 +80,7 @@ func bindingConnectionDaemon(t *testing.T) *daemon {
 // scope without one of the extension's entries.
 func TestBindingConnectionSecrets(t *testing.T) {
 	d := bindingConnectionDaemon(t)
-	acme := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"acme": true})
+	acme := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"acme": true}, nil)
 	ctx := context.Background()
 	for conn, want := range map[string]string{"acme-main": "main-token", "acme-reviewer": "reviewer-token"} {
 		got, err := acme(ctx, "work", conn, []string{"token"})
@@ -105,7 +105,7 @@ func TestBindingConnectionSecrets(t *testing.T) {
 		}
 	}
 	// The other type's owner gets its connection; acme's are refused to it.
-	other := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"other": true})
+	other := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"other": true}, nil)
 	if got, err := other(ctx, "work", "other-bot", []string{"token"}); err != nil || got["token"] != "other-token" {
 		t.Fatalf("other-bot to its owner: %v %v", got, err)
 	}
@@ -143,6 +143,132 @@ func TestBindingConnectionConfigure(t *testing.T) {
 	for _, e := range other.Entries {
 		if e.ScopeID == "work" && (len(e.BindingConnections) != 1 || e.BindingConnections[0].ID != "other-bot") {
 			t.Fatalf("the other type's owner: %+v", e.BindingConnections)
+		}
+	}
+}
+
+// containerConnectionDaemon is a daemon whose current generation has two
+// connections of a container provider package's type, cloud: scope pods
+// has binding a in a pod container naming cloud-a and binding b in one
+// naming cloud-b; scope plain grants cloud-a but its binding runs in a pod
+// container that names none; scope named has a binding naming cloud-a as
+// its own connection, with no container. The package declares no entry
+// type, so it is configured only through the bindings' containers.
+func containerConnectionDaemon(t *testing.T) *daemon {
+	t.Helper()
+	const image = "ghcr.io/acme/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	binding := func(name, container, own string) map[string]any {
+		b := map[string]any{"name": name, "executor": "agent", "requires": map[string]any{"toolbelt": "mcp"}, "operations": []any{}, "secret_names": []any{}, "config": map[string]any{}}
+		if container != "-" {
+			cfg := map[string]any{"image": image}
+			if container != "" {
+				cfg["connection"] = container
+			}
+			b["container"] = map[string]any{"provider": "pod", "config": cfg}
+		}
+		if own != "" {
+			b["connection"] = own
+		}
+		return b
+	}
+	scope := func(id string, conns []any, bindings ...any) map[string]any {
+		return map[string]any{"id": id, "name": id,
+			"authorization": map[string]any{"connections": conns, "operations": []any{}, "read_scopes": []any{}},
+			"bindings":      bindings, "routes": []any{}, "extensions": []any{}, "secret_refs": map[string]any{}}
+	}
+	conn := func(id, env string) map[string]any {
+		return map[string]any{"id": id, "type": "cloud", "config": map[string]any{"account": id}, "secret_refs": map[string]any{"token": "env:" + env}}
+	}
+	doc := map[string]any{"version": 1, "settings": map[string]any{}, "connections": []any{conn("cloud-a", "CLOUD_A"), conn("cloud-b", "CLOUD_B")}, "scopes": []any{
+		scope("pods", []any{"cloud-a", "cloud-b"}, binding("a", "cloud-a", ""), binding("b", "cloud-b", "")),
+		scope("plain", []any{"cloud-a"}, binding("a", "", "")),
+		scope("named", []any{"cloud-a"}, binding("a", "-", "cloud-a")),
+	}}
+	raw, _ := json.Marshal(doc)
+	reg := config.Registry{
+		Executors:        map[string]extension.Executor{"agent": containerTestExecutor{}},
+		Connections:      map[string]func(json.RawMessage) error{"cloud": nil},
+		Containers:       map[string]func(json.RawMessage) error{"pod": nil},
+		ContainerOwners:  map[string]string{"pod": "cloud"},
+		ConnectionOwners: map[string]string{"cloud": "cloud"},
+	}
+	s, err := config.Validate(raw, reg)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	env := map[string]string{"CLOUD_A": "account-a-token", "CLOUD_B": "account-b-token"}
+	d := &daemon{resolver: &config.Resolver{LookupEnv: func(k string) (string, bool) { v, ok := env[k]; return v, ok }}}
+	d.external.current.Store(&generationSnapshot{s: s, gen: 1})
+	return d
+}
+
+type containerTestExecutor struct{ connTestExecutor }
+
+func (containerTestExecutor) Capabilities() domain.Capabilities {
+	return domain.Capabilities{Toolbelt: "mcp", Container: true}
+}
+
+// TestContainerConnectionSecrets: a package that provides only containers
+// resolves the token of a connection its binding's container config names,
+// each binding reaching its own account, and is refused one in a scope
+// whose containers name none, or that a binding names only as its own
+// connection (that is the executor's).
+func TestContainerConnectionSecrets(t *testing.T) {
+	d := containerConnectionDaemon(t)
+	cloud := d.scopedSecrets("cloud", nil, map[string]bool{"cloud": true}, map[string]bool{"pod": true})
+	ctx := context.Background()
+	for conn, want := range map[string]string{"cloud-a": "account-a-token", "cloud-b": "account-b-token"} {
+		got, err := cloud(ctx, "pods", conn, []string{"token"})
+		if err != nil || got["token"] != want {
+			t.Fatalf("%s: %v %v", conn, got, err)
+		}
+	}
+	for _, scope := range []domain.ID{"plain", "named"} {
+		if got, err := cloud(ctx, scope, "cloud-a", []string{"token"}); !errors.Is(err, extension.ErrUnauthorized) {
+			t.Errorf("%s: %v %v", scope, got, err)
+		}
+	}
+	// Negative control: without its container types the package is
+	// refused even where its containers name the connection, as before.
+	if _, err := d.scopedSecrets("cloud", nil, map[string]bool{"cloud": true}, nil)(ctx, "pods", "cloud-a", []string{"token"}); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("without container types: %v", err)
+	}
+}
+
+// TestContainerCredentials: a launch's container is checked against the
+// current values of the connection its config names, resolved for the
+// package providing the container, whatever that package asked for
+// before; none for a config naming no connection. A connection that can't
+// be resolved, or a provider no running package declares, refuses the
+// launch rather than skipping the check.
+func TestContainerCredentials(t *testing.T) {
+	d := containerConnectionDaemon(t)
+	var m protocol.Manifest
+	m.Name = "cloud"
+	m.Provides.Containers = []protocol.ContainerDecl{{Type: "pod"}}
+	d.external.byName = map[string]*installed{"cloud": {m: m}}
+	ctx := context.Background()
+	for conn, want := range map[string]string{"cloud-a": "account-a-token", "cloud-b": "account-b-token"} {
+		got, err := d.containerCredentials(ctx, "pods", "pod", json.RawMessage(`{"image":"x","connection":"`+conn+`"}`))
+		if err != nil || !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("%s: %v %v", conn, got, err)
+		}
+	}
+	if got, err := d.containerCredentials(ctx, "plain", "pod", json.RawMessage(`{"image":"x"}`)); err != nil || got != nil {
+		t.Fatalf("no connection: %v %v", got, err)
+	}
+	for name, c := range map[string]struct {
+		provider, conn string
+	}{
+		"an unknown connection":       {"pod", "nope"},
+		"a provider nobody runs":      {"docker", "cloud-a"},
+		"a secret that can't resolve": {"pod", "cloud-a"},
+	} {
+		if name == "a secret that can't resolve" {
+			d.resolver = &config.Resolver{LookupEnv: func(string) (string, bool) { return "", false }}
+		}
+		if _, err := d.containerCredentials(ctx, "pods", c.provider, json.RawMessage(`{"connection":"`+c.conn+`"}`)); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

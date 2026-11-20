@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +89,13 @@ type ContainerBinding struct {
 	// (PlacedSite.Env), so git there reaches the repository as the run's
 	// does.
 	Env map[string]string
+	// Withheld, when set, gives the credentials of the connection the
+	// container's config names (ContainerConfig.Connection), which the host
+	// resolves for the launch. A
+	// placement, plan or created container that carries one is refused
+	// as ErrSandboxDenied, and a created one removed: they reach the run,
+	// its history and the container's labels (ContainerCreated).
+	Withheld func() []string
 	// AtSite binds the attempt's resource provider again with the site
 	// the execution was placed at (BindResourcesAt), so its acquisition
 	// can make the workspace there. Nil: the resource is always made on
@@ -222,6 +230,9 @@ func (c *BoundContainer) place(ctx context.Context, placer ContainerPlacer, pref
 	if err == nil && (at.ID == "" || at.Daemon == "" || strings.Contains(at.ID, "/")) {
 		err = fmt.Errorf("%w: the provider returned an incomplete placement", ErrSandboxUnavailable)
 	}
+	if err == nil {
+		err = c.withheld("placement", at.ID, at.Daemon, at.Summary)
+	}
 	end(err)
 	if err != nil {
 		if errors.Is(err, ErrSandboxUnavailable) || errors.Is(err, ErrSandboxDenied) {
@@ -234,6 +245,35 @@ func (c *BoundContainer) place(ctx context.Context, placer ContainerPlacer, pref
 		c.b.Placed(at)
 	}
 	return at, nil
+}
+
+// minWithheld is the shortest credential withheld checks for: a shorter
+// value would match ordinary text, refusing launches that carry none.
+const minWithheld = 8
+
+// withheld refuses what the provider returned when any of texts carries a
+// credential its package resolved (ContainerBinding.Withheld). The error
+// names what carried it, never the credential.
+func (c *BoundContainer) withheld(what string, texts ...string) error {
+	if c.b.Withheld == nil {
+		return nil
+	}
+	for _, v := range c.b.Withheld() {
+		if len(v) < minWithheld {
+			continue
+		}
+		// The plan's data is JSON, where the credential may be escaped.
+		forms := []string{v}
+		if raw, err := json.Marshal(v); err == nil && string(raw[1:len(raw)-1]) != v {
+			forms = append(forms, string(raw[1:len(raw)-1]))
+		}
+		for _, t := range texts {
+			if slices.ContainsFunc(forms, func(f string) bool { return strings.Contains(t, f) }) {
+				return fmt.Errorf("%w: the container provider put a credential it resolved for its connection in the %s; a provider keeps its credentials out of what reaches the run", ErrSandboxDenied, what)
+			}
+		}
+	}
+	return nil
 }
 
 // ContainerDigest pins a container plan: its image and effective policy.
@@ -369,6 +409,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	if plan.Image != cfg.Image || len(plan.Data.Data) == 0 {
 		return SandboxPlan{}, fmt.Errorf("%w: the provider returned an incomplete plan", ErrSandboxUnavailable)
 	}
+	if err := c.withheld("plan", plan.Image, plan.Summary, string(plan.Data.Data)); err != nil {
+		return SandboxPlan{}, err
+	}
 	plan.Digest = ContainerDigest(plan.Image, plan.Data)
 	segment := strconv.Itoa(b.Segment)
 	if b.Attach {
@@ -390,6 +433,15 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	if created.Ref.ID == "" || created.Daemon == "" || len(created.Argv) == 0 {
 		_ = b.Provider.Remove(ctx, created.Ref)
 		return SandboxPlan{}, fmt.Errorf("%w: the provider returned an incomplete container", ErrSandboxUnavailable)
+	}
+	carried := append([]string{created.Ref.ID, created.Daemon}, created.Argv...)
+	carried = append(carried, created.Env...)
+	for k, v := range created.Ref.Labels {
+		carried = append(carried, k, v)
+	}
+	if err := c.withheld("container", carried...); err != nil {
+		_ = b.Provider.Remove(ctx, created.Ref)
+		return SandboxPlan{}, err
 	}
 	// The container must be where the execution was placed, which is
 	// where its workspace was made.

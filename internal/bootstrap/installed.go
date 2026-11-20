@@ -277,6 +277,10 @@ func (x *installed) providerTypes(reg *config.Registry) {
 			v = func(json.RawMessage, []string) error { return nil }
 		}
 		reg.Containers[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+		if reg.ContainerOwners == nil {
+			reg.ContainerOwners = map[string]string{}
+		}
+		reg.ContainerOwners[c.Type] = x.m.Name
 		if c.Place {
 			if reg.Placers == nil {
 				reg.Placers = map[string]bool{}
