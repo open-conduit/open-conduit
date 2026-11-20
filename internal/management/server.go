@@ -423,7 +423,9 @@ var routes = []route{
 	{"GET", []string{"work", "*", "actions"}, targetWork, false, false, (*Server).listWorkActions},
 	{"GET", []string{"scopes", "*", "actions"}, targetScope, false, false, (*Server).listScopeActions},
 	{"GET", []string{"work", "*", "panels"}, targetWork, false, false, (*Server).listWorkPanels},
-	{"GET", []string{"work", "*", "config-candidate"}, targetWork, false, false, (*Server).configCandidate},
+	// A candidate's text is the whole daemon's config, so it is read
+	// daemon-wide, as GET /config is.
+	{"GET", []string{"work", "*", "config-candidate"}, targetDaemon, false, false, (*Server).configCandidate},
 	{"GET", []string{"pages"}, targetDaemon, false, false, (*Server).listPages},
 	{"GET", []string{"extensions"}, targetAny, false, false, (*Server).listExtensions},
 	{"GET", []string{"scopes", "*", "panels"}, targetScope, false, false, (*Server).listScopePanels},

@@ -184,6 +184,8 @@ func TestManagementScopedGrants(t *testing.T) {
 	refused("alice running doctor", err, 403, "forbidden_role")
 	_, err = alice.Operators(ctx)
 	refused("alice listing operators", err, 403, "forbidden_role")
+	_, err = alice.WorkConfigCandidate(ctx, work["team-a"].ID)
+	refused("alice reading a config candidate in her own scope", err, 403, "forbidden_role")
 	if _, err = alice.Health(ctx); err != nil {
 		t.Fatalf("health for a scoped operator: %v", err)
 	}
