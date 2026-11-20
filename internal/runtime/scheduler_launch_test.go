@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -405,11 +406,25 @@ type abortingRenewals struct {
 	mu    sync.Mutex
 	fails int
 	err   error
+	// log is each renewal transaction's outcome: what its callback
+	// returned and what Transact did, for a failure to show.
+	log []string
 }
 
 func (s *abortingRenewals) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	var aborted bool
-	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(abortingRenewalsTx{tx, s, &aborted}) })
+	var inner []error
+	err := s.Store.Transact(ctx, g, func(tx storage.Tx) error {
+		e := fn(abortingRenewalsTx{tx, s, &aborted})
+		inner = append(inner, e)
+		return e
+	})
+	if g.Lease != nil {
+		s.mu.Lock()
+		s.log = append(s.log, fmt.Sprintf("callback %v, transact %v", inner, err))
+		s.mu.Unlock()
+	}
+	return err
 }
 
 type abortingRenewalsTx struct {
@@ -485,9 +500,9 @@ func TestProductionSchedulerHoldSurvivesTransientAborts(t *testing.T) {
 					got = append(got, <-reported)
 				}
 				store.mu.Lock()
-				left := store.fails
+				left, log := store.fails, store.log
 				store.mu.Unlock()
-				t.Fatalf("control: a conflicting renewal kept the lease (cause %v; reported %v; %d injected failures left)", context.Cause(ctx), got, left)
+				t.Fatalf("control: a conflicting renewal kept the lease (cause %v; reported %v; %d injected failures left; renewals %q)", context.Cause(ctx), got, left, log)
 			}
 			continue
 		}
