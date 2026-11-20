@@ -175,9 +175,9 @@ A source that owns a vendor's objects is the three handlers together. `reconcile
 
 The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept`, `deliver`, `events`, `works`, `secrets`, `connectionSecrets`, `artifact` and `waitProgress`, plus `call(method, params, resultSchema)` for any other method. KV values are bytes (`Uint8Array`), or strings stored as UTF-8. `onMigrate` upgrades the extension's KV namespaces to `kvVersion`. Everything the host sends is decoded through the schemas in `src/wire.ts`, which ignore fields a newer host adds, and a malformed message is refused rather than passed on.
 
-`main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!/usr/bin/env node` line and make it executable. [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`, as CommonJS, and writes `{ "type": "commonjs" }` as the package's own `package.json`. Node reads an extensionless file as the nearest `package.json` says, so without it a `"type": "module"` one above the package (the project's own, when the package is built inside it) makes Node load the bundle as ESM, and `package-manifest` fails with `require is not defined in ES module scope`. The daemon runs the command with its own PATH, so `env node` is the first Node on that PATH: under the background service, the PATH `service install` recorded from the installer's shell. After changing which Node you use (with a version manager, say), run `service install` again, and check the extension with `open-conduit doctor`. Its unit tests serve the extension over a pair of in-memory streams, with the SDK's `Conn` standing in for the host, and `make certify` certifies its package.
+`main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!/usr/bin/env node` line and make it executable. [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`, as CommonJS, and writes `{ "type": "commonjs" }` as the package's own `package.json`. Node reads an extensionless file as the nearest `package.json` says, so without it a `"type": "module"` one above the package (the project's own, when the package is built inside it) makes Node load the bundle as ESM, and `package-manifest` fails with `require is not defined in ES module scope`. The daemon runs the command with its own PATH, so `env node` is the first Node on that PATH: under the background service, the PATH `service install` recorded from the installer's shell. After changing which Node you use (with a version manager, say), run `service install` again, and check the extension with `open-conduit doctor`. Its unit tests run on the SDK's [test host](#unit-tests-in-typescript-open-conduitsdktesting), and `make certify` certifies its package.
 
-The SDK doesn't yet include executors or the provider kinds (resources, sandboxes, tunnels), dependency filters, an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
+The SDK doesn't yet include executors or the provider kinds (resources, sandboxes, tunnels), dependency filters, a TypeScript `extension new` scaffold, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
 
 ### Examples
 
@@ -366,6 +366,23 @@ The host answers the scoped methods the way the daemon does. KV values carry the
 ```go
 h := sdktest.New(t, acme.Build(), sdktest.WithKV("acme.index", "a", []byte(`{"text":"hi"}`)))
 got, err := sdktest.Call[acme.Note](ctx, h, "acme.lookup", acme.LookupRequest{ID: "a"})
+```
+
+### Unit tests in TypeScript: `@open-conduit/sdk/testing`
+
+`testHost(ext, options)` from `@open-conduit/sdk/testing` is `sdktest` for the TypeScript SDK. It serves the extension over a pair of in-memory streams, so every call crosses the wire as it would in the daemon, and it answers the host methods from memory. It never reads a real clock, the network or the operator's config. Close it when the test ends (`t.after(() => host.close())`).
+
+- **Seeding (options):** `scopes`, `works`, `events` (accepted as causal roots), `pending`, `kv`, `kvVersion`, `secrets` (by scope), `connectionSecrets`, `authority` (what operation calls carry) and `clock`. A `TestClock` starts at `testStart` and moves only when the test calls `advance` or `set`.
+- **Calling in:** `configure(entries)` registers the sources and webhook paths in its result. `operation(name, input, authority?)` calls a declared operation by its kind: it returns a handler's output, a wait's plan with its output, or an emission's accepted Event with its commit's output, and the commit's records are written to KV. `route`, `samples` (as of the clock's now), `reconcile` and `reconcileAll` (every page of a source), `push`, `webhook(path, { headers, body })`, `trigger`, `task`, `check` and `validate` cover the other surfaces, and `call` reaches any other method. `webhook` answers 404 for a path no source registered, as the listener does, without reaching the extension.
+- **Inspecting:** `kv` and `kvText`, `events()` (seeded, derived, delivered and emitted), `sources()`, `artifacts()` and `progress(workId)`.
+
+It answers the scoped methods as `sdktest` does. KV values carry content versions, a stale check conflicts, and another extension's namespace is unauthorized. `event.accept` needs a parent Event in the same configured scope, deduplicates by source and delivery ID, and writes its records only when the Event is new. `ingress.deliver` runs the delivery through the source's `push` and accepts what it observed, deduplicated the same way, so a sender's retry adds nothing. State reads and secrets see only configured scopes. It doesn't enforce causal limits, and it doesn't serve timers, Work control or `config.*` (they answer unsupported). [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/weather/src/weather.test.ts) is tested this way.
+
+```ts
+const host = await testHost(build(), { secrets: { s1: { token: "t0k" } } });
+await host.configure([{ scope_id: "s1", type: "desk", config: { secret: "hush" } }]);
+const { status } = await host.webhook("/desk/s1", { headers: { "X-Sig": sig }, body });
+assert.equal(host.events()[0]?.event.type, "desk.ticket.opened");
 ```
 
 ### Daemon tests: `extensiontest`
