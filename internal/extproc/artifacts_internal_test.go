@@ -2,13 +2,39 @@ package extproc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/storage"
 )
+
+// oneArtifact is a store holding one artifact. Open matches a ref without
+// a digest on its other fields, as the contract requires of a store.
+type oneArtifact struct {
+	ref  domain.ArtifactRef
+	data string
+}
+
+func (a oneArtifact) Create(context.Context, string) (storage.ArtifactWriter, error) {
+	return nil, storage.ErrReadOnly
+}
+func (a oneArtifact) Delete(context.Context, storage.ArtifactRef) error { return storage.ErrReadOnly }
+func (a oneArtifact) Open(_ context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
+	if ref.ID != a.ref.ID {
+		return nil, storage.ErrNotFound
+	}
+	if ref.SHA256 == "" {
+		ref.SHA256 = a.ref.SHA256
+	}
+	if ref != a.ref {
+		return nil, storage.ErrInvalid
+	}
+	return io.NopCloser(strings.NewReader(a.data)), nil
+}
 
 // TestResultArtifactsGetTheirDigest: a ref an extension built on an older
 // SDK returns without its digest is recorded with the digest of the stored
@@ -16,21 +42,9 @@ import (
 // digest is passed through untouched.
 func TestResultArtifactsGetTheirDigest(t *testing.T) {
 	ctx := context.Background()
-	store, err := artifacts.Open(filepath.Join(t.TempDir(), "artifacts"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	w, err := store.Create(ctx, "text/plain")
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.WriteString(w, "transcript")
-	full, err := w.Commit(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Service{deps: Deps{Artifacts: store}}
+	sum := sha256.Sum256([]byte("transcript"))
+	full := domain.ArtifactRef{ID: "artifact", Size: 10, MediaType: "text/plain", SHA256: hex.EncodeToString(sum[:])}
+	s := &Service{deps: Deps{Artifacts: oneArtifact{full, "transcript"}}}
 	bare := full
 	bare.SHA256 = ""
 	in := []domain.ArtifactRef{bare}
