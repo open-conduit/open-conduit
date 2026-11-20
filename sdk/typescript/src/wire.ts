@@ -101,6 +101,8 @@ export const Work = t.object(
     context: Payload,
     parent_id: t.optional(t.string()),
     display: t.optional(Display),
+    // The executor of the Work's latest attempt, when recorded.
+    latest_executor: t.optional(t.string()),
     revision: t.integer(),
     created_at: t.string(),
     updated_at: t.string(),
@@ -910,6 +912,16 @@ export const Family = t.object(
 );
 export type Family = Infer<typeof Family>;
 
+/** A payload schema the extension writes and reads: the versions it reads, the highest being the one it writes. */
+export const SchemaDecl = t.object(
+  {
+    name: t.string(),
+    versions: t.array(t.integer()),
+  },
+  open,
+);
+export type SchemaDecl = Infer<typeof SchemaDecl>;
+
 export const ExtensionDecl = t.object(
   {
     type: t.string(),
@@ -1004,6 +1016,7 @@ export const Provides = t.object(
   {
     extensions: t.optional(t.array(ExtensionDecl)),
     families: t.optional(t.array(Family)),
+    schemas: t.optional(t.array(SchemaDecl)),
     routes: t.optional(t.array(RouteDecl)),
     work_kinds: t.optional(t.array(WorkKindDecl)),
     operations: t.optional(t.array(OperationDecl)),
