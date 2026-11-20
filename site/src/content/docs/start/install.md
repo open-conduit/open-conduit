@@ -36,6 +36,10 @@ curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/inst
 
 Set `OPEN_CONDUIT_VERSION=v0.1.0` (or another tag) to install a particular release, and `BIN_DIR` or `INSTALL_DIR` to change where the link and the binaries go.
 
+## Container image
+
+Each release also publishes an image, `ghcr.io/open-conduit/open-conduit`, for Kubernetes, ECS, Nomad or plain Docker. It holds the daemon, `os`, the bundled packages, git, Node and Claude Code, and runs `serve` as an unprivileged user with its state on one volume. [Run it on a cluster](/open-conduit/guides/headless/) covers it.
+
 ## go install
 
 You need Go 1.24.2 or later. Install both commands, which puts them side by side in `$(go env GOBIN)` (default `~/go/bin`):

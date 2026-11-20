@@ -5,7 +5,7 @@ description: Supported platforms, where state and secrets live, and how to overr
 
 ## Platforms
 
-Open Conduit runs on macOS and Linux, on amd64 and arm64. Windows is not supported.
+Open Conduit runs on macOS and Linux, on amd64 and arm64. Windows is not supported. The [container image](/open-conduit/guides/headless/) is Linux on amd64 and arm64.
 
 ## Files
 

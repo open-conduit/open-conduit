@@ -10,6 +10,8 @@ One daemon can serve a team. It runs on a server under an account of its own, an
 - [named operators](../operating/#more-than-one-operator) give each person a credential and a role
 - [remote runners](../remote-runners/) move the runs to other machines, if you want them there
 
+To run it on Kubernetes, ECS or Nomad instead of a login account, start from the image and [run it on a cluster](../headless/).
+
 ## 1. An account on the server
 
 This walks through a Linux server, `conduit.example.com`, with an account `conduit` that owns the daemon, its state and its logins. Everyone else reaches the daemon through that account in the narrow ways below, never with a shell.
