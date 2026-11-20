@@ -163,6 +163,19 @@ func TestSharedExecutorConformance(t *testing.T) {
 	conformance.RunExecutor(t, func() extension.Executor { return newExecutor(t, dir, art) }, r)
 }
 
+// TestSharedStateSweeperConformance: a run directory of an execution the
+// host doesn't know is released, as Forget releases it, and a known one is
+// kept.
+func TestSharedStateSweeperConformance(t *testing.T) {
+	dir := stateDir(t)
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	known, _ := request("exec-sweep-known", 1, `{"command":"printf known"}`)
+	unknown, _ := request("exec-sweep-unknown", 1, `{"command":"printf unknown"}`)
+	conformance.RunStateSweeper(t, func() conformance.StateSweepFixture {
+		return conformance.StateSweepFixture{Executor: newExecutor(t, dir, art), Known: known, Unknown: unknown}
+	})
+}
+
 // TestSharedInjectConformance: injected Events land in the segment's inbox
 // (OS_INBOX); the process reads and acknowledges them (here with the file
 // protocol `os inbox` implements) and the result proves exactly those.

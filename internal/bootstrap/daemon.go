@@ -162,6 +162,7 @@ type daemon struct {
 	telemetry     telemetryFanout
 	telemetryFile *rotatingLog
 	resources     resourceState
+	executorState executorStateSweep
 	sandboxes     sandboxState
 	containers    containerState
 	// sites records the sites the host gave each resource type.
@@ -732,7 +733,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.capacityCheck, d.loopCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

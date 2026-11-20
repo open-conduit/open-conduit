@@ -85,6 +85,8 @@ var Methods = []Method{
 	{Name: "executor.inject", Direction: HostToExtension, Provides: "executors.inject", Contract: []string{"extension.InjectExecutor.Inject"}},
 	{Name: "executor.stop", Direction: HostToExtension, Provides: "executors.stop", Contract: []string{"extension.StopExecutor.Stop"}},
 	{Name: "executor.forget", Direction: HostToExtension, Provides: "executors.forget", Contract: []string{"extension.ForgetExecutor.Forget"}},
+	{Name: "executor.sweep", Direction: HostToExtension, Provides: "executors.sweep", Contract: []string{"extension.StateSweeper.SweepState", "extension.StateSweepReport", "extension.StateKept"}},
+	{Name: "executor.known", Direction: ExtensionToHost, Provides: "executors.sweep", Contract: []string{"extension.ExecutionKnownFunc", "extension.MaxKnownBatch"}},
 	{Name: "executor.attach", Direction: HostToExtension, Provides: "executors.attach", Contract: []string{"extension.AttachExecutor.Attach"}},
 	{Name: "executor.container_attach", Direction: HostToExtension, Provides: "executors.container_attach", Contract: []string{"extension.ContainerAttachExecutor.ContainerAttach", "extension.ContainerAttachRequest", "extension.ContainerAttachSpec"}},
 	{Name: "executor.interactive_launch", Direction: HostToExtension, Provides: "executors.interactive_launch", Contract: []string{"extension.InteractiveLauncher.InteractiveLaunch", "extension.InteractiveLaunchRequest", "extension.InteractiveLaunchSpec"}},

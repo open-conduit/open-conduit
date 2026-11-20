@@ -184,6 +184,15 @@ func TestContainerAttach(t *testing.T) {
 	if !slices.Contains(a.Needs.Write, home) || !slices.Contains(a.Needs.Write, l.Dir) || len(a.Needs.Sockets) != 0 {
 		t.Errorf("needs %+v", a.Needs)
 	}
+	// The attach's run directory is the Work's, not an execution's: a sweep
+	// that knows no execution leaves it alone and reports nothing of it.
+	report, err := e.SweepState(context.Background(), func(context.Context, []domain.ID) (map[domain.ID]bool, error) { return nil, nil })
+	if err != nil || !slices.Equal(report.Removed, []domain.ID{"exec-1"}) || len(report.Kept) != 0 {
+		t.Errorf("sweep %+v %v", report, err)
+	}
+	if _, err := os.Stat(l.RunDir); err != nil {
+		t.Errorf("the sweep removed the attach's run directory: %v", err)
+	}
 
 	r, _ = h.request("work/host", "exec-2", 1, nil)
 	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {

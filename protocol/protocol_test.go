@@ -62,6 +62,8 @@ var useCases = map[string][]string{
 	"executor.inject":             {"shell", "claude-code"},
 	"executor.stop":               {"shell", "claude-code"},
 	"executor.forget":             {"shell", "claude-code"},
+	"executor.sweep":              {"shell", "claude-code", "codex"},
+	"executor.known":              {"shell", "claude-code", "codex"},
 	"executor.attach":             {"claude-code"},
 	"executor.container_attach":   {"claude-code"},
 	"executor.live":               {"claude-code"},
@@ -363,7 +365,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})
 	m.Provides.Executors[0].Name, m.Provides.Resources[0].Type = "chat-runner", "chat-ws"
 	m.Provides.Executors[0].Capabilities.Sandbox, m.Provides.Executors[0].Capabilities.Container = true, true
-	m.Provides.Executors[0].Controls.ContainerAttach, m.Provides.Executors[0].Controls.Live, m.Provides.Executors[0].Controls.InteractiveLaunch = true, true, true
+	m.Provides.Executors[0].Controls.ContainerAttach, m.Provides.Executors[0].Controls.Live, m.Provides.Executors[0].Controls.InteractiveLaunch, m.Provides.Executors[0].Controls.Sweep = true, true, true, true
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
 	}

@@ -242,6 +242,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			c := x.Capabilities()
 			_, stop := x.(extension.StopExecutor)
 			_, forget := x.(extension.ForgetExecutor)
+			_, sweep := x.(extension.StateSweeper)
 			_, attach := x.(extension.AttachExecutor)
 			_, containerAttach := x.(extension.ContainerAttachExecutor)
 			_, live := x.(extension.LiveExecutor)
@@ -256,7 +257,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, folder := x.(extension.FolderConfigurer)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
 				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container, NoProcess: c.NoProcess},
-				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
+				Controls:     protocol.Controls{Stop: stop, Forget: forget, Sweep: sweep, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
 				ResourceMode: moded, Playbook: playbook, VersionProbe: probe, FolderConfig: folder, LaunchNames: launchNames, Fields: slices.Clone(execs[n].Fields)})
 		}
 	}

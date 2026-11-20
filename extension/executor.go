@@ -255,6 +255,66 @@ type ForgetExecutor interface {
 	Forget(context.Context, domain.ID) error
 }
 
+// StateSweeper is optional, for an executor that keeps private state per
+// execution (a run directory). SweepState releases the state of every
+// execution the host's coordination state doesn't know, as Forget would
+// release it, so state outlives no record of it: after an in-place restore
+// the executions from after the bundle are in that position, and so is one
+// whose record went before its Forget succeeded. The executor maps its own
+// layout back to execution IDs and asks known about them; it releases only
+// those known leaves out, and never one whose process still runs. State it
+// cannot map to an execution is kept and reported. A failing known call
+// fails the sweep with nothing more released (fail closed). It must be
+// idempotent and must never signal or adopt processes. The host calls it
+// when the daemon starts; it may run beside attempts, since the host
+// records an execution before it launches one.
+type StateSweeper interface {
+	SweepState(context.Context, ExecutionKnownFunc) (StateSweepReport, error)
+}
+
+// ExecutionKnownFunc reports which of ids the host's coordination state
+// holds: an ID the map leaves out (or maps to false) is unknown. It takes
+// at most MaxKnownBatch IDs a call; KnownExecutions splits a longer list.
+type ExecutionKnownFunc func(ctx context.Context, ids []domain.ID) (map[domain.ID]bool, error)
+
+// MaxKnownBatch bounds the IDs one ExecutionKnownFunc call asks about.
+const MaxKnownBatch = 256
+
+// KnownExecutions asks known about ids in batches of MaxKnownBatch and
+// merges the answers.
+func KnownExecutions(ctx context.Context, known ExecutionKnownFunc, ids []domain.ID) (map[domain.ID]bool, error) {
+	out := map[domain.ID]bool{}
+	for start := 0; start < len(ids); start += MaxKnownBatch {
+		batch := ids[start:min(start+MaxKnownBatch, len(ids))]
+		got, err := known(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range batch {
+			if got[id] {
+				out[id] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// StateSweepReport is what one SweepState did: the executions whose state
+// it released, and the state it kept although known left it out or it
+// could not ask (Kept: in_use, a process still runs; unmapped, it names no
+// execution the executor can read; remove_failed).
+type StateSweepReport struct {
+	Removed []domain.ID
+	Kept    []StateKept
+}
+
+// StateKept is state a sweep kept: its execution when known, the
+// executor's own reference to it (a path) and why.
+type StateKept struct {
+	Execution domain.ID
+	Ref, Kept string
+}
+
 // StopExecutor is optional trusted host cleanup for a fenced attempt (for
 // example after operator cancel, a deadline, ErrNotAdoptable or a failed
 // observation). Stop terminates any verified live part of the execution at

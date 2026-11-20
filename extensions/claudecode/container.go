@@ -212,6 +212,9 @@ func (e *Executor) ContainerAttach(ctx context.Context, req extension.ContainerA
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return extension.ContainerAttachSpec{}, err
 	}
+	if err := writeFile(filepath.Join(runs, attachFile), []byte(string(req.Work.ID)+"\n")); err != nil {
+		return extension.ContainerAttachSpec{}, err
+	}
 	argv := append([]string{a.Binary, "--resume", session, "--model", a.Model, "--permission-mode", a.PermissionMode}, a.ExtraArgs...)
 	needs := extension.SandboxNeeds{Write: []string{a.Dir, req.Home}, Hosts: []string{cfg.apiHost()}}
 	if a.PluginDir != "" {

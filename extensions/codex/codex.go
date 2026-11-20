@@ -217,6 +217,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 		return nil, err
 	}
 	key := executionKey(r.Execution.ID)
+	if err = recordExecution(filepath.Join(e.o.StateDir, "runs", key), r.Execution.ID); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(e.o.StateDir, "runs", key, nonce)
 	if err = os.MkdirAll(filepath.Join(dir, inboxDir, "consumed"), 0o700); err != nil {
 		return nil, err

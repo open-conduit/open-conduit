@@ -667,6 +667,29 @@ func (e *remoteExecutor) Forget(ctx context.Context, id domain.ID) error {
 	return e.target(ctx, "executor.forget", e.decl.Controls.Forget, protocol.ExecutorTargetParams{ExecutionID: string(id)}, nil)
 }
 
+// SweepState binds known to a fresh ID for the call, as a provider's sweep
+// binds its status, so the package's executor.known quoting it is answered
+// from the host's coordination state.
+func (e *remoteExecutor) SweepState(ctx context.Context, known extension.ExecutionKnownFunc) (extension.StateSweepReport, error) {
+	if !e.decl.Controls.Sweep {
+		return extension.StateSweepReport{}, extension.ErrUnsupported
+	}
+	id := newID()
+	e.r.s.mu.Lock()
+	e.r.s.sweeps[id] = known
+	e.r.s.mu.Unlock()
+	defer func() {
+		e.r.s.mu.Lock()
+		delete(e.r.s.sweeps, id)
+		e.r.s.mu.Unlock()
+	}()
+	var out protocol.StateSweepReport
+	if err := e.r.p.Call(ctx, "executor.sweep", protocol.ExecutorSweepParams{Executor: e.decl.Name, Sweep: id}, &out); err != nil {
+		return extension.StateSweepReport{}, err
+	}
+	return out.Extension(), nil
+}
+
 func (e *remoteExecutor) Attach(ctx context.Context, work domain.ID) (extension.AttachSpec, error) {
 	var out protocol.AttachSpec
 	if err := e.target(ctx, "executor.attach", e.decl.Controls.Attach, protocol.ExecutorTargetParams{WorkID: string(work)}, &out); err != nil {

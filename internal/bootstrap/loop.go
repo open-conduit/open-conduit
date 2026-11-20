@@ -76,6 +76,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		pass.phase("endpoints", func() {
 			d.reconcileEndpoints(ctx)
 			d.sweepResources(c)
+			d.sweepExecutorState(ctx)
 		})
 		pass.phase("retention", func() { d.retentionPass(ctx, c, &lastSweep) })
 		pass.phase("backup", func() { d.scheduleBackup(ctx) })

@@ -829,6 +829,39 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 		delete(s.handles, p.Handle)
 		s.mu.Unlock()
 		return protocol.FromResult(r), nil
+	case "executor.sweep":
+		var p protocol.ExecutorSweepParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		e, ok := s.ext.Executors[p.Executor]
+		if !ok {
+			return nil, notFound(method)
+		}
+		x, ok := e.(extension.StateSweeper)
+		if !ok {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, method)
+		}
+		known := func(ctx context.Context, ids []domain.ID) (map[domain.ID]bool, error) {
+			p := protocol.ExecutorKnownParams{Sweep: p.Sweep, Executions: make([]string, 0, len(ids))}
+			for _, id := range ids {
+				p.Executions = append(p.Executions, string(id))
+			}
+			var out protocol.ExecutorKnown
+			if err := s.conn.Call(ctx, "executor.known", p, &out); err != nil {
+				return nil, err
+			}
+			got := map[domain.ID]bool{}
+			for _, id := range out.Known {
+				got[domain.ID(id)] = true
+			}
+			return got, nil
+		}
+		rep, err := x.SweepState(ctx, known)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromStateSweepReport(rep), nil
 	case "executor.container_attach":
 		var p protocol.ContainerAttachParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

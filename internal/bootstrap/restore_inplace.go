@@ -468,21 +468,7 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 
 // knownExecutions reports which of ids the restored database holds.
 func knownExecutions(ctx context.Context, store storage.Database, ids []domain.ID) (map[domain.ID]bool, error) {
-	known := map[domain.ID]bool{}
-	err := store.View(ctx, func(tx storage.Tx) error {
-		known = map[domain.ID]bool{}
-		for _, id := range ids {
-			_, err := tx.Execution(id)
-			switch {
-			case err == nil:
-				known[id] = true
-			case !errors.Is(err, storage.ErrNotFound):
-				return err
-			}
-		}
-		return nil
-	})
-	return known, err
+	return knownIn(ctx, store, time.Now(), ids)
 }
 
 // laterTimeline reports the parts of the state directory an in-place
@@ -502,7 +488,7 @@ func laterTimeline(stateDir string) []cli.LaterEntry {
 			}
 		}
 	}
-	each("executors", "the executor's private state, kept: run directories of executions from after the bundle stay until removed by hand; the restored executions recover or retry, and no process from before the bundle is adopted")
+	each("executors", "the executor's private state, kept: when the daemon starts, an executor that sweeps its state removes the run directories of executions the restored database doesn't know, which doctor's executor_state check lists; another's stay until removed by hand. The restored executions recover or retry, and no process from before the bundle is adopted")
 	each("resources", "kept: the provider reconciles its leases against the restored database when the daemon starts, so an owner the database doesn't know is reported unknown to it; what it keeps (a workspace with unpushed work, say), doctor reports")
 	each("containers", "kept: the container provider reconciles its containers against the restored database when the daemon starts, removing those of executions it doesn't know")
 	each("extensions", "the extension's private directory, a cache: kept, and rebuilt by the extension as it needs; durable extension state is in the restored database")
