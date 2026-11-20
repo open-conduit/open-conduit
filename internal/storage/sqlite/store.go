@@ -570,7 +570,11 @@ func mapError(err error) error {
 		case 19:
 			return fmt.Errorf("%w: database constraint", storage.ErrConflict)
 		case 5, 6:
-			return fmt.Errorf("%w: database busy", storage.ErrConflict)
+			// Busy or locked: another connection held the lock past the
+			// busy timeout. The transaction committed nothing (a COMMIT
+			// that fails busy leaves it open, and it is rolled back), so
+			// it is a transient abort, not a clash over records.
+			return fmt.Errorf("%w: database busy", storage.ErrTransient)
 		}
 	}
 	return err

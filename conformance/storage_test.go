@@ -2,8 +2,10 @@ package conformance_test
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,6 +217,163 @@ func (b brokenActorTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	return b.Tx.AcceptEvent(e)
 }
 
+// identityColumn allocates sequences as an identity column does under
+// concurrent writers: an Event takes its sequence when accepted and becomes
+// visible when its transaction ends, and other transactions run meanwhile,
+// so a later sequence can be visible before an earlier one. Each call runs
+// in its own transaction of the inner store; only the calls the sequence
+// case makes are supported.
+type identityColumn struct {
+	inner   storage.Store
+	mu      sync.Mutex
+	pending map[domain.ID]bool
+}
+type identityColumnTx struct {
+	storage.Tx
+	s        *identityColumn
+	ctx      context.Context
+	g        storage.Guard
+	accepted []domain.ID
+}
+
+func (s *identityColumn) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	tx := &identityColumnTx{s: s, ctx: ctx, g: g}
+	err := fn(tx)
+	s.mu.Lock()
+	for _, id := range tx.accepted {
+		delete(s.pending, id)
+	}
+	s.mu.Unlock()
+	return err
+}
+func (t *identityColumnTx) AcceptEvent(e domain.Event) (a domain.AcceptedEvent, added bool, err error) {
+	t.s.mu.Lock()
+	t.s.pending[e.ID] = true
+	t.s.mu.Unlock()
+	t.accepted = append(t.accepted, e.ID)
+	err = t.s.inner.Transact(t.ctx, t.g, func(tx storage.Tx) error {
+		a, added, err = tx.AcceptEvent(e)
+		return err
+	})
+	return a, added, err
+}
+func (t *identityColumnTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	var all []domain.AcceptedEvent
+	err := t.s.inner.Transact(t.ctx, t.g, func(tx storage.Tx) error {
+		var err error
+		all, err = tx.Events(after, 0)
+		return err
+	})
+	t.s.mu.Lock()
+	defer t.s.mu.Unlock()
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if !t.s.pending[a.Event.ID] && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+func (t *identityColumnTx) Event(id domain.ID) (a domain.AcceptedEvent, err error) {
+	err = t.s.inner.Transact(t.ctx, t.g, func(tx storage.Tx) error {
+		a, err = tx.Event(id)
+		return err
+	})
+	return a, err
+}
+func (t *identityColumnTx) LatestSequence() (uint64, error) {
+	events, err := t.Events(0, 0)
+	if len(events) == 0 {
+		return 0, err
+	}
+	return events[len(events)-1].Sequence, err
+}
+
+// likeKV lists KV keys the way a store matching prefix+"%" with SQL LIKE,
+// unescaped, might: "_" in the prefix matches any one character and "%"
+// any run of them.
+type likeKV struct{ storage.Store }
+type likeKVTx struct{ storage.Tx }
+
+func (b likeKV) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(likeKVTx{tx}) })
+}
+func (b likeKVTx) List(ns, prefix string) ([]storage.Entry, error) {
+	all, err := b.Tx.List(ns, "")
+	re := regexp.MustCompile("^" + strings.NewReplacer("%", ".*", "_", ".").Replace(regexp.QuoteMeta(prefix)))
+	out := []storage.Entry{}
+	for _, e := range all {
+		if re.MatchString(e.Key) {
+			out = append(out, e)
+		}
+	}
+	return out, err
+}
+
+// collatedKV lists KV keys in a case-insensitive collation's order, as a
+// store comparing keys under a locale might.
+type collatedKV struct{ storage.Store }
+type collatedKVTx struct{ storage.Tx }
+
+func (b collatedKV) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(collatedKVTx{tx}) })
+}
+func (b collatedKVTx) List(ns, prefix string) ([]storage.Entry, error) {
+	out, err := b.Tx.List(ns, prefix)
+	slices.SortStableFunc(out, func(x, y storage.Entry) int { return strings.Compare(strings.ToLower(x.Key), strings.ToLower(y.Key)) })
+	return out, err
+}
+
+// abortOnce aborts the first run of every transaction that writes, as a
+// backend under contention would, with abort: ErrConflict for one that
+// reports contention as a clash, or ErrTransient after committing for one
+// that reports an abort it cannot be sure of. The rest commit.
+type abortOnce struct {
+	storage.Store
+	abort  error
+	commit bool
+	mu     sync.Mutex
+	seen   map[string]bool
+}
+
+func (b *abortOnce) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	var name string
+	err := b.Store.Transact(ctx, g, func(tx storage.Tx) error {
+		r := &abortOnceTx{Tx: tx}
+		if err := fn(r); err != nil {
+			return err
+		}
+		name = r.event
+		b.mu.Lock()
+		first := name != "" && !b.seen[name]
+		if first {
+			b.seen[name] = true
+		}
+		b.mu.Unlock()
+		if first && !b.commit {
+			return b.abort
+		}
+		if first {
+			name = "commit-then-abort"
+		}
+		return nil
+	})
+	if err == nil && name == "commit-then-abort" {
+		return b.abort
+	}
+	return err
+}
+
+type abortOnceTx struct {
+	storage.Tx
+	event string
+}
+
+func (t *abortOnceTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
+	t.event = string(e.ID)
+	return t.Tx.AcceptEvent(e)
+}
+
 func TestWeakenedBackendsAreRejected(t *testing.T) {
 	cases := []struct {
 		name, diagnostic string
@@ -233,6 +392,17 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "earlier", func() storage.Store { return forgetfulArtifacts{reference.New()} }},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "after the Work's cancel", func() storage.Store { return terminalWorkArtifacts{reference.New()} }},
+		{"sequences_visible_in_order_to_a_waiting_reader", "was skipped", func() storage.Store {
+			return &identityColumn{inner: reference.New(), pending: map[domain.ID]bool{}}
+		}},
+		{"kv_prefixes_and_order_are_bytes", "prefix matched a wildcard", func() storage.Store { return likeKV{reference.New()} }},
+		{"kv_prefixes_and_order_are_bytes", "not in byte order", func() storage.Store { return collatedKV{reference.New()} }},
+		{"transient_aborts_commit_nothing_and_retry", "reported as a conflict", func() storage.Store {
+			return &abortOnce{Store: reference.New(), abort: storage.ErrConflict, seen: map[string]bool{}}
+		}},
+		{"transient_aborts_commit_nothing_and_retry", "aborted transaction had committed", func() storage.Store {
+			return &abortOnce{Store: reference.New(), abort: storage.ErrTransient, commit: true, seen: map[string]bool{}}
+		}},
 	}
 	for _, negative := range cases {
 		t.Run(negative.name, func(t *testing.T) {
