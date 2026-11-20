@@ -8,10 +8,11 @@ import (
 )
 
 // delegated is a config file whose scope "teams" takes the submitted
-// include "web".
+// include "web", which allows the folder_agent executor and the secret
+// key.
 func delegated(parent string) []byte {
 	return []byte(`{"version":1,"settings":{},"connections":[],
-		"includes":[{"name":"web","parent":` + quote(parent) + `}],
+		"includes":[{"name":"web","parent":` + quote(parent) + `,"executors":["folder_agent"],"secret_names":["key"]}],
 		"scopes":[{"id":"home","name":"home",
 			"authorization":{"connections":[],"operations":["emit","read_context","declare_outcome"],"read_scopes":[]},
 			"secret_refs":{"key":"env:KEY"}},
@@ -71,7 +72,7 @@ func TestSubmittedIncludeTakesAFragment(t *testing.T) {
 		t.Fatalf("moved web %+v", moved)
 	}
 	// Removing the include drops them.
-	gone := mustFile(t, []byte(strings.Replace(string(delegated("teams")), `{"name":"web","parent":"teams"}`, "", 1)), applied.Normalized)
+	gone := mustFile(t, []byte(strings.Replace(string(delegated("teams")), `{"name":"web","parent":"teams","executors":["folder_agent"],"secret_names":["key"]}`, "", 1)), applied.Normalized)
 	if _, ok := gone.Scope("web"); ok || len(gone.Includes) != 0 {
 		t.Fatal("removed include kept its scopes")
 	}
@@ -131,7 +132,7 @@ func TestSubmittedIncludesAreDeclaredOnce(t *testing.T) {
 	if !slices.Contains(codes(diagnostics(t, func() error { _, err := ValidateFile([]byte(both), includeRegistry(), Includes{}); return err }())), "invalid_value") {
 		t.Fatal("an include with both a path and a name validated")
 	}
-	twice := strings.Replace(string(delegated("teams")), `{"name":"web","parent":"teams"}`, `{"name":"web","parent":"teams"},{"name":"web","parent":"home"}`, 1)
+	twice := strings.Replace(string(delegated("teams")), `{"name":"web","parent":"teams",`, `{"name":"web","parent":"home"},{"name":"web","parent":"teams",`, 1)
 	if !slices.Contains(codes(diagnostics(t, func() error { _, err := ValidateFile([]byte(twice), includeRegistry(), Includes{}); return err }())), "duplicate_value") {
 		t.Fatal("an include declared twice validated")
 	}
@@ -142,7 +143,7 @@ func TestSubmittedIncludesAreDeclaredOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orphan := strings.Replace(string(applied.Normalized), `"includes":[{"name":"web","parent":"teams"}],`, "", 1)
+	orphan := strings.Replace(string(applied.Normalized), `"includes":[{"executors":["folder_agent"],"name":"web","parent":"teams","secret_names":["key"]}],`, "", 1)
 	if orphan == string(applied.Normalized) {
 		t.Fatalf("normalized lacks its includes: %s", applied.Normalized)
 	}
@@ -168,5 +169,57 @@ func TestExportKeepsSubmittedIncludes(t *testing.T) {
 	}
 	if back := mustFile(t, text, applied.Normalized); back.Hash != applied.Hash {
 		t.Fatalf("export did not compose back: %s", text)
+	}
+}
+
+// TestSubmittedIncludeAllowsOnlyWhatTheFileSays: by default a fragment
+// defines no binding or extension entry and selects no secret: it routes
+// to the bindings its parent provides and may disable them. What the
+// include allows, it may use; narrowing the include later refuses a
+// fragment that uses more, at the include.
+func TestSubmittedIncludeAllowsOnlyWhatTheFileSays(t *testing.T) {
+	bare := []byte(`{"version":1,"settings":{},"connections":[],
+		"includes":[{"name":"web","parent":"teams"}],
+		"scopes":[{"id":"teams","name":"teams",
+			"authorization":{"connections":[],"operations":["emit","read_context","declare_outcome"],"read_scopes":[]},
+			"secret_refs":{"key":"env:KEY"},
+			"bindings":[{"name":"run","executor":"folder_agent","requires":{"toolbelt":"cli"},"operations":["emit"],"config":{"command":"x"}}]}]}`)
+	root := mustFile(t, bare, nil)
+	_, err := ApplyFragment(root.Normalized, "web", []byte(fragment), includeRegistry())
+	got := map[string]bool{}
+	for _, d := range diagnostics(t, err) {
+		if d.Code == "not_allowed" {
+			got[d.Path] = true
+		}
+	}
+	if !got["fragment/scopes/0/bindings/0/executor"] || !got["fragment/scopes/0/bindings/0/secret_names/0"] {
+		t.Fatalf("a binding the include doesn't allow: %v", diagnostics(t, err))
+	}
+	entry := `{"version":1,"scopes":[{"id":"web","name":"web","extensions":[{"name":"gh","type":"schedule","config":{}}]}]}`
+	_, err = ApplyFragment(root.Normalized, "web", []byte(entry), includeRegistry())
+	if !slices.Contains(codes(diagnostics(t, err)), "not_allowed") {
+		t.Fatalf("an extension entry the include doesn't allow: %v", err)
+	}
+	routed := `{"version":1,"scopes":[{"id":"web","name":"web",
+		"routes":[{"name":"incoming","handler":"manual","binding":"run","active_policy":"queue","config":{}}]},
+		{"id":"quiet","name":"quiet","bindings":[{"name":"run","disabled":true}]}]}`
+	applied, err := ApplyFragment(root.Normalized, "web", []byte(routed), includeRegistry())
+	if err != nil {
+		t.Fatalf("routing to an inherited binding: %v", err)
+	}
+	allowing := []byte(strings.Replace(string(bare), `{"name":"web","parent":"teams"}`, `{"name":"web","parent":"teams","executors":["folder_agent"],"secret_names":["key"]}`, 1))
+	wide, err := ApplyFragment(mustFile(t, allowing, applied.Normalized).Normalized, "web", []byte(fragment), includeRegistry())
+	if err != nil {
+		t.Fatalf("a binding the include allows: %v", err)
+	}
+	_, err = ValidateFile(bare, includeRegistry(), Includes{Previous: wide.Normalized})
+	if d := diagnostics(t, err); len(d) == 0 || !strings.HasPrefix(d[0].Path, "includes/0/scopes/0/bindings/0") || d[0].Code != "not_allowed" {
+		t.Fatalf("narrowing the include under a fragment that uses more: %v", d)
+	}
+	if !slices.Contains(codes(diagnostics(t, func() error {
+		_, err := ValidateFile([]byte(strings.Replace(string(central("/x")), `"parent":"home"`, `"parent":"home","executors":["folder_agent"]`, 1)), includeRegistry(), Includes{})
+		return err
+	}())), "invalid_value") {
+		t.Fatal("a folder include took executors")
 	}
 }

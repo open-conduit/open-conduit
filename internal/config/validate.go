@@ -157,7 +157,12 @@ type EffectiveScope struct {
 // Snapshot is one immutable validated generation candidate. Normalized
 // contains secret reference text: never log or return it.
 type Snapshot struct {
-	Hash       string
+	Hash string
+	// FileHash is the hash of the generation without its submitted
+	// includes' scopes: the part a config file sets, which a config file
+	// apply checks its candidate against, so a team's fragment apply never
+	// stales it. It is Hash when there are none.
+	FileHash   string
 	Normalized json.RawMessage
 	Settings   Settings
 	Order      []domain.ID
@@ -1221,6 +1226,16 @@ func (v *validator) snapshot() *Snapshot {
 	}
 	s.EntryOperations = v.registeredEntryOperations(s)
 	s.Includes = v.doc.Submitted()
+	s.FileHash = hash
+	if file := *v.doc; len(s.Includes) > 0 {
+		file.Scopes = nil
+		for _, sc := range v.doc.Scopes {
+			if !strings.HasPrefix(sc.Source, "submitted:") {
+				file.Scopes = append(file.Scopes, sc)
+			}
+		}
+		_, s.FileHash = file.Normalize()
+	}
 	return s
 }
 
@@ -1242,10 +1257,56 @@ func (v *validator) submittedIncludes() {
 			v.fail(p+"/parent", "unknown_scope", "parent must be a scope defined in the config file itself")
 		}
 	}
-	for i, sc := range v.doc.Scopes {
-		if name, ok := strings.CutPrefix(sc.Source, "submitted:"); ok && !names[name] {
-			v.fail(ptr("scopes", i)+"/source", "unknown_include", "this scope's submitted include is not declared")
+	allows := map[string]IncludeAllow{}
+	for _, in := range v.doc.Includes {
+		if in.Name != "" {
+			allows[in.Name] = in.Allow
 		}
+	}
+	for i, sc := range v.doc.Scopes {
+		name, ok := strings.CutPrefix(sc.Source, "submitted:")
+		if !ok {
+			continue
+		}
+		if !names[name] {
+			v.fail(ptr("scopes", i)+"/source", "unknown_include", "this scope's submitted include is not declared")
+			continue
+		}
+		v.submittedScope(ptr("scopes", i), sc, allows[name])
+	}
+}
+
+// submittedScope holds a submitted scope to what its include allows: a
+// binding it defines runs an allowed executor, an extension entry it
+// declares is of an allowed type, and either selects only allowed secret
+// names. Disabling an inherited one only narrows, so is always allowed.
+func (v *validator) submittedScope(path string, sc ScopeConfig, allow IncludeAllow) {
+	secrets := func(p string, names []string) {
+		for m, n := range names {
+			if !slices.Contains(allow.SecretNames, n) {
+				v.fail(ptr(p+"/secret_names", m), "not_allowed", "the include doesn't let its fragments select this secret; ask the config file's owner to add it to the include's secret_names")
+			}
+		}
+	}
+	for k, b := range sc.Bindings {
+		p := ptr(path+"/bindings", k)
+		if b.Disabled {
+			continue
+		}
+		if !slices.Contains(allow.Executors, b.Executor) {
+			v.fail(p+"/executor", "not_allowed", "the include doesn't let its fragments define bindings for this executor; route to a binding the parent scope provides, or ask the config file's owner to add the executor to the include's executors")
+		}
+		secrets(p, b.SecretNames)
+	}
+	for k, x := range sc.Extensions {
+		p := ptr(path+"/extensions", k)
+		if x.Disabled {
+			continue
+		}
+		if !slices.Contains(allow.ExtensionTypes, x.Type) {
+			v.fail(p+"/type", "not_allowed", "the include doesn't let its fragments declare extension entries of this type; ask the config file's owner to add it to the include's extension_types")
+		}
+		secrets(p, x.SecretNames)
 	}
 }
 

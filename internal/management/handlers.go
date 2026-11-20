@@ -981,7 +981,7 @@ func (s *Server) validateConfig(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, map[string]any{"valid": true, "candidate_hash": snapshot.Hash, "config": snapshot.Redacted()}, nil
+	return 200, map[string]any{"valid": true, "candidate_hash": snapshot.FileHash, "config": snapshot.Redacted()}, nil
 }
 
 // applyConfig applies config, or config_text: the file's text as a JSON

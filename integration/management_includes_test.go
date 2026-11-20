@@ -12,9 +12,10 @@ import (
 )
 
 // includesConfig attaches two submitted includes, web and api, under the
-// scope teams, beside a scope of the config file's own.
+// scope teams, beside a scope of the config file's own. Their fragments
+// may define bindings for the fixture executor, and select no secret.
 const includesConfig = `{"version": 1, "settings": {}, "connections": [],
-  "includes": [{"name": "web", "parent": "teams"}, {"name": "api", "parent": "teams"}],
+  "includes": [{"name": "web", "parent": "teams", "executors": ["fixture"]}, {"name": "api", "parent": "teams", "executors": ["fixture"]}],
   "scopes": [
     {"id": "teams", "name": "teams",
      "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome"], "read_scopes": []}},
@@ -111,6 +112,52 @@ func TestManagementSubmittedIncludes(t *testing.T) {
 		t.Fatalf("a clashing fragment: %+v", err)
 	}
 
+	// It may define bindings only for the executors the include allows,
+	// and select only the secrets it allows.
+	other := strings.Replace(string(teamFragment("web")), `"executor": "fixture"`, `"executor": "shell"`, 1)
+	_, err = web.ApplyFragmentText(ctx, "web", []byte(other), applied.Hash, "web-shell")
+	if !errors.As(err, &apiErr) || apiErr.Code != "invalid_config" || !strings.Contains(apiErr.Error(), "fragment/scopes/0/bindings/0/executor: not_allowed") {
+		t.Fatalf("an executor the include doesn't allow: %v", err)
+	}
+	secret := strings.Replace(string(teamFragment("web")), `"operations": ["emit"],`, `"operations": ["emit"], "secret_names": ["key"],`, 1)
+	_, err = web.ApplyFragmentText(ctx, "web", []byte(secret), applied.Hash, "web-secret")
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Error(), "fragment/scopes/0/bindings/0/secret_names/0: not_allowed") {
+		t.Fatalf("a secret the include doesn't allow: %v", err)
+	}
+
+	// A config file apply validated before a team's apply still applies
+	// over it, and keeps it.
+	current, err := owner.Config(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileText, err := os.ReadFile(h.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := []byte(strings.Replace(string(fileText), `"name": "platform"`, `"name": "Platform"`, 1))
+	v, err := owner.ValidateConfig(ctx, renamed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiNow, err := api.Include(ctx, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiBound := strings.Replace(string(teamFragment("api")), `"name": "api"`, `"name": "api team"`, 1)
+	if _, err = api.ApplyFragmentText(ctx, "api", []byte(apiBound), apiNow.Hash, "api-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = owner.ApplyConfigText(ctx, renamed, v.CandidateHash, current.Generation, "file-over-fragment"); err != nil {
+		t.Fatalf("a config file apply staled only by a fragment apply: %v", err)
+	}
+	if sc, err := owner.Scope(ctx, "api"); err != nil || sc.Name != "api team" {
+		t.Fatalf("the config file apply undid api's: %+v %v", sc, err)
+	}
+	// A config file apply since its base still conflicts.
+	_, err = owner.ApplyConfigText(ctx, fileText, mustValidate(t, owner, fileText), current.Generation, "file-stale")
+	refused("a config file apply based before another", err, 409, "generation_conflict")
+
 	// Removing a scope with live Work is refused until it drains.
 	w, err := owner.CreateWork(ctx, client.WorkRequest{ScopeID: "web", Kind: "manual.task", Binding: "run"}, "make-web")
 	if err != nil {
@@ -165,4 +212,13 @@ func TestManagementSubmittedIncludes(t *testing.T) {
 			t.Errorf("trail lacks %q: %v", want, outcomes)
 		}
 	}
+}
+
+func mustValidate(t *testing.T, c *client.Client, text []byte) string {
+	t.Helper()
+	v, err := c.ValidateConfig(context.Background(), text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.CandidateHash
 }

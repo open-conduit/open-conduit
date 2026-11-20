@@ -45,7 +45,7 @@ func ExportFile(stored []byte) ([]byte, error) {
 		list := []any{}
 		for _, in := range file.Includes {
 			if in.Name != "" {
-				list = append(list, map[string]any{"name": in.Name, "parent": in.Parent})
+				list = append(list, in.normalized())
 			} else {
 				list = append(list, map[string]any{"path": in.Path, "parent": in.Parent})
 			}

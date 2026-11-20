@@ -47,6 +47,24 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,62}$",
             "description": "A scope defined in this file that the include's scopes sit beneath."
+          },
+          "executors": {
+            "type": "array",
+            "items": {"type": "string"},
+            "uniqueItems": true,
+            "description": "A submitted include only: the executors its fragments' bindings may name. None by default: its fragments route to the bindings the parent provides."
+          },
+          "extension_types": {
+            "type": "array",
+            "items": {"type": "string"},
+            "uniqueItems": true,
+            "description": "A submitted include only: the extension entry types its fragments may declare. None by default."
+          },
+          "secret_names": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$"},
+            "uniqueItems": true,
+            "description": "A submitted include only: the inherited secret names its fragments' bindings and entries may select. None by default."
           }
         },
         "required": [
@@ -56,7 +74,14 @@
           {
             "required": [
               "path"
-            ]
+            ],
+            "not": {
+              "anyOf": [
+                {"required": ["executors"]},
+                {"required": ["extension_types"]},
+                {"required": ["secret_names"]}
+              ]
+            }
           },
           {
             "required": [
