@@ -262,16 +262,27 @@ type Backends func(name string) (storage.Backend, error)
 // all. nil records nothing.
 type Record func(dir, backend string) error
 
+// ArtifactTarget is the artifact store a restore imports into: Backend
+// opened at Location, or, when Location is empty, at the restored
+// directory's artifacts (the file store's default place).
+type ArtifactTarget struct {
+	Backend  storage.ArtifactBackend
+	Location string
+}
+
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The bundle's backend restores its snapshot to conduit.db in
 // that directory and fences old lease authority, and its artifacts are
-// imported into the store files opens at the directory's artifacts. Each
+// imported into the store target opens. That store must hold nothing yet,
+// as the directory must not exist, so a restore never mixes a bundle's
+// content into a live store; when a restore into a location outside the
+// directory fails, what it imported there is deleted again. Each
 // is checked against its reference's digest, or, for a reference recorded
 // before references carried one, the digest the manifest vouches for. No
 // daemon may own destination; an existing path is rejected, never
 // overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, files storage.ArtifactBackend, record Record) error {
-	if now.IsZero() || files == nil {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, target ArtifactTarget, record Record) (err error) {
+	if now.IsZero() || target.Backend == nil {
 		return storage.ErrInvalid
 	}
 	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
@@ -297,12 +308,35 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 		return err
 	}
 	defer input.Close()
-	return publish(ctx, destination, func(stage string) error {
-		output, err := files.Open(ctx, filepath.Join(stage, "artifacts"))
-		if err != nil {
+	// A store outside the directory is opened and checked here, and emptied
+	// again when the restore fails at any step up to publishing; one inside
+	// it goes with the staged directory.
+	var external storage.ArtifactStore
+	var imported []domain.ArtifactRef
+	if target.Location != "" {
+		if external, err = openEmpty(ctx, target.Backend, target.Location); err != nil {
 			return err
 		}
-		defer output.Close()
+		defer external.Close()
+		defer func() {
+			if err == nil {
+				return
+			}
+			for _, ref := range imported {
+				_ = external.Delete(context.WithoutCancel(ctx), ref)
+			}
+		}()
+	}
+	return publish(ctx, destination, func(stage string) error {
+		output := external
+		if output == nil {
+			staged, err := openEmpty(ctx, target.Backend, filepath.Join(stage, "artifacts"))
+			if err != nil {
+				return err
+			}
+			defer staged.Close()
+			output = staged
+		}
 		seen := map[string]bool{}
 		for _, item := range m.Artifacts {
 			if seen[item.Ref.ID] {
@@ -323,6 +357,9 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			h := sha256.New()
 			err = output.Import(ctx, item.Ref, io.TeeReader(r, h))
 			closeErr := r.Close()
+			if err == nil {
+				imported = append(imported, item.Ref)
+			}
 			if errors.Is(err, storage.ErrCorrupt) {
 				return fmt.Errorf("backup: artifact digest mismatch: %w", err)
 			}
@@ -536,4 +573,22 @@ func Inspect(bundle string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
+}
+
+// openEmpty opens the store a restore imports into and refuses one that
+// already holds content.
+func openEmpty(ctx context.Context, b storage.ArtifactBackend, location string) (storage.ArtifactStore, error) {
+	s, err := b.Open(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	held, err := s.List(ctx, "", 1)
+	if err == nil && len(held) > 0 {
+		err = fmt.Errorf("backup: the artifact store at %s already holds content: restore into an empty one", location)
+	}
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }

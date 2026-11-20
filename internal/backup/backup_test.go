@@ -86,7 +86,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// What the caller records goes into the staged directory: a failure
 	// publishes nothing, and success publishes it with the state.
 	refused := filepath.Join(root, "refused")
-	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, artifacts.Backend, func(string, string) error { return errors.New("record failed") }); err == nil {
+	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore published despite a failed record")
 	}
 	if _, err := os.Lstat(refused); !os.IsNotExist(err) {
@@ -99,11 +99,38 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(dir, "recorded"), []byte(backend), 0o600)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, record); err != nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, record); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "recorded")); err != nil {
 		t.Fatalf("record not published with the state: %v", err)
+	}
+	// A target outside the directory is the operator's chosen store: a
+	// failed restore takes back what it imported there, a successful one
+	// leaves the content in it, and a store that already holds content is
+	// refused rather than mixed with the bundle's.
+	elsewhere := filepath.Join(root, "chosen-artifacts")
+	chosen := ArtifactTarget{Backend: artifacts.Backend, Location: elsewhere}
+	if err := Restore(ctx, bundle, filepath.Join(root, "refused-chosen"), now, nil, storage.LookupBackend, chosen, func(string, string) error { return errors.New("record failed") }); err == nil {
+		t.Fatal("restore into a chosen store published despite a failed record")
+	}
+	if held := listAll(t, elsewhere); len(held) != 0 {
+		t.Fatalf("a failed restore left %d artifacts in the chosen store", len(held))
+	}
+	if err := Restore(ctx, bundle, filepath.Join(root, "restored-chosen"), now, nil, storage.LookupBackend, chosen, nil); err != nil {
+		t.Fatal(err)
+	}
+	if held := listAll(t, elsewhere); len(held) != 1 || held[0].Ref != ref {
+		t.Fatalf("chosen store holds %+v, want the bundle's one artifact", held)
+	}
+	if _, err := os.Stat(filepath.Join(root, "restored-chosen", "artifacts")); !os.IsNotExist(err) {
+		t.Fatalf("a restore into a chosen store also made the directory's own: %v", err)
+	}
+	if err := Restore(ctx, bundle, filepath.Join(root, "restored-again"), now, nil, storage.LookupBackend, chosen, nil); err == nil || !strings.Contains(err.Error(), "already holds content") {
+		t.Fatalf("restore into a store with content: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "restored-again")); !os.IsNotExist(err) {
+		t.Fatalf("a refused restore published a directory: %v", err)
 	}
 	restored, err := sqlite.Open(ctx, filepath.Join(destination, "conduit.db"))
 	if err != nil {
@@ -145,7 +172,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, nil); err == nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -185,7 +212,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, artifacts.Backend, nil); err == nil {
+			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -290,7 +317,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 	}
 	before := treeOf(t, bundle)
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, nil); err != nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err != nil {
 		t.Fatal(err)
 	}
 	after := treeOf(t, bundle)
@@ -544,4 +571,19 @@ func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
 	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
 		t.Fatalf("hold left after a failed renewal: %v %v", rows, err)
 	}
+}
+
+// listAll lists every artifact in the file store at dir.
+func listAll(t *testing.T, dir string) []storage.StoredArtifact {
+	t.Helper()
+	s, err := artifacts.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	held, err := s.List(context.Background(), "", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return held
 }
