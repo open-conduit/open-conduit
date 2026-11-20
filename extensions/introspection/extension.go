@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -308,13 +307,13 @@ func (x *Extension) retire(ctx context.Context, configured map[domain.ID]bool) {
 	err := x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
 		// The extension's Work in a scope with no entry, enabled or
 		// disabled, is Work the configuration no longer has a use for.
-		works, err := tx.ListWorks()
+		works, err := retirable(tx)
 		if err != nil {
 			return err
 		}
 		all := maps.Clone(configured)
 		for _, w := range works {
-			if _, ok := all[w.ScopeID]; !ok && slices.Contains(WorkKinds(), w.Kind) {
+			if _, ok := all[w.ScopeID]; !ok {
 				all[w.ScopeID] = false
 			}
 		}

@@ -534,15 +534,39 @@ func (p *Projector) Thread(w domain.Work) (channel, thread string, ok bool) {
 	return "", "", false
 }
 
-// outcomeIntents re-derives replies declared by durable outcomes.
-func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
+// worksCursor keys the projector's change cursor: the since of its next
+// read of Work for outcome replies (storage.LiveOrChanged).
+const worksCursor = "works/cursor"
+
+type changeCursor struct {
+	Since time.Time `json:"since"`
+}
+
+// outcomePass is what outcomeIntents read: the Work, and the cursor it read
+// them from.
+type outcomePass struct {
+	works []domain.Work
+	since time.Time
+}
+
+// outcomeIntents re-derives replies declared by durable outcomes, from the
+// Work of the scope that is live or changed since the change cursor, not
+// every Work ever made: a finished Work's replies are derived until they
+// are delivered, and the cursor passes it then (saveWorksCursor).
+func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, outcomePass, error) {
 	var out []Intent
+	var read outcomePass
 	err := p.transact(ctx, func(tx storage.Tx) error {
-		out = nil
-		works, err := tx.ListWorks()
+		out, read = nil, outcomePass{}
+		var cur changeCursor
+		if _, err := p.get(tx, worksCursor, &cur); err != nil {
+			return err
+		}
+		works, err := storage.LiveOrChanged(tx, storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope)}, cur.Since)
 		if err != nil {
 			return err
 		}
+		read = outcomePass{works: works, since: cur.Since}
 		for _, w := range works {
 			if string(w.ScopeID) != p.o.Settings.Scope {
 				continue
@@ -565,7 +589,17 @@ func (p *Projector) outcomeIntents(ctx context.Context) ([]Intent, error) {
 		}
 		return nil
 	})
-	return out, err
+	return out, read, err
+}
+
+// saveWorksCursor moves the change cursor past the finished Work whose
+// outcome replies the pass settled (storage.NextChangeCursor).
+func (p *Projector) saveWorksCursor(ctx context.Context, read outcomePass, unsettled map[domain.ID]bool) error {
+	next := storage.NextChangeCursor(read.since, read.works, func(w domain.Work) bool { return unsettled[w.ID] })
+	if next.Equal(read.since) {
+		return nil
+	}
+	return p.transact(ctx, func(tx storage.Tx) error { return p.put(tx, worksCursor, changeCursor{Since: next}) })
 }
 
 // Converge runs one bounded pass: outcome replies, unfinished durable
@@ -588,10 +622,13 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 	if limit <= 0 {
 		limit = 50
 	}
-	intents, err := p.outcomeIntents(ctx)
+	intents, read, err := p.outcomeIntents(ctx)
 	if err != nil {
 		return res, err
 	}
+	// unsettled is the Work whose replies this pass left to a later one;
+	// the change cursor stays before it.
+	unsettled := map[domain.ID]bool{}
 	prompts, err := p.promptIntents(ctx)
 	if err != nil {
 		return res, err
@@ -619,7 +656,8 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 	done := 0
 	for _, in := range append(intents, durable...) {
 		if done >= limit {
-			break
+			unsettled[in.Work] = true
+			continue
 		}
 		st, err := p.Lookup(ctx, in.ID)
 		if err != nil {
@@ -639,7 +677,10 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 			res.Codes = append(res.Codes, "reply:credential")
 			return res, err
 		case err != nil:
+			unsettled[in.Work] = true
 			res.Codes = append(res.Codes, "reply:"+ErrorCode(err))
+		case state != IntentRecovered && state != IntentPosted && state != IntentFailed:
+			unsettled[in.Work] = true // attempted: its search is not due yet
 		case state == IntentRecovered:
 			res.Recovered++
 		case state == IntentPosted:
@@ -651,6 +692,11 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 				code = "reply:" + CodeIdentityScope
 			}
 			res.Codes = append(res.Codes, code)
+		}
+	}
+	if !p.o.Settings.Projection.DryRun {
+		if err := p.saveWorksCursor(ctx, read, unsettled); err != nil {
+			return res, err
 		}
 	}
 	if done < limit {

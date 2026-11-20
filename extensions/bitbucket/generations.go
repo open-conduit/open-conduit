@@ -16,14 +16,15 @@ import (
 // run in another process (#428). A tracker opens each reopened generation's
 // Work under issue/<key>/generation/reopen-<unix> in its namespace, so the
 // generation current at a time is the latest such reopen at or before it.
-// It reads the Work once for each push or reconcile page, and resolves
-// every PR of it from that read.
+// It reads the tracker's Work in the scope (those whose subject is a key
+// of ns) once for each push or reconcile page, and resolves every PR of it
+// from that read.
 func StoreGenerations(store storage.Store, scope domain.ID, ns string, now func() time.Time) Generations {
 	return func(ctx context.Context) (GenerationAt, error) {
 		var works []domain.Work
-		err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		err := storage.View(ctx, store, now(), func(tx storage.Tx) error {
 			var err error
-			works, err = tx.ListWorks()
+			works, err = tx.QueryWorks(storage.WorkQuery{ScopeID: scope, Sources: []string{ns}})
 			return err
 		})
 		if err != nil {

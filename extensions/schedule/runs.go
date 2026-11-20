@@ -72,7 +72,7 @@ func checkpointKey(work domain.ID) string { return "ended/" + digest(string(work
 // per job, at most limit. An attempt that ended waiting is passed over: the
 // job has not finished, and its next attempt will announce.
 func EndedRunsInTx(tx storage.Tx, now time.Time, limit int) ([]Ended, error) {
-	works, err := tx.ListWorks()
+	works, err := tx.QueryWorks(storage.WorkQuery{Kind: WorkKind})
 	if err != nil {
 		return nil, err
 	}

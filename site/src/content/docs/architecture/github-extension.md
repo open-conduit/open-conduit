@@ -178,6 +178,8 @@ The runtime routes an Event in the scope of the entry that observed it, using th
 
 `Projector.Converge` (run by the daemon at most every five seconds) reads durable state: Work, attempts and outcomes in the extension's scope whose keys are in its namespace. When several generations share an issue, the live one wins.
 
+A pass reads the scope's live Work and the finished Work changed since its change cursor (`storage.LiveOrChanged`), not every Work ever made (#707). Finished Work is settled once its labels are applied and its outcome comments posted, and the cursor, kept in the projector's namespace, then moves past it (`storage.NextChangeCursor`). It stays `storage.ChangeLag` (a minute) behind the latest change the pass read, so a change committed just after the read is read on the next pass, and never passes finished Work a pass left unsettled: a failed or deferred label or comment, or a pass cut short by its limit. A pass that stops part way, or runs dry, leaves the cursor where it was. When a finished Work turns up whose issue another Work last projected, and that Work wasn't read, the projector reads it and keeps its labels if it still wins. `TestGitHubProjectionPassReadsTheLiveAndChanged` bounds what a settled pass reads, against a store that answers every query from the whole list.
+
 **Labels** are level-triggered:
 
 - `claimed` is present while Work owns the issue. It comes off once the Work completes, whether or not the issue is closed: nothing hears the issue any more, so the label would promise an agent who isn't there. The completed Work still owns the issue's generation, so admission never claims it again; a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
@@ -250,7 +252,6 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 
 ## Limitations
 
-- **Projection volume.** The projector reads every Work in the store on each pass and keeps those in its scope and namespace. That has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is validated but not enforced, and `config check` warns where a config sets it. A scope's `limits.concurrency` does cap how many of its issues have a turn running at once.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry, an entry moved to another connection, or its connection moved to another `api_url` reports `restart_required` until the daemon restarts. Other connection changes apply in place (see Configuration).
 - **Pull request Work.** A PR reopened after its Work completed isn't claimed again: the completed Work keeps the PR's key. While a PR's Work waits, input its route passes on but that doesn't wake it is kept as wait context, as an issue's agent's is, so the next pass sees it; what the route skips, such as pending checks, is not.

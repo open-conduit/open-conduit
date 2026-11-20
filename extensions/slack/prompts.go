@@ -60,14 +60,11 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 	var ws []waiting
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		ws = nil
-		works, err := tx.ListWorks()
+		works, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), States: askingStates})
 		if err != nil {
 			return err
 		}
 		for _, w := range works {
-			if string(w.ScopeID) != p.o.Settings.Scope || w.State != domain.WorkWaiting && w.State != domain.WorkReady {
-				continue
-			}
 			channel, thread, ok := p.Thread(w)
 			if !ok {
 				continue

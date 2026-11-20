@@ -502,26 +502,23 @@ func (x *Extension) publishRuns(ctx context.Context, limit int) (int, []string, 
 	return published, codes, err
 }
 
-// jobWorksInTx are the job Works. Listing every Work is a full read of the
-// store, and over the protocol a full read crosses the process boundary,
-// so the job Works' IDs are kept and the full list read again only every
-// ensureGap; between, each known job Work is read by ID. A job Work made
-// since is found at the next full read, so its first run is announced up
-// to ensureGap late.
+// jobWorksInTx are the job Works. The query for them still has the host
+// read every job Work ever made, so the job Works' IDs are kept and the
+// query made again only every ensureGap; between, each known job Work is
+// read by ID. A job Work made since is found at the next query, so its
+// first run is announced up to ensureGap late.
 func (x *Extension) jobWorksInTx(tx storage.Tx, now time.Time) ([]domain.Work, error) {
 	x.mu.Lock()
 	ids, at := x.jobs, x.jobsAt
 	x.mu.Unlock()
 	if ids == nil || now.Sub(at) >= ensureGap || now.Before(at) {
-		all, err := tx.ListWorks()
+		works, err := tx.QueryWorks(storage.WorkQuery{Kind: WorkKind})
 		if err != nil {
 			return nil, err
 		}
-		works, ids := []domain.Work{}, []domain.ID{}
-		for _, w := range all {
-			if w.Kind == WorkKind {
-				works, ids = append(works, w), append(ids, w.ID)
-			}
+		ids := make([]domain.ID, 0, len(works))
+		for _, w := range works {
+			ids = append(ids, w.ID)
 		}
 		x.mu.Lock()
 		x.jobs, x.jobsAt = ids, now

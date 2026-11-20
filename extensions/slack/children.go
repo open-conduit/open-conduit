@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -70,7 +71,7 @@ func (p *Projector) who(w domain.Work, binding string) string {
 // subtree is root and every Work below it, depth first, each with the name
 // its requests go by. A descendant that is a conversation itself is left
 // out with its own subtree: its requests are prompted in its own thread.
-func (p *Projector) subtree(tx storage.Tx, root domain.Work, children map[domain.ID][]domain.Work) ([]asker, error) {
+func (p *Projector) subtree(tx storage.Tx, root domain.Work, f *family) ([]asker, error) {
 	var out []asker
 	seen := map[domain.ID]bool{}
 	var walk func(w domain.Work, depth int) error
@@ -87,7 +88,11 @@ func (p *Projector) subtree(tx storage.Tx, root domain.Work, children map[domain
 			return err
 		}
 		out = append(out, asker{work: w, who: p.who(w, binding)})
-		for _, k := range children[w.ID] {
+		kids, err := f.children(w.ID)
+		if err != nil {
+			return err
+		}
+		for _, k := range kids {
 			if err := walk(k, depth+1); err != nil {
 				return err
 			}
@@ -190,22 +195,22 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 	var hs []held
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		hs = nil
-		works, err := tx.ListWorks()
+		works, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), States: askingStates})
 		if err != nil {
 			return err
 		}
-		byID := make(map[domain.ID]domain.Work, len(works))
+		f := newFamily(tx)
 		for _, w := range works {
-			byID[w.ID] = w
-		}
-		for _, w := range works {
-			if string(w.ScopeID) != p.o.Settings.Scope || w.ParentID == "" || w.State != domain.WorkWaiting && w.State != domain.WorkReady {
+			if w.ParentID == "" {
 				continue
 			}
 			if _, _, own := p.Thread(w); own {
 				continue
 			}
-			anc, ok := p.conversationOf(w, byID)
+			anc, ok, err := p.conversationOf(w, f)
+			if err != nil {
+				return err
+			}
 			if !ok {
 				continue
 			}
@@ -269,17 +274,71 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 
 // conversationOf is w's nearest ancestor that is a conversation with a
 // thread of this entry.
-func (p *Projector) conversationOf(w domain.Work, byID map[domain.ID]domain.Work) (domain.Work, bool) {
+func (p *Projector) conversationOf(w domain.Work, f *family) (domain.Work, bool, error) {
 	cur := w
 	for range maxDepth {
-		parent, ok := byID[cur.ParentID]
-		if cur.ParentID == "" || !ok {
-			return domain.Work{}, false
+		if cur.ParentID == "" {
+			return domain.Work{}, false, nil
+		}
+		parent, ok, err := f.work(cur.ParentID)
+		if err != nil || !ok {
+			return domain.Work{}, false, err
 		}
 		if _, _, own := p.Thread(parent); own {
-			return parent, true
+			return parent, true, nil
 		}
 		cur = parent
 	}
-	return domain.Work{}, false
+	return domain.Work{}, false, nil
+}
+
+// askingStates are the states of Work that may be asking a person something:
+// waiting on an answer, or ready but not started (held for an approval).
+var askingStates = []domain.WorkState{domain.WorkWaiting, domain.WorkReady}
+
+// family reads Work's parents and children as a pass needs them, each once
+// a pass, so a pass reads the Work it follows rather than every Work ever
+// made to find them.
+type family struct {
+	tx    storage.Tx
+	works map[domain.ID]domain.Work
+	gone  map[domain.ID]bool
+	kids  map[domain.ID][]domain.Work
+}
+
+func newFamily(tx storage.Tx) *family {
+	return &family{tx: tx, works: map[domain.ID]domain.Work{}, gone: map[domain.ID]bool{}, kids: map[domain.ID][]domain.Work{}}
+}
+
+// work is the Work id, if the extension can read it.
+func (f *family) work(id domain.ID) (domain.Work, bool, error) {
+	if w, ok := f.works[id]; ok {
+		return w, true, nil
+	}
+	if f.gone[id] {
+		return domain.Work{}, false, nil
+	}
+	w, err := f.tx.Work(id)
+	if errors.Is(err, storage.ErrNotFound) {
+		f.gone[id] = true
+		return domain.Work{}, false, nil
+	}
+	if err != nil {
+		return domain.Work{}, false, err
+	}
+	f.works[id] = w
+	return w, true, nil
+}
+
+// children are id's child Work, oldest first.
+func (f *family) children(id domain.ID) ([]domain.Work, error) {
+	if kids, ok := f.kids[id]; ok {
+		return kids, nil
+	}
+	kids, err := f.tx.QueryWorks(storage.WorkQuery{ParentID: id})
+	if err != nil {
+		return nil, err
+	}
+	f.kids[id] = kids
+	return kids, nil
 }

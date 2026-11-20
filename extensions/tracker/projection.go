@@ -216,14 +216,67 @@ func (p *Projector) desired(w domain.Work, latest *domain.Execution, last string
 	return labels, state
 }
 
-func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
-	var out []projected
+// worksCursor keys the projection's change cursor, the since of its next
+// read of Work (storage.LiveOrChanged), and watchPrefix the completed Work
+// whose issue was still open when last projected, which every pass reads
+// until the issue closes, whatever the cursor.
+const (
+	worksCursor = "works/cursor"
+	watchPrefix = "watch/"
+)
+
+type changeCursor struct {
+	Since time.Time `json:"since"`
+}
+
+// pass is what one projection pass read: the issues to project, the Work
+// it read for them, and the cursor it read them from.
+type pass struct {
+	items []projected
+	works []domain.Work
+	since time.Time
+}
+
+// snapshot reads the Work of the projector's scope that is live, changed
+// since its cursor or watched, not every Work ever made: finished Work is
+// projected once it settles, and the cursor passes it then
+// (saveWorksCursor).
+func (p *Projector) snapshot(ctx context.Context) (pass, error) {
+	var out pass
 	err := p.transact(ctx, func(tx storage.Tx) error {
-		out = nil
-		works, err := tx.ListWorks()
+		out = pass{}
+		var cur changeCursor
+		if _, err := p.get(tx, worksCursor, &cur); err != nil {
+			return err
+		}
+		works, err := storage.LiveOrChanged(tx, storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope)}, cur.Since)
 		if err != nil {
 			return err
 		}
+		out.since = cur.Since
+		read := map[domain.ID]bool{}
+		for _, w := range works {
+			read[w.ID] = true
+		}
+		watched, err := tx.List(p.ns, watchPrefix)
+		if err != nil {
+			return err
+		}
+		for _, row := range watched {
+			id := domain.ID(strings.TrimPrefix(row.Key, watchPrefix))
+			if read[id] {
+				continue
+			}
+			w, err := tx.Work(id)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			works = append(works, w)
+		}
+		out.works = works
 		byIssue := map[string]projected{}
 		for _, w := range works {
 			if string(w.ScopeID) != p.o.Settings.Scope {
@@ -270,8 +323,7 @@ func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
 			switch {
 			case !ok:
 				byIssue[issue] = item
-			case prev.work.State.Terminal() && !w.State.Terminal(),
-				prev.work.State.Terminal() == w.State.Terminal() && w.CreatedAt.After(prev.work.CreatedAt):
+			case supersedes(w, prev.work):
 				item.intents = append(prev.intents, item.intents...)
 				byIssue[issue] = item
 			default:
@@ -285,11 +337,45 @@ func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			out = append(out, byIssue[k])
+			out.items = append(out.items, byIssue[k])
 		}
 		return nil
 	})
 	return out, err
+}
+
+// supersedes says whether w, rather than prev, is the Work an issue
+// projects: live Work over finished, else the later created.
+func supersedes(w, prev domain.Work) bool {
+	return prev.State.Terminal() && !w.State.Terminal() ||
+		prev.State.Terminal() == w.State.Terminal() && w.CreatedAt.After(prev.CreatedAt)
+}
+
+// saveWorksCursor moves the change cursor past the finished Work the pass
+// settled (storage.NextChangeCursor).
+func (p *Projector) saveWorksCursor(ctx context.Context, read pass, unsettled map[domain.ID]bool) error {
+	next := storage.NextChangeCursor(read.since, read.works, func(w domain.Work) bool { return unsettled[w.ID] })
+	if next.Equal(read.since) {
+		return nil
+	}
+	return p.transact(ctx, func(tx storage.Tx) error { return p.put(tx, worksCursor, changeCursor{Since: next}) })
+}
+
+// watch keeps w on the watch list while it is completed on an issue still
+// open, and takes it off otherwise, writing only when that changes.
+func (p *Projector) watch(tx storage.Tx, w domain.Work, closed bool) error {
+	key := watchPrefix + string(w.ID)
+	_, err := tx.Get(p.ns, key)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	switch want, has := w.State == domain.WorkCompleted && !closed, err == nil; {
+	case want && !has:
+		return tx.Put(p.ns, key, []byte("{}"))
+	case !want && has:
+		return tx.Delete(p.ns, key)
+	}
+	return nil
 }
 
 func projectionDigest(labels []string, state string) string {
@@ -355,10 +441,14 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	if limit <= 0 {
 		limit = 50
 	}
-	items, err := p.snapshot(ctx)
+	read, err := p.snapshot(ctx)
 	if err != nil {
 		return res, err
 	}
+	items := read.items
+	// unsettled is the Work whose labels or outcome comments this pass
+	// left to a later one; the change cursor stays before it.
+	unsettled := map[domain.ID]bool{}
 	fail := func(stage string, err error) error {
 		code := ErrorCode(err)
 		res.Codes = append(res.Codes, stage+":"+code)
@@ -370,20 +460,45 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	budget := limit
 	for _, item := range items {
 		if budget <= 0 {
-			break
+			unsettled[item.work.ID] = true
+			continue
 		}
 		key := "issue/" + item.issue
 		var st projectionState
+		superseded := false
 		if err := p.transact(ctx, func(tx storage.Tx) error {
-			st = projectionState{}
-			_, e := p.get(tx, key, &st)
-			return e
+			st, superseded = projectionState{}, false
+			if _, e := p.get(tx, key, &st); e != nil {
+				return e
+			}
+			if item.work.State.Terminal() && st.Work != "" && st.Work != item.work.ID {
+				// The pass reads finished Work only once it changes, so
+				// the Work the issue last projected may be one it didn't
+				// read; when that one still wins, the projection stands.
+				last, e := tx.Work(st.Work)
+				if errors.Is(e, storage.ErrNotFound) {
+					e = nil
+				} else if e == nil {
+					superseded = supersedes(last, item.work)
+				}
+				if e != nil || superseded {
+					return e
+				}
+			}
+			if !item.work.State.Terminal() || st.Work != item.work.ID || p.o.Settings.Projection.DryRun {
+				return nil
+			}
+			return p.watch(tx, item.work, st.Closed)
 		}); err != nil {
 			return res, err
 		}
+		if superseded {
+			continue
+		}
 		want := projectionDigest(p.desired(item.work, item.latest, item.last, st.Work == item.work.ID && st.Closed))
 		// Terminal Work is settled, except a completed Work whose issue is
-		// still open: it drops the claimed label once the issue closes.
+		// still open: it drops the claimed label once the issue closes, so
+		// it stays on the watch list until then.
 		watch := !item.work.State.Terminal() || item.work.State == domain.WorkCompleted && !st.Closed
 		verifyDue := watch && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
 		if st.Applied == want && st.Work == item.work.ID && !verifyDue {
@@ -392,6 +507,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		budget--
 		applied, closed, moved, err := p.converge(ctx, item)
 		if err != nil {
+			unsettled[item.work.ID] = true
 			if stop := fail("labels", err); stop != nil {
 				return res, stop
 			}
@@ -411,7 +527,10 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			verified = time.Time{}
 		}
 		if err := p.transact(ctx, func(tx storage.Tx) error {
-			return p.put(tx, key, projectionState{Work: item.work.ID, Applied: applied, VerifiedAt: verified, Closed: closed})
+			if err := p.put(tx, key, projectionState{Work: item.work.ID, Applied: applied, VerifiedAt: verified, Closed: closed}); err != nil {
+				return err
+			}
+			return p.watch(tx, item.work, closed)
 		}); err != nil {
 			return res, err
 		}
@@ -422,18 +541,22 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		state, err := p.Deliver(ctx, in)
 		switch {
 		case err != nil:
+			unsettled[in.Work] = true
 			return fail("comment", err)
 		case state == StateRecovered:
 			res.Recovered++
 		case state == StatePosted:
 			res.Posted++
+		default:
+			unsettled[in.Work] = true // attempted: its search is not due yet
 		}
 		return nil
 	}
 	for _, item := range items {
 		for _, in := range item.intents {
 			if intents >= limit {
-				break
+				unsettled[in.Work] = true
+				continue
 			}
 			state, err := p.outbox.State(ctx, in.ID)
 			if err != nil {
@@ -445,6 +568,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			if stop := deliver(in); stop != nil {
 				return res, stop
 			}
+		}
+	}
+	if !p.o.Settings.Projection.DryRun {
+		if err := p.saveWorksCursor(ctx, read, unsettled); err != nil {
+			return res, err
 		}
 	}
 	// Durable intents (agent tool calls) whose delivery is unfinished.

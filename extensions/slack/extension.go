@@ -365,11 +365,8 @@ func (x *Extension) activeThreads(s Settings) func(context.Context) (map[string]
 		var out map[string][]string
 		err := x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
 			out = map[string][]string{}
-			works, err := tx.ListWorks()
+			works, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(s.Scope), States: storage.LiveWorkStates})
 			for _, w := range works {
-				if string(w.ScopeID) != s.Scope || w.State.Terminal() {
-					continue
-				}
 				for _, k := range w.CorrelationKeys {
 					if k.Source != s.Namespace {
 						continue
