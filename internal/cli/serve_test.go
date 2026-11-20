@@ -27,6 +27,12 @@ func TestServeTelemetryOptOut(t *testing.T) {
 	if r := run(nil, "--no-telemetry"); !r.NoTelemetry {
 		t.Fatal("--no-telemetry left it on")
 	}
+	if r := run(nil); r.NoUpdates {
+		t.Fatal("updates off by default")
+	}
+	if r := run(nil, "--no-updates"); !r.NoUpdates {
+		t.Fatal("--no-updates left them on")
+	}
 	for _, c := range []struct {
 		key, value string
 		off        bool

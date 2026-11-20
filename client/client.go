@@ -1952,6 +1952,21 @@ func IsNotLive(err error) bool {
 	return errors.As(err, &e) && e.Code == "not_live"
 }
 
+// ReleaseInstalled is the release POST /releases/install put in place.
+type ReleaseInstalled struct {
+	Version string `json:"version"`
+}
+
+// InstallRelease asks the daemon to install version, which must be the
+// latest release, in place of its binaries. It needs the admin role, is
+// refused over the network (local_only), answers updates_off when the
+// daemon doesn't install releases and stale_release when a newer one is
+// out. It restarts nothing.
+func (c *Client) InstallRelease(ctx context.Context, version, key string) (out ReleaseInstalled, err error) {
+	err = c.Do(ctx, "POST", "releases/install", nil, map[string]any{"version": version}, key, &out)
+	return
+}
+
 // Doctor runs health checks; checkSecrets explicitly resolves references.
 func (c *Client) Doctor(ctx context.Context, checkSecrets bool) (out Doctor, err error) {
 	q := url.Values{}

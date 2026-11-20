@@ -42,7 +42,9 @@ const managementConfig = `{
 }`
 
 type managementHarness struct {
-	t          testing.TB
+	t testing.TB
+	// releases is the daemon's release installer, a fake.
+	releases   *fakeReleases
 	state      string
 	configPath string
 	store      storage.Store
@@ -116,6 +118,13 @@ func newManagementHarnessWith(t testing.TB, cfg string, register func(*config.Re
 // API reads through wrap(store) (the store itself when wrap is nil).
 func newManagementHarnessServing(t testing.TB, cfg string, register func(*config.Registry), wrap func(storage.Store) storage.Store) *managementHarness {
 	t.Helper()
+	return newHarness(t, cfg, register, wrap, true)
+}
+
+// newHarness is newManagementHarnessServing whose daemon installs releases
+// through h.releases, or with updates off (no Releases) unless releasing.
+func newHarness(t testing.TB, cfg string, register func(*config.Registry), wrap func(storage.Store) storage.Store, releasing bool) *managementHarness {
+	t.Helper()
 	ctx := context.Background()
 	state, err := os.MkdirTemp("/tmp", "oc-")
 	if err != nil {
@@ -123,7 +132,7 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 	}
 	t.Cleanup(func() { os.RemoveAll(state) })
 	h := &managementHarness{t: t, state: state, clock: conformance.NewClock(), tokens: make(chan string, 8), sockets: map[string]string{}, secrets: make(chan map[string]string, 8),
-		keyring: &memoryKeyring{values: map[string]string{}}, observed: &recordedObserver{}}
+		keyring: &memoryKeyring{values: map[string]string{}}, observed: &recordedObserver{}, releases: &fakeReleases{latest: "1.0.0"}}
 	h.lock, err = management.AcquireLock(state)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +217,11 @@ func newManagementHarnessServing(t testing.TB, cfg string, register func(*config
 		served = wrap(db)
 	}
 	secretsFile := filepath.Join(state, "config", "secrets.json")
-	server, err := management.NewServer(management.Options{Store: served, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
+	var releases management.Releases
+	if releasing {
+		releases = h.releases
+	}
+	server, err := management.NewServer(management.Options{Releases: releases, Store: served, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
 		Git: management.NewGitTransport(upstreamFunc(func(r *http.Request) (*http.Response, error) {
 			if h.gitUpstream == nil {
 				return nil, errors.New("no git upstream")

@@ -246,16 +246,24 @@ func remote(ctx context.Context) *remoteCall {
 
 // localOnly reports whether a route only makes sense on the daemon's own
 // machine: attach returns a command and directory for the caller to run
-// there, and a container attach a docker command for the daemon's Docker.
+// there, a container attach a docker command for the daemon's Docker, and
+// installing a release replaces the binary there.
 func localOnly(rt *route) bool {
+	if strings.Join(rt.pattern, "/") == "releases/install" {
+		return true
+	}
 	if len(rt.pattern) != 3 || rt.pattern[0] != "work" {
 		return false
 	}
 	return rt.pattern[2] == "attach" || rt.pattern[2] == "container-attach"
 }
 
-// errLocalOnly refuses an attach over the network, naming what to run.
+// errLocalOnly refuses a local-only route over the network, naming what
+// to run on the daemon's machine instead.
 func errLocalOnly(rt *route, params []string) error {
+	if rt.pattern[0] == "releases" {
+		return fail(409, "local_only", "this replaces the binary on the daemon's machine, so the management listener refuses it: run `open-conduit upgrade` there")
+	}
 	cmd := "open-conduit work attach " + params[0]
 	if rt.pattern[2] == "container-attach" {
 		cmd = "open-conduit container attach " + params[0]

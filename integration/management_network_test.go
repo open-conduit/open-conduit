@@ -188,6 +188,9 @@ func TestManagementNetworkListenerRefusals(t *testing.T) {
 	if _, err = c.ContainerAttach(ctx, "work/one", "attach-2"); apiCode(err) != "local_only" {
 		t.Fatalf("container attach over the network = %v, want local_only", err)
 	}
+	if _, err = c.InstallRelease(ctx, "1.0.0", "install-1"); apiCode(err) != "local_only" || !strings.Contains(err.Error(), "open-conduit upgrade") || len(h.releases.installs()) != 0 {
+		t.Fatalf("install over the network = %v (installed %v), want local_only naming upgrade", err, h.releases.installs())
+	}
 	// On the socket, the same call reaches the handler.
 	if _, err = h.operatorClient().AttachWork(ctx, "work/one", "attach-3"); apiCode(err) == "local_only" {
 		t.Fatal("attach refused on the owner-only socket")

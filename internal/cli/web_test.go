@@ -33,6 +33,12 @@ func TestWebCommand(t *testing.T) {
 	if len(got) != 1 || got[0].Addr != "127.0.0.1:9000" || got[0].Host != "conduit.localhost" || got[0].Client == nil {
 		t.Fatalf("request: %+v", got)
 	}
+	if got[0].NoUpdates {
+		t.Fatal("updates off by default")
+	}
+	if errOut, code := run("web", "--no-updates"); code != 0 || !got[1].NoUpdates {
+		t.Fatalf("web --no-updates: %d %s %+v", code, errOut, got)
+	}
 	if errOut, code := run("web", "extra"); code != 2 || !strings.Contains(errOut, "web takes only") {
 		t.Fatalf("extra argument: %d %s", code, errOut)
 	}

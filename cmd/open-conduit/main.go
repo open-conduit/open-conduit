@@ -40,10 +40,33 @@ var updater = func() *upgrade.Updater {
 }()
 
 // webUpdates are the web view's release check and the service it restarts
-// after an update.
-func webUpdates(o web.Options) web.Options {
+// after the daemon installs one, unless updates are off.
+func webUpdates(o web.Options, off bool) web.Options {
+	if off {
+		return o
+	}
 	o.Updates, o.Service = updater, cli.NewServiceControl(cli.SystemServiceHost(), os.Getenv)
 	return o
+}
+
+// daemonReleases is how the daemon installs a release of its binary for an
+// admin (POST /releases/install), nil with updates off.
+func daemonReleases(off bool) management.Releases {
+	if off {
+		return nil
+	}
+	return releases{updater}
+}
+
+// releases adapts the updater to management.Releases.
+type releases struct{ u *upgrade.Updater }
+
+func (r releases) Latest(ctx context.Context) (string, error) {
+	rel, err := r.u.Latest(ctx)
+	return rel.Version, err
+}
+func (r releases) Install(ctx context.Context, version string) error {
+	return r.u.Install(ctx, version)
 }
 
 func main() {
@@ -93,7 +116,7 @@ func serve(r cli.ServeRequest) int {
 		BackupInterval: r.BackupInterval, BackupDir: r.BackupDir, BackupsKept: r.BackupsKept,
 		WebhookAddr: r.WebhookAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Config: r.TunnelConfig, PublicURL: r.PublicURL},
 		Management: management.NetworkConfig{Addr: r.ManagementAddr, CertFile: r.ManagementTLSCert, KeyFile: r.ManagementTLSKey, ClientCAFile: r.ManagementClientCA, TrustedProxy: r.ManagementTrustedProxy},
-		NoTunnel:   r.NoTunnel, DryRun: r.DryRun, NoTelemetry: r.NoTelemetry, Ready: webReady(ctx, r)})
+		NoTunnel:   r.NoTunnel, DryRun: r.DryRun, NoTelemetry: r.NoTelemetry, Releases: daemonReleases(r.NoUpdates), Ready: webReady(ctx, r)})
 	if err != nil {
 		// Composition errors carry safe summaries (paths, codes); never config values.
 		fmt.Fprintf(os.Stderr, "open-conduit: serve: %s\n", err)
@@ -176,7 +199,7 @@ func serveWeb(r cli.WebRequest) error {
 		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost (%s):\n%s\n", urls[0], web.AddressWarning, urls[1])
 		return err
 	}
-	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.SignIn), SubjectHeader: r.SubjectHeader}))
+	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.SignIn), SubjectHeader: r.SubjectHeader}, r.NoUpdates))
 	if err != nil {
 		return err
 	}
@@ -230,7 +253,7 @@ func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
 	if err != nil {
 		return err
 	}
-	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.WebSignIn), SubjectHeader: r.WebSubjectHeader}))
+	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.WebSignIn), SubjectHeader: r.WebSubjectHeader}, r.NoUpdates))
 	if err != nil {
 		return err
 	}

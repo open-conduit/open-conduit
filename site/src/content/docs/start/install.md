@@ -75,6 +75,6 @@ open-conduit upgrade           # install it
 
 A Homebrew install belongs to Homebrew: `upgrade` tells you to run `brew upgrade --cask open-conduit` instead.
 
-The web view says when a newer release is out, in the status line along the bottom, and its Update page installs it the same way (see [the web view](/open-conduit/guides/operating/#the-web-view)).
+The web view says when a newer release is out, in the status line along the bottom, and its Update page installs it the same way for an admin (see [the web view](/open-conduit/guides/operating/#the-web-view)).
 
 Next: run `open-conduit init --with claude` (or `--with codex`) and let your agent set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there proposes the config and you approve and apply it ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).
