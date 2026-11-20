@@ -1,23 +1,28 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// TestStoredAdmissionDefaultIsDropped: generations stored while
-// admission_limit defaulted to 10 (and was not enforced) carry a 10 nobody
-// chose. Opening the config drops it, once, so no scope is capped after an
-// upgrade; a value an operator wrote (3) stays, and a 10 committed after
-// the migration is kept (the negative control).
+// TestStoredAdmissionDefaultIsDropped: a generation committed while
+// admission_limit defaulted to 10 (unenforced) carries a 10 nobody chose.
+// Opening the config publishes the same config without it as the next
+// generation, with an audit record naming both, and leaves the applied
+// generation's text and hash as they were. It runs once: a 10 committed
+// afterwards is kept, and a value an operator chose (3) is never touched
+// (the negative controls).
 func TestStoredAdmissionDefaultIsDropped(t *testing.T) {
 	ctx := context.Background()
 	now := func() time.Time { return time.Now().UTC() }
@@ -30,17 +35,27 @@ func TestStoredAdmissionDefaultIsDropped(t *testing.T) {
 		}
 		return s
 	}
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
-	if err != nil {
-		t.Fatal(err)
+	open := func(t *testing.T) (storage.Store, func() *management.ConfigService) {
+		t.Helper()
+		store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		return store, func() *management.ConfigService {
+			t.Helper()
+			c, err := management.OpenConfig(ctx, store, now, registry, filepath.Join(t.TempDir(), "config.json"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return c
+		}
 	}
-	defer store.Close()
-	old, chosen := doc("10"), doc("3")
-	put := func(gen uint64, s *config.Snapshot) {
+	commit := func(t *testing.T, store storage.Store, gen uint64, s *config.Snapshot) {
 		t.Helper()
 		active, _ := json.Marshal(map[string]any{"Generation": gen, "Hash": s.Hash, "ActivatedAt": now()})
 		if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
-			if err := tx.Put("core.config", "generation/"+map[uint64]string{1: "1", 2: "2", 3: "3"}[gen], s.Normalized); err != nil {
+			if err := tx.Put("core.config", "generation/"+strconv.FormatUint(gen, 10), s.Normalized); err != nil {
 				return err
 			}
 			return tx.Put("core.config", "active", active)
@@ -48,33 +63,54 @@ func TestStoredAdmissionDefaultIsDropped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	put(2, chosen)
-	put(1, old)
-	configs, err := management.OpenConfig(ctx, store, now, registry, filepath.Join(t.TempDir(), "config.json"), nil)
-	if err != nil {
-		t.Fatal(err)
+	audits := func(t *testing.T, store storage.Store) (out []domain.AuditRecord) {
+		t.Helper()
+		if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) (err error) { out, err = tx.AuditRecords(0, 100); return }); err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
-	if s, _ := configs.Current(); s.Settings.AdmissionLimit != 0 || s.Scopes["eng"].AdmissionLimit != 0 {
-		t.Fatalf("the stored default still caps: %d", s.Settings.AdmissionLimit)
-	}
-	// Generation 2 was stored before the migration; only point at it.
-	active, _ := json.Marshal(map[string]any{"Generation": 2, "Hash": chosen.Hash, "ActivatedAt": now()})
-	if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error { return tx.Put("core.config", "active", active) }); err != nil {
-		t.Fatal(err)
-	}
-	configs, err = management.OpenConfig(ctx, store, now, registry, filepath.Join(t.TempDir(), "config.json"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := configs.Current(); s.Settings.AdmissionLimit != 3 {
-		t.Fatalf("an operator's admission_limit was dropped: %d", s.Settings.AdmissionLimit)
-	}
-	put(3, old)
-	configs, err = management.OpenConfig(ctx, store, now, registry, filepath.Join(t.TempDir(), "config.json"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := configs.Current(); s.Settings.AdmissionLimit != 10 {
-		t.Fatalf("a 10 committed after the migration was dropped: %d", s.Settings.AdmissionLimit)
-	}
+
+	t.Run("default dropped", func(t *testing.T) {
+		store, openConfig := open(t)
+		old := doc("10")
+		commit(t, store, 1, old)
+		s, gen := openConfig().Current()
+		if gen != 2 || s.Settings.AdmissionLimit != 0 || s.Scopes["eng"].AdmissionLimit != 0 {
+			t.Fatalf("generation %d caps at %d after the upgrade", gen, s.Settings.AdmissionLimit)
+		}
+		var stored []byte
+		if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) (err error) { stored, err = tx.Get("core.config", "generation/1"); return }); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(stored, old.Normalized) {
+			t.Fatalf("the applied generation was rewritten: %s", stored)
+		}
+		if again, err := config.Validate(stored, registry); err != nil || again.Hash != old.Hash {
+			t.Fatalf("the applied generation's hash changed: %v", err)
+		}
+		records := audits(t, store)
+		if len(records) != 1 || records[0].Action != management.AuditActionAdmissionDefault || records[0].Actor != "host:open-conduit" ||
+			records[0].Detail["generation"] != "2" || records[0].Detail["hash"] != s.Hash || records[0].Detail["from_generation"] != "1" || records[0].Detail["from_hash"] != old.Hash {
+			t.Fatalf("the published generation's audit record: %+v", records)
+		}
+		// A 10 applied after the upgrade is the operator's, and stays.
+		commit(t, store, 3, old)
+		if s, gen := openConfig().Current(); gen != 3 || s.Settings.AdmissionLimit != 10 {
+			t.Fatalf("a 10 committed after the upgrade: generation %d, limit %d", gen, s.Settings.AdmissionLimit)
+		}
+		if len(audits(t, store)) != 1 {
+			t.Fatal("the upgrade ran twice")
+		}
+	})
+	t.Run("chosen value kept", func(t *testing.T) {
+		store, openConfig := open(t)
+		commit(t, store, 1, doc("3"))
+		if s, gen := openConfig().Current(); gen != 1 || s.Settings.AdmissionLimit != 3 {
+			t.Fatalf("an operator's admission_limit: generation %d, limit %d", gen, s.Settings.AdmissionLimit)
+		}
+		if len(audits(t, store)) != 0 {
+			t.Fatal("a chosen value was published again")
+		}
+	})
 }
