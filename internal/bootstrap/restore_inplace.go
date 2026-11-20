@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -116,12 +117,27 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if resumed != nil {
 		report.MovedAside, report.MovedItems = filepath.Join(stateDir, resumed.Aside), resumed.Moved
 	}
+	// A stage no journal names is from a restore that stopped before its
+	// swap began: nothing else makes one, and the lock is held.
+	if report.RemovedStages, err = removeStaleStages(stateDir); err != nil {
+		return info, err
+	}
 	if rec, ok := readRestored(stateDir); ok && rec.DatabaseSHA256 == digest && (o.Once || resumed != nil) {
 		if resumed == nil {
 			report.AlreadyRestored = true
 			return info, nil
 		}
 		return finishInPlace(ctx, lock, stateDir, o, info)
+	}
+
+	// What the replaced storage choice names outside the directory is
+	// never swapped away silently.
+	previous, err := readChoice(stateDir)
+	if err != nil {
+		return info, err
+	}
+	if err := keepsStorage(stateDir, previous, o); err != nil {
+		return info, err
 	}
 
 	now := time.Now().UTC()
@@ -135,21 +151,61 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		_ = os.RemoveAll(stage)
 		return info, err
 	}
-	// What the replaced storage choice names outside the directory stays
-	// where it is, named by the storage.json moved aside.
-	previous, _ := readChoice(stateDir)
 	if err := runSwap(stateDir, swap); err != nil {
 		return info, fmt.Errorf("the in-place restore stopped part way: %w (run it again to finish)", err)
 	}
 	report.MovedAside, report.MovedItems = filepath.Join(stateDir, swap.Aside), swap.Moved
 	aside := filepath.Join(stateDir, swap.Aside, storageFile)
-	if previous.Location != "" {
-		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: previous.Location, Note: "the replaced database, which " + aside + " names: left where it is"})
-	}
-	if a := previous.Artifacts; a != nil && a.Location != "" && a.Location != o.ArtifactLocation {
+	// The operator chose a new store (keepsStorage): the replaced one
+	// stays where it is, named by the storage.json moved aside.
+	if a := previous.Artifacts; a != nil && a.Location != "" && a.Location != filepath.Join(stateDir, "artifacts") {
 		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: a.Location, Note: "the replaced artifact store, which " + aside + " names: left where it is"})
 	}
 	return finishInPlace(ctx, lock, stateDir, o, info)
+}
+
+// keepsStorage refuses an in-place restore that would move the daemon off
+// a store its storage.json names outside the state directory without
+// being asked. The restored database always goes into the directory, so
+// an external database refuses; an external or non-default artifact store
+// needs the operator to name the store the bundle's artifacts go to (an
+// empty one), or --artifacts files to move to the directory's own.
+func keepsStorage(stateDir string, previous storageChoice, o cli.RestoreOptions) error {
+	if previous.Location != "" && filepath.Clean(previous.Location) != filepath.Join(stateDir, "conduit.db") {
+		return fmt.Errorf("%s names a database outside the state directory (%s), and an in-place restore puts the bundle's database in the directory: restore with --to DIR and move it where the daemon expects it instead", storageFile, previous.Location)
+	}
+	a := previous.Artifacts
+	if a == nil || o.ArtifactBackend != "" {
+		return nil
+	}
+	if a.Backend == artifacts.BackendName && (a.Location == "" || filepath.Clean(a.Location) == filepath.Join(stateDir, "artifacts")) {
+		return nil
+	}
+	return fmt.Errorf("%s names the %s artifact store at %s: name the empty store the bundle's artifacts go to (--artifacts NAME --artifacts-location LOC), or --artifacts files to move them into the state directory", storageFile, a.Backend, a.Location)
+}
+
+// removeStaleStages removes the stages restores left in stateDir when they
+// stopped before their swap began: .restore-* and backup.Restore's own
+// .conduit-snapshot-*. The caller holds the lock and has finished any
+// journalled swap.
+func removeStaleStages(stateDir string) ([]string, error) {
+	var removed []string
+	for _, pattern := range []string{".restore-*", ".conduit-snapshot-*"} {
+		matches, err := filepath.Glob(filepath.Join(stateDir, pattern))
+		if err != nil {
+			return removed, err
+		}
+		for _, m := range matches {
+			if info, err := os.Lstat(m); err != nil || !info.IsDir() {
+				continue
+			}
+			if err := os.RemoveAll(m); err != nil {
+				return removed, err
+			}
+			removed = append(removed, m)
+		}
+	}
+	return removed, nil
 }
 
 // bundleDigest is the digest of a bundle's coordination snapshot.

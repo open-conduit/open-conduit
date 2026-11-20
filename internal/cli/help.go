@@ -45,7 +45,8 @@ var helpGroups = []helpGroup{
 		{"serve", `  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]
         [--backup-interval 24h] [--backups-kept 7] [--backup-dir DIR]
                              (scheduled online backups into <data-dir>/backups; --backup-interval 0 turns them off)
-        [--restore BUNDLE]   (restore BUNDLE in place before serving, as backup restore --in-place does, once:
+        [--restore BUNDLE [--restore-artifacts NAME --restore-artifacts-location LOC]]
+                             (restore BUNDLE in place before serving, as backup restore --in-place does, once:
                              a start that finds the directory restored from it already serves it as it is)
         [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                              (override the config's settings.webhooks for this run; TYPE is a tunnel

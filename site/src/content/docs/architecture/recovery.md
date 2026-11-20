@@ -68,12 +68,14 @@ open-conduit service start                         # with the binary the bundle 
 
 `backup restore --in-place` works on the daemon's own state directory (`--data-dir`, or the default) under its lock, so it refuses while the daemon runs. In order, it:
 
-1. Verifies the bundle and restores it into a stage inside the state directory, so every later step is a rename on one filesystem. The stage gets a fresh `private/operator.token` (the bundle's credentials are revoked) and a `restored.json` naming the bundle. A bundle that fails verification, or one a newer binary wrote, changes nothing.
-2. Writes a journal, `restore-in-progress.json`, naming the stage, the move-aside directory and every item to move.
-3. Moves the state it replaces into `before-restore-<UTC time>/`: `conduit.db` with its `-wal`, `-shm` and lock files, `artifacts/`, `storage.json`, `restored.json` and `private/operator.token`. The directory's other keys (`private/cursor.key`, the web view's sign-in) stay.
-4. Renames the staged state into place, then removes the stage and the journal.
-5. Removes the toolbelt run directories and sockets (`runs/`) of executions the restored database doesn't know.
-6. Runs `state check` on the result and reports it with the rest (`in_place`): what was moved aside (`moved_aside`, `moved_items`), the runs removed (`removed_runs`), and what stays from after the bundle (`later_timeline`). It exits 1 when the check finds problems.
+1. Removes the stages earlier restores left when they stopped before their swap began (`.restore-*`, `.conduit-snapshot-*`), and lists them under `removed_stages`.
+2. Refuses to move the daemon off a store its `storage.json` names outside the directory without being asked. The restored database always goes into the directory, so a database outside it refuses: restore `--to DIR` and move it yourself. A non-default artifact store needs the store the bundle's artifacts go to, which must be empty (`--artifacts NAME --artifacts-location LOC`), or `--artifacts files` to move them into the directory on purpose. The replaced store stays where it is, and the report names it.
+3. Verifies the bundle and restores it into a stage inside the state directory, so every later step is a rename on one filesystem. The stage gets a fresh `private/operator.token` (the bundle's credentials are revoked) and a `restored.json` naming the bundle. A bundle that fails verification, or one a newer binary wrote, changes nothing.
+4. Writes a journal, `restore-in-progress.json`, naming the stage, the move-aside directory and every item to move.
+5. Moves the state it replaces into `before-restore-<UTC time>/`: `conduit.db` with its `-wal`, `-shm` and lock files, `artifacts/`, `storage.json`, `restored.json` and `private/operator.token`. The directory's other keys (`private/cursor.key`, the web view's sign-in) stay.
+6. Renames the staged state into place, then removes the stage and the journal.
+7. Removes the toolbelt run directories and sockets (`runs/`) of executions the restored database doesn't know.
+8. Runs `state check` on the result and reports it with the rest (`in_place`): what was moved aside (`moved_aside`, `moved_items`), the runs removed (`removed_runs`), and what stays from after the bundle (`later_timeline`). It exits 1 when the check finds problems.
 
 If the restore stops part way through the swap (a crash, a full disk), the journal stays and the daemon and the other offline commands refuse the directory. Run the same `backup restore BUNDLE --in-place` again: it finishes the swap from the journal and doesn't restore a second time.
 
@@ -84,7 +86,7 @@ What stays from after the bundle is reported, never deleted, since its layout be
 - `containers/<type>/`: the container provider reconciles its containers when the daemon starts, removing those of executions the restored database doesn't know.
 - `extensions/<name>/`: an extension's private directory, a cache it rebuilds as it needs ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
 - `homes/` and `logs/`, as they are.
-- A database or artifact store outside the directory that the replaced `storage.json` named stays where it is, named by the copy in `before-restore-*/`.
+- An artifact store outside the directory that the replaced `storage.json` named, when you chose another (step 2), stays where it is, named by the copy in `before-restore-*/`.
 
 Afterwards:
 
@@ -101,7 +103,7 @@ When the daemon is the container's process, there's no shell to stop it and run 
 open-conduit serve --restore /backups/conduit-20261102T090000Z
 ```
 
-Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
+Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. With an artifact store outside the volume, name the empty store the bundle's artifacts go to with `--restore-artifacts NAME --restore-artifacts-location LOC`, as `--artifacts` and `--artifacts-location` do for `backup restore`. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
 
 ## SQLite migration recovery
 

@@ -36,6 +36,8 @@ The artifacts go to the state directory's own `artifacts/`. To put them in anoth
 open-conduit backup restore BUNDLE --in-place --artifacts files --artifacts-location /srv/open-conduit/artifacts
 ```
 
+When `storage.json` names an artifact store outside the state directory, `--in-place` refuses until you name one of these: it never moves the daemon onto the directory's own store unasked. Name `--artifacts files` alone to move the artifacts into the state directory on purpose.
+
 `backup restore BUNDLE --to DIR` writes a new directory instead, never over an existing one, to inspect a bundle or to restore on a new host (below).
 
 ## Move to a new host

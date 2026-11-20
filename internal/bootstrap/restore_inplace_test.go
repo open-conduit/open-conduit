@@ -260,3 +260,65 @@ func TestRestoreInPlaceRefusesARunningDaemon(t *testing.T) {
 		t.Fatal("the refused restore moved state aside")
 	}
 }
+
+// TestRestoreInPlaceKeepsAnExternalStore: a state directory whose
+// storage.json names an artifact store outside it is not moved onto the
+// directory's own file store unasked. The restore refuses before staging,
+// and --artifacts files (the negative control) moves it there on purpose,
+// reporting the old store as left in place. A database outside the
+// directory always refuses, since the restored one goes in the directory.
+func TestRestoreInPlaceKeepsAnExternalStore(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	external := filepath.Join(t.TempDir(), "artifacts")
+	write(t, filepath.Join(f.state, storageFile), `{"backend":"sqlite","artifacts":{"backend":"files","location":"`+external+`"}}`)
+	_, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{})
+	if err == nil || !strings.Contains(err.Error(), "--artifacts") {
+		t.Fatalf("an external artifact store: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(f.state, ".restore-*")); len(matches) != 0 || len(asides(t, f.state)) != 0 {
+		t.Fatalf("the refused restore staged or moved: %v", matches)
+	}
+	info, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{ArtifactBackend: "files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left bool
+	for _, e := range info.InPlace.LaterTimeline {
+		left = left || e.Path == external
+	}
+	if !left {
+		t.Fatalf("the replaced store is not reported: %+v", info.InPlace.LaterTimeline)
+	}
+
+	write(t, filepath.Join(f.state, storageFile), `{"backend":"sqlite","location":"`+filepath.Join(t.TempDir(), "conduit.db")+`"}`)
+	if _, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{ArtifactBackend: "files"}); err == nil || !strings.Contains(err.Error(), "outside the state directory") {
+		t.Fatalf("an external database: %v", err)
+	}
+}
+
+// TestRestoreInPlaceClearsStaleStages: stages a restore left when it was
+// killed before its swap began are removed and reported by the next one,
+// so repeated failures don't fill the volume with copies of the database.
+func TestRestoreInPlaceClearsStaleStages(t *testing.T) {
+	f := newInPlaceFixture(t)
+	stale := []string{filepath.Join(f.state, ".restore-20200101T000000Z"), filepath.Join(f.state, ".conduit-snapshot-123")}
+	for _, d := range stale {
+		write(t, filepath.Join(d, "conduit.db"), "copy")
+	}
+	info, err := RestoreInPlace(context.Background(), f.bundle, f.state, cli.RestoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(stale)
+	got := slices.Clone(info.InPlace.RemovedStages)
+	slices.Sort(got)
+	if !slices.Equal(got, stale) {
+		t.Fatalf("removed stages = %v, want %v", got, stale)
+	}
+	for _, d := range stale {
+		if exists(d) {
+			t.Fatalf("%s is left", d)
+		}
+	}
+}

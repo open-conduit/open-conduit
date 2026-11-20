@@ -56,6 +56,9 @@ type InPlaceReport struct {
 	// RemovedRuns are the executions whose toolbelt run directories and
 	// sockets were removed, since the restored database doesn't know them.
 	RemovedRuns []string `json:"removed_runs,omitempty"`
+	// RemovedStages are stages earlier restores left when they stopped
+	// before their swap began.
+	RemovedStages []string `json:"removed_stages,omitempty"`
 	// LaterTimeline is what stays in the directory from after the bundle,
 	// with what happens to each: reported, never deleted.
 	LaterTimeline []LaterEntry `json:"later_timeline,omitempty"`

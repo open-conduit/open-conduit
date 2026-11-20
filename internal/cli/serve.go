@@ -59,6 +59,10 @@ type ServeRequest struct {
 	// serving, once (serve --restore): a container restores from a mounted
 	// bundle with no shell and no separate job.
 	Restore string
+	// RestoreArtifacts and RestoreArtifactsLocation are --restore's
+	// artifact store, as backup restore's --artifacts and
+	// --artifacts-location.
+	RestoreArtifacts, RestoreArtifactsLocation string
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.
@@ -109,7 +113,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
-	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, Once: true})
+	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, Once: true})
 	if err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", err)
 		return false
@@ -126,7 +130,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -191,6 +195,10 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.WebSignIn = WebSignInPath(r.StateDir)
 	r.NoUpdates = *noUpdates
 	r.Restore = o.abs(fs.get("restore"))
+	r.RestoreArtifacts, r.RestoreArtifactsLocation = fs.get("restore-artifacts"), fs.get("restore-artifacts-location")
+	if r.Restore == "" && (r.RestoreArtifacts != "" || r.RestoreArtifactsLocation != "") {
+		return ServeRequest{}, usageError(o.errOut, "--restore-artifacts and --restore-artifacts-location go with --restore BUNDLE")
+	}
 	r.NoTelemetry = *noTelemetry || optedOut(o.env.Getenv("OPEN_CONDUIT_NO_TELEMETRY")) || optedOut(o.env.Getenv("DO_NOT_TRACK"))
 	if r.ConfigPath == "" {
 		r.ConfigPath = o.abs(o.env.Getenv("OPEN_CONDUIT_CONFIG"))
