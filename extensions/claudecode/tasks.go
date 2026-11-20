@@ -91,13 +91,16 @@ const (
 	taskMarker     = "open-conduit-task:"
 )
 
-// taskWrapper records its PID, runs the command with the group's
-// termination signals reaching it with default disposition, signals what
-// is left of its own group, and records the exit status atomically: the
-// segment wrapper's shape, for a group of the task's own.
+// taskWrapper traps the group's termination signals, then records its
+// PID, runs the command with those signals reaching it with default
+// disposition, signals what is left of its own group, and records the exit
+// status atomically: the segment wrapper's shape, for a group of the
+// task's own. The trap comes before the PID: nothing signals the group
+// until the PID is published, so a stop can never end the wrapper before
+// it records an exit, which the sweep would count lost.
 const taskWrapper = `d=$1; shift
-printf '%s\n' "$$" > "$d/pid.tmp" && mv -f "$d/pid.tmp" "$d/pid"
 trap ':' HUP INT TERM
+printf '%s\n' "$$" > "$d/pid.tmp" && mv -f "$d/pid.tmp" "$d/pid"
 "$@"
 c=$?
 trap '' HUP INT TERM
