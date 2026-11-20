@@ -78,16 +78,17 @@ Schema migrations run inside one immediate transaction at open (`internal/storag
 
 | Symptom | Cause | Recovery |
 | --- | --- | --- |
-| `schema N is newer than supported` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade into a new directory. Never edit `user_version`. |
-| `records are newer than this binary writes` (`state check`: `records_newer`) | A newer binary, whose records have fields this one doesn't know, wrote the database, and an older binary was started on it. Opening it would drop those fields from every record the older binary rewrote | Run the newer binary again. To go back, restore the bundle taken before the upgrade (`backup restore BUNDLE --to DIR`) and start the older binary there. Never edit `record_format`. |
+| `stored schema is newer than this binary supports` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade into a new directory. Never edit `user_version`. |
+| `stored records are newer than this binary writes` (`state check`: `records_newer`) | A newer binary, whose records have fields this one doesn't know, wrote the database, and an older binary was started on it. Opening it would drop those fields from every record the older binary rewrote | Run the newer binary again. To go back, restore the bundle taken before the upgrade (`backup restore BUNDLE --to DIR`) and start the older binary there. Never edit `record_format`. |
 | `unversioned nonempty database; explicit migration required` or `schema metadata mismatch` (`schema_unrecognized`) | The file is not an Open Conduit database, or was altered by hand | Point `--data-dir` at the right directory, or restore the latest bundle. |
+| `storage.json: storage: no backend "NAME" is built into this binary` or another `storage.json` error (`state check`: `storage_unavailable`) | The state directory's [storage choice](../domain-storage/#backend-lifecycle) names a backend this binary was not built with, or is malformed | Run a binary built with that backend, or fix `storage.json`. Nothing falls back to SQLite. |
 | `migration rolled back: …` | The upgrade failed part way (disk full, I/O) | Fix the cause and start again: the old schema is intact. If it keeps failing, restore the pre-upgrade bundle and report the defect. |
 
 The upgrade routine is: stop the daemon, run `backup create` and `backup verify`, install the new binary, then start it. Keep the old binary and the bundle until the observation window passes.
 
 ## Corrupted-state diagnosis
 
-Run `open-conduit state check [--json]` with the daemon stopped. It examines a private copy of the database, so diagnosis never changes the state. It reports:
+Run `open-conduit state check [--json]` with the daemon stopped. It examines the database through its backend's `Inspect`, which changes nothing (SQLite's opens a private copy), so diagnosis never changes the state. It reports:
 
 | Check | Meaning |
 | --- | --- |

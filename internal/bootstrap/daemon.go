@@ -36,7 +36,6 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
-	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/internal/telemetry"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/storage"
@@ -376,7 +375,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}); err != nil {
 		return err
 	}
-	store, err := sqlite.Open(ctx, filepath.Join(o.StateDir, "conduit.db"))
+	// The state directory's storage choice selects the backend.
+	backend, store, err := openState(ctx, o.StateDir)
 	if err != nil {
 		return err
 	}
@@ -429,7 +429,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.artifacts.Close()
-	if err = d.startBackups(store); err != nil {
+	if err = d.startBackups(backend.name, store); err != nil {
 		return fmt.Errorf("backups: %w", err)
 	}
 	// The state lock is held and nothing writes yet: pending streams are a

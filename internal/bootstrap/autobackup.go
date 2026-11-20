@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/internal/backup"
-	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Scheduled backups: while it runs, the daemon publishes a backup bundle of
@@ -29,7 +29,9 @@ const (
 )
 
 type backupState struct {
-	db      *sqlite.Store
+	// name is db's backend, which the bundle records.
+	name    string
+	db      storage.Database
 	mu      sync.Mutex
 	running bool
 	next    time.Time
@@ -63,8 +65,8 @@ func scheduledBundles(dir string) ([]string, []time.Time, error) {
 // scheduled bundle (now, when there is none) and removes the staging
 // directories an interrupted backup left: the state lock is held, so no
 // backup is running.
-func (d *daemon) startBackups(db *sqlite.Store) error {
-	d.backups.db = db
+func (d *daemon) startBackups(name string, db storage.Database) error {
+	d.backups.name, d.backups.db = name, db
 	if d.o.BackupInterval < 0 {
 		return nil
 	}
@@ -139,7 +141,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
-	if err := backup.Create(ctx, destination, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retentionExpired); err != nil {
+	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retentionExpired); err != nil {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))

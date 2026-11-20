@@ -14,7 +14,9 @@ import (
 
 // BackupInfo describes a published or verified bundle.
 type BackupInfo struct {
-	Path      string    `json:"path"`
+	Path string `json:"path"`
+	// Backend names the storage backend the bundle's snapshot is for.
+	Backend   string    `json:"backend,omitempty"`
 	Schema    uint32    `json:"schema"`
 	Build     string    `json:"build"`
 	CreatedAt time.Time `json:"created_at"`

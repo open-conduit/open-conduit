@@ -35,8 +35,9 @@ const RecordFormat uint32 = 6
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat
 
-// ErrRecordsNewer is Open's refusal of a database a newer binary has written.
-var ErrRecordsNewer = errors.New("sqlite: records are newer than this binary writes")
+// ErrRecordsNewer is Open's refusal of a database a newer binary has written:
+// the storage contract's refusal, which callers test with errors.Is.
+var ErrRecordsNewer = storage.ErrRecordsNewer
 
 // busyTimeout bounds how long a connection waits for a competing connection's lock.
 const busyTimeout = 5 * time.Second
@@ -114,7 +115,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	if version > SchemaVersion {
-		return nil, fmt.Errorf("sqlite: schema %d is newer than supported %d; use a matching newer binary", version, SchemaVersion)
+		return nil, fmt.Errorf("sqlite: %w (schema %d; this binary supports %d): use a matching newer binary", storage.ErrSchemaNewer, version, SchemaVersion)
 	}
 	if version == 0 {
 		if err = s.migrate(ctx); err != nil {

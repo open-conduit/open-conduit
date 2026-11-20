@@ -1,4 +1,6 @@
-// Package backup composes consistent SQLite snapshots and pinned artifacts.
+// Package backup composes a coordination backend's consistent snapshot with
+// pinned artifacts. It works over the storage lifecycle contract
+// (storage.Backend, storage.Database), never a particular backend.
 // Backups contain private runtime state and must remain owner-only.
 package backup
 
@@ -17,7 +19,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
-	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -26,7 +27,11 @@ type entry struct {
 	SHA256 string
 }
 type manifest struct {
-	Version        uint32
+	Version uint32
+	// Backend names the storage backend whose snapshot the bundle holds;
+	// empty is SQLite, which every bundle held before backends had names
+	// (left out for it, so older binaries still read SQLite bundles).
+	Backend        string `json:",omitempty"`
 	Schema         uint32
 	Build          string
 	CreatedAt      time.Time
@@ -49,28 +54,34 @@ func (e Expired) of(tx storage.Tx, id domain.ID) (bool, error) {
 	return e(tx, id)
 }
 
+// DefaultBackend is the backend a manifest that names none was made with.
+const DefaultBackend = "sqlite"
+
+// snapshotName is the coordination snapshot's file in a bundle. It keeps
+// the name SQLite bundles always had, whatever the backend.
+const snapshotName = "conduit.db"
+
 // Create publishes a complete immutable bundle at a previously absent path.
 // Pinning precedes the database snapshot so retention cannot remove captured refs.
 // References of Executions whose retention expired are recorded as omitted
-// rather than copied, since their content may already be gone.
-func Create(ctx context.Context, destination string, db *sqlite.Store, files *artifacts.Store, build string, expired Expired) error {
+// rather than copied, since their content may already be gone. backend is
+// the name db's Backend is registered under; Restore looks it up again.
+func Create(ctx context.Context, destination string, backend string, db storage.Database, files *artifacts.Store, build string, expired Expired) error {
+	if backend == "" {
+		return storage.ErrInvalid
+	}
 	return publish(ctx, destination, func(stage string) error {
 		pin, err := files.Pin()
 		if err != nil {
 			return err
 		}
 		defer pin.Close()
-		database := filepath.Join(stage, "conduit.db")
-		if err := db.Backup(ctx, database); err != nil {
-			return err
-		}
-		snapshot, err := sqlite.Open(ctx, database)
-		if err != nil {
-			return err
-		}
+		database := filepath.Join(stage, snapshotName)
 		refs := map[string]domain.ArtifactRef{}
 		live := map[string]bool{}
-		err = snapshot.Transact(ctx, storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error {
+		// References are read from the snapshot's own state, not the live
+		// database, so the bundle copies exactly what its snapshot names.
+		err = db.Snapshot(ctx, database, func(tx storage.Tx) error {
 			xs, err := tx.ListExecutions("")
 			if err != nil {
 				return err
@@ -91,12 +102,8 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 			}
 			return nil
 		})
-		closeErr := snapshot.Close()
 		if err != nil {
 			return err
-		}
-		if closeErr != nil {
-			return closeErr
 		}
 		output, err := artifacts.Open(filepath.Join(stage, "artifacts"))
 		if err != nil {
@@ -125,6 +132,9 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 			}
 			m.Artifacts = append(m.Artifacts, entry{ref, hex.EncodeToString(h.Sum(nil))})
 		}
+		if backend != DefaultBackend {
+			m.Backend = backend
+		}
 		m.DatabaseSHA256, err = digestFile(ctx, database)
 		if err != nil {
 			return err
@@ -137,10 +147,15 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 	})
 }
 
+// Backends finds a storage backend by the name a bundle records
+// (storage.LookupBackend).
+type Backends func(name string) (storage.Backend, error)
+
 // Restore verifies all bundle bytes before publishing a new isolated state
-// directory. The SQLite restore fences old lease authority. No daemon may own
+// directory. The bundle's backend restores its snapshot to conduit.db in
+// that directory and fences old lease authority. No daemon may own
 // destination; an existing path is rejected, never overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired) error {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}
@@ -148,7 +163,11 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 	if err != nil {
 		return err
 	}
-	database := filepath.Join(bundle, "conduit.db")
+	backend, err := backends(m.backend())
+	if err != nil {
+		return err
+	}
+	database := filepath.Join(bundle, snapshotName)
 	hash, err := digestFile(ctx, database)
 	if err != nil {
 		return err
@@ -195,10 +214,10 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
 		}
-		if err := sqlite.Restore(ctx, database, filepath.Join(stage, "conduit.db"), now); err != nil {
+		if err := backend.Restore(ctx, database, filepath.Join(stage, snapshotName), now); err != nil {
 			return err
 		}
-		restored, err := sqlite.Open(ctx, filepath.Join(stage, "conduit.db"))
+		restored, err := backend.Open(ctx, filepath.Join(stage, snapshotName))
 		if err != nil {
 			return err
 		}
@@ -238,6 +257,13 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			return nil
 		})
 	})
+}
+
+func (m manifest) backend() string {
+	if m.Backend == "" {
+		return DefaultBackend
+	}
+	return m.Backend
 }
 
 func readManifest(path string) (manifest, error) {
@@ -365,6 +391,8 @@ func syncDirectory(path string) error {
 
 // Info summarizes a bundle's manifest.
 type Info struct {
+	// Backend names the storage backend the snapshot is for.
+	Backend   string
 	Schema    uint32
 	Build     string
 	CreatedAt time.Time
@@ -380,5 +408,5 @@ func Inspect(bundle string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	return Info{Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
+	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
 }

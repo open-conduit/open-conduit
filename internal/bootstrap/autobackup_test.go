@@ -30,7 +30,7 @@ func backupDaemon(t *testing.T, now time.Time) *daemon {
 	t.Cleanup(func() { files.Close() })
 	d := &daemon{o: Options{StateDir: state, BackupDir: filepath.Join(state, "backups"), BackupInterval: time.Hour, BackupsKept: 2, Version: "test", Commit: "abc"},
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)), now: func() time.Time { return now }, artifacts: files, reported: map[string]string{}}
-	if err = d.startBackups(db); err != nil {
+	if err = d.startBackups(sqlite.Name, db); err != nil {
 		t.Fatal(err)
 	}
 	return d
@@ -72,7 +72,7 @@ func TestScheduledBackupsKeepTheNewest(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("bundles %v, want %v", got, want)
 	}
-	if err := backup.Restore(ctx, filepath.Join(d.o.BackupDir, want[2]), filepath.Join(t.TempDir(), "restored"), start, retentionExpired); err != nil {
+	if err := backup.Restore(ctx, filepath.Join(d.o.BackupDir, want[2]), filepath.Join(t.TempDir(), "restored"), start, retentionExpired, restoreBackends); err != nil {
 		t.Fatalf("scheduled bundle does not restore: %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestScheduledBackupsResumeFromTheNewestBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := &daemon{o: d.o, log: d.log, now: func() time.Time { return start.Add(10 * time.Minute) }}
-	if err := restarted.startBackups(d.backups.db); err != nil {
+	if err := restarted.startBackups(d.backups.name, d.backups.db); err != nil {
 		t.Fatal(err)
 	}
 	if want := start.Add(time.Hour); !restarted.backups.next.Equal(want) {
@@ -105,7 +105,7 @@ func TestScheduledBackupsResumeFromTheNewestBundle(t *testing.T) {
 func TestScheduledBackupsOff(t *testing.T) {
 	state := t.TempDir()
 	d := &daemon{o: Options{BackupDir: filepath.Join(state, "backups"), BackupInterval: -1}, now: time.Now}
-	if err := d.startBackups(nil); err != nil {
+	if err := d.startBackups(sqlite.Name, nil); err != nil {
 		t.Fatal(err)
 	}
 	d.scheduleBackup(context.Background())
