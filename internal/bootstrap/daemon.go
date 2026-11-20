@@ -410,6 +410,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err != nil {
 		return err
 	}
+	d.resolver.Providers, d.resolver.Observe = d.secretProvider, d.observeSecret
 	defer func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

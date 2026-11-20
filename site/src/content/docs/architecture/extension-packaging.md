@@ -103,6 +103,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`, `place` for an `extension.ContainerPlacer`) | `container_provider.*` |
 | `Tunnels` | `tunnels` | `tunnel.run`, `tunnel.url` (E→H), `validate` kind `tunnel` (`Validate`) |
 | `Verifiers` | `verifiers` | `credential.verify`, `validate` kind `verifier` (`Validate`) |
+| `Secrets` | `secret_schemes` | `secret.serve` |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |

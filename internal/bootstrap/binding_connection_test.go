@@ -80,7 +80,7 @@ func bindingConnectionDaemon(t *testing.T) *daemon {
 // scope without one of the extension's entries.
 func TestBindingConnectionSecrets(t *testing.T) {
 	d := bindingConnectionDaemon(t)
-	acme := d.scopedSecrets(map[string]bool{"acme": true}, map[string]bool{"acme": true})
+	acme := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"acme": true})
 	ctx := context.Background()
 	for conn, want := range map[string]string{"acme-main": "main-token", "acme-reviewer": "reviewer-token"} {
 		got, err := acme(ctx, "work", conn, []string{"token"})
@@ -105,7 +105,7 @@ func TestBindingConnectionSecrets(t *testing.T) {
 		}
 	}
 	// The other type's owner gets its connection; acme's are refused to it.
-	other := d.scopedSecrets(map[string]bool{"acme": true}, map[string]bool{"other": true})
+	other := d.scopedSecrets("acme", map[string]bool{"acme": true}, map[string]bool{"other": true})
 	if got, err := other(ctx, "work", "other-bot", []string{"token"}); err != nil || got["token"] != "other-token" {
 		t.Fatalf("other-bot to its owner: %v %v", got, err)
 	}

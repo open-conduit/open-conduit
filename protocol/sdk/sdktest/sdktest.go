@@ -303,6 +303,14 @@ func (h *Host) Verify(ctx context.Context, typ, issuer string, config domain.Pay
 	return out, err
 }
 
+// ServeSecret asks the extension's secret provider of scheme for the value
+// reference names, as the host does when a slot's consumer needs it.
+func (h *Host) ServeSecret(ctx context.Context, scheme, reference string) (protocol.SecretServeResult, error) {
+	var out protocol.SecretServeResult
+	err := h.conn.Call(ctx, "secret.serve", protocol.SecretServeParams{Scheme: scheme, Reference: reference}, &out)
+	return out, err
+}
+
 // Configure applies a configuration generation. With p.KV unset it sends
 // the recorded KV version and the manifest's, so a WithKVVersion below the
 // manifest's runs Migrate first. Each entry's scope becomes configured, and

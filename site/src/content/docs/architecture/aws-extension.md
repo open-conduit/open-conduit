@@ -3,7 +3,7 @@ title: "AWS extension"
 description: "How a run gets short-lived AWS credentials for a named IAM role from the host: the base identity, the account allow-list, the run's profiles, gating a role, and the record of each issue."
 ---
 
-The [`aws` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/aws) gives a run short-lived credentials for a named IAM role, from the host, when the run asks. AWS uses the same model for an ECS task or a Lambda function. The daemon holds one base identity for each connection. An entry names the roles that a scope's bindings may assume, and each role must be in an account the entry allows. The extension is first-party and runs out of process as a package bundled with the release (`open-conduit extension-run aws`). It is written only on `protocol/sdk`, as a third party would write it. It uses only public hooks: a connection type, an entry type, one toolbelt operation, a run layer with files ([extension protocol](../extension-protocol/)), a task and two doctor checks.
+The [`aws` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/aws) gives a run short-lived credentials for a named IAM role, from the host, when the run asks. AWS uses the same model for an ECS task or a Lambda function. The daemon holds one base identity for each connection. An entry names the roles that a scope's bindings may assume, and each role must be in an account the entry allows. The extension is first-party and runs out of process as a package bundled with the release (`open-conduit extension-run aws`). It is written only on `protocol/sdk`, as a third party would write it. It uses only public hooks: a connection type, an entry type, one toolbelt operation, a run layer with files ([extension protocol](../extension-protocol/)), a secret reference scheme, a task and two doctor checks.
 
 A key in a binding's `secret_env` stays in the run for the life of the key. Nothing records which run used it, and nobody can approve a write before it happens. This extension issues credentials that last 15 minutes by default. Each role is for named bindings only. CloudTrail names the run behind every call, and a person can gate any role.
 
@@ -94,6 +94,27 @@ When the gate holds a call, the operation doesn't run and the run's Work is park
 {"operations": ["aws.credentials"], "input": {"role": "write"}, "valid_for": "15m", "responders": ["operator:local"]}
 ```
 
+## Secrets Manager references
+
+The package also serves the `aws-sm` secret reference scheme ([secrets](../config-management/#secrets-and-process-environment)), so a secret slot anywhere in the config can name a secret in AWS Secrets Manager instead of a copy in the keyring or `secrets.json`:
+
+```json
+"secret_refs": {
+  "github_token": "aws-sm:prod/github#token",
+  "slack_bot": "aws-sm:arn:aws:secretsmanager:eu-west-2:111122223333:secret:prod/slack-AbCdEf"
+}
+```
+
+`aws-sm:<secret>` is the secret's `SecretString`, and `aws-sm:<secret>#<key>` one string field of a `SecretString` that is a JSON object. `<secret>` is the secret's name or its ARN. The host asks the package for the value only when the slot's consumer needs it (`secret.serve`), and keeps it no longer than that attempt, so a rotation in Secrets Manager reaches the next attempt with no step in Open Conduit, and each read is in CloudTrail as `GetSecretValue`.
+
+The package reads with the daemon's own AWS identity, never a connection's, so the credentials it serves can't depend on a secret it serves: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in its environment, else whatever the AWS CLI's credential chain finds (a profile, an instance profile, a container role, or web identity for EKS IRSA). The package's environment is the sanitized baseline, so grant it what that identity needs with `settings.extensions.aws.pass_env`:
+
+```json
+"settings": {"extensions": {"aws": {"pass_env": ["AWS_REGION", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]}}}
+```
+
+The region is the ARN's, else `AWS_REGION` or `AWS_DEFAULT_REGION`. `AWS_ENDPOINT_URL_SECRETS_MANAGER` or `AWS_ENDPOINT_URL` replaces the regional endpoint (a VPC endpoint, LocalStack), as for an AWS SDK. A reference the package can't serve fails closed with a safe code, never AWS's message: `not_found`, `denied`, `decryption_failed`, `unavailable` (a secret marked for deletion), `invalid_reference`, `identity_refused`, `no_identity`, `no_region`, `binary_secret`, `not_json` or `key_missing`. `doctor --check-secrets` and `GET /v1/secrets` show each `aws-sm:` reference and whether it resolves now.
+
 ## What the extension does not do
 
 - **The credentials are in the run.** The model can read them. This differs from git's transport, where the host signs ([git transport](../toolbelt-management/#git-transport)). A signing proxy for all of AWS isn't practical, because every service has its own endpoint and Signature Version 4 covers the body. The limits are the role's IAM policy, the short life and the audit trail. An agent that runs the profile's command by hand gets the credentials in its own output, and so does the model. The host doesn't keep them: `aws.credentials` declares `SecretAccessKey` and `SessionToken` as its secret output, so the host scrubs them from everything the run publishes, including the transcript, activity, outcome and live output ([secret outputs](../extensions/#secret-outputs)). The access key ID isn't secret and stays, so it still finds the issue's record.
@@ -114,4 +135,4 @@ The toolbelt's own records show the call in the Work's run history: as called, a
 - `aws`: each entry's base identity is valid (`sts:GetCallerIdentity`), naming the identity's ARN.
 - `aws-roles` (deep, `doctor --deep`): the base identity can assume each role, for the shortest session STS issues.
 
-`extensions/aws/awstest` is a fake STS that checks each request's signature against the key pairs it knows and answers `GetCallerIdentity` and `AssumeRole` in STS's XML, so the tests and the certification fixture (`open-conduit extension-run aws certify-fixture`) need no AWS account. The signer is checked against AWS's published Signature Version 4 example.
+`extensions/aws/awstest` is a fake STS and Secrets Manager that checks each request's signature against the key pairs it knows and answers `GetCallerIdentity` and `AssumeRole` in STS's XML and `GetSecretValue` in Secrets Manager's JSON, so the tests and the certification fixture (`open-conduit extension-run aws certify-fixture`) need no AWS account. The signer is checked against AWS's published Signature Version 4 example.

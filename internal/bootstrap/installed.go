@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -799,4 +801,54 @@ func (d *daemon) verifier(typ string) (management.Verifier, bool) {
 		}
 	}
 	return management.Verifier{}, false
+}
+
+// secretProvider finds the running package that serves a secret reference
+// scheme (manifest secret_schemes), with its name. A scheme no running
+// package serves is not found, so its references fail closed.
+func (d *daemon) secretProvider(scheme string) (extension.SecretProvider, string, bool) {
+	for _, x := range d.extensionPackages() {
+		if x.r == nil {
+			continue
+		}
+		for _, decl := range x.m.Provides.SecretSchemes {
+			if decl.Scheme != scheme {
+				continue
+			}
+			p, ok := x.r.SecretProvider(scheme)
+			return p, x.m.Name, ok
+		}
+	}
+	return nil, "", false
+}
+
+// observeSecret records one provider-backed resolution, by name and
+// outcome, never value: secret.resolved, or secret.refused with its safe
+// code. Reference text is sensitive, so it carries only the first 16 hex
+// characters of the reference's digest, which tells two references apart.
+// It is anchored by the scheme and carries the serving package and the
+// package it was resolved for, if any.
+func (d *daemon) observeSecret(ctx context.Context, r config.SecretResolution) {
+	if d.pipeline == nil {
+		return
+	}
+	at := d.now()
+	ref := sha256.Sum256([]byte(r.Reference))
+	sum := sha256.Sum256([]byte("secret\x00" + r.Reference + "\x00" + r.Consumer + "\x00" + at.UTC().Format(time.RFC3339Nano)))
+	trace := hex.EncodeToString(sum[:16])
+	attrs := map[string]string{"secret.scheme": r.Scheme, "secret.reference": hex.EncodeToString(ref[:8]), "duration_ms": strconv.FormatInt(r.Duration.Milliseconds(), 10), "record_id": trace}
+	for k, v := range map[string]string{"secret.name": r.Name, "secret.provider": r.Provider, "secret.consumer": r.Consumer, "secret.code": r.Code} {
+		if v != "" {
+			attrs[k] = v
+		}
+	}
+	name := "secret.resolved"
+	if r.Code != "" {
+		name = "secret.refused"
+	}
+	rec := observability.Record{Name: name, At: at, Correlation: observability.Correlation{TraceID: trace}, Attributes: attrs}
+	if observability.Validate(rec) != nil {
+		return
+	}
+	_ = d.pipeline.Observe(context.WithoutCancel(ctx), rec)
 }

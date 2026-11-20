@@ -148,7 +148,7 @@ var HostManifest = func(name string) ([]byte, protocol.Manifest, error) {
 
 // Taken lists names already registered in-process (first-party extensions,
 // executors, builtins, core). Keys are kinds: "name", "type", "handler",
-// "executor", "resource", "sandbox", "tunnel", "verifier", "operation", "family", "work_kind", "recurrence",
+// "executor", "resource", "sandbox", "tunnel", "verifier", "secret_scheme", "operation", "family", "work_kind", "recurrence",
 // "schema".
 type Taken map[string]map[string]bool
 
@@ -194,6 +194,9 @@ func claims(m protocol.Manifest) map[string][]string {
 	}
 	for _, x := range p.Verifiers {
 		c["verifier"] = append(c["verifier"], x.Type)
+	}
+	for _, x := range p.SecretSchemes {
+		c["secret_scheme"] = append(c["secret_scheme"], x.Scheme)
 	}
 	for _, x := range p.Operations {
 		c["operation"] = append(c["operation"], x.Name)

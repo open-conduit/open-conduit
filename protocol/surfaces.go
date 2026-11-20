@@ -1098,6 +1098,25 @@ type CredentialVerifyResult struct {
 	ExpiresAt string   `json:"expires_at"`
 }
 
+// SecretServeParams asks a secret provider for the value one reference
+// names (secret.serve; extension.SecretProvider.Serve): Scheme is the
+// declared scheme and Reference the reference text after "<scheme>:", as
+// the operator wrote it. The host asks only when the slot's authorised
+// consumer needs the value.
+type SecretServeParams struct {
+	Scheme    string `json:"scheme"`
+	Reference string `json:"reference"`
+}
+
+// SecretServeResult is the value, or the safe failure code the provider
+// refused with (extension.SecretRefusal). Exactly one is set: a refusal's
+// code is lower-case letters, digits and underscores, at most 64
+// characters, and never the value or the provider's own error text.
+type SecretServeResult struct {
+	Value string `json:"value,omitempty"`
+	Code  string `json:"code,omitempty"`
+}
+
 // LaunchParams plans one launch (sandbox.plan) or creates its container
 // (container.launch).
 type LaunchParams struct {

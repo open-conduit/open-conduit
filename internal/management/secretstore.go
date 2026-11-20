@@ -43,8 +43,9 @@ func (s *Server) secretStore() (*config.SecretStore, error) {
 
 // listSecrets is GET /secrets: every name the daemon's secret store holds
 // that it can know of (the secrets file's names, the names stored in the
-// keyring through this API, and every keyring: or file: reference the active
-// config makes), with where it is stored, whether it resolves now and which
+// keyring through this API, and every keyring:, file: or provider reference
+// the active config makes, a provider's store being its scheme), with where
+// it is stored, whether it resolves now and which
 // references in the active config name it. Values are read only to check
 // they resolve, and never returned.
 func (s *Server) listSecrets(c *call) (int, any, error) {
@@ -77,7 +78,7 @@ func (s *Server) listSecrets(c *call) (int, any, error) {
 	refs := secretReferences(snapshot)
 	for ref := range refs {
 		scheme, name, _ := strings.Cut(ref, ":")
-		if scheme == config.StoreKeyring || scheme == config.StoreFile {
+		if scheme == config.StoreKeyring || scheme == config.StoreFile || config.ProviderScheme(ref) != "" {
 			found[key{scheme, name}] = true
 		}
 	}

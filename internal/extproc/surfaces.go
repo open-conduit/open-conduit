@@ -552,6 +552,36 @@ func (v *remoteVerifier) Verify(ctx context.Context, c extension.CredentialCheck
 	return extension.VerifiedCredential{Subject: out.Subject, Groups: out.Groups, ExpiresAt: at}, nil
 }
 
+// SecretProvider returns the secret provider adapter of a declared scheme.
+// Each Serve is one secret.serve call: a refusal is an
+// extension.SecretRefusal with the provider's code, and any other failure
+// (the package being down, a malformed answer) is an error the host
+// reports as provider_failed, failing closed.
+func (r *Remote) SecretProvider(scheme string) (extension.SecretProvider, bool) {
+	for _, d := range r.m.Provides.SecretSchemes {
+		if d.Scheme == scheme {
+			return &remoteSecrets{r: r}, true
+		}
+	}
+	return nil, false
+}
+
+type remoteSecrets struct{ r *Remote }
+
+func (v *remoteSecrets) Serve(ctx context.Context, req extension.SecretRequest) (string, error) {
+	var out protocol.SecretServeResult
+	if err := v.r.p.Call(ctx, "secret.serve", protocol.SecretServeParams{Scheme: req.Scheme, Reference: req.Reference}, &out); err != nil {
+		return "", err
+	}
+	switch {
+	case out.Code != "" && out.Value != "":
+		return "", fmt.Errorf("secret provider %s answered with both a value and a code", req.Scheme)
+	case out.Code != "":
+		return "", &extension.SecretRefusal{Code: out.Code}
+	}
+	return out.Value, nil
+}
+
 type remoteContainer struct {
 	r   *Remote
 	typ string

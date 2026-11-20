@@ -71,6 +71,15 @@ type Registry struct {
 	// (settings.webhooks.tunnel). Its error is a fixed, secret-free
 	// reason, shown in the diagnostic.
 	Tunnels map[string]func(json.RawMessage) error
+	// SecretSchemes are the secret reference schemes packages declare
+	// (manifest secret_schemes), each with the name of the package that
+	// resolves it. A reference of any other scheme but the built-in forms
+	// is refused.
+	SecretSchemes map[string]string
+	// ConnectionOwners are the registration names of the packages that own
+	// connection types, by type, so validation can see which package
+	// resolves a connection's secrets (a provider's own credentials).
+	ConnectionOwners map[string]string
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -360,6 +369,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 		}
 	}
 	v.tunnel(doc.Settings.Webhooks.Tunnel)
+	v.secretSchemes()
 	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
 		v.checkPassEnv(ptr("settings/extensions", name)+"/pass_env", doc.Settings.Extensions[name].PassEnv)
 	}

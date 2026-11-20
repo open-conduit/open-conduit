@@ -63,7 +63,7 @@ Each entry of `connections`.
 | --- | --- | --- | --- | --- |
 | `config` | object | yes |  | The integration's connection fields (open-conduit adapters TYPE). |
 | `id` | string | yes |  | Stable ID that scopes, bindings and extension entries name. |
-| `secret_refs` | object |  |  | Secret name to reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND); values never appear in the config. |
+| `secret_refs` | object |  |  | Secret name to reference (keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config. |
 | `type` | string | yes |  | The integration that owns it (open-conduit adapters lists them). |
 
 ## scopes
@@ -185,7 +185,7 @@ The `config` objects of connections, extension entries, routes, bindings, bindin
 
 ### AWS (`aws`)
 
-Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail. Registers: connection, extension.
+Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail, and secrets read from AWS Secrets Manager. Registers: connection, extension.
 
 Connection `config`:
 
