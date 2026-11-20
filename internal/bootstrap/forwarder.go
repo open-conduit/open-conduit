@@ -121,15 +121,41 @@ func (d *daemon) receive(w http.ResponseWriter, r *http.Request, f *config.Forwa
 	return extension.WebhookReceipt{ReceivedAt: received.UTC(), ForwardID: id}, true
 }
 
+// forwardReportEvery is how often a refused forwarded request is logged and
+// recorded as telemetry: refusals are driven by whoever reaches the
+// listener, so they are coalesced, and doctor keeps the full count and the
+// last reason.
+var forwardReportEvery = time.Minute
+
 // forwardRefused records a refused forwarded request: counted for doctor,
-// logged, and a telemetry event, each with why and the package its path
-// names, never the rest of the path (a schedule URL's token) or the request.
+// and, at most once every forwardReportEvery, logged and recorded as a
+// telemetry event with why, how many were refused since the last report and
+// the package its path names. The package is named only when it is one the
+// daemon runs ("" otherwise), so an unauthenticated caller never chooses
+// the text; the rest of the path (a schedule URL's token) and the request
+// are never recorded.
 func (d *daemon) forwardRefused(r *http.Request, f *config.Forwarder, code forwardRefusal) {
-	pkg, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	first, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pkg := ""
+	for _, x := range d.extensionPackages() {
+		if x.Name() == first {
+			pkg = first
+		}
+	}
+	now := d.now()
 	d.hooks.mu.Lock()
 	d.hooks.forwardRefused++
 	d.hooks.forwardLast = string(code)
+	d.hooks.forwardUnreported++
+	report := d.hooks.forwardReported.IsZero() || now.Sub(d.hooks.forwardReported) >= forwardReportEvery
+	refused := d.hooks.forwardUnreported
+	if report {
+		d.hooks.forwardReported, d.hooks.forwardUnreported = now, 0
+	}
 	d.hooks.mu.Unlock()
-	d.log.Warn("webhook request refused: not from the configured forwarder", "forwarder", f.Name, "package", pkg, "reason", string(code))
-	d.capture(context.Background(), "webhooks.forward_refused", map[string]any{"forwarder": f.Name, "package": pkg, "reason": string(code)})
+	if !report {
+		return
+	}
+	d.log.Warn("webhook request refused: not from the configured forwarder", "forwarder", f.Name, "package", pkg, "reason", string(code), "refused", refused)
+	d.capture(context.Background(), "webhooks.forward_refused", map[string]any{"forwarder": f.Name, "package": pkg, "reason": string(code), "refused": refused})
 }

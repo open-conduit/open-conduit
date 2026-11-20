@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,4 +177,34 @@ func (d *daemon) webhookCheckDetail() string {
 	d.hooks.listening = "127.0.0.1:1"
 	d.hooks.mu.Unlock()
 	return d.webhookCheck(context.Background()).Detail
+}
+
+// A refusal is logged and recorded at most once every forwardReportEvery,
+// with the count since the last report, and names no package the daemon
+// doesn't run: the path's first segment is the caller's to choose.
+func TestForwarderRefusalsAreCoalescedAndNameNoCallerText(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	d, f := forwarderDaemon(now)
+	var log syncBuffer
+	d.log = slog.New(slog.NewTextHandler(&log, nil))
+	events := &capturedEvents{}
+	d.telemetry.primary = events
+	refuse := func() {
+		d.receive(httptest.NewRecorder(), forwarded("/injected-by-caller/x", "{}", "", "", ""), f)
+	}
+	refuse()
+	refuse()
+	refuse()
+	if got := events.all(); got != "webhooks.forward_refused" {
+		t.Fatalf("within the window: %q", got)
+	}
+	d.now = func() time.Time { return now.Add(forwardReportEvery) }
+	refuse()
+	if got := events.all(); got != "webhooks.forward_refused,webhooks.forward_refused" {
+		t.Fatalf("after the window: %q", got)
+	}
+	out := log.String()
+	if strings.Contains(out, "injected") || strings.Count(out, "refused:") != 2 || !strings.Contains(out, "refused=3") || d.hooks.forwardRefused != 4 {
+		t.Fatalf("log %q, %d refused", out, d.hooks.forwardRefused)
+	}
 }

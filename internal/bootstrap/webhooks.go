@@ -124,6 +124,10 @@ type webhookState struct {
 	forwarder                 *config.Forwarder
 	forwarded, forwardRefused int
 	forwardLast               string
+	// forwardReported is when a refusal was last logged and recorded;
+	// forwardUnreported counts those refused since.
+	forwardReported   time.Time
+	forwardUnreported int
 }
 
 // staticTunnel is settings.webhooks' tunnel for a public URL the operator
