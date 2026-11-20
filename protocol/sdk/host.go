@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -232,17 +233,78 @@ func (h *Host) WorkEvents(ctx context.Context, work domain.ID, after uint64, lim
 	return accepted, nil
 }
 
-// Works lists Work of configured scopes (one scope when scope is set).
+// Works lists Work of configured scopes (one scope when scope is set), a
+// page at a time (QueryWorks).
 func (h *Host) Works(ctx context.Context, scope domain.ID) ([]domain.Work, error) {
-	var out []protocol.Work
-	if err := h.conn.Call(ctx, "state.works", protocol.StateParams{ScopeID: string(scope)}, &out); err != nil {
-		return nil, err
+	return h.QueryWorks(ctx, storage.WorkQuery{ScopeID: scope}, nil)
+}
+
+// QueryWorks lists the Work q selects (storage.WorkQuery) of configured
+// scopes and the extension's own kinds, in q.Order after q.After, at most
+// q.Limit (zero is all), through state.works. The host reads them through
+// its indexes, a page of at most protocol.MaxWorksPage at a time, so the
+// cost follows the Work q selects, not every Work ever made. With
+// correlation set it is the Work owning that key, if q selects it. q.Within
+// is the host's to set and is ignored.
+func (h *Host) QueryWorks(ctx context.Context, q storage.WorkQuery, correlation *domain.CorrelationKey) ([]domain.Work, error) {
+	if !q.Order.Valid() || q.Limit < 0 {
+		return nil, storage.ErrInvalid
 	}
-	works := make([]domain.Work, len(out))
-	for i, w := range out {
-		works[i] = w.Domain()
+	q.Within = nil
+	all := []domain.Work{}
+	for {
+		page := protocol.MaxWorksPage
+		if q.Limit > 0 && q.Limit-len(all) < page {
+			page = q.Limit - len(all)
+		}
+		pq := q
+		pq.Limit = page
+		var out []protocol.Work
+		if err := h.conn.Call(ctx, "state.works", protocol.WorksParams(pq, correlation), &out); err != nil {
+			return nil, err
+		}
+		got := make([]domain.Work, 0, len(out))
+		for _, w := range out {
+			if d := w.Domain(); correlation == nil || slices.Contains(d.CorrelationKeys, *correlation) {
+				got = append(got, d)
+			}
+		}
+		// A host that predates the query answers every Work in one page:
+		// keep what q selects.
+		if len(out) > page {
+			sel, _ := storage.SelectWorks(got, q)
+			return sel, nil
+		}
+		sel, _ := storage.SelectWorks(got, pq)
+		all = append(all, sel...)
+		if correlation != nil || len(out) < page || len(sel) == 0 || q.Limit > 0 && len(all) >= q.Limit {
+			return all, nil
+		}
+		k := q.Order.Key(sel[len(sel)-1])
+		q.After = &k
 	}
-	return works, nil
+}
+
+// Execution reads one attempt by its ID (state.execution). An attempt of
+// Work outside the extension's scopes, and not of its own kinds, is not
+// found.
+func (h *Host) Execution(ctx context.Context, id domain.ID) (domain.Execution, error) {
+	var out protocol.Execution
+	if err := h.conn.Call(ctx, "state.execution", protocol.StateParams{ID: string(id)}, &out); err != nil {
+		return domain.Execution{}, err
+	}
+	return out.Domain(), nil
+}
+
+// EventByDelivery reads the Event with a delivery identity
+// (state.delivery), read from the host's index. One outside the
+// extension's scopes is not found.
+func (h *Host) EventByDelivery(ctx context.Context, source, deliveryID string) (domain.AcceptedEvent, error) {
+	var out protocol.AcceptedEvent
+	if err := h.conn.Call(ctx, "state.delivery", protocol.StateParams{Source: source, DeliveryID: deliveryID}, &out); err != nil {
+		return domain.AcceptedEvent{}, err
+	}
+	return out.Domain(), nil
 }
 
 // Pending is the input routed to work that no attempt of it has read yet,

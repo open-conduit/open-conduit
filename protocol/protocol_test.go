@@ -98,6 +98,7 @@ var useCases = map[string][]string{
 	"state.work":                  {"github", "slack", "linear", "jira", "bitbucket", "claude-code"},
 	"state.works":                 {"github", "slack", "linear", "jira", "schedule", "introspection"},
 	"state.executions":            {"github", "slack", "linear", "jira", "schedule"},
+	"state.execution":             {"github", "human", "aws"},
 	"state.event":                 {"github"},
 	"state.events":                {"github", "schedule"},
 	"state.scopes":                {"github", "introspection"},
@@ -163,6 +164,9 @@ var contractReads = map[string]string{
 	// storage.Tx.WorkEvents' cost follows the Work's own events; without
 	// it sdk.Store would scan the whole log through state.events (#536).
 	"state.work_events": "storage.Tx.WorkEvents",
+	// storage.Tx.EventByDelivery's cost follows one Event; without it
+	// sdk.Store would scan the whole log through state.events (#707).
+	"state.delivery": "storage.Tx.EventByDelivery",
 }
 
 func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
@@ -261,7 +265,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 	// Storage: the namespaced KV and the read views extensions use. Writes
 	// to core records (AcceptEvent, PutWork, leases, timers) are never
 	// exposed; they go through event.accept, timer.arm and work.cancel.
-	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "ListExecutions", "Event", "Events", "WorkEvents", "ScopeEvents", "ListScopes", "Scope", "ListTimers"} {
+	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "LiveWorks", "QueryWorks", "WorkByCorrelation", "ListExecutions", "Execution", "Event", "EventByDelivery", "Events", "WorkEvents", "ScopeEvents", "ListScopes", "Scope", "ListTimers"} {
 		if _, ok := reflect.TypeFor[storage.Tx]().MethodByName(m); !ok || !carried["storage.Tx."+m] {
 			t.Errorf("storage.Tx.%s is not carried", m)
 		}

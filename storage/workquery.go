@@ -48,6 +48,10 @@ func (k WorkKey) Before(other WorkKey) bool {
 	return a < b || a == b && k.ID < other.ID
 }
 
+// LiveWorkStates are the states of Work that has not finished (not
+// Terminal): a WorkQuery with them as States selects what LiveWorks lists.
+var LiveWorkStates = []domain.WorkState{domain.WorkReady, domain.WorkRunning, domain.WorkWaiting}
+
 // WorkQuery selects Work by what storage indexes. Each field left zero
 // selects every Work.
 type WorkQuery struct {

@@ -4,7 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Params and results of the version 1 methods (07-02). Each type is named
@@ -515,11 +519,104 @@ type StateSequenceResult struct {
 	Sequence uint64 `json:"sequence"`
 }
 
+// StateParams are the arguments of the state reads. ID names the record
+// read: a Work (state.work, and the Work whose Executions, Waits, pending
+// input or Events state.executions, state.waits, state.pending and
+// state.work_events read), an Execution (state.execution), an Event
+// (state.event) or a Scope (state.scopes). After and Limit page
+// state.events and state.work_events by sequence; Limit also caps a page
+// of state.works. Source and DeliveryID are the delivery identity
+// state.delivery reads an Event by.
+//
+// ScopeID and the fields after it select the Work state.works lists, as
+// storage.WorkQuery does (WorksParams, Query): the host reads them through
+// its indexes, so a page costs the Work it selects, not every Work ever
+// made. Correlation selects the one Work that owns a key. A host that
+// predates a field ignores it and lists more, never less, so a reader
+// keeps only what its query matches (storage.SelectWorks).
 type StateParams struct {
 	ID      string `json:"id,omitempty"`
 	ScopeID string `json:"scope_id,omitempty"`
 	After   uint64 `json:"after,omitempty"`
 	Limit   int    `json:"limit,omitempty"`
+
+	States       []string    `json:"states,omitempty"`
+	Kind         string      `json:"kind,omitempty"`
+	ParentID     string      `json:"parent_id,omitempty"`
+	Sources      []string    `json:"sources,omitempty"`
+	Executor     string      `json:"executor,omitempty"`
+	Correlation  *Key        `json:"correlation,omitempty"`
+	UpdatedSince *time.Time  `json:"updated_since,omitempty"`
+	Order        string      `json:"order,omitempty"`
+	Cursor       *WorkCursor `json:"cursor,omitempty"`
+
+	Source     string `json:"source,omitempty"`
+	DeliveryID string `json:"delivery_id,omitempty"`
+}
+
+// MaxWorksPage is the most Work one state.works page holds. A Limit of
+// zero asks for every Work the query selects, as hosts before pages
+// answered.
+const MaxWorksPage = 1000
+
+// WorkCursor is a Work's position in a state.works Order
+// (storage.WorkKey): the next page starts strictly after it.
+type WorkCursor struct {
+	At time.Time `json:"at"`
+	ID string    `json:"id"`
+}
+
+var workStates = []domain.WorkState{domain.WorkReady, domain.WorkRunning, domain.WorkWaiting, domain.WorkCompleted, domain.WorkFailed, domain.WorkCancelled}
+
+// WorksParams is the state.works request for q, or for the Work owning
+// correlation when it is set.
+func WorksParams(q storage.WorkQuery, correlation *domain.CorrelationKey) StateParams {
+	p := StateParams{ScopeID: string(q.ScopeID), Limit: q.Limit, Kind: q.Kind, ParentID: string(q.ParentID), Sources: q.Sources, Executor: q.Executor, Order: string(q.Order)}
+	for _, s := range q.States {
+		p.States = append(p.States, string(s))
+	}
+	if correlation != nil {
+		k := fromKey(*correlation)
+		p.Correlation = &k
+	}
+	if !q.UpdatedSince.IsZero() {
+		since := q.UpdatedSince
+		p.UpdatedSince = &since
+	}
+	if q.After != nil {
+		p.Cursor = &WorkCursor{At: q.After.At, ID: string(q.After.ID)}
+	}
+	return p
+}
+
+// Query is the storage.WorkQuery a state.works request selects, and the
+// correlation key it names, if any. An unknown state or order, or a
+// negative limit, is invalid; a Limit above MaxWorksPage is MaxWorksPage.
+// Within is left for the host to set from the reader's authority.
+func (p StateParams) Query() (storage.WorkQuery, *domain.CorrelationKey, error) {
+	q := storage.WorkQuery{ScopeID: domain.ID(p.ScopeID), Kind: p.Kind, ParentID: domain.ID(p.ParentID), Sources: p.Sources, Executor: p.Executor, Order: storage.WorkOrder(p.Order), Limit: min(p.Limit, MaxWorksPage)}
+	if !q.Order.Valid() || p.Limit < 0 {
+		return storage.WorkQuery{}, nil, storage.ErrInvalid
+	}
+	for _, s := range p.States {
+		state := domain.WorkState(s)
+		if !slices.Contains(workStates, state) {
+			return storage.WorkQuery{}, nil, storage.ErrInvalid
+		}
+		q.States = append(q.States, state)
+	}
+	if p.UpdatedSince != nil {
+		q.UpdatedSince = *p.UpdatedSince
+	}
+	if p.Cursor != nil {
+		q.After = &storage.WorkKey{At: p.Cursor.At, ID: domain.ID(p.Cursor.ID)}
+	}
+	var k *domain.CorrelationKey
+	if p.Correlation != nil {
+		key := domain.CorrelationKey{Source: p.Correlation.Source, ExternalID: p.Correlation.ExternalID}
+		k = &key
+	}
+	return q, k, nil
 }
 
 // Derived events and control.

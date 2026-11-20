@@ -19,7 +19,29 @@ import {
   PendingInput,
   SecretResolveResult,
   Work,
+  type WorkCursor,
 } from "./wire.ts";
+
+/** The most Work one state.works page holds (protocol.MaxWorksPage). */
+export const MaxWorksPage = 1000;
+
+/**
+ * What a state.works read selects (storage.WorkQuery): Work in any of
+ * `states`, of `scopeId`, `kind`, `parentId`, any of `sources` and
+ * `executor`, updated at or after `updatedSince` (an RFC 3339 time).
+ * `order` is "created", "-created", "updated" or "-updated".
+ */
+export interface WorksQuery {
+  scopeId?: string;
+  states?: string[];
+  kind?: string;
+  parentId?: string;
+  sources?: string[];
+  executor?: string;
+  updatedSince?: string;
+  order?: "created" | "-created" | "updated" | "-updated";
+  limit?: number;
+}
 
 /** Makes one extension-to-host call; the result is decoded by the caller. */
 export type Caller = (
@@ -225,14 +247,62 @@ export class Host {
 
   /** Work of the configured scopes (one scope when scopeId is set). */
   async works(scopeId = "", signal?: AbortSignal): Promise<Work[]> {
-    return (
-      (await this.call(
-        "state.works",
-        scopeId === "" ? {} : { scope_id: scopeId },
-        t.nullable(t.array(Work)),
-        signal,
-      )) ?? []
-    );
+    return this.queryWorks(scopeId === "" ? {} : { scopeId }, signal);
+  }
+
+  /**
+   * The Work a query selects, of the configured scopes and the extension's
+   * own kinds, in its order (by creation unless `order` says otherwise),
+   * at most `limit` (all when unset). The host reads them through its
+   * indexes a page at a time, so the cost follows the Work selected, not
+   * every Work ever made: ask for live Work with `states`, or for Work
+   * changed since a time with `updatedSince`.
+   */
+  async queryWorks(query: WorksQuery, signal?: AbortSignal): Promise<Work[]> {
+    const order = query.order ?? "created";
+    const all: Work[] = [];
+    let cursor: WorkCursor | undefined;
+    for (;;) {
+      const page =
+        query.limit !== undefined && query.limit > 0
+          ? Math.min(MaxWorksPage, query.limit - all.length)
+          : MaxWorksPage;
+      const params = {
+        ...(query.scopeId ? { scope_id: query.scopeId } : {}),
+        ...(query.states?.length ? { states: query.states } : {}),
+        ...(query.kind ? { kind: query.kind } : {}),
+        ...(query.parentId ? { parent_id: query.parentId } : {}),
+        ...(query.sources?.length ? { sources: query.sources } : {}),
+        ...(query.executor ? { executor: query.executor } : {}),
+        ...(query.updatedSince ? { updated_since: query.updatedSince } : {}),
+        ...(query.order ? { order: query.order } : {}),
+        ...(cursor ? { cursor } : {}),
+        limit: page,
+      };
+      const got =
+        (await this.call(
+          "state.works",
+          params,
+          t.nullable(t.array(Work)),
+          signal,
+        )) ?? [];
+      // A host that predates the query answers every Work in one page.
+      if (got.length > page) return got;
+      all.push(...got);
+      const last = got[got.length - 1];
+      if (
+        got.length < page ||
+        last === undefined ||
+        (query.limit !== undefined &&
+          query.limit > 0 &&
+          all.length >= query.limit)
+      )
+        return all;
+      cursor = {
+        at: order.endsWith("updated") ? last.updated_at : last.created_at,
+        id: last.id,
+      };
+    }
   }
 
   /**

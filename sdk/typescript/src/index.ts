@@ -25,8 +25,16 @@ export type {
   Options,
   TaskFn,
 } from "./extension.ts";
-export { Host, text } from "./host.ts";
-export type { Accept, Batch, Caller, Entry, Put, Value } from "./host.ts";
+export { Host, MaxWorksPage, text } from "./host.ts";
+export type {
+  Accept,
+  Batch,
+  Caller,
+  Entry,
+  Put,
+  Value,
+  WorksQuery,
+} from "./host.ts";
 export { t, check, diagnose, matches, isRecord } from "./schema.ts";
 export type { Infer, Type } from "./schema.ts";
 export {

@@ -393,6 +393,66 @@ test("a handler calls the host while it serves", async () => {
   end();
 });
 
+test("Work is read by query, a page at a time, not as every Work ever made", async () => {
+  const asked: StateParams[] = [];
+  const works = Array.from({ length: 1001 }, (_, i) => ({
+    id: `w${String(i).padStart(4, "0")}`,
+    kind: "acme.job",
+    scope_id: "s1",
+    state: "running",
+    correlation_keys: null,
+    context: { schema: "acme.v1", data: {} },
+    revision: 1,
+    created_at: "2026-11-20T10:00:00.000000001Z",
+    updated_at: `2026-11-20T10:00:00.${String(i).padStart(9, "0")}Z`,
+  }));
+  const hostHandler: Handler = async (method, params) => {
+    if (method !== "state.works")
+      throw new ProtocolError(Code.MethodNotFound, method);
+    const p = decode(StateParams, params);
+    asked.push(p);
+    const from =
+      p.cursor === undefined
+        ? 0
+        : works.findIndex((w) => w.id === p.cursor?.id) + 1;
+    return works.slice(from, from + (p.limit ?? works.length));
+  };
+  const ext = extension("acme", { version: "1.0.0" }).operation("acme.live", {
+    input: t.object({}),
+    handler: async (_, { host }) => {
+      const got = await host.queryWorks({
+        scopeId: "s1",
+        states: ["ready", "running", "waiting"],
+        order: "updated",
+      });
+      return { count: got.length, last: got[got.length - 1]?.id ?? "" };
+    },
+  });
+  const { host, end } = await ready(ext, hostHandler);
+  const out = await host.call("operation.call", {
+    operation: "acme.live",
+    authority,
+    input: { data: {} },
+  });
+  assert.deepEqual(out, {
+    output: { schema: "acme.live.v1", data: { count: 1001, last: "w1000" } },
+  });
+  const query = {
+    scope_id: "s1",
+    states: ["ready", "running", "waiting"],
+    order: "updated",
+  };
+  assert.deepEqual(asked, [
+    { ...query, limit: 1000 },
+    {
+      ...query,
+      cursor: { at: "2026-11-20T10:00:00.000000999Z", id: "w0999" },
+      limit: 1000,
+    },
+  ]);
+  end();
+});
+
 test("a Work's events are read with state.work_events, not a scan of the log", async () => {
   const asked: StateParams[] = [];
   const hostHandler: Handler = async (method, params) => {

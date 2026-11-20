@@ -395,12 +395,33 @@ export const KVCommitParams = t.object(
 );
 export type KVCommitParams = Infer<typeof KVCommitParams>;
 
+/** A Work's position in a state.works order: the next page starts after it. */
+export const WorkCursor = t.object(
+  {
+    at: t.string(),
+    id: t.string(),
+  },
+  open,
+);
+export type WorkCursor = Infer<typeof WorkCursor>;
+
 export const StateParams = t.object(
   {
     id: t.optional(t.string()),
     scope_id: t.optional(t.string()),
     after: t.optional(t.integer()),
     limit: t.optional(t.integer()),
+    states: t.optional(t.array(t.string())),
+    kind: t.optional(t.string()),
+    parent_id: t.optional(t.string()),
+    sources: t.optional(t.array(t.string())),
+    executor: t.optional(t.string()),
+    correlation: t.optional(Key),
+    updated_since: t.optional(t.string()),
+    order: t.optional(t.string()),
+    cursor: t.optional(WorkCursor),
+    source: t.optional(t.string()),
+    delivery_id: t.optional(t.string()),
   },
   open,
 );

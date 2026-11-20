@@ -233,7 +233,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.pending": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.execution": true, "state.event": true, "state.delivery": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.pending": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -268,7 +268,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.kvCommit(ctx, p)
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.execution", "state.event", "state.delivery", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -695,13 +695,15 @@ func (s *Service) kvCommit(ctx context.Context, p protocol.KVCommitParams) (prot
 
 // State reads, limited to configured scopes, and Work of the extension's
 // own kinds wherever it is. A record outside them is not_found, so a read
-// is never an existence oracle for other scopes.
+// is never an existence oracle for other scopes. They run in a View, so a
+// read never holds the writer: routing, claims and toolbelt calls don't
+// queue behind an extension's reads.
 
 func (s *Service) state(ctx context.Context, method string, p protocol.StateParams) (any, error) {
 	allowed := s.allowedScopes()
 	notFound := protocol.Errorf(protocol.CodeNotFound, "not found")
 	var out any
-	err := s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
+	err := storage.View(ctx, s.deps.Store, s.deps.Now(), func(tx storage.Tx) error {
 		out = nil
 		switch method {
 		case "state.work":
@@ -717,15 +719,17 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if p.ScopeID != "" && !allowed[domain.ID(p.ScopeID)] {
 				return unauthorized("scope is not configured for this extension")
 			}
-			works, err := tx.ListWorks()
+			q, key, err := p.Query()
+			if err != nil {
+				return invalid("malformed works query")
+			}
+			works, err := s.works(tx, allowed, q, key)
 			if err != nil {
 				return err
 			}
-			list := []protocol.Work{}
+			list := make([]protocol.Work, 0, len(works))
 			for _, w := range works {
-				if (allowed[w.ScopeID] || s.ownKind(w.Kind)) && (p.ScopeID == "" || w.ScopeID == domain.ID(p.ScopeID)) {
-					list = append(list, protocol.FromWork(w))
-				}
+				list = append(list, protocol.FromWork(w))
 			}
 			out = list
 		case "state.executions":
@@ -745,6 +749,34 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 				list = append(list, protocol.FromExecution(x))
 			}
 			out = list
+		case "state.execution":
+			x, err := tx.Execution(domain.ID(p.ID))
+			if err != nil {
+				return err
+			}
+			w, err := tx.Work(x.WorkID)
+			if err != nil {
+				return err
+			}
+			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
+				return notFound
+			}
+			out = protocol.FromExecution(x)
+		case "state.delivery":
+			if p.Source == "" || p.DeliveryID == "" {
+				return notFound
+			}
+			a, err := tx.EventByDelivery(p.Source, p.DeliveryID)
+			if err != nil {
+				return err
+			}
+			scope, err := runtime.EventScopeInTx(tx, a)
+			if err != nil || !allowed[scope] {
+				return notFound
+			}
+			event := protocol.FromAccepted(a)
+			event.ScopeID = string(scope)
+			out = event
 		case "state.sequence":
 			seq, err := tx.LatestSequence()
 			if err != nil {
@@ -871,6 +903,64 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 		return nil
 	})
 	return out, err
+}
+
+// works is the page of Work q selects that the extension may read: Work of
+// its configured scopes, and of its own kinds wherever it is. Each part is
+// one indexed QueryWorks (the scopes as q.Within, each own kind as q.Kind),
+// and the page is the first q.Limit of their union in q.Order, so it costs
+// the Work it selects, never every Work ever made. With a correlation key
+// it is the one Work owning that key, when q selects it.
+func (s *Service) works(tx storage.Tx, allowed map[domain.ID]bool, q storage.WorkQuery, key *domain.CorrelationKey) ([]domain.Work, error) {
+	readable := func(w domain.Work) bool { return allowed[w.ScopeID] || s.ownKind(w.Kind) }
+	if key != nil {
+		w, err := tx.WorkByCorrelation(*key)
+		if errors.Is(err, storage.ErrNotFound) || err == nil && !readable(w) {
+			return []domain.Work{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		page, _ := storage.SelectWorks([]domain.Work{w}, q)
+		return page, nil
+	}
+	scoped := q
+	scoped.Within = make([]domain.ID, 0, len(allowed))
+	for id := range allowed {
+		scoped.Within = append(scoped.Within, id)
+	}
+	slices.Sort(scoped.Within)
+	parts := []storage.WorkQuery{scoped}
+	if q.ScopeID == "" {
+		// Own kinds are readable outside the configured scopes too; a
+		// named scope is a configured one, which the first part covers.
+		for _, k := range s.manifest.Provides.WorkKinds {
+			if q.Kind == "" || q.Kind == k.Kind {
+				own := q
+				own.Kind = k.Kind
+				parts = append(parts, own)
+			}
+		}
+	}
+	if len(parts) == 1 {
+		return tx.QueryWorks(scoped)
+	}
+	seen := map[domain.ID]bool{}
+	var union []domain.Work
+	for _, part := range parts {
+		page, err := tx.QueryWorks(part)
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range page {
+			if !seen[w.ID] {
+				seen[w.ID] = true
+				union = append(union, w)
+			}
+		}
+	}
+	page, _ := storage.SelectWorks(union, q)
+	return page, nil
 }
 
 // scopedEvents is one page of read (ScopeEvents or WorkEvents) after p.After,
