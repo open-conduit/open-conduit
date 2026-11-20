@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +20,9 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 )
 
-// releaseServer serves v1.9.0 as GitHub would, for linux/amd64.
+// releaseServer serves v2.0.0 (the latest, signed) and v1.14.0 (from
+// before signing) as GitHub would, for linux/amd64. Its bundles are what
+// testVerify accepts.
 func releaseServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	var buf bytes.Buffer
@@ -35,16 +39,29 @@ func releaseServer(t *testing.T) *httptest.Server {
 	sum := sha256.Sum256(data)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/"+upgrade.Repo+"/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"tag_name": "v1.9.0", "html_url": "https://example.test/v1.9.0"}`))
+		_, _ = w.Write([]byte(`{"tag_name": "v2.0.0", "html_url": "https://example.test/v2.0.0"}`))
 	})
-	base := "/" + upgrade.Repo + "/releases/download/v1.9.0/"
-	mux.HandleFunc("GET "+base+"checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(hex.EncodeToString(sum[:]) + "  open-conduit_1.9.0_linux_amd64.tar.gz\n"))
-	})
-	mux.HandleFunc("GET "+base+"open-conduit_1.9.0_linux_amd64.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(data) })
+	for _, v := range []string{"2.0.0", "1.14.0"} {
+		base := "/" + upgrade.Repo + "/releases/download/v" + v + "/"
+		sums := []byte(hex.EncodeToString(sum[:]) + "  open-conduit_" + v + "_linux_amd64.tar.gz\n")
+		mux.HandleFunc("GET "+base+"checksums.txt", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(sums) })
+		if v == "2.0.0" {
+			mux.HandleFunc("GET "+base+"checksums.txt.sigstore.json", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(append([]byte("signed:"), sums...)) })
+		}
+		mux.HandleFunc("GET "+base+"open-conduit_"+v+"_linux_amd64.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(data) })
+	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// testVerify stands in for the Sigstore check: a bundle signs checksums
+// when it is "signed:" and them.
+func testVerify(_ context.Context, bundle, checksums []byte) error {
+	if string(bundle) != "signed:"+string(checksums) {
+		return errors.New("bad signature")
+	}
+	return nil
 }
 
 func TestUpgrade(t *testing.T) {
@@ -57,7 +74,7 @@ func TestUpgrade(t *testing.T) {
 			for _, name := range []string{"open-conduit", "os"} {
 				_ = os.WriteFile(filepath.Join(bin, name), []byte("old "+name), 0o755)
 			}
-			u := &upgrade.Updater{Executable: filepath.Join(bin, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "amd64", HTTP: srv.Client()}
+			u := &upgrade.Updater{Executable: filepath.Join(bin, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "amd64", HTTP: srv.Client(), Verify: testVerify}
 			fake := &fakeServiceManager{}
 			host := &ServiceHost{GOOS: goos, Executable: u.Executable, UID: 501, Run: fake.run, Answers: func() bool { return fake.running }, Sleep: func(time.Duration) {}, LookPath: func(string) (string, error) { return "/usr/bin/x", nil }}
 			env := map[string]string{"HOME": root}
@@ -68,15 +85,15 @@ func TestUpgrade(t *testing.T) {
 				return out.String(), errOut.String(), code
 			}
 
-			if out, _, code := run("1.8.0", "upgrade", "--check"); code != 0 || !strings.Contains(out, "1.9.0 is out") || !strings.Contains(out, "run open-conduit upgrade") {
+			if out, _, code := run("1.8.0", "upgrade", "--check"); code != 0 || !strings.Contains(out, "2.0.0 is out") || !strings.Contains(out, "run open-conduit upgrade") {
 				t.Fatalf("check: %d %q", code, out)
 			}
-			out, _, code := run("1.9.0", "upgrade", "--check", "--json")
+			out, _, code := run("2.0.0", "upgrade", "--check", "--json")
 			var res upgradeResult
-			if code != 0 || json.Unmarshal([]byte(out), &res) != nil || res.Newer || res.Latest != "1.9.0" {
+			if code != 0 || json.Unmarshal([]byte(out), &res) != nil || res.Newer || res.Latest != "2.0.0" {
 				t.Fatalf("check json: %d %q", code, out)
 			}
-			if out, _, code := run("1.9.0", "upgrade"); code != 0 || !strings.Contains(out, "up to date") {
+			if out, _, code := run("2.0.0", "upgrade"); code != 0 || !strings.Contains(out, "up to date") {
 				t.Fatalf("up to date: %d %q", code, out)
 			}
 			if b, _ := os.ReadFile(u.Executable); string(b) != "old open-conduit" {
@@ -84,7 +101,7 @@ func TestUpgrade(t *testing.T) {
 			}
 
 			// No service: install, and say serve needs a restart.
-			if out, errOut, code := run("1.8.0", "upgrade"); code != 0 || !strings.Contains(out, "installed open-conduit 1.9.0 in "+bin) || !strings.Contains(out, "no background service is running") {
+			if out, errOut, code := run("1.8.0", "upgrade"); code != 0 || !strings.Contains(out, "installed open-conduit 2.0.0 in "+bin) || !strings.Contains(out, "no background service is running") {
 				t.Fatalf("upgrade without a service: %d %q %s", code, out, errOut)
 			}
 			for _, name := range []string{"open-conduit", "os"} {
@@ -99,7 +116,7 @@ func TestUpgrade(t *testing.T) {
 			}
 			fake.calls = nil
 			out, errOut, code := run("1.8.0", "upgrade")
-			if code != 0 || !strings.Contains(out, "restarted the background service on 1.9.0") {
+			if code != 0 || !strings.Contains(out, "restarted the background service on 2.0.0") {
 				t.Fatalf("upgrade with a service: %d %q %s", code, out, errOut)
 			}
 			want := "launchctl kickstart -k gui/501/" + launchdLabel
@@ -117,6 +134,35 @@ func TestUpgrade(t *testing.T) {
 				t.Fatal("service control doesn't see the running service")
 			}
 		})
+	}
+}
+
+// A release from before signing needs --allow-unsigned, which needs
+// --version.
+func TestUpgradeToAnUnsignedRelease(t *testing.T) {
+	srv := releaseServer(t)
+	bin := t.TempDir()
+	for _, name := range []string{"open-conduit", "os"} {
+		_ = os.WriteFile(filepath.Join(bin, name), []byte("old "+name), 0o755)
+	}
+	u := &upgrade.Updater{Executable: filepath.Join(bin, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "amd64", HTTP: srv.Client(), Verify: testVerify}
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		e := Env{Getenv: func(string) string { return "" }, Cwd: bin, Updater: u}
+		code := RunOperator("2.0.0", "abc", args, e, &out, &errOut)
+		return out.String(), errOut.String(), code
+	}
+	if _, errOut, code := run("upgrade", "--version", "1.14.0", "--no-restart"); code != 1 || !strings.Contains(errOut, "before releases were signed") || !strings.Contains(errOut, "--allow-unsigned") {
+		t.Fatalf("unsigned without the flag: %d %q", code, errOut)
+	}
+	if b, _ := os.ReadFile(u.Executable); string(b) != "old open-conduit" {
+		t.Fatal("installed an unsigned release without --allow-unsigned")
+	}
+	if _, errOut, code := run("upgrade", "--allow-unsigned"); code != 2 || !strings.Contains(errOut, "--allow-unsigned needs --version") {
+		t.Fatalf("--allow-unsigned alone: %d %q", code, errOut)
+	}
+	if out, errOut, code := run("upgrade", "--version", "1.14.0", "--allow-unsigned", "--no-restart"); code != 0 || !strings.Contains(out, "installed open-conduit 1.14.0") {
+		t.Fatalf("unsigned with the flag: %d %q %q", code, out, errOut)
 	}
 }
 

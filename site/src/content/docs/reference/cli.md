@@ -282,16 +282,20 @@ package and restarts the daemon on the same state; Ctrl-C stops everything and r
 ### `open-conduit upgrade`
 
 ```text
-Usage: open-conduit upgrade [--check] [--version VERSION] [--no-restart] [--json]
+Usage: open-conduit upgrade [--check] [--version VERSION [--allow-unsigned]] [--no-restart] [--json]
 
 Installs the latest release in place of this open-conduit and the os beside
-it, after checking the archive against the release's checksums.txt, then
-restarts the background service so the daemon runs the new version.
+it, then restarts the background service so the daemon runs the new version.
+The release's checksums.txt must carry a signature made by its release
+workflow on main, and the archive must match checksums.txt; otherwise
+nothing is installed.
 
-  --check       only say whether a newer release is out
-  --version V   install release V (for example 1.9.0) instead of the latest
-  --no-restart  leave the background service running the old version
-  --json        print the result as JSON
+  --check           only say whether a newer release is out
+  --version V       install release V (for example 2.0.0) instead of the latest
+  --allow-unsigned  with --version, allow a release from before v1.15.0,
+                    which has no signature, on its checksums alone
+  --no-restart      leave the background service running the old version
+  --json            print the result as JSON
 
 A Homebrew install is upgraded with brew: brew upgrade --cask open-conduit.
 ```

@@ -1,7 +1,8 @@
 // Package upgrade finds the latest Open Conduit release and installs it in
 // place of the running binaries: `open-conduit upgrade` and the web view's
 // update page share it. It reads the release from GitHub, verifies the
-// archive against the release's checksums.txt, as install.sh does, and
+// release's checksums.txt against its Sigstore signature, made by the
+// release workflow on main, then the archive against checksums.txt, and
 // swaps open-conduit and os beside the running executable with a rename
 // each, so a failure part way leaves the old binaries working. The bundled
 // extension packages (the archive's extensions/ directory, such as setup)
@@ -37,6 +38,26 @@ const Repo = "open-conduit/open-conduit"
 // BrewCommand upgrades a Homebrew install.
 const BrewCommand = "brew upgrade --cask open-conduit"
 
+// FirstSigned is the first release whose checksums.txt is signed
+// (install.sh's first_signed). Every release from it on publishes
+// checksums.txt.sigstore.json.
+const FirstSigned = "1.15.0"
+
+// SignerSubject and SignerIssuer are who signs a release's checksums.txt:
+// the release workflow on main, through GitHub Actions' OIDC identity, as
+// install.sh pins it.
+const (
+	SignerSubject = "https://github.com/" + Repo + "/.github/workflows/release.yml@refs/heads/main"
+	SignerIssuer  = "https://token.actions.githubusercontent.com"
+)
+
+// signatureAsset is the Sigstore bundle signing checksums.txt.
+const signatureAsset = "checksums.txt.sigstore.json"
+
+// ErrUnsigned reports that a release is from before FirstSigned, so there
+// is no signature to prove the release workflow published it.
+var ErrUnsigned = errors.New("the release is from before releases were signed (v" + FirstSigned + "), so it can't be verified")
+
 // Release is a published release.
 type Release struct {
 	// Version is the tag without its leading v ("1.9.0"), the form the
@@ -65,6 +86,11 @@ type Updater struct {
 	Now func() time.Time
 	// TTL is how long a check is reused (six hours when zero).
 	TTL time.Duration
+	// Verify checks that a Sigstore bundle is SignerSubject's signature
+	// over checksums, as issued by SignerIssuer. The entrypoint supplies it,
+	// so a binary without one (os) carries no Sigstore client; with none,
+	// no signed release installs.
+	Verify func(ctx context.Context, bundle, checksums []byte) error
 
 	mu       sync.Mutex
 	latest   Release
@@ -219,6 +245,18 @@ func parse(v string) (semver, bool) {
 	return s, true
 }
 
+// signed says whether a release this version would be is FirstSigned or
+// later; a pre-release counts as its release (1.15.0-rc.1 is signed).
+func (s semver) signed() bool {
+	f, _ := parse(FirstSigned)
+	for i := range 3 {
+		if s.core[i] != f.core[i] {
+			return s.core[i] > f.core[i]
+		}
+	}
+	return true
+}
+
 // binaries are what an archive must hold, installed side by side.
 var binaries = []string{"open-conduit", "os"}
 
@@ -226,20 +264,40 @@ var binaries = []string{"open-conduit", "os"}
 // replaces the one beside the executable.
 const bundled = "extensions"
 
-// Install downloads version's archive for this platform, verifies it
-// against the release's checksums and puts its open-conduit and os in
-// place of the running ones, then replaces the bundled extensions/
-// directory beside them with the archive's (removing it when the archive
-// has none). It never touches a Homebrew install.
+// Install downloads version's archive for this platform, verifies the
+// release's checksums.txt against its signature and the archive against
+// checksums.txt, and puts its open-conduit and os in place of the running
+// ones, then replaces the bundled extensions/ directory beside them with
+// the archive's (removing it when the archive has none). A missing or
+// failed signature installs nothing, and a release from before
+// FirstSigned is refused with ErrUnsigned. It never touches a Homebrew
+// install.
 func (u *Updater) Install(ctx context.Context, version string) error {
+	return u.install(ctx, version, false)
+}
+
+// InstallUnsigned is Install, except that a release from before
+// FirstSigned, which has no signature, is installed on its checksums
+// alone. A later release must still verify. Only an operator's explicit
+// request should reach it.
+func (u *Updater) InstallUnsigned(ctx context.Context, version string) error {
+	return u.install(ctx, version, true)
+}
+
+func (u *Updater) install(ctx context.Context, version string, allowUnsigned bool) error {
 	if u.Homebrew() {
 		return ErrHomebrew
 	}
 	if u.Executable == "" {
 		return errors.New("can't tell where the running open-conduit is installed")
 	}
-	if _, ok := parse(version); !ok {
+	v, ok := parse(version)
+	if !ok {
 		return fmt.Errorf("%q is not a release version", version)
+	}
+	signed := v.signed()
+	if !signed && !allowUnsigned {
+		return fmt.Errorf("v%s: %w", strings.TrimPrefix(version, "v"), ErrUnsigned)
 	}
 	version = strings.TrimPrefix(version, "v")
 	goos, goarch := u.GOOS, u.GOARCH
@@ -256,6 +314,18 @@ func (u *Updater) Install(ctx context.Context, version string) error {
 	sums, err := u.fetch(ctx, base+"/checksums.txt", 1<<20)
 	if err != nil {
 		return err
+	}
+	// The signature is checked before any checksum is trusted: checksums
+	// beside an archive prove only that the two match, and whoever can
+	// replace one can replace both.
+	if signed {
+		bundle, err := u.fetch(ctx, base+"/"+signatureAsset, 1<<20)
+		if err != nil {
+			return fmt.Errorf("every release from v%s on is signed, and v%s's signature couldn't be downloaded, so nothing was installed: %w", FirstSigned, version, err)
+		}
+		if err := u.verify(ctx, bundle, sums); err != nil {
+			return fmt.Errorf("checksums.txt for v%s is not signed by the %s release workflow, so nothing was installed: %w", version, Repo, err)
+		}
 	}
 	want := checksum(sums, archive)
 	if want == "" {
@@ -291,6 +361,15 @@ func (u *Updater) Install(ctx context.Context, version string) error {
 	}
 	delete(staged, bundled)
 	return nil
+}
+
+// verify checks bundle against checksums with u.Verify, failing closed
+// when there is none.
+func (u *Updater) verify(ctx context.Context, bundle, checksums []byte) error {
+	if u.Verify == nil {
+		return errors.New("this binary can't verify release signatures")
+	}
+	return u.Verify(ctx, bundle, checksums)
 }
 
 // swapBundled puts the staged extensions directory (none when "") in place

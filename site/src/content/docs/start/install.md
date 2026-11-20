@@ -71,7 +71,7 @@ open-conduit upgrade --check   # say whether a newer release is out
 open-conduit upgrade           # install it
 ```
 
-`upgrade` downloads the latest release for this machine, checks it against the release's `checksums.txt` and replaces `open-conduit`, the `os` beside it and the bundled `extensions/` directory, wherever they are installed. Packages you installed yourself, in the config directory, are left alone. If the [background service](/open-conduit/guides/background-service/) is running, it then restarts it on the new version; pass `--no-restart` to leave that to you. A daemon you started with `open-conduit serve` keeps the old version until you restart it. `--version 1.9.0` installs a particular release.
+`upgrade` downloads the latest release for this machine, verifies the signature on the release's `checksums.txt` (made by the release workflow on `main`; no `cosign` needed), checks the archive against that list and replaces `open-conduit`, the `os` beside it and the bundled `extensions/` directory, wherever they are installed. Packages you installed yourself, in the config directory, are left alone. If the [background service](/open-conduit/guides/background-service/) is running, it then restarts it on the new version; pass `--no-restart` to leave that to you. A daemon you started with `open-conduit serve` keeps the old version until you restart it. If the signature is missing or doesn't verify, nothing is installed. `--version 2.0.0` installs a particular release; one from before v1.15.0 has no signature, and needs `--allow-unsigned` as well to install on its checksum alone.
 
 A Homebrew install belongs to Homebrew: `upgrade` tells you to run `brew upgrade --cask open-conduit` instead.
 

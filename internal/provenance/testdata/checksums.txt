@@ -1,0 +1,4 @@
+4b7acff216c30121e22f6bd88a882abb4613a554182e92ff04f7aeb118532ade  open-conduit_6.10.0_darwin_amd64.tar.gz
+becf66e52c6e387fb2552cf3ab8169d53b6e5ca6d1cef4fc6386059454c7d090  open-conduit_6.10.0_darwin_arm64.tar.gz
+edf4d8dd12c372a7b990075515972ec06e12f4bca52ef1b520dd28f6b2aebee1  open-conduit_6.10.0_linux_amd64.tar.gz
+423d2da5e862a2e6a35cc3e6b0c8c223f3f2e9707a91dd751824d207a0701d4b  open-conduit_6.10.0_linux_arm64.tar.gz

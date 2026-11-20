@@ -18,17 +18,26 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/provenance"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/internal/web"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
 var version = "dev"
 var commit = "unknown"
 
 // updater checks for releases for upgrade and the web view's update page,
-// which share its last check.
-var updater = upgrade.New()
+// which share its last check. It verifies each release's signature in
+// process against Sigstore's public-good trusted root.
+var updater = func() *upgrade.Updater {
+	u := upgrade.New()
+	u.Verify = releaseVerifier(func(ctx context.Context) (root.TrustedMaterial, error) {
+		return provenance.PublicGood(ctx, nil)
+	})
+	return u
+}()
 
 // webUpdates are the web view's release check and the service it restarts
 // after an update.

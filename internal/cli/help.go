@@ -110,7 +110,7 @@ var helpGroups = []helpGroup{
 		{"dev", `  dev [DIR] [--secret NAME=VALUE|NAME=env:VAR]... [--entry TYPE=JSON]... [--agent PATH] [--web-addr 127.0.0.1:PORT]
                              run the package in DIR (default .) against a throwaway daemon and its web view,
                              rebuilding and restarting it when its files change; Ctrl-C stops everything`},
-		{"upgrade", `  upgrade [--check] [--version V] [--no-restart] [--json]   install the latest release and restart the background service`},
+		{"upgrade", `  upgrade [--check] [--version V [--allow-unsigned]] [--no-restart] [--json]   install the latest release and restart the background service`},
 		{"version", `  version`},
 	}},
 }
