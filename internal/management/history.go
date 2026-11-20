@@ -225,7 +225,7 @@ func (s *Server) listRuns(c *call) (int, any, error) {
 			if x.Outcome != nil {
 				outcome = string(x.Outcome.Kind)
 			}
-			if !match(q, "scope_id", string(w.ScopeID)) || !match(q, "state", string(x.State)) || !match(q, "executor_binding", x.ExecutorBinding) || !match(q, "work_kind", w.Kind) || !match(q, "outcome", outcome) || !match(q, "work_id", string(x.WorkID)) {
+			if !c.sees(w.ScopeID) || !match(q, "scope_id", string(w.ScopeID)) || !match(q, "state", string(x.State)) || !match(q, "executor_binding", x.ExecutorBinding) || !match(q, "work_kind", w.Kind) || !match(q, "outcome", outcome) || !match(q, "work_id", string(x.WorkID)) {
 				continue
 			}
 			items = append(items, lazyKeyed{key: createdKey(x.CreatedAt, x.ID), build: func() (any, bool, error) {

@@ -1910,6 +1910,9 @@ func workQueries(s storage.Store) error {
 			{storage.WorkQuery{States: closed}, "w1 w2", "of two states"},
 			{storage.WorkQuery{States: []domain.WorkState{domain.WorkRunning}}, "", "of a state no Work is in"},
 			{storage.WorkQuery{ScopeID: "other"}, "w2", "of a scope"},
+			{storage.WorkQuery{Within: []domain.ID{"other", "missing"}}, "w2", "within scopes"},
+			{storage.WorkQuery{Within: []domain.ID{}}, "", "within no scope"},
+			{storage.WorkQuery{ScopeID: "scope", Within: []domain.ID{"other"}}, "", "of a scope outside those within"},
 			{storage.WorkQuery{Kind: "test.other"}, "w2", "of a kind"},
 			{storage.WorkQuery{ParentID: "w1"}, "w3", "of a parent"},
 			{storage.WorkQuery{Sources: []string{"github.issue"}}, "w1 w3", "from a correlation source"},
@@ -1958,6 +1961,8 @@ func workQueries(s storage.Store) error {
 			{storage.WorkQuery{Executor: "claude"}, "1 [other] [test.other] [claude]", "of an executor's Work"},
 			{storage.WorkQuery{ScopeID: "scope", States: []domain.WorkState{domain.WorkReady}}, "2 [scope] [github.issue test] [shell]", "of ready Work in a scope, one without attempts"},
 			{storage.WorkQuery{ScopeID: "missing"}, "0 [] [] []", "of no Work"},
+			{storage.WorkQuery{Within: []domain.ID{"other"}}, "1 [other] [test.other] [claude]", "of Work within a scope"},
+			{storage.WorkQuery{Within: []domain.ID{}}, "0 [] [] []", "of Work within no scope"},
 		} {
 			f, err := tx.WorkFacets(q.q)
 			if err != nil {

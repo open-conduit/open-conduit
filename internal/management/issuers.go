@@ -29,10 +29,14 @@ type Verifier struct {
 // the table mapping the issuer's groups to roles. Keeping the table here,
 // not in config, means a config apply can't grant a role (#366).
 type issuerRecord struct {
-	ID        string
-	Type      string
-	Config    json.RawMessage
-	Groups    map[string]string `json:",omitempty"`
+	ID     string
+	Type   string
+	Config json.RawMessage
+	Groups map[string]string `json:",omitempty"`
+	// Grants map groups to roles at scopes: a member of a row's group
+	// holds its role at its scope's subtree, beside the daemon-wide role
+	// Groups gives.
+	Grants    []groupGrant `json:",omitempty"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -229,7 +233,7 @@ func (s *Server) observeCredential(ctx context.Context, r issuerRecord, credenti
 }
 
 func issuedPrincipal(r issuerRecord, v verified, token string) principal {
-	return principal{operator: true, token: token, name: r.ID + ":" + v.subject, role: r.role(v.groups), issuer: r.ID}
+	return principal{operator: true, token: token, name: r.ID + ":" + v.subject, role: r.role(v.groups), grants: grantsOf(r.Grants, v.groups), issuer: r.ID}
 }
 
 func listIssuers(tx storage.Tx) ([]issuerRecord, error) {
@@ -254,6 +258,7 @@ type wireIssuer struct {
 	Type      string            `json:"type"`
 	Config    json.RawMessage   `json:"config"`
 	Groups    map[string]string `json:"groups"`
+	Grants    []groupGrant      `json:"grants"`
 	CreatedAt string            `json:"created_at"`
 	UpdatedAt string            `json:"updated_at"`
 }
@@ -263,7 +268,11 @@ func toWireIssuer(r issuerRecord) wireIssuer {
 	if groups == nil {
 		groups = map[string]string{}
 	}
-	return wireIssuer{ID: r.ID, Type: r.Type, Config: r.Config, Groups: groups, CreatedAt: ts(r.CreatedAt), UpdatedAt: ts(r.UpdatedAt)}
+	grants := r.Grants
+	if grants == nil {
+		grants = []groupGrant{}
+	}
+	return wireIssuer{ID: r.ID, Type: r.Type, Config: r.Config, Groups: groups, Grants: grants, CreatedAt: ts(r.CreatedAt), UpdatedAt: ts(r.UpdatedAt)}
 }
 
 // listIssuersRoute is GET /auth/issuers: every trusted issuer, with its
@@ -293,14 +302,16 @@ const maxGroup = 256
 // its type, config and group table. The verifier type must be one a
 // running package provides, and the package checks the config (validate,
 // kind verifier) before it is stored. Each group maps to a role; a group
-// left out grants nothing. Credentials verified under the previous record
-// are verified again.
+// left out grants nothing. Grants, rows of {group, scope, role}, give a
+// group's members view or operate at a scope's subtree instead.
+// Credentials verified under the previous record are verified again.
 func (s *Server) putIssuer(c *call) (int, any, error) {
 	id := c.params[0]
 	var in struct {
 		Type   string            `json:"type"`
 		Config json.RawMessage   `json:"config"`
 		Groups map[string]string `json:"groups"`
+		Grants []groupGrant      `json:"grants"`
 	}
 	var out wireIssuer
 	err := func() error {
@@ -322,6 +333,17 @@ func (s *Server) putIssuer(c *call) (int, any, error) {
 				return fail(400, "malformed", "groups map each group name (1-256 characters) to admin, operate or view")
 			}
 		}
+		if len(in.Grants) > maxGrants*4 {
+			return fail(400, "malformed", "grants take up to 256 rows")
+		}
+		seen := map[groupGrant]bool{}
+		for _, gg := range in.Grants {
+			key := groupGrant{Group: gg.Group, Scope: gg.Scope}
+			if gg.Group == "" || len(gg.Group) > maxGroup || !validGrants([]Grant{{Scope: gg.Scope, Role: gg.Role}}) || seen[key] {
+				return fail(400, "malformed", "grants are rows of {group, scope, role}: a group name (1-256 characters), a scope ID and view or operate, no group and scope twice; admin is only ever daemon-wide")
+			}
+			seen[key] = true
+		}
 		var ver Verifier
 		ok := false
 		if s.o.Verifiers != nil {
@@ -337,7 +359,7 @@ func (s *Server) putIssuer(c *call) (int, any, error) {
 		}
 		now := s.o.Now()
 		return s.o.Store.Transact(c.ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-			r := issuerRecord{ID: id, Type: in.Type, Config: in.Config, Groups: in.Groups, CreatedAt: now, UpdatedAt: now}
+			r := issuerRecord{ID: id, Type: in.Type, Config: in.Config, Groups: in.Groups, Grants: in.Grants, CreatedAt: now, UpdatedAt: now}
 			if b, err := tx.Get(authNamespace, "issuer/"+id); err == nil {
 				var prior issuerRecord
 				if err = json.Unmarshal(b, &prior); err != nil {

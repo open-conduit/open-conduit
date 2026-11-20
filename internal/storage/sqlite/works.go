@@ -88,6 +88,17 @@ func workWhere(q storage.WorkQuery) (string, []any) {
 	if q.ScopeID != "" {
 		conds, args = append(conds, "scope_id=?"), append(args, string(q.ScopeID))
 	}
+	if q.Within != nil {
+		if len(q.Within) == 0 {
+			conds = append(conds, "0")
+		} else {
+			within := make([]string, len(q.Within))
+			for i, id := range q.Within {
+				within[i] = string(id)
+			}
+			in("scope_id", within)
+		}
+	}
 	if q.Kind != "" {
 		conds, args = append(conds, workKind+"=?"), append(args, q.Kind)
 	}

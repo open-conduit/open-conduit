@@ -169,6 +169,20 @@ func (b textTimesTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
 	return out, err
 }
 
+// unboundedWithin ignores Within, as a store that missed the field would:
+// a reader whose authority covers some scopes would list every scope's
+// Work.
+type unboundedWithin struct{ storage.Store }
+type unboundedWithinTx struct{ storage.Tx }
+
+func (b unboundedWithin) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(unboundedWithinTx{tx}) })
+}
+func (b unboundedWithinTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	q.Within = nil
+	return b.Tx.QueryWorks(q)
+}
+
 // forgetfulArtifacts publishes a finished attempt's stopped turn without
 // keeping the artifacts it held, as a store that overwrote the list might.
 type forgetfulArtifacts struct{ storage.Store }
@@ -229,6 +243,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "latest attempt is claude's", func() storage.Store { return anyAttemptExecutor{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "every Work by creation", func() storage.Store { return textTimes{reference.New()} }},
+		{"work_queries_select_order_page_and_count", "within scopes", func() storage.Store { return unboundedWithin{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view waited for a write", func() storage.Store { return serialView{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "earlier", func() storage.Store { return forgetfulArtifacts{reference.New()} }},

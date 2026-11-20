@@ -21,11 +21,13 @@ The host name in the URL is not used. A dev server or proxy that forwards to the
 
 ## Roles
 
-Each operator has a role, checked where the request is served, before anything is read or written: `view` reads, `operate` also runs controls and sends Events, and `admin` also applies and exports configuration, stores and removes secrets, and issues credentials. A request the role doesn't allow is refused with `403 forbidden_role`. The table below gives each endpoint's least role. The `/v1/toolbelt` endpoints are not for operators: an execution reaches them with its own token, on the socket the host gives that execution, and an operator credential is refused there (`403 wrong_credential_class`). Everything an operator does is recorded as theirs (`operator:<name>`), from the credential, never from the request.
+Each operator has a role, checked where the request is served, before anything is read or written: `view` reads, `operate` also runs controls and sends Events, and `admin` also applies and exports configuration, stores and removes secrets, and issues credentials. A request the role doesn't allow is refused with `403 forbidden_role`. The table below gives each endpoint's least role.
+
+A role can also be granted at a scope instead of daemon-wide: `--grants team-a=operate` on `auth add` (`"grants": [{"scope", "role"}]` in `POST /v1/auth/operators`), or `grants` rows of `{"group", "scope", "role"}` on a trusted issuer. A grant is `view` or `operate` and covers its scope and every scope beneath it; `admin` is only ever daemon-wide. An operator may hold a daemon-wide role and grants together. The table's *Target* column says what each endpoint acts on, and so which scope a grant must cover. For a record named in the path (`scope`, `work`, `execution`, `event`, `wait`, `artifact`) or the body's `scope_id`, the host resolves its scope before the handler runs and refuses one outside every grant with `403 forbidden_scope` (a record that doesn't exist is `404`). A `list` holds only what the operator's grants cover, whatever its filters ask for. A `daemon` endpoint needs its role daemon-wide, and `any` needs it anywhere. The `/v1/toolbelt` endpoints are not for operators: an execution reaches them with its own token, on the socket the host gives that execution, and an operator credential is refused there (`403 wrong_credential_class`). Everything an operator does is recorded as theirs (`operator:<name>`), from the credential, never from the request.
 
 ## Envelopes
 
-A success is `{"data": …}`. A failure is `{"error": {"code", "message", "request_id", "details"?}}` with an HTTP status to match: `400 malformed` or `invalid_filter`, `401 unauthenticated`, `403 forbidden_role`, `404 not_found`, `409 revision_conflict`, `state_conflict` or `idempotency_conflict`, `422 invalid_request` or `invalid_config` (with `details`: each diagnostic's `path`, `code` and `message`), and `503 unavailable` (retry). Every response has an `X-Request-Id` header, the same as the error's `request_id`. Messages never carry a backend's or provider's own error text.
+A success is `{"data": …}`. A failure is `{"error": {"code", "message", "request_id", "details"?}}` with an HTTP status to match: `400 malformed` or `invalid_filter`, `401 unauthenticated`, `403 forbidden_role` or `forbidden_scope`, `404 not_found`, `409 revision_conflict`, `state_conflict` or `idempotency_conflict`, `422 invalid_request` or `invalid_config` (with `details`: each diagnostic's `path`, `code` and `message`), and `503 unavailable` (retry). Every response has an `X-Request-Id` header, the same as the error's `request_id`. Messages never carry a backend's or provider's own error text.
 
 ## Requests that change something
 
@@ -46,74 +48,74 @@ A list returns `{"items": […], "next_cursor": …}` (the Work list adds `total
 
 ## Endpoints
 
-| Method | Path | Role | Idempotency-Key | Filters |
-| --- | --- | --- | --- | --- |
-| `GET` | `/v1/health` | view | – | – |
-| `GET` | `/v1/capacity` | view | – | – |
-| `GET` | `/v1/schema` | view | – | – |
-| `GET` | `/v1/scopes` | view | – | `parent_id`, `enabled` |
-| `GET` | `/v1/scopes/{id}` | view | – | – |
-| `GET` | `/v1/work` | view | – | `scope_id`, `state`, `kind`, `parent_id`, `source`, `executor`, `updated_after`, `q`, `sort`, `with` |
-| `GET` | `/v1/work/facets` | view | – | `scope_id`, `state`, `kind` |
-| `GET` | `/v1/work/{id}` | view | – | – |
-| `GET` | `/v1/work/{id}/actions` | view | – | – |
-| `GET` | `/v1/scopes/{id}/actions` | view | – | – |
-| `GET` | `/v1/work/{id}/panels` | view | – | – |
-| `GET` | `/v1/work/{id}/config-candidate` | view | – | – |
-| `GET` | `/v1/pages` | view | – | – |
-| `GET` | `/v1/extensions` | view | – | – |
-| `GET` | `/v1/scopes/{id}/panels` | view | – | – |
-| `GET` | `/v1/scopes/{id}/route/samples` | view | – | – |
-| `GET` | `/v1/events` | view | – | `scope_id`, `work_id`, `type`, `after_sequence`, `with` |
-| `GET` | `/v1/events/{id}` | view | – | – |
-| `GET` | `/v1/events/{id}/route` | view | – | – |
-| `GET` | `/v1/executions` | view | – | `scope_id`, `work_id`, `state` |
-| `GET` | `/v1/executions/{id}` | view | – | – |
-| `GET` | `/v1/waits` | view | – | `scope_id`, `work_id`, `execution_id`, `state` |
-| `GET` | `/v1/waits/{id}` | view | – | – |
-| `GET` | `/v1/runs` | view | – | `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind`, `outcome` |
-| `GET` | `/v1/runs/{id}` | view | – | – |
-| `GET` | `/v1/runs/{id}/live` | view | – | – |
-| `GET` | `/v1/doctor` | view | – | – |
-| `GET` | `/v1/config` | view | – | – |
-| `GET` | `/v1/config/export` | admin | – | – |
-| `GET` | `/v1/artifacts` | view | – | `work_id`, `execution_id`, `kind` |
-| `GET` | `/v1/artifacts/{id}/content` | view | – | – |
-| `POST` | `/v1/events` | operate | required | – |
-| `POST` | `/v1/work` | operate | required | – |
-| `POST` | `/v1/work/{id}/cancel` | operate | required | – |
-| `POST` | `/v1/work/{id}/retry` | operate | required | – |
-| `POST` | `/v1/work/{id}/wake` | operate | required | – |
-| `POST` | `/v1/work/{id}/rebind` | operate | required | – |
-| `POST` | `/v1/work/{id}/hold` | operate | required | – |
-| `POST` | `/v1/work/{id}/interrupt` | operate | required | – |
-| `POST` | `/v1/work/{id}/release` | operate | required | – |
-| `POST` | `/v1/work/{id}/attach` | operate | required | – |
-| `POST` | `/v1/work/{id}/container-attach` | operate | required | – |
-| `POST` | `/v1/work/{id}/container-detach` | operate | required | – |
-| `POST` | `/v1/work/{id}/actions/{provider}/{action}` | operate | required | – |
-| `POST` | `/v1/scopes/{id}/reconcile` | operate | required | – |
-| `POST` | `/v1/scopes/{id}/route/trace` | view | optional | – |
-| `POST` | `/v1/scopes/{id}/actions/{provider}/{action}` | operate | required | – |
-| `POST` | `/v1/executions/{id}/cancel` | operate | required | – |
-| `POST` | `/v1/events/{id}/skip` | operate | required | – |
-| `POST` | `/v1/events/{id}/reroute` | operate | required | – |
-| `POST` | `/v1/config/validate` | view | optional | – |
-| `POST` | `/v1/config/apply` | admin | required | – |
-| `GET` | `/v1/secrets` | admin | – | – |
-| `PUT` | `/v1/secrets/{id}` | admin | – | – |
-| `DELETE` | `/v1/secrets/{id}` | admin | – | – |
-| `POST` | `/v1/auth/rotate` | operate | optional | – |
-| `GET` | `/v1/auth/operators` | view | – | – |
-| `POST` | `/v1/auth/operators` | admin | optional | – |
-| `POST` | `/v1/auth/revoke` | operate | required | – |
-| `GET` | `/v1/auth/issuers` | view | – | – |
-| `PUT` | `/v1/auth/issuers/{id}` | admin | optional | – |
-| `DELETE` | `/v1/auth/issuers/{id}` | admin | optional | – |
-| `POST` | `/v1/toolbelt/call` | execution | optional | – |
-| `GET` | `/v1/toolbelt/guidance` | execution | – | – |
-| `GET` | `/v1/toolbelt/serving` | execution | – | – |
-| `POST` | `/v1/toolbelt/git` | execution | optional | – |
-| `DELETE` | `/v1/toolbelt/git/{id}` | execution | optional | – |
-| `GET` | `/v1/toolbelt/git/{id}/{id}` | execution | – | – |
-| `POST` | `/v1/toolbelt/git/{id}/{id}` | execution | – | – |
+| Method | Path | Role | Target | Idempotency-Key | Filters |
+| --- | --- | --- | --- | --- | --- |
+| `GET` | `/v1/health` | view | any | – | – |
+| `GET` | `/v1/capacity` | view | daemon | – | – |
+| `GET` | `/v1/schema` | view | any | – | – |
+| `GET` | `/v1/scopes` | view | list | – | `parent_id`, `enabled` |
+| `GET` | `/v1/scopes/{id}` | view | scope | – | – |
+| `GET` | `/v1/work` | view | list | – | `scope_id`, `state`, `kind`, `parent_id`, `source`, `executor`, `updated_after`, `q`, `sort`, `with` |
+| `GET` | `/v1/work/facets` | view | list | – | `scope_id`, `state`, `kind` |
+| `GET` | `/v1/work/{id}` | view | work | – | – |
+| `GET` | `/v1/work/{id}/actions` | view | work | – | – |
+| `GET` | `/v1/scopes/{id}/actions` | view | scope | – | – |
+| `GET` | `/v1/work/{id}/panels` | view | work | – | – |
+| `GET` | `/v1/work/{id}/config-candidate` | view | daemon | – | – |
+| `GET` | `/v1/pages` | view | daemon | – | – |
+| `GET` | `/v1/extensions` | view | any | – | – |
+| `GET` | `/v1/scopes/{id}/panels` | view | scope | – | – |
+| `GET` | `/v1/scopes/{id}/route/samples` | view | scope | – | – |
+| `GET` | `/v1/events` | view | list | – | `scope_id`, `work_id`, `type`, `after_sequence`, `with` |
+| `GET` | `/v1/events/{id}` | view | event | – | – |
+| `GET` | `/v1/events/{id}/route` | view | event | – | – |
+| `GET` | `/v1/executions` | view | list | – | `scope_id`, `work_id`, `state` |
+| `GET` | `/v1/executions/{id}` | view | execution | – | – |
+| `GET` | `/v1/waits` | view | list | – | `scope_id`, `work_id`, `execution_id`, `state` |
+| `GET` | `/v1/waits/{id}` | view | wait | – | – |
+| `GET` | `/v1/runs` | view | list | – | `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind`, `outcome` |
+| `GET` | `/v1/runs/{id}` | view | execution | – | – |
+| `GET` | `/v1/runs/{id}/live` | view | execution | – | – |
+| `GET` | `/v1/doctor` | view | daemon | – | – |
+| `GET` | `/v1/config` | view | daemon | – | – |
+| `GET` | `/v1/config/export` | admin | daemon | – | – |
+| `GET` | `/v1/artifacts` | view | list | – | `work_id`, `execution_id`, `kind` |
+| `GET` | `/v1/artifacts/{id}/content` | view | artifact | – | – |
+| `POST` | `/v1/events` | operate | body scope_id | required | – |
+| `POST` | `/v1/work` | operate | body scope_id | required | – |
+| `POST` | `/v1/work/{id}/cancel` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/retry` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/wake` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/rebind` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/hold` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/interrupt` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/release` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/attach` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/container-attach` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/container-detach` | operate | work | required | – |
+| `POST` | `/v1/work/{id}/actions/{provider}/{action}` | operate | work | required | – |
+| `POST` | `/v1/scopes/{id}/reconcile` | operate | scope | required | – |
+| `POST` | `/v1/scopes/{id}/route/trace` | view | scope | optional | – |
+| `POST` | `/v1/scopes/{id}/actions/{provider}/{action}` | operate | scope | required | – |
+| `POST` | `/v1/executions/{id}/cancel` | operate | execution | required | – |
+| `POST` | `/v1/events/{id}/skip` | operate | event | required | – |
+| `POST` | `/v1/events/{id}/reroute` | operate | event | required | – |
+| `POST` | `/v1/config/validate` | view | daemon | optional | – |
+| `POST` | `/v1/config/apply` | admin | daemon | required | – |
+| `GET` | `/v1/secrets` | admin | daemon | – | – |
+| `PUT` | `/v1/secrets/{id}` | admin | daemon | – | – |
+| `DELETE` | `/v1/secrets/{id}` | admin | daemon | – | – |
+| `POST` | `/v1/auth/rotate` | operate | any | optional | – |
+| `GET` | `/v1/auth/operators` | view | daemon | – | – |
+| `POST` | `/v1/auth/operators` | admin | daemon | optional | – |
+| `POST` | `/v1/auth/revoke` | operate | any | required | – |
+| `GET` | `/v1/auth/issuers` | view | daemon | – | – |
+| `PUT` | `/v1/auth/issuers/{id}` | admin | daemon | optional | – |
+| `DELETE` | `/v1/auth/issuers/{id}` | admin | daemon | optional | – |
+| `POST` | `/v1/toolbelt/call` | execution | execution token | optional | – |
+| `GET` | `/v1/toolbelt/guidance` | execution | execution token | – | – |
+| `GET` | `/v1/toolbelt/serving` | execution | execution token | – | – |
+| `POST` | `/v1/toolbelt/git` | execution | execution token | optional | – |
+| `DELETE` | `/v1/toolbelt/git/{id}` | execution | execution token | optional | – |
+| `GET` | `/v1/toolbelt/git/{id}/{id}` | execution | execution token | – | – |
+| `POST` | `/v1/toolbelt/git/{id}/{id}` | execution | execution token | – | – |

@@ -50,6 +50,16 @@ open-conduit auth add alice --role operate --out alice.token
 
 Give alice the file over a channel you trust; it is the only copy. Add `--ttl 720h` (or any duration) to make it expire, so access lapses unless you issue another. Everything she does is recorded as `operator:alice`, and anything her role doesn't allow is refused with `forbidden_role`. To let her answer an agent's questions and approvals too, add `operator:alice` to the `human` entry's `responders`.
 
+### A role in one team's scopes only
+
+When several teams share the daemon, give each person a role where they work rather than everywhere. A grant is a role at a scope, and it covers that scope and every scope beneath it:
+
+```sh
+open-conduit auth add bea --grants support=operate,billing=view --out bea.token
+```
+
+bea can run controls on Work in `support` and its child scopes, and read `billing` and its children. Everything else is closed to her. Lists show her only the Work, Events and runs in those scopes, whatever filter she gives, and a read or control aimed at anything else is refused with `forbidden_scope`. A grant is `view` or `operate`. `admin` is only ever daemon-wide, because config, secrets and operators belong to the whole daemon. For the same reason, `config`, `doctor` and the extensions' pages need a daemon-wide role. `--role view --grants support=operate` combines the two: she can read everything and operate only in `support`. To change someone's grants, revoke the credential and issue another.
+
 The management API is served only on a Unix socket, so alice reaches it over SSH. Her key goes in `~conduit/.ssh/authorized_keys` with a forced command that connects to the socket and does nothing else:
 
 ```
@@ -85,6 +95,12 @@ open-conduit auth issuer set corp --type oidc \
 The `oidc` package, bundled with the release, checks each token's signature against the keys the issuer publishes, and that it was issued by that issuer, for that audience, and hasn't expired. `open-conduit adapters oidc` lists its other settings: `jwks_url`, inline `keys`, which claims carry the person (`subject_claim`, default `sub`) and their groups (`groups_claim`, default `groups`), and the clock `leeway`.
 
 Someone in `engineering` then calls with their token in place of a credential file. `OPEN_CONDUIT_TOKEN_FILE` may point at a private (0600) file holding just the token. Everything they do is recorded as `operator:corp:<subject>`, and their role is the highest one their groups map to. Someone whose groups map to none gets in but may do nothing. Leaving the company, or leaving the group, takes effect when their token expires, and removing a group from the table takes effect on the next call. The daemon checks the token on its first use and then until it expires, without asking the identity provider again, and it keeps working through a short outage of the identity provider. Your own credential never depends on the issuer, so you can still get in when the identity provider is down.
+
+To give a group a role in some scopes only, add `--grants` rows to the issuer. Members of `support-oncall` then operate in `support` and its child scopes and nowhere else, as in the section above:
+
+```sh
+open-conduit auth issuer set corp --type oidc --config '…'   --groups '{"platform-admins": "admin"}'   --grants '[{"group": "support-oncall", "scope": "support", "role": "operate"}]'
+```
 
 Only an admin can trust an issuer or change its groups (`auth issuers` lists them, `auth issuer remove corp` stops trusting it), and each change is recorded in the daemon's log. The table lives in the daemon's own store, not in the config file, so applying a config can't grant anyone a role. To let someone answer an agent's questions, add `operator:corp:<subject>` to the `human` entry's `responders`.
 

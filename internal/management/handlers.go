@@ -91,6 +91,9 @@ func (s *Server) listScopes(c *call) (int, any, error) {
 	err = s.read(c.ctx, func(tx storage.Tx) error {
 		scopes, e := tx.ListScopes()
 		for _, sc := range scopes {
+			if !c.sees(sc.ID) {
+				continue
+			}
 			enabled := s.o.Config.Enabled(sc.ID)
 			if p, ok := q.filters["parent_id"]; ok && string(sc.ParentID) != p {
 				continue
@@ -210,6 +213,10 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 			page = func(after uint64) ([]domain.AcceptedEvent, error) {
 				return tx.ScopeEvents([]domain.ID{domain.ID(scope), ""}, after, 200)
 			}
+		} else if c.reach != nil {
+			// Only the scopes the operator's grants cover.
+			within := append(c.scopes(), "")
+			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.ScopeEvents(within, after, 200) }
 		}
 		for {
 			batch, e := page(after)
@@ -228,7 +235,7 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 				if e != nil {
 					return e
 				}
-				if !match(q, "scope_id", string(scope)) || !match(q, "type", a.Event.Type) || !(match(q, "work_id", string(a.Event.WorkID)) || match(q, "work_id", string(a.RoutedWorkID))) {
+				if !c.sees(scope) || !match(q, "scope_id", string(scope)) || !match(q, "type", a.Event.Type) || !(match(q, "work_id", string(a.Event.WorkID)) || match(q, "work_id", string(a.RoutedWorkID))) {
 					continue
 				}
 				if len(out) == q.limit {
@@ -429,7 +436,7 @@ func (s *Server) listExecutions(c *call) (int, any, error) {
 				}
 				scope, scopes[x.WorkID] = w.ScopeID, w.ScopeID
 			}
-			if !match(q, "scope_id", string(scope)) || !match(q, "state", string(x.State)) || !match(q, "work_id", string(x.WorkID)) {
+			if !c.sees(scope) || !match(q, "scope_id", string(scope)) || !match(q, "state", string(x.State)) || !match(q, "work_id", string(x.WorkID)) {
 				continue
 			}
 			items = append(items, keyed{createdKey(x.CreatedAt, x.ID), toExecution(x, scope)})
@@ -487,12 +494,12 @@ func (s *Server) listWaits(c *call) (int, any, error) {
 		}
 		var items []lazyKeyed
 		for _, wait := range waits {
-			if _, ok := q.filters["scope_id"]; ok {
+			if _, ok := q.filters["scope_id"]; ok || c.reach != nil {
 				w, e := tx.Work(wait.WorkID)
 				if e != nil {
 					return e
 				}
-				if !match(q, "scope_id", string(w.ScopeID)) {
+				if !c.sees(w.ScopeID) || !match(q, "scope_id", string(w.ScopeID)) {
 					continue
 				}
 			}
@@ -556,9 +563,25 @@ func (s *Server) artifacts(c *call, keep func(domain.Execution) bool) ([]wireArt
 		if e != nil {
 			return e
 		}
+		scopes := map[domain.ID]domain.ID{}
 		for _, x := range xs {
 			if len(x.AllArtifacts()) == 0 || !keep(x) {
 				continue
+			}
+			// A list holds only the runs of scopes the operator's grants
+			// cover.
+			if c.reach != nil {
+				scope, ok := scopes[x.WorkID]
+				if !ok {
+					w, e := tx.Work(x.WorkID)
+					if e != nil {
+						return e
+					}
+					scope, scopes[x.WorkID] = w.ScopeID, w.ScopeID
+				}
+				if !c.sees(scope) {
+					continue
+				}
 			}
 			refs, e := runtime.ArtifactsInTx(tx, x)
 			if e != nil {
@@ -1168,7 +1191,7 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		}
 		// The replacement keeps the caller's expiry: rotating never
 		// extends how long a credential lasts.
-		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.ExpiresAt)
+		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ExpiresAt)
 		return err
 	})
 	if err != nil {
@@ -1240,12 +1263,15 @@ func (s *Server) revoke(c *call) (int, any, error) {
 }
 
 type wireOperator struct {
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	TokenID   string `json:"token_id"`
-	CreatedAt string `json:"created_at"`
-	RevokedAt string `json:"revoked_at,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	Name string `json:"name"`
+	// Role is the daemon-wide role, "" for an operator that holds only
+	// grants.
+	Role      string  `json:"role"`
+	Grants    []Grant `json:"grants"`
+	TokenID   string  `json:"token_id"`
+	CreatedAt string  `json:"created_at"`
+	RevokedAt string  `json:"revoked_at,omitempty"`
+	ExpiresAt string  `json:"expires_at,omitempty"`
 }
 
 // listOperators is GET /auth/operators: every operator credential, active or
@@ -1262,7 +1288,7 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 			if err = json.Unmarshal(row.Value, &r); err != nil {
 				return err
 			}
-			o := wireOperator{Name: r.name(), Role: r.role(), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
+			o := wireOperator{Name: r.name(), Role: r.role(), Grants: readGrants(r.Grants), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
 			if r.Revoked {
 				o.RevokedAt = ts(r.RevokedAt)
 			}
@@ -1294,17 +1320,24 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 // one person a credential per session. Every credential of a name is the
 // same operator: its actor, its role checks against what it carries, and
 // its Idempotency-Keys, which are the operator's, not the session's.
+// grants give the operator view or operate at scopes, each covering the
+// scope's subtree; with grants, role (the daemon-wide one) may be left
+// out, and the operator then holds nothing beyond its grants.
 func (s *Server) addOperator(c *call) (int, any, error) {
 	var in struct {
-		Name string `json:"name"`
-		Role string `json:"role"`
-		TTL  string `json:"ttl"`
+		Name   string  `json:"name"`
+		Role   string  `json:"role"`
+		Grants []Grant `json:"grants"`
+		TTL    string  `json:"ttl"`
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
 	}
-	if !ValidRole(in.Role) {
-		return 0, nil, fail(400, "malformed", "role must be admin, operate or view")
+	if !ValidRole(in.Role) && (in.Role != "" || len(in.Grants) == 0) {
+		return 0, nil, fail(400, "malformed", "role must be admin, operate or view, or left out when grants are given")
+	}
+	if !validGrants(in.Grants) {
+		return 0, nil, fail(400, "malformed", "grants are up to 64 of {scope, role}, each a scope ID and view or operate, no scope twice; admin is only ever daemon-wide")
 	}
 	if !ValidOperatorName(in.Name) {
 		return 0, nil, fail(400, "malformed", "name must be 1-32 lower case letters, digits or dashes, start with a letter, and not be local")
@@ -1339,14 +1372,14 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 			}
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, expires)
+		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, expires)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	c.w.Header().Set("Cache-Control", "no-store")
-	out := map[string]any{"name": in.Name, "role": in.Role, "token_id": file.TokenID, "token": file.Token}
+	out := map[string]any{"name": in.Name, "role": in.Role, "grants": readGrants(in.Grants), "token_id": file.TokenID, "token": file.Token}
 	if !expires.IsZero() {
 		out["expires_at"] = ts(expires)
 	}

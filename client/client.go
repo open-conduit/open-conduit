@@ -1207,11 +1207,15 @@ func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenF
 // Operator is one operator credential: whose it is, and whether it is
 // still active. It never carries the token.
 type Operator struct {
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	TokenID   string `json:"token_id"`
-	CreatedAt string `json:"created_at"`
-	RevokedAt string `json:"revoked_at,omitempty"`
+	Name string `json:"name"`
+	// Role is the operator's daemon-wide role, empty when it holds only
+	// Grants.
+	Role string `json:"role"`
+	// Grants are its roles at scopes, each covering the scope's subtree.
+	Grants    []Grant `json:"grants,omitempty"`
+	TokenID   string  `json:"token_id"`
+	CreatedAt string  `json:"created_at"`
+	RevokedAt string  `json:"revoked_at,omitempty"`
 	// ExpiresAt is when an expiring credential stops authenticating;
 	// empty never expires.
 	ExpiresAt string `json:"expires_at,omitempty"`
@@ -1241,18 +1245,36 @@ type IssuedOperator struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
+// Grant is a role (view or operate) at a scope: it covers that scope and
+// every scope beneath it. Admin is only ever daemon-wide.
+type Grant struct {
+	Scope string `json:"scope"`
+	Role  string `json:"role"`
+}
+
+// OperatorRequest is a credential to issue: a name, a daemon-wide Role,
+// Grants at scopes, or both (Role may be empty when Grants are given),
+// and a TTL (a Go duration such as "8h"; empty never expires).
+type OperatorRequest struct {
+	Name   string  `json:"name"`
+	Role   string  `json:"role,omitempty"`
+	Grants []Grant `json:"grants,omitempty"`
+	TTL    string  `json:"ttl,omitempty"`
+}
+
+// IssueOperator issues the credential req describes, returned once.
+func (c *Client) IssueOperator(ctx context.Context, req OperatorRequest) (out IssuedOperator, err error) {
+	err = c.Do(ctx, "POST", "auth/operators", nil, req, "", &out)
+	return
+}
+
 // AddExpiringOperator issues a credential for the named operator with role
 // that stops authenticating ttl (a Go duration such as "8h") after the
 // daemon issues it, returned once. An empty ttl never expires. A name may
 // hold any number of expiring credentials at once, beside at most one that
 // never expires.
 func (c *Client) AddExpiringOperator(ctx context.Context, name, role, ttl string) (out IssuedOperator, err error) {
-	body := map[string]string{"name": name, "role": role}
-	if ttl != "" {
-		body["ttl"] = ttl
-	}
-	err = c.Do(ctx, "POST", "auth/operators", nil, body, "", &out)
-	return
+	return c.IssueOperator(ctx, OperatorRequest{Name: name, Role: role, TTL: ttl})
 }
 
 // Issuer is a trusted identity provider issuer: the credential verifier
@@ -1260,12 +1282,15 @@ func (c *Client) AddExpiringOperator(ctx context.Context, name, role, ttl string
 // mapping its groups to roles (admin, operate or view). Its credentials
 // are recorded as operator:<id>:<subject>.
 type Issuer struct {
-	ID        string            `json:"id"`
-	Type      string            `json:"type"`
-	Config    json.RawMessage   `json:"config"`
-	Groups    map[string]string `json:"groups"`
-	CreatedAt string            `json:"created_at,omitempty"`
-	UpdatedAt string            `json:"updated_at,omitempty"`
+	ID     string            `json:"id"`
+	Type   string            `json:"type"`
+	Config json.RawMessage   `json:"config"`
+	Groups map[string]string `json:"groups"`
+	// Grants give a group's members a role (view or operate) at a scope's
+	// subtree, beside the daemon-wide role Groups gives.
+	Grants    []GroupGrant `json:"grants,omitempty"`
+	CreatedAt string       `json:"created_at,omitempty"`
+	UpdatedAt string       `json:"updated_at,omitempty"`
 }
 
 // Issuers lists the trusted issuers.
@@ -1280,8 +1305,25 @@ func (c *Client) Issuers(ctx context.Context) ([]Issuer, error) {
 // SetIssuer trusts an issuer, or replaces its type, config and group
 // table (admin).
 func (c *Client) SetIssuer(ctx context.Context, id, typ string, config json.RawMessage, groups map[string]string) (out Issuer, err error) {
-	body := map[string]any{"type": typ, "config": config, "groups": groups}
-	err = c.Do(ctx, "PUT", "auth/issuers/"+esc(id), nil, body, "", &out)
+	return c.PutIssuer(ctx, Issuer{ID: id, Type: typ, Config: config, Groups: groups})
+}
+
+// GroupGrant is one row of an issuer's scoped group table: members of
+// Group hold Role (view or operate) at Scope's subtree.
+type GroupGrant struct {
+	Group string `json:"group"`
+	Scope string `json:"scope"`
+	Role  string `json:"role"`
+}
+
+// PutIssuer trusts the issuer in, or replaces its type, config, group
+// table and grants (admin).
+func (c *Client) PutIssuer(ctx context.Context, in Issuer) (out Issuer, err error) {
+	body := map[string]any{"type": in.Type, "config": in.Config, "groups": in.Groups}
+	if len(in.Grants) > 0 {
+		body["grants"] = in.Grants
+	}
+	err = c.Do(ctx, "PUT", "auth/issuers/"+esc(in.ID), nil, body, "", &out)
 	return
 }
 
