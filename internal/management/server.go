@@ -151,6 +151,9 @@ type Server struct {
 	o        Options
 	failing  *providerHealth
 	verified verifiedCache
+	// unauthenticated budgets the audit records of refused credentials
+	// per client (see auditRefusal).
+	unauthenticated *failureLimiter
 }
 
 func NewServer(o Options) (*Server, error) {
@@ -166,7 +169,7 @@ func NewServer(o Options) (*Server, error) {
 	if o.Git == nil {
 		o.Git = NewGitTransport(nil, o.Now)
 	}
-	return &Server{o: o, failing: newProviderHealth()}, nil
+	return &Server{o: o, failing: newProviderHealth(), unauthenticated: &failureLimiter{now: o.Now, seen: map[string]*failures{}}}, nil
 }
 
 type apiError struct {

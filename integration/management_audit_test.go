@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/management"
 )
 
 // TestManagementAuditLedger checks the audit ledger records each kind of
@@ -151,5 +154,75 @@ func TestManagementAuditLedger(t *testing.T) {
 	}
 	if _, _, err = domain.VerifyAuditChain(after, prev, rest.Records); err != nil || len(rest.Records) < len(page.Records)-2 {
 		t.Fatalf("second page: %d records, %v", len(rest.Records), err)
+	}
+}
+
+// TestManagementAuditUnauthenticatedBudget checks that someone with no
+// credential can't grow the audit ledger without bound. Each client's
+// refused credentials are recorded as 401s up to the auth-failure limit
+// per window: a network client's throttled requests (429) are never
+// recorded, nor is anything a request that authenticated no operator did
+// beyond its 401, even on an audited route. The owner's socket, which has
+// no throttle, has the same budget.
+func TestManagementAuditUnauthenticatedBudget(t *testing.T) {
+	h := newManagementHarness(t)
+	dir := t.TempDir()
+	networkCerts(t, dir)
+	at := func(name string) string { return filepath.Join(dir, name) }
+	endpoint := serveNetwork(t, h, management.NetworkConfig{CertFile: at("server.pem"), KeyFile: at("server.key")})
+	ctx := context.Background()
+	owner := h.operatorClient()
+	wrong, err := client.NewWithOptions(endpoint, "not-a-credential", client.Options{CAFile: at("ca.pem")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := client.New(h.endpoint, "not-a-credential-either")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthenticated := func() []domain.AuditRecord {
+		t.Helper()
+		page, err := owner.Audit(ctx, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []domain.AuditRecord
+		for _, r := range page.Records {
+			if r.Actor == "" {
+				if r.Outcome != "unauthenticated" {
+					t.Fatalf("a request that authenticated no one was recorded as %s: %+v", r.Outcome, r)
+				}
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	cancel := func(c *client.Client, i int) error {
+		_, err := c.CancelWork(ctx, "work/none", "", "flood", fmt.Sprint("flood-", i))
+		return err
+	}
+	for i := 0; i < 3*management.AuthFailureLimit; i++ {
+		if err = cancel(wrong, i); apiCode(err) != "unauthenticated" && apiCode(err) != "too_many_auth_failures" {
+			t.Fatalf("network flood %d = %v", i, err)
+		}
+	}
+	if got := unauthenticated(); len(got) != management.AuthFailureLimit || got[0].Action != "POST /v1/work/{id}/cancel" {
+		t.Fatalf("after a throttled flood the ledger has %d refusals, want %d: %+v", len(got), management.AuthFailureLimit, got)
+	}
+	for i := 0; i < 3*management.AuthFailureLimit; i++ {
+		if err = cancel(local, i); apiCode(err) != "unauthenticated" {
+			t.Fatalf("socket flood %d = %v", i, err)
+		}
+	}
+	if got := unauthenticated(); len(got) != 2*management.AuthFailureLimit {
+		t.Fatalf("after a flood on the socket the ledger has %d refusals, want %d", len(got), 2*management.AuthFailureLimit)
+	}
+	// The next window brings a fresh budget.
+	h.clock.Advance(management.AuthFailureWindow)
+	if err = cancel(local, 0); apiCode(err) != "unauthenticated" {
+		t.Fatal(err)
+	}
+	if got := unauthenticated(); len(got) != 2*management.AuthFailureLimit+1 {
+		t.Fatalf("after the window the ledger has %d refusals, want %d", len(got), 2*management.AuthFailureLimit+1)
 	}
 }

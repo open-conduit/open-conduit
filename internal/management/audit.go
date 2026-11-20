@@ -22,9 +22,11 @@ import (
 //   - A call whose change lives elsewhere (a secret in the keyring, a
 //     release's binaries, an attach command) records its success once it
 //     returns (auditAfter).
-//   - Any audited call that fails or is refused, and any request whose
-//     credential is refused or whose role or scope falls short, whatever
-//     the route, records its refusal's code once it is refused.
+//   - Any audited call an operator makes that fails or is refused, and any
+//     operator request whose role, scope or subject falls short, whatever
+//     the route, records its refusal's code once it is refused. A request
+//     whose credential is refused records that refusal (401), within a
+//     budget per client.
 //
 // Reads and the calls that change nothing (route trace, config validate)
 // are not recorded unless refused.
@@ -143,12 +145,21 @@ func (s *Server) auditAfter(ctx context.Context, r domain.AuditRecord) {
 	}
 }
 
-// auditRefusal records a request refused before or by its handler: a
-// credential refused (on any route, the toolbelt's too), a role, scope or
-// subject an operator lacks (on any route), or any failure of an audited
-// call. A client throttled for failing authentication again and again is
-// not recorded each time: its failures were, until the throttle began.
-// Other failures of reads are not recorded.
+// auditRefusal records a request refused before or by its handler.
+//
+//   - A credential refused (401, on any route, the toolbelt's too) is
+//     recorded as that refusal, and only within the client's budget:
+//     AuthFailureLimit records per AuthFailureWindow for each network
+//     client, execution socket and the owner's socket, with as many
+//     clients tracked as the listener's throttle tracks. Someone with no
+//     credential cannot otherwise write to a ledger that is never deleted,
+//     and a throttled request (429) is never recorded.
+//   - A request that authenticated an operator is recorded when its role,
+//     scope or subject falls short (403, any route but the toolbelt's),
+//     when its credential class is wrong, or when an audited call fails.
+//
+// Other failures, and every failure of a request that authenticated no
+// operator, are not recorded.
 func (s *Server) auditRefusal(c *call, err error) {
 	if err == nil || c.recorded {
 		return
@@ -156,12 +167,16 @@ func (s *Server) auditRefusal(c *call, err error) {
 	api := mapError(err)
 	toolbelt := c.rt != nil && c.rt.pattern[0] == "toolbelt"
 	switch {
-	case api.status == 401, api.code == "wrong_credential_class":
-	case api.status == 403 && !toolbelt:
-		// An execution's toolbelt refusals (an operation not declared, its
-		// authority released) are its own run's, which toolbelt.rejected
-		// records; an operator's are the ledger's.
-	case audited(c.rt):
+	case api.status == 401:
+		if wait, _ := s.unauthenticated.fail(auditClient(c.ctx)); wait > 0 {
+			return
+		}
+	case !c.who.operator:
+		// Nothing a request that authenticated no operator does beyond
+		// its 401 reaches the ledger: an execution's toolbelt refusals are
+		// its own run's, which toolbelt.rejected records.
+		return
+	case api.code == "wrong_credential_class", api.status == 403 && !toolbelt, audited(c.rt):
 	default:
 		return
 	}
@@ -178,6 +193,19 @@ func (s *Server) auditRefusal(c *call, err error) {
 		}
 	}
 	s.auditAfter(c.ctx, r)
+}
+
+// auditClient is who a refused credential's audit budget is counted
+// against: the network client, the execution whose socket the request came
+// in on, or the owner's socket.
+func auditClient(ctx context.Context) string {
+	if rc := remote(ctx); rc != nil {
+		return rc.client
+	}
+	if id := scopedExecution(ctx); id != "" {
+		return "execution:" + string(id)
+	}
+	return "socket"
 }
 
 // audit is GET /audit (admin): the audit ledger in sequence order,
