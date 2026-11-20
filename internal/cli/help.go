@@ -31,6 +31,8 @@ var helpGroups = []helpGroup{
   config path | config show [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
   config include add [FOLDER] --parent SCOPE | config include remove [FOLDER]   [--file F] (compose a folder's .open-conduit/config.json)
+  config include add --name NAME --parent SCOPE | config include remove --name NAME   [--file F] (declare an include whose fragment is submitted to the daemon)
+  config include show NAME | config include apply NAME FILE [--hash H] [--key K]   (read or apply a submitted include's fragment; apply needs configure covering its parent)
   config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
   config validate FILE       validate against the running daemon's registrations (needs the daemon)
   config apply FILE [--generation N] [--key K]   make FILE the running daemon's next generation (needs the daemon;
@@ -98,7 +100,7 @@ var helpGroups = []helpGroup{
 	}},
 	{"Maintain", []helpEntry{
 		{"auth", `  auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
-  auth operators | auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view or operate at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given, and that may act for KIND:ID subjects with --act-for (operator: for operators, within both's authority)
+  auth operators | auth add NAME --out FILE [--role admin|configure|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view, operate or configure at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given, and that may act for KIND:ID subjects with --act-for (operator: for operators, within both's authority)
   auth issuers | auth issuer set ID --type TYPE [--config JSON] [--groups JSON] [--grants JSON] | auth issuer remove ID   list, trust or stop trusting an identity provider issuer (admin); its credentials are recorded as operator:ID:SUBJECT, with the role --groups maps their groups to and the scoped roles --grants rows ({group, scope, role}) give them
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file`},
 		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)`},

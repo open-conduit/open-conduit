@@ -360,14 +360,65 @@ type Document struct {
 	Settings    Settings
 	Connections []Connection
 	Scopes      []ScopeConfig
-	// Includes are the folders a config file composes in (ParseFile only);
-	// Compose replaces them with their scopes.
+	// Includes are what a config file composes in. ParseFile reads folders
+	// (Path) and submitted includes (Name); Compose replaces a folder with
+	// its scopes and keeps the submitted includes, which a stored
+	// generation records so a fragment can be submitted to one later.
 	Includes []Include
 }
 
-// Include is one folder whose .open-conduit/config.json adds scopes under
-// Parent, a scope of the config file itself.
-type Include struct{ Path, Parent string }
+// Include adds scopes under Parent, a scope of the config file itself:
+// either a folder (Path) whose .open-conduit/config.json holds them, or a
+// submitted include (Name) whose fragment an operator granted configure
+// on Parent applies through the management API (ApplyFragment). One
+// include is one or the other, never both.
+type Include struct {
+	Path, Name, Parent string
+	// Allow is what a submitted include's fragments may use beyond
+	// inheriting: nothing unless the config file says.
+	Allow IncludeAllow
+}
+
+// IncludeAllow is what the config file's owner lets a submitted include's
+// fragments use. A binding a fragment defines runs its executor with the
+// config the fragment's author wrote, and an extension entry may start
+// processes, so each executor and entry type is the owner's to allow, as
+// is each inherited secret name a binding or entry selects. Empty allows
+// none: the fragment routes to the bindings its parent provides.
+type IncludeAllow struct {
+	Executors, ExtensionTypes, SecretNames []string
+}
+
+func (a IncludeAllow) empty() bool {
+	return len(a.Executors) == 0 && len(a.ExtensionTypes) == 0 && len(a.SecretNames) == 0
+}
+
+// normalized renders a submitted include; only what it allows joins it.
+func (in Include) normalized() map[string]any {
+	m := map[string]any{"name": in.Name, "parent": in.Parent}
+	for k, v := range map[string][]string{"executors": in.Allow.Executors, "extension_types": in.Allow.ExtensionTypes, "secret_names": in.Allow.SecretNames} {
+		if len(v) > 0 {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// Submitted is the document's submitted includes, in order.
+func (d *Document) Submitted() []Include {
+	var out []Include
+	for _, in := range d.Includes {
+		if in.Name != "" {
+			out = append(out, in)
+		}
+	}
+	return out
+}
+
+// SubmittedSource is the source a stored generation records for the scopes
+// of the submitted include name. A folder's source is its absolute path, so
+// the two never collide.
+func SubmittedSource(name string) string { return "submitted:" + name }
 
 // Parse decodes a stored generation or a config file without includes
 // strictly: duplicate keys, unknown fields, explicit null, bad types and
@@ -396,24 +447,45 @@ func (c *checker) document(n *node) *Document {
 	if !c.object(n, "", []string{"version", "settings", "connections", "scopes"}, "includes") {
 		return doc
 	}
-	if is := n.field("includes"); is != nil {
-		if !c.file {
-			c.fail("includes", "unknown_field", "includes belong in the config file; validate the file with its directory")
-		} else if c.typed(is, "includes", kArray, "array") {
-			for i, item := range is.items {
-				p := ptr("includes", i)
-				if !c.object(item, p, []string{"path", "parent"}) {
-					continue
-				}
-				var inc Include
-				if path, ok := c.str(item.field("path"), p+"/path", nil); ok && path == "" {
+	if is := n.field("includes"); is != nil && c.typed(is, "includes", kArray, "array") {
+		for i, item := range is.items {
+			p := ptr("includes", i)
+			// A stored generation keeps only submitted includes: a folder's
+			// scopes are already in it.
+			keys := []string{"name", "executors", "extension_types", "secret_names"}
+			if c.file {
+				keys = append(keys, "path")
+			}
+			if !c.object(item, p, []string{"parent"}, keys...) {
+				continue
+			}
+			var inc Include
+			switch pn, nn := item.field("path"), item.field("name"); {
+			case pn != nil && nn != nil:
+				c.fail(p, "invalid_value", "an include is a folder (path) or submitted (name), not both")
+			case pn != nil:
+				if path, ok := c.str(pn, p+"/path", nil); ok && path == "" {
 					c.fail(p+"/path", "invalid_value", "include path must be a folder")
 				} else {
 					inc.Path = path
 				}
-				inc.Parent, _ = c.str(item.field("parent"), p+"/parent", idPattern)
-				doc.Includes = append(doc.Includes, inc)
+			case nn != nil:
+				inc.Name, _ = c.str(nn, p+"/name", idPattern)
+			case c.file:
+				c.fail(p+"/path", "missing_field", "give the folder's path, or a name for an include whose fragment is submitted through the API")
+			default:
+				c.fail(p+"/name", "missing_field", "required field is missing")
 			}
+			inc.Parent, _ = c.str(item.field("parent"), p+"/parent", idPattern)
+			inc.Allow = IncludeAllow{
+				Executors:      c.list(item.field("executors"), p+"/executors", nil),
+				ExtensionTypes: c.list(item.field("extension_types"), p+"/extension_types", nil),
+				SecretNames:    c.list(item.field("secret_names"), p+"/secret_names", idPattern),
+			}
+			if inc.Path != "" && !inc.Allow.empty() {
+				c.fail(p, "invalid_value", "executors, extension_types and secret_names bound a submitted include's fragments; a folder's are the config file owner's own")
+			}
+			doc.Includes = append(doc.Includes, inc)
 		}
 	}
 	if v := n.field("version"); v != nil && c.typed(v, "version", kNumber, "integer") {
@@ -1018,12 +1090,22 @@ func (d *Document) normalized(redact bool) any {
 		}
 		settings["extensions"] = pkgs
 	}
-	return map[string]any{
+	out := map[string]any{
 		"version":     d.Version,
 		"settings":    settings,
 		"connections": connections,
 		"scopes":      scopes,
 	}
+	// Only submitted includes are stored, and only a document with one
+	// carries the list, so configurations without them keep their hash.
+	if submitted := d.Submitted(); len(submitted) > 0 {
+		list := []any{}
+		for _, in := range submitted {
+			list = append(list, in.normalized())
+		}
+		out["includes"] = list
+	}
+	return out
 }
 func (b BindingEntry) normalized() any {
 	if b.Disabled {

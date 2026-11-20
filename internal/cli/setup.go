@@ -644,19 +644,26 @@ func (o *operator) saveConfig(path string, out []byte) int {
 	return 0
 }
 
-// includeConfig adds or removes a folder in the config file's includes:
-// `config include add [FOLDER] --parent SCOPE` (FOLDER defaults to the
-// current directory) and `config include remove [FOLDER]`.
+// includeConfig adds or removes an include in the config file's includes:
+// a folder with `config include add [FOLDER] --parent SCOPE` (FOLDER
+// defaults to the current directory) and `config include remove [FOLDER]`,
+// or a submitted include with `--name NAME` in place of FOLDER. `config
+// include show|apply NAME` read and apply a submitted include's fragment on
+// the running daemon.
 func (o *operator) includeConfig(args []string) int {
-	const usage = "expected config include add [FOLDER] --parent SCOPE | config include remove [FOLDER]"
+	const usage = "expected config include add [FOLDER] --parent SCOPE | config include add --name NAME --parent SCOPE | config include remove [FOLDER] | config include remove --name NAME (config file) or config include show NAME | config include apply NAME FILE [--hash H] (running daemon)"
+	if len(args) > 0 && (args[0] == "show" || args[0] == "apply") {
+		return o.submittedInclude(args, usage)
+	}
 	if len(args) == 0 || (args[0] != "add" && args[0] != "remove") {
 		return usageError(o.errOut, usage)
 	}
-	f := newFlags("include", "file", "parent")
+	f := newFlags("include", "file", "parent", "name")
 	pos, err := f.parse(args[1:])
-	if err != nil || len(pos) > 1 || (args[0] == "add") != (f.get("parent") != "") {
+	if err != nil || len(pos) > 1 || (args[0] == "add") != (f.get("parent") != "") || (f.get("name") != "" && len(pos) > 0) {
 		return usageError(o.errOut, usage)
 	}
+	name := f.get("name")
 	folder := o.env.Cwd
 	if len(pos) == 1 {
 		folder = pos[0]
@@ -682,8 +689,14 @@ func (o *operator) includeConfig(args []string) int {
 	}
 	at := -1
 	for i, el := range includes.arr {
-		var p string
-		if pn := el.field("path"); el.kind == 'o' && pn != nil && json.Unmarshal(pn.scalar, &p) == nil {
+		if el.kind != 'o' {
+			continue
+		}
+		var p, n string
+		if nn := el.field("name"); name != "" && nn != nil && json.Unmarshal(nn.scalar, &n) == nil && n == name {
+			at = i
+		}
+		if pn := el.field("path"); name == "" && pn != nil && json.Unmarshal(pn.scalar, &p) == nil {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(filepath.Dir(path), p)
 			}
@@ -692,15 +705,22 @@ func (o *operator) includeConfig(args []string) int {
 			}
 		}
 	}
+	what := folder
+	if name != "" {
+		what = "include " + name
+	}
 	switch {
 	case args[0] == "add" && at >= 0:
-		return o.emit(nil, fmt.Errorf("%s is already included", folder))
+		return o.emit(nil, fmt.Errorf("%s is already included", what))
 	case args[0] == "add":
 		entry, _ := json.Marshal(map[string]string{"path": folder, "parent": f.get("parent")})
+		if name != "" {
+			entry, _ = json.Marshal(map[string]string{"name": name, "parent": f.get("parent")})
+		}
 		n, _ := parseNode(entry)
 		includes.arr = append(includes.arr, n)
 	case at < 0:
-		return o.emit(nil, fmt.Errorf("%s is not included", folder))
+		return o.emit(nil, fmt.Errorf("%s is not included", what))
 	default:
 		includes.arr = append(includes.arr[:at], includes.arr[at+1:]...)
 	}
@@ -708,6 +728,40 @@ func (o *operator) includeConfig(args []string) int {
 		return o.emit(nil, err)
 	}
 	return o.saveConfig(path, root.bytes())
+}
+
+// submittedInclude reads (`config include show NAME`) or applies (`config
+// include apply NAME FILE`) a submitted include's fragment on the running
+// daemon. apply goes over the fragment current when it runs unless --hash
+// asks to apply only over that one.
+func (o *operator) submittedInclude(args []string, usage string) int {
+	f := newFlags("include", "hash", "key")
+	pos, err := f.parse(args[1:])
+	if err != nil || (args[0] == "show" && (len(pos) != 1 || f.get("hash") != "")) || (args[0] == "apply" && len(pos) != 2) {
+		return usageError(o.errOut, usage)
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	if args[0] == "show" {
+		return o.emit(c.Include(cx, pos[0]))
+	}
+	data, err := os.ReadFile(o.abs(pos[1]))
+	if err != nil {
+		return o.emit(nil, fmt.Errorf("fragment file unreadable"))
+	}
+	hash := f.get("hash")
+	if hash == "" {
+		current, err := c.Include(cx, pos[0])
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		hash = current.Hash
+	}
+	return o.emit(c.ApplyFragmentText(cx, pos[0], data, hash, f.key()))
 }
 
 // storeSecret stores a value in the platform keyring (preferred) or the

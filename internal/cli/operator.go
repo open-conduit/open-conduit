@@ -803,11 +803,11 @@ func (o *operator) auth(args []string) int {
 		f := newFlags("add", "out", "role", "grants", "ttl", "act-for")
 		pos, err := f.parse(args[1:])
 		if err != nil || len(pos) != 1 || f.get("out") == "" {
-			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]")
+			return usageError(o.errOut, "expected auth add NAME --out FILE [--role admin|configure|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]")
 		}
 		grants, ok := parseGrants(f.get("grants"))
 		if !ok {
-			return usageError(o.errOut, "--grants takes SCOPE=ROLE pairs separated by commas, each role view or operate, for example team-a=operate,team-b=view")
+			return usageError(o.errOut, "--grants takes SCOPE=ROLE pairs separated by commas, each role view, operate or configure, for example team-a=operate,team-b=view")
 		}
 		role := f.get("role")
 		if role == "" && len(grants) == 0 {

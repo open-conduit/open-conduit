@@ -227,7 +227,7 @@ func TestDeletedFolderKeepsItsScopesDisabled(t *testing.T) {
 }
 
 // TestStoredAndFileFormsStayApart: the config file cannot claim a scope's
-// source, and a stored generation never carries includes.
+// source, and a stored generation never carries a folder include.
 func TestStoredAndFileFormsStayApart(t *testing.T) {
 	file := []byte(`{"version":1,"settings":{},"connections":[],"scopes":[{"id":"home","name":"home","source":"/x"}]}`)
 	if _, err := ValidateFile(file, registry(), Includes{}); !slices.Contains(codes(diagnostics(t, err)), "unknown_field") {

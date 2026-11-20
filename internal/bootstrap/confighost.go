@@ -66,7 +66,7 @@ func (h configHost) Base(context.Context) (protocol.ConfigBaseResult, error) {
 	if err != nil {
 		return protocol.ConfigBaseResult{}, errors.New("the config file could not be read")
 	}
-	b := protocol.ConfigBaseResult{Generation: strconv.FormatUint(generation, 10), Hash: s.Hash, Handle: h.handles.put(text), Text: string(redactText(text))}
+	b := protocol.ConfigBaseResult{Generation: strconv.FormatUint(generation, 10), Hash: s.FileHash, Handle: h.handles.put(text), Text: string(redactText(text))}
 	for id, scope := range s.Scopes {
 		if scope.Source != "" {
 			b.Folders = append(b.Folders, string(id))
@@ -97,7 +97,7 @@ func (h configHost) Validate(_ context.Context, handle string) (string, []protoc
 	case err != nil:
 		return "", []protocol.ConfigDiagnostic{{Path: "", Code: "invalid", Message: "the configuration is not valid JSON"}}, nil
 	}
-	return s.Hash, nil, nil
+	return s.FileHash, nil, nil
 }
 
 func (h configHost) Edit(_ context.Context, handle, op, pointer string, value json.RawMessage) (protocol.ConfigEditResult, error) {

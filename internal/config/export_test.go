@@ -25,7 +25,7 @@ func TestExportFileRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("export is not a config file: %v\n%s", err, text)
 	}
-	if len(doc.Includes) != 1 || doc.Includes[0] != (Include{Path: folder, Parent: "home"}) || len(doc.Scopes) != 1 || doc.Scopes[0].ID != "home" {
+	if len(doc.Includes) != 1 || doc.Includes[0].Path != folder || doc.Includes[0].Parent != "home" || len(doc.Scopes) != 1 || doc.Scopes[0].ID != "home" {
 		t.Fatalf("folder scopes not turned back into their include: %+v %+v", doc.Includes, doc.Scopes)
 	}
 	if doc.Scopes[0].SecretRefs["key"] != "env:KEY" {

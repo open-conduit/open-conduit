@@ -12,9 +12,10 @@ import (
 
 // Grant is a role at a scope: it lets an operator do what the role allows
 // to that scope and to every scope beneath it, and nothing elsewhere. A
-// scoped grant is view or operate; admin is only ever daemon-wide (an
-// operator's role), since what it governs (config, secrets, operators)
-// is the daemon's, not a scope's.
+// scoped grant is view, operate or configure (applying the fragment of a
+// submitted include whose parent it covers); admin is only ever
+// daemon-wide (an operator's role), since what it governs (the whole
+// config, secrets, operators) is the daemon's, not a scope's.
 type Grant struct {
 	Scope domain.ID `json:"scope"`
 	Role  string    `json:"role"`
@@ -24,14 +25,14 @@ type Grant struct {
 const maxGrants = 64
 
 // validGrants checks grants as a credential or issuer takes them: each a
-// scope ID and view or operate, none repeated.
+// scope ID and view, operate or configure, none repeated.
 func validGrants(grants []Grant) bool {
 	if len(grants) > maxGrants {
 		return false
 	}
 	seen := map[domain.ID]bool{}
 	for _, g := range grants {
-		if !validScopeID(g.Scope) || (g.Role != RoleView && g.Role != RoleOperate) || seen[g.Scope] {
+		if !validScopeID(g.Scope) || (g.Role != RoleView && g.Role != RoleOperate && g.Role != RoleConfigure) || seen[g.Scope] {
 			return false
 		}
 		seen[g.Scope] = true
@@ -185,6 +186,10 @@ const (
 	// targetBodyScope is a request naming its scope in the body's
 	// scope_id (sending an Event, creating Work).
 	targetBodyScope
+	// targetInclude names a submitted include by the path's first ID: its
+	// parent, the scope the config file attaches it under, must be
+	// covered.
+	targetInclude
 	// targetToolbelt is an execution's own: no operator reaches it.
 	targetToolbelt
 )
@@ -192,7 +197,7 @@ const (
 var targetNames = map[target]string{
 	targetDaemon: "daemon", targetAny: "any", targetList: "list", targetScope: "scope", targetWork: "work",
 	targetExecution: "execution", targetEvent: "event", targetWait: "wait", targetArtifact: "artifact",
-	targetBodyScope: "body scope_id", targetToolbelt: "execution token",
+	targetBodyScope: "body scope_id", targetInclude: "include", targetToolbelt: "execution token",
 }
 
 // authorizeScoped is the check for an operator who doesn't hold the
@@ -217,7 +222,12 @@ func (s *Server) authorizeScoped(c *call, rt *route, need string) error {
 		if rt.target == targetList {
 			return nil
 		}
-		scope, err := targetScopeIn(tx, rt.target, c)
+		var scope domain.ID
+		if rt.target == targetInclude {
+			scope, err = s.includeParent(c.params[0])
+		} else {
+			scope, err = targetScopeIn(tx, rt.target, c)
+		}
 		if err != nil {
 			return err
 		}
@@ -226,6 +236,20 @@ func (s *Server) authorizeScoped(c *call, rt *route, need string) error {
 		}
 		return nil
 	})
+}
+
+// includeParent is the scope the committed generation attaches the
+// submitted include name under.
+func (s *Server) includeParent(name string) (domain.ID, error) {
+	current, _ := s.o.Config.Current()
+	if current == nil {
+		return "", storage.ErrNotFound
+	}
+	in, ok := current.Include(name)
+	if !ok {
+		return "", storage.ErrNotFound
+	}
+	return domain.ID(in.Parent), nil
 }
 
 // targetScopeIn resolves the scope of what c's route names.

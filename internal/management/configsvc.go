@@ -26,7 +26,17 @@ var (
 	ErrGenerationConflict = errors.New("config generation conflict")
 	ErrHashMismatch       = errors.New("candidate hash does not match")
 	ErrScopeInUse         = errors.New("scope in use")
+	// ErrFragmentConflict is a fragment apply naming a fragment hash that
+	// is no longer the include's: someone else applied to it first.
+	ErrFragmentConflict = errors.New("fragment hash conflict")
+	// ErrIncludeMoved is a fragment apply whose include the config file
+	// has since moved under a parent the caller isn't granted.
+	ErrIncludeMoved = errors.New("include moved")
 )
+
+// fragmentRetries bounds how often a fragment apply composes again because
+// another apply committed while it validated.
+const fragmentRetries = 5
 
 type activation struct {
 	Generation  uint64
@@ -45,7 +55,11 @@ type ConfigService struct {
 	path       string
 	current    *config.Snapshot
 	generation uint64
-	history    map[uint64]*config.Snapshot
+	// fileGeneration is the last generation a config file published (at
+	// start, the restored one). A config file apply based on it or later
+	// was staled by fragment applies alone.
+	fileGeneration uint64
+	history        map[uint64]*config.Snapshot
 	// defaultHash is the default configuration's hash, when OpenConfig was
 	// given one that validates.
 	defaultHash string
@@ -98,13 +112,14 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		if err = c.publish(ctx, snapshot, 0); err != nil {
 			return nil, err
 		}
+		c.fileGeneration = c.generation
 		return c, nil
 	}
 	snapshot, err := config.Validate(normalized, registry)
 	if err != nil {
 		return c.adopt(ctx, active.Generation, normalized, err)
 	}
-	c.current, c.generation = snapshot, active.Generation
+	c.current, c.generation, c.fileGeneration = snapshot, active.Generation, active.Generation
 	c.history[active.Generation] = snapshot
 	return c, nil
 }
@@ -153,6 +168,7 @@ func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []b
 	if err = c.publish(ctx, snapshot, stored); err != nil {
 		return fail(err)
 	}
+	c.fileGeneration = c.generation
 	c.Adopted = &Adoption{Stored: stored, Cause: cause}
 	return c, nil
 }
@@ -224,29 +240,118 @@ func (c *ConfigService) includes(previous []byte) config.Includes {
 
 // Apply fully revalidates, checks hash and generation, saves the file
 // atomically (keeping last-good), then publishes the generation durably.
+//
+// hash is the candidate's FileHash and expected the generation it was
+// based on. Fragment applies to submitted includes don't stale either: a
+// generation published since expected by fragment applies alone still
+// counts as expected (only a config file apply since then conflicts), and
+// the candidate is composed again over the latest fragments before it is
+// published, so it never undoes a team's apply.
 func (c *ConfigService) Apply(ctx context.Context, data []byte, hash string, expected uint64) (uint64, string, error) {
-	snapshot, err := c.Validate(data)
-	if err != nil {
-		return 0, "", err
+	for range fragmentRetries {
+		_, generation := c.Current()
+		snapshot, err := c.Validate(data)
+		if err != nil {
+			return 0, "", err
+		}
+		if snapshot.FileHash != hash {
+			return 0, "", ErrHashMismatch
+		}
+		c.mu.Lock()
+		if expected < c.fileGeneration || expected > c.generation {
+			c.mu.Unlock()
+			return 0, "", ErrGenerationConflict
+		}
+		if c.generation != generation {
+			// A fragment apply committed while this one validated: compose
+			// again over it.
+			c.mu.Unlock()
+			continue
+		}
+		err = config.SaveAtomic(c.path, data)
+		if err == nil {
+			err = c.publishLocked(ctx, snapshot, c.generation)
+		}
+		if err == nil {
+			c.fileGeneration = c.generation
+			if c.OnApply != nil {
+				c.OnApply(ctx, snapshot, c.generation)
+			}
+		}
+		next := c.generation
+		c.mu.Unlock()
+		if err != nil {
+			return 0, "", err
+		}
+		return next, snapshot.Hash, nil
 	}
-	if snapshot.Hash != hash {
-		return 0, "", ErrHashMismatch
+	return 0, "", ErrGenerationConflict
+}
+
+// Fragment reads the submitted include name from the committed generation.
+func (c *ConfigService) Fragment(name string) (config.Fragment, uint64, error) {
+	current, generation := c.Current()
+	if current == nil {
+		return config.Fragment{}, 0, config.ErrUnknownInclude
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if expected != c.generation {
-		return 0, "", ErrGenerationConflict
+	f, err := config.FragmentOf(current.Normalized, name)
+	return f, generation, err
+}
+
+// ApplyFragment replaces the submitted include name's scopes with fragment
+// and publishes the result as the next generation. It is checked against
+// the include's own hash, not the generation, so applies to two includes
+// never conflict: it composes against the committed generation (config.
+// ApplyFragment), and if another apply commits meanwhile, composes again
+// against that one. allowed is asked about the include's parent each time,
+// since a config file apply may have moved it; the config file on disk is
+// neither read nor written.
+func (c *ConfigService) ApplyFragment(ctx context.Context, name string, fragment []byte, expectedHash string, allowed func(parent string) bool) (uint64, string, error) {
+	for range fragmentRetries {
+		current, generation := c.Current()
+		if current == nil {
+			return 0, "", config.ErrUnknownInclude
+		}
+		before, err := config.FragmentOf(current.Normalized, name)
+		if err != nil {
+			return 0, "", err
+		}
+		if !allowed(before.Parent) {
+			return 0, "", ErrIncludeMoved
+		}
+		if before.Hash != expectedHash {
+			return 0, "", ErrFragmentConflict
+		}
+		snapshot, err := config.ApplyFragment(current.Normalized, name, fragment, c.registry)
+		if err != nil {
+			return 0, "", err
+		}
+		after, err := config.FragmentOf(snapshot.Normalized, name)
+		if err != nil {
+			return 0, "", err
+		}
+		c.mu.Lock()
+		if c.generation != generation {
+			c.mu.Unlock()
+			continue
+		}
+		if snapshot.Hash == current.Hash {
+			// Nothing changed: no new generation.
+			c.mu.Unlock()
+			return generation, after.Hash, nil
+		}
+		err = c.publishLocked(ctx, snapshot, generation)
+		if err == nil && c.OnApply != nil {
+			c.OnApply(ctx, snapshot, c.generation)
+		}
+		next := c.generation
+		c.mu.Unlock()
+		if err != nil {
+			return 0, "", err
+		}
+		return next, after.Hash, nil
 	}
-	if err = config.SaveAtomic(c.path, data); err != nil {
-		return 0, "", err
-	}
-	if err = c.publishLocked(ctx, snapshot, expected); err != nil {
-		return 0, "", err
-	}
-	if c.OnApply != nil {
-		c.OnApply(ctx, snapshot, c.generation)
-	}
-	return c.generation, snapshot.Hash, nil
+	return 0, "", ErrGenerationConflict
 }
 
 func (c *ConfigService) publish(ctx context.Context, s *config.Snapshot, expected uint64) error {

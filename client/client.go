@@ -1263,6 +1263,38 @@ func (c *Client) ApplyConfigText(ctx context.Context, text []byte, hash, generat
 	return
 }
 
+// Include is a submitted include's fragment: the scope the config file
+// attaches it under, its text as ApplyFragmentText takes it back, and its
+// hash, which an apply names as the fragment it replaces.
+type Include struct {
+	Name         string `json:"name"`
+	Parent       string `json:"parent"`
+	Generation   string `json:"generation"`
+	Hash         string `json:"hash"`
+	FragmentText string `json:"fragment_text"`
+}
+
+// FragmentApplied is the generation a fragment apply published and the
+// include's new fragment hash.
+type FragmentApplied struct {
+	Generation string `json:"generation"`
+	Hash       string `json:"hash"`
+}
+
+// Include reads the submitted include name. It needs view covering the
+// include's parent.
+func (c *Client) Include(ctx context.Context, name string) (Include, error) {
+	return get[Include](c, ctx, "config/includes/"+esc(name))
+}
+
+// ApplyFragmentText applies fragment text to the submitted include name,
+// over expected, the hash of the fragment it replaces. It needs configure
+// covering the include's parent.
+func (c *Client) ApplyFragmentText(ctx context.Context, name string, text []byte, expected, key string) (out FragmentApplied, err error) {
+	err = c.Do(ctx, "POST", "config/includes/"+esc(name)+"/apply", nil, map[string]any{"fragment_text": string(text), "expected_hash": expected}, key, &out)
+	return
+}
+
 // ConfigCandidate is what a Work proposes for the operator (a setup
 // session's change set): its changes for review and, once one is approved,
 // the config text to apply with its base generation and hash.
