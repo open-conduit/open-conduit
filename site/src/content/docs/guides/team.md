@@ -60,7 +60,33 @@ open-conduit auth add bea --grants support=operate,billing=view --out bea.token
 
 bea can run controls on Work in `support` and its child scopes, and read `billing` and its children. Everything else is closed to her. Lists show her only the Work, Events and runs in those scopes, whatever filter she gives, and a read or control aimed at anything else is refused with `forbidden_scope`. A grant is `view` or `operate`. `admin` is only ever daemon-wide, because config, secrets and operators belong to the whole daemon. For the same reason, `config`, `doctor` and the extensions' pages need a daemon-wide role. `--role view --grants support=operate` combines the two: she can read everything and operate only in `support`. To change someone's grants, revoke the credential and issue another.
 
-The management API is served only on a Unix socket, so alice reaches it over SSH. Her key goes in `~conduit/.ssh/authorized_keys` with a forced command that connects to the socket and does nothing else:
+### Reach the daemon over TLS
+
+To give alice, or a service of yours, an HTTPS endpoint (behind your load balancer, say), turn on the management listener with a certificate and key:
+
+```sh
+open-conduit serve --management-addr 0.0.0.0:8443 \
+  --management-tls-cert /etc/open-conduit/tls.crt --management-tls-key /etc/open-conduit/tls.key \
+  --management-client-ca /etc/open-conduit/clients-ca.pem
+```
+
+`--management-client-ca` is optional: with it, every connection must also present a client certificate that CA signed, which is worth having on any address outside a private network. A renewed certificate is picked up without a restart. If a proxy on the same machine terminates TLS, serve plaintext to it on loopback instead: `--management-addr 127.0.0.1:8443 --management-trusted-proxy`. Anything else that would serve plaintext, or a listener missing part of its setup, stops `serve` from starting. Give the paths as absolute paths when you install the service.
+
+alice then points the CLI at it, with her credential, the CA her copy should trust, and her client certificate if you asked for one:
+
+```sh
+export OPEN_CONDUIT_ENDPOINT=https://conduit.example.com:8443
+export OPEN_CONDUIT_TOKEN_FILE="$HOME/alice.token"    # mode 0600
+export OPEN_CONDUIT_CA_FILE="$HOME/conduit-ca.pem"   # trust only this CA; leave unset for a public certificate
+export OPEN_CONDUIT_CLIENT_CERT="$HOME/alice.crt" OPEN_CONDUIT_CLIENT_KEY="$HOME/alice.key"
+open-conduit work list
+```
+
+Every call still needs her credential, and her role and grants decide what it may do, exactly as on the socket. A client that fails to authenticate 10 times in a minute is refused for the rest of that minute. `work attach` and `container attach` run on the daemon's machine, so over the network they say what to run there instead.
+
+### Or relay the socket over SSH
+
+Without the listener, the management API is served only on a Unix socket, so alice reaches it over SSH. Her key goes in `~conduit/.ssh/authorized_keys` with a forced command that connects to the socket and does nothing else:
 
 ```
 restrict,command="socat - UNIX-CONNECT:/home/conduit/.local/state/open-conduit/management.sock" ssh-ed25519 AAAA… alice

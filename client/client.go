@@ -6,6 +6,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -304,9 +306,16 @@ func transportError(ctx context.Context, err error) error {
 type Client struct {
 	http  *http.Client
 	token string
+	// base is the API's root URL, ending "/v1/": http://localhost/v1/
+	// over a Unix socket, or the https endpoint's.
+	base string
 }
 
-// ParseEndpoint accepts only unix:///absolute/path.
+// errEndpoint is what an endpoint that does not parse is told.
+var errEndpoint = errors.New("endpoint must be unix:///absolute/path or https://host[:port][/path]")
+
+// ParseEndpoint accepts only unix:///absolute/path, returning the socket's
+// path. An https:// endpoint is refused here: see ParseNetworkEndpoint.
 func ParseEndpoint(endpoint string) (string, error) {
 	path, ok := strings.CutPrefix(endpoint, "unix://")
 	if !ok || !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -315,24 +324,104 @@ func ParseEndpoint(endpoint string) (string, error) {
 	return path, nil
 }
 
+// ParseNetworkEndpoint accepts https://host[:port][/path], the daemon's
+// management listener (or a load balancer in front of it), returning it
+// as a URL without a trailing slash. Plain http is refused: a bearer is
+// never sent in the clear.
+func ParseNetworkEndpoint(endpoint string) (*url.URL, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return nil, errEndpoint
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath = ""
+	return u, nil
+}
+
+// Options are how a client reaches an https endpoint. They are refused
+// for a Unix socket, which needs none.
+type Options struct {
+	// CAFile is a PEM bundle of the certificate authorities the endpoint's
+	// certificate must chain to. Set, it replaces the system's roots, so the
+	// client trusts only that CA (pinning); unset, the system's roots apply.
+	CAFile string
+	// ClientCertFile and ClientKeyFile are a PEM client certificate and
+	// key, presented to a listener that requires mutual TLS.
+	ClientCertFile, ClientKeyFile string
+}
+
 // New builds a client for one endpoint and bearer token.
 func New(endpoint, token string) (*Client, error) {
-	socket, err := ParseEndpoint(endpoint)
-	if err != nil {
-		return nil, err
-	}
+	return NewWithOptions(endpoint, token, Options{})
+}
+
+// NewWithOptions builds a client for one endpoint (unix:///absolute/path
+// or https://host[:port][/path]) and bearer token, reaching an https
+// endpoint as o says.
+func NewWithOptions(endpoint, token string, o Options) (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("missing bearer token")
 	}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socket)
-		},
-		MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second,
+	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if !strings.HasPrefix(endpoint, "https://") {
+		socket, err := ParseEndpoint(endpoint)
+		if err != nil {
+			return nil, errEndpoint
+		}
+		if o != (Options{}) {
+			return nil, errors.New("CA and client certificate options apply only to an https:// endpoint")
+		}
+		transport := &http.Transport{
+			Proxy: nil,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", socket)
+			},
+			MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second,
+		}
+		return &Client{http: &http.Client{Transport: transport, CheckRedirect: redirect}, token: token, base: "http://localhost/v1/"}, nil
 	}
-	return &Client{http: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, token: token}, nil
+	u, err := ParseNetworkEndpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := o.tlsConfig()
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{
+		Proxy:           nil,
+		TLSClientConfig: cfg, ForceAttemptHTTP2: true,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        4, IdleConnTimeout: 30 * time.Second,
+	}
+	return &Client{http: &http.Client{Transport: transport, CheckRedirect: redirect}, token: token, base: u.String() + "/v1/"}, nil
+}
+
+func (o Options) tlsConfig() (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if o.CAFile != "" {
+		b, err := os.ReadFile(o.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("CA file unreadable: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(b) {
+			return nil, errors.New("CA file holds no PEM certificate")
+		}
+		cfg.RootCAs = pool
+	}
+	if (o.ClientCertFile == "") != (o.ClientKeyFile == "") {
+		return nil, errors.New("give both a client certificate and its key")
+	}
+	if o.ClientCertFile != "" {
+		pair, err := tls.LoadX509KeyPair(o.ClientCertFile, o.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("client certificate and key unusable: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	return cfg, nil
 }
 
 // DiscoverEndpoint applies --endpoint → OPEN_CONDUIT_ENDPOINT → socket
@@ -395,7 +484,7 @@ func (c *Client) Do(ctx context.Context, method, path string, query url.Values, 
 	return c.do(ctx, method, path, query, body, idempotencyKey, nil, out)
 }
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, key string, header http.Header, out any) error {
-	u := "http://localhost/v1/" + strings.TrimPrefix(path, "/")
+	u := c.base + strings.TrimPrefix(path, "/")
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -666,7 +755,7 @@ func (c *Client) Artifacts(ctx context.Context, q url.Values) (Page[Artifact], e
 
 // ArtifactContent streams one artifact, optionally with a Range header value.
 func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost/v1/artifacts/"+esc(id)+"/content", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.base+"artifacts/"+esc(id)+"/content", nil)
 	if err != nil {
 		return err
 	}
@@ -1496,7 +1585,7 @@ func (c *Client) GitExchange(ctx context.Context, session, service, protocol str
 }
 
 func (c *Client) gitStream(ctx context.Context, method, session, service, protocol string, body io.Reader) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost/v1/toolbelt/git/"+esc(session)+"/"+esc(service), body)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+"toolbelt/git/"+esc(session)+"/"+esc(service), body)
 	if err != nil {
 		return nil, err
 	}

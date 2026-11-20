@@ -40,6 +40,12 @@ type ServeRequest struct {
 	// WebSignIn.
 	Web                         bool
 	WebAddr, WebHost, WebSignIn string
+	// ManagementAddr opens the management listener on a TCP address, with
+	// its TLS certificate and key, an optional client CA for mutual TLS,
+	// or, on a loopback address only, ManagementTrustedProxy for a local
+	// proxy that terminates TLS. Off unless ManagementAddr is set.
+	ManagementAddr, ManagementTLSCert, ManagementTLSKey, ManagementClientCA string
+	ManagementTrustedProxy                                                  bool
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.
@@ -79,7 +85,8 @@ func (o *operator) serve(args []string) int {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca")
+	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
 	// --claude-usage is retired: a claude-code binding sets usage.
@@ -133,6 +140,8 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	// --web-addr or --web-host alone also turn the view on.
 	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
 	r.Web = *web || r.WebAddr != "" || r.WebHost != ""
+	r.ManagementAddr, r.ManagementTrustedProxy = fs.get("management-addr"), *trustedProxy
+	r.ManagementTLSCert, r.ManagementTLSKey, r.ManagementClientCA = o.abs(fs.get("management-tls-cert")), o.abs(fs.get("management-tls-key")), o.abs(fs.get("management-client-ca"))
 	r.WebSignIn = WebSignInPath(r.StateDir)
 	r.NoTelemetry = *noTelemetry || optedOut(o.env.Getenv("OPEN_CONDUIT_NO_TELEMETRY")) || optedOut(o.env.Getenv("DO_NOT_TRACK"))
 	if r.ConfigPath == "" {

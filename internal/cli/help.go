@@ -50,7 +50,11 @@ var helpGroups = []helpGroup{
         (--webhook-addr takes any free local port; 8787 is only an example)
         (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
         [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
-                             also serve the web view from the daemon (open-conduit web url prints its sign-in URL)`},
+                             also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
+        [--management-addr HOST:PORT --management-tls-cert FILE --management-tls-key FILE [--management-client-ca FILE]]
+        [--management-addr 127.0.0.1:PORT --management-trusted-proxy]
+                             also serve the management API over the network: TLS (mutual TLS with a client CA),
+                             or plaintext on loopback to a local proxy that terminates TLS; off by default`},
 		{"service", `  service install [--no-start] [serve flags] | service uninstall|start|stop|status
                              run the daemon in the background (launchd on macOS, systemd --user on Linux)`},
 	}},
@@ -117,7 +121,8 @@ Run open-conduit COMMAND --help for one command.
 var operatorHelp = func() string {
 	var b strings.Builder
 	b.WriteString("open-conduit — Open Conduit operator client\n\n")
-	b.WriteString("Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH] [--data-dir DIR] COMMAND\n")
+	b.WriteString("Usage: open-conduit [--endpoint unix:///path | https://host:port] [--token-file PATH] [--socket PATH] [--data-dir DIR]\n")
+	b.WriteString("                    [--ca-file PEM] [--client-cert PEM --client-key PEM] COMMAND\n")
 	for _, g := range helpGroups {
 		fmt.Fprintf(&b, "\n%s:\n", g.title)
 		for _, e := range g.entries {

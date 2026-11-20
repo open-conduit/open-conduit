@@ -169,7 +169,7 @@ Rebind, hold/release, attach and scope reconcile are described in [operator setu
 
 Control checkpoints keep the Work in the envelope but use an empty routed association, so earlier runnable input cannot delay fencing. `artifacts/{id}/content` streams through `storage.Artifacts` and supports one byte range.
 
-The client dials only the configured socket, with the fixed host `localhost`, no proxy and no redirects. `open-conduit` resolves the endpoint (`--endpoint`, then `OPEN_CONDUIT_ENDPOINT`, then socket discovery) and the token file (`--token-file`, then `OPEN_CONDUIT_TOKEN_FILE`, then `state/private/operator.token`). It supports, among other commands:
+The client dials only the configured endpoint: the socket, with the fixed host `localhost`, or an `https://` endpoint (`client.NewWithOptions`, with `Options.CAFile` to trust only that CA and `ClientCertFile`/`ClientKeyFile` for mutual TLS); never a proxy, a redirect or `http://`. The CLI takes those as `--ca-file`, `--client-cert` and `--client-key`, or `OPEN_CONDUIT_CA_FILE`, `OPEN_CONDUIT_CLIENT_CERT` and `OPEN_CONDUIT_CLIENT_KEY` for an https endpoint. `open-conduit` resolves the endpoint (`--endpoint`, then `OPEN_CONDUIT_ENDPOINT`, then socket discovery) and the token file (`--token-file`, then `OPEN_CONDUIT_TOKEN_FILE`, then `state/private/operator.token`). It supports, among other commands:
 
 - health
 - scopes, work, events (including causal `events chain`), executions, waits and artifacts (`artifacts cat` for logs)
@@ -177,6 +177,23 @@ The client dials only the configured socket, with the fixed host `localhost`, no
 - config validate/apply
 - auth rotate/revoke, and auth operators/add for named operators
 - unified run history (`runs list|get|table|log`), `doctor` and `tui` ([observability and history](../observability-history/))
+
+### Management listener
+
+The daemon can also serve the management API on a TCP address, for clients on other machines: `serve --management-addr HOST:PORT` (`bootstrap.Options.Management`, a `management.NetworkConfig`). It is off unless the address is given, so the socket stays the only way in on a laptop install. `NetworkConfig.Check` runs before the daemon takes its lock and refuses, as a startup error, anything that would serve plaintext to the network or is half-configured: an address without a certificate and key, a certificate without its key, settings without an address, a client CA without TLS, and `--management-trusted-proxy` with TLS or on anything but a loopback IP literal. `ListenNetwork` then loads the certificate, key and client CA, so a bad file stops the start too:
+
+- **TLS.** `--management-tls-cert` and `--management-tls-key`, TLS 1.2 or later. The pair is read again on a handshake after either file changes, so a renewed certificate needs no restart, and a half-written renewal keeps the last good pair.
+- **Mutual TLS.** `--management-client-ca` makes every connection present a client certificate that bundle verifies (`RequireAndVerifyClientCert`). It is a second factor: the request still needs an operator credential, and the certificate names no principal.
+- **Trusted proxy.** `--management-trusted-proxy` on `127.0.0.1` or `::1` serves plaintext to a proxy on the same machine that terminates TLS. The last address in its `X-Forwarded-For` names the client.
+
+`management.Network` wraps the same handler the socket serves (the current generation's server, so a config apply changes both at once) and marks each request with its client. `serve` then differs from the socket in four ways only, and every other check is the socket's: credential class, role and grants, the body cap, idempotency and the actor stamp.
+
+- The toolbelt is not served (`404 not_found`), before the bearer is read, and an execution token is `403 wrong_credential_class` on every other route, as on the socket. Executions keep their own sockets.
+- `work attach` and `container attach` return a command to run on the daemon's machine (and a container attach a command for its Docker), so they are refused with `409 local_only`, after the role check, and the message names the command to run there. Container detach, which only removes an attach container, is served. `upgrade` and the web view's update page are not management calls: they replace the binaries of the machine they run on, so a remote client can't reach them.
+- A client that fails authentication (`401`) `AuthFailureLimit` (10) times in `AuthFailureWindow` (a minute) is refused with `429 too_many_auth_failures` and `Retry-After` until the window ends, before its bearer is read, so a good credential from that client waits too. The daemon logs the first refusal in each window. Up to 4096 clients are tracked; past that the oldest window is dropped. The limits outlive config reloads. The socket is never limited.
+- `NetworkServer` reads headers within 10 seconds (up to 64 KiB) and a request within a minute, writes a response within 5 minutes and closes an idle connection after 2. No operator route streams: `runs/{id}/live` returns the output so far and is polled, and the git relay is a toolbelt route, which the listener doesn't serve, so a load balancer's idle timeout above those is enough.
+
+The listener doesn't make the daemon multi-tenant: what a request may do is the credential's role and grants. The bundled web view stays a client of the socket and binds only loopback; to reach it from elsewhere, put it behind a proxy as before.
 
 ## Evidence
 
