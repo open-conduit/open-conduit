@@ -17,7 +17,7 @@ import (
 const passWindow = 600
 
 // passPhases are the phases of a pass, in the order it runs them.
-var passPhases = []string{"route", "poll", "start", "controls", "subscriptions", "ingress", "packages", "endpoints", "retention", "backup"}
+var passPhases = []string{"route", "poll", "admission", "start", "controls", "subscriptions", "ingress", "packages", "endpoints", "retention", "backup"}
 
 // passTimes records how long each of the host's passes and its phases take:
 // the latest passWindow of each in memory, which the loop check summarises,

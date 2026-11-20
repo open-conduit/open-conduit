@@ -61,12 +61,7 @@ func (c *ConfigCheck) Validate(path string, data []byte) ([]config.Diagnostic, e
 func ConfigWarnings(path string, data []byte, modes []string, machine bool) []string {
 	var w []string
 	if machine {
-		w = config.Warnings(data)
-	} else {
-		w = config.UnenforcedWarnings(data)
-	}
-	if machine {
-		w = append(w, config.IncludeWarnings(data, filepath.Dir(path))...)
+		w = append(config.Warnings(data), config.IncludeWarnings(data, filepath.Dir(path))...)
 	}
 	return append(w, modes...)
 }

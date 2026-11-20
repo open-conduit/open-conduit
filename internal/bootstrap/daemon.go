@@ -667,7 +667,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
 		Executors: executors, HistoricalExecutors: history,
 		GlobalLimit: set.Concurrency, ExecutorPools: pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
-		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
+		ScopeLimits: scopeLimits(s), AdmissionLimits: admissionLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Served: &d.served, Environment: d.runEnvironment,
 		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Isolation: d.configs.Isolation, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
@@ -722,6 +722,20 @@ func scopeLimits(s *config.Snapshot) map[domain.ID]int {
 		}
 		if sc.Concurrency > 0 && sc.Concurrency < inherited {
 			out[id] = sc.Concurrency
+		}
+	}
+	return out
+}
+
+// admissionLimits gives the scheduler each scope's admission_limit, as
+// validation narrowed it down the scope tree (settings.admission_limit at
+// the root). The scheduler counts a scope's Work against every ancestor
+// too, so a parent's limit bounds its descendants together.
+func admissionLimits(s *config.Snapshot) map[domain.ID]int {
+	out := map[domain.ID]int{}
+	for id, sc := range s.Scopes {
+		if sc.AdmissionLimit > 0 {
+			out[id] = sc.AdmissionLimit
 		}
 	}
 	return out

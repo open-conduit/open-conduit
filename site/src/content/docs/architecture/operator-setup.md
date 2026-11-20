@@ -251,7 +251,7 @@ make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 ## Limitations
 
 - **Root command.** A bare `open-conduit` prints help; it does not choose between the daemon and the TUI.
-- **Unenforced setting.** `settings.admission_limit` is validated but not enforced; `config check` warns where a config sets it, and `init` no longer writes it.
+- **Admission default.** `init` does not write `settings.admission_limit`, so a new config takes the default of 10 open Work per scope ([admission](../execution-scheduling/#admission)).
 - **Rebind and reload.** A rebind takes effect at the next scheduling decision, which pins the binding from the generation the scheduler runs.
 
 ## History

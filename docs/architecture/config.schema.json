@@ -123,7 +123,7 @@
           "minimum": 1,
           "maximum": 2147483647,
           "default": 10,
-          "description": "Reserved for a cap on claimed Work per scope. Validated but not enforced: config check warns where a config sets it."
+          "description": "Most open Work each scope has admitted at once, counting its descendants' Work. Work beyond it is created as usual and held until admitted Work in the scope finishes; ready, running and waiting Work all hold a place. A scope's limits.admission_limit can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "reconcile_seconds": {
           "type": "integer",
@@ -867,7 +867,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 2147483647,
-              "description": "Reserved; validated but not enforced."
+              "description": "Most open Work admitted in this scope and its descendants at once, at most the parent's."
             }
           },
           "required": [],
