@@ -100,6 +100,17 @@ func TestContainerCollect(t *testing.T) {
 		}
 	})
 
+	t.Run("reconcile_doesnt_stop_a_non_collecting_providers_running_orphan_first", func(t *testing.T) {
+		_, f, _ := exited(t)
+		f.containers["c1"].Running = true
+		if _, err := extension.ReconcileHostContainers(ctx, notCollecting{f}, extension.ContainerHosts{Host: "host-a"}, keepNone); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.stopped) != 0 || len(f.collected) != 0 || !contains(f.removed, "c1") {
+			t.Errorf("stopped %v, collected %v, removed %v; want it removed as before, neither stopped nor collected", f.stopped, f.collected, f.removed)
+		}
+	})
+
 	t.Run("a_failed_collect_keeps_the_container", func(t *testing.T) {
 		h, f, pin := exited(t)
 		f.collectErr = errors.New("remote unreachable")

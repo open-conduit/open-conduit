@@ -913,7 +913,7 @@ func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts Con
 		}
 		// A running one is stopped before it is collected, so what it
 		// wrote comes back as it would from a stop.
-		if _, collects := p.(ContainerCollector); collects && st.Running {
+		if Collects(p) && st.Running {
 			if err := p.Stop(ctx, st.Ref, reconcileStopGrace); err != nil {
 				errs = append(errs, err)
 				continue
