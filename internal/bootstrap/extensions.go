@@ -728,9 +728,9 @@ func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domai
 // config of a binding using one of its container providers names (B05,
 // config.Snapshot.ExtensionConnection). It is the one host resolver for
 // every package, and resolves for pkg, so a provider package is never
-// asked for a credential of its own through a scheme it serves. What a
-// container provider's package resolves for a connection is withheld from
-// its launches (withheldCredentials).
+// asked for a credential of its own through a scheme it serves. A
+// container's connection is also resolved at each launch, for the check
+// that the launch doesn't carry it (containerCredentials).
 func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes, containerTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 		resolver := d.resolver.For(pkg)
@@ -771,7 +771,6 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes, containerTypes m
 			}
 			out[n] = v
 		}
-		d.containers.withheld.add(containerTypes, out)
 		return out, nil
 	}
 }

@@ -89,8 +89,9 @@ type ContainerBinding struct {
 	// (PlacedSite.Env), so git there reaches the repository as the run's
 	// does.
 	Env map[string]string
-	// Withheld, when set, gives the credentials the provider's package has
-	// resolved for its connections (ContainerConfig.Connection). A
+	// Withheld, when set, gives the credentials of the connection the
+	// container's config names (ContainerConfig.Connection), which the host
+	// resolves for the launch. A
 	// placement, plan or created container that carries one is refused
 	// as ErrSandboxDenied, and a created one removed: they reach the run,
 	// its history and the container's labels (ContainerCreated).

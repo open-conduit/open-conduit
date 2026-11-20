@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"slices"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -213,8 +212,7 @@ func (containerTestExecutor) Capabilities() domain.Capabilities {
 // resolves the token of a connection its binding's container config names,
 // each binding reaching its own account, and is refused one in a scope
 // whose containers name none, or that a binding names only as its own
-// connection (that is the executor's). What it resolves is withheld from
-// its provider's launches, and only its.
+// connection (that is the executor's).
 func TestContainerConnectionSecrets(t *testing.T) {
 	d := containerConnectionDaemon(t)
 	cloud := d.scopedSecrets("cloud", nil, map[string]bool{"cloud": true}, map[string]bool{"pod": true})
@@ -235,12 +233,42 @@ func TestContainerConnectionSecrets(t *testing.T) {
 	if _, err := d.scopedSecrets("cloud", nil, map[string]bool{"cloud": true}, nil)(ctx, "pods", "cloud-a", []string{"token"}); !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("without container types: %v", err)
 	}
-	withheld := d.containers.withheld.of("pod")()
-	slices.Sort(withheld)
-	if !reflect.DeepEqual(withheld, []string{"account-a-token", "account-b-token"}) {
-		t.Fatalf("withheld from pod launches: %v", withheld)
+}
+
+// TestContainerCredentials: a launch's container is checked against the
+// current values of the connection its config names, resolved for the
+// package providing the container, whatever that package asked for
+// before; none for a config naming no connection. A connection that can't
+// be resolved, or a provider no running package declares, refuses the
+// launch rather than skipping the check.
+func TestContainerCredentials(t *testing.T) {
+	d := containerConnectionDaemon(t)
+	var m protocol.Manifest
+	m.Name = "cloud"
+	m.Provides.Containers = []protocol.ContainerDecl{{Type: "pod"}}
+	d.external.byName = map[string]*installed{"cloud": {m: m}}
+	ctx := context.Background()
+	for conn, want := range map[string]string{"cloud-a": "account-a-token", "cloud-b": "account-b-token"} {
+		got, err := d.containerCredentials(ctx, "pods", "pod", json.RawMessage(`{"image":"x","connection":"`+conn+`"}`))
+		if err != nil || !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("%s: %v %v", conn, got, err)
+		}
 	}
-	if other := d.containers.withheld.of("docker")(); len(other) != 0 {
-		t.Fatalf("withheld from another provider's launches: %v", other)
+	if got, err := d.containerCredentials(ctx, "plain", "pod", json.RawMessage(`{"image":"x"}`)); err != nil || got != nil {
+		t.Fatalf("no connection: %v %v", got, err)
+	}
+	for name, c := range map[string]struct {
+		provider, conn string
+	}{
+		"an unknown connection":       {"pod", "nope"},
+		"a provider nobody runs":      {"docker", "cloud-a"},
+		"a secret that can't resolve": {"pod", "cloud-a"},
+	} {
+		if name == "a secret that can't resolve" {
+			d.resolver = &config.Resolver{LookupEnv: func(string) (string, bool) { return "", false }}
+		}
+		if _, err := d.containerCredentials(ctx, "pods", c.provider, json.RawMessage(`{"connection":"`+c.conn+`"}`)); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

@@ -43,55 +43,6 @@ type containerState struct {
 	// couldn't collect among it), for doctor; nil when it did it all.
 	mu     sync.Mutex
 	failed error
-	// withheld are the credentials each container provider's package has
-	// resolved for its connections, by provider type
-	// (extension.ContainerBinding.Withheld).
-	withheld withheldCredentials
-}
-
-// maxWithheld bounds the credentials kept for each provider type: the
-// newest are kept, so a rotated credential's old value goes in time.
-const maxWithheld = 64
-
-// withheldCredentials are the credentials container providers' packages
-// resolved, kept in memory only, so a launch carrying one is refused.
-type withheldCredentials struct {
-	mu     sync.Mutex
-	byType map[string][]string
-}
-
-// add records values resolved by the package providing types.
-func (w *withheldCredentials) add(types map[string]bool, values map[string]string) {
-	if len(types) == 0 || len(values) == 0 {
-		return
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.byType == nil {
-		w.byType = map[string][]string{}
-	}
-	for typ := range types {
-		kept := w.byType[typ]
-		for _, v := range values {
-			if v == "" || slices.Contains(kept, v) {
-				continue
-			}
-			kept = append(kept, v)
-		}
-		if len(kept) > maxWithheld {
-			kept = slices.Clone(kept[len(kept)-maxWithheld:])
-		}
-		w.byType[typ] = kept
-	}
-}
-
-// of is the credentials withheld from provider typ's launches.
-func (w *withheldCredentials) of(typ string) func() []string {
-	return func() []string {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		return slices.Clone(w.byType[typ])
-	}
 }
 
 // reconcileFailed is what the last container reconcile pass couldn't do.
@@ -280,6 +231,10 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 	if p == nil {
 		return runtime.ContainerBinding{}, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 	}
+	withheld, err := d.containerCredentials(ctx, state.ScopeID, desc.Provider, desc.Config)
+	if err != nil {
+		return runtime.ContainerBinding{}, err
+	}
 	run := d.endpoints.Dir(state.ExecutionID)
 	shared := []string{run, d.pluginDir()}
 	socket := d.endpoints.Socket(state.ExecutionID)
@@ -336,12 +291,12 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Phase:  runtime.LaunchPhases(ctx),
 		// A provider that places launches goes back to where the Work
 		// last ran, so its workspace there is reused.
-		Name:   desc.Provider,
-		Prefer: workPlacement(workHome, desc.Provider),
-		Placed: func(at extension.Placement) { placeWork(workHome, desc.Provider, at) },
+		Name:     desc.Provider,
+		Prefer:   workPlacement(workHome, desc.Provider),
+		Placed:   func(at extension.Placement) { placeWork(workHome, desc.Provider, at) },
+		Withheld: func() []string { return withheld },
 		// Bound again with the site, so the resource can be made there;
 		// a binding that can't be bound again keeps the host's.
-		Withheld: d.containers.withheld.of(desc.Provider),
 		AtSite: func(site extension.Site) extension.ResourceBroker {
 			if r, err := d.bindResourcesAt(ctx, state, site); err == nil && r != nil {
 				return r
@@ -627,6 +582,10 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 	if p == nil {
 		return management.ContainerAttachment{}, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, desc.Provider)
 	}
+	withheld, err := d.containerCredentials(ctx, state.ScopeID, desc.Provider, desc.Config)
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
 	secrets, err := d.configs.Secrets(d.resolver)(ctx, state)
 	if err != nil {
 		return management.ContainerAttachment{}, err
@@ -656,7 +615,7 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 		Config:   domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
 		Host:     d.containerHost(),
 		Attach:   true,
-		Withheld: d.containers.withheld.of(desc.Provider),
+		Withheld: func() []string { return withheld },
 		// An attach goes where the Work last ran, and never moves it.
 		Name:      desc.Provider,
 		Prefer:    prefer,
@@ -791,4 +750,72 @@ func siteFor(current *config.Snapshot, providers map[string]extension.ContainerP
 		return nil, fmt.Errorf("%w: container provider %s doesn't place launches", extension.ErrSiteUnavailable, provider)
 	}
 	return extension.PlacedSite{Provider: provider, Placer: placer, At: extension.Placement{ID: placement}}, nil
+}
+
+// containerCredentials are the credentials a launch's container must not
+// carry (extension.ContainerBinding.Withheld): the current values of the
+// connection its config names (extension.ContainerConfig.Connection),
+// resolved for the package providing the container, as its secret.resolve
+// would give them. None when the config names no connection. They are
+// resolved for each launch rather than remembered from what the package
+// asked for, so the check holds after a restart and for a credential the
+// provider keeps itself. One that can't be resolved refuses the launch:
+// the host can't check what it can't see.
+func (d *daemon) containerCredentials(ctx context.Context, scope domain.ID, provider string, raw json.RawMessage) ([]string, error) {
+	var cfg struct {
+		Connection string `json:"connection"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil || cfg.Connection == "" {
+		return nil, nil
+	}
+	refuse := func(why string) error {
+		return fmt.Errorf("%w: the container's connection %s %s", extension.ErrSandboxUnavailable, cfg.Connection, why)
+	}
+	s, _ := d.extensionSnapshot()
+	if s == nil || s.Scopes[scope] == nil {
+		return nil, refuse("is not in the current config")
+	}
+	var conn *config.Connection
+	for i := range s.Connections {
+		if s.Connections[i].ID == cfg.Connection {
+			conn = &s.Connections[i]
+		}
+	}
+	if conn == nil {
+		return nil, refuse("is not in the current config")
+	}
+	pkg := d.containerOwner(provider)
+	if pkg == "" {
+		return nil, refuse("has no provider package running")
+	}
+	resolver := d.resolver.For(pkg)
+	names := make([]string, 0, len(conn.SecretRefs))
+	for n := range conn.SecretRefs {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	var out []string
+	for _, n := range names {
+		v, err := resolver.ResolveNamed(ctx, n, conn.SecretRefs[n])
+		if err != nil {
+			return nil, refuse("could not be resolved to check the launch against")
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// containerOwner is the name of the running package that provides
+// container type typ, "" when none does.
+func (d *daemon) containerOwner(typ string) string {
+	d.external.mu.Lock()
+	defer d.external.mu.Unlock()
+	for name, x := range d.external.byName {
+		for _, c := range x.m.Provides.Containers {
+			if c.Type == typ {
+				return name
+			}
+		}
+	}
+	return ""
 }
