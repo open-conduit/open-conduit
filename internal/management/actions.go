@@ -12,7 +12,8 @@ import (
 
 // Extension actions (issue #51): GET /scopes/{id}/actions and
 // GET /work/{id}/actions list what each provider offers on the target now;
-// POST …/actions/{provider}/{action} invokes one as the local operator. The
+// POST …/actions/{provider}/{action} invokes one as the operator whose
+// credential made the request, or the person it acts for. The
 // provider authorises the call and returns the Event; this server accepts it
 // under core.action. A refusal is the provider's code and message, and
 // leaves no Event.

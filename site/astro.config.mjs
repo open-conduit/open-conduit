@@ -139,16 +139,10 @@ export default defineConfig({
 								{ label: 'Observed sources', slug: 'architecture/observe-extension' },
 								{ label: 'Webhooks', slug: 'architecture/webhook-extension' },
 								{ label: 'Operator setup', slug: 'architecture/operator-setup' },
+								{ label: 'Setup sessions', slug: 'architecture/setup-sessions' },
 								{ label: 'Installed integrations', slug: 'architecture/installed-integrations' },
 								{ label: 'Backup and recovery', slug: 'architecture/recovery' },
 								{ label: 'Extension packaging', slug: 'architecture/extension-packaging' },
-							],
-						},
-						{
-							label: 'Proposals',
-							collapsed: true,
-							items: [
-								{ label: 'Setup sessions', slug: 'architecture/setup-sessions' },
 							],
 						},
 					],
