@@ -575,8 +575,9 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 		check.Status, check.Code, check.Detail = inproc.CheckInfo, "not_configured", "no schedule entries are configured"
 		return check
 	}
-	timers := map[domain.ID]domain.Timer{}
+	var timers map[domain.ID]domain.Timer
 	_ = x.h.Store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+		timers = map[domain.ID]domain.Timer{}
 		all, err := tx.ListTimers()
 		for _, t := range all {
 			timers[t.ID] = t

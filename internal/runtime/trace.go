@@ -147,6 +147,7 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 	var waiting *traceWait
 	var wakes []traceWait
 	err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		s, waiting, wakes = routeSnapshot{}, nil, nil
 		if candidate != nil {
 			tx = candidateTx{Tx: tx, scopes: candidate}
 		}
@@ -256,6 +257,7 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 				// The successor runs where its predecessor did
 				// (deliveryRouteInTx).
 				if e = r.transact(ctx, nil, func(tx storage.Tx) error {
+					binding = p.selected.Binding
 					b, e := workBindingInTx(tx, *s.work)
 					if e == nil && b == "" {
 						b, e = predecessorBindingInTx(tx, s.work.ID)
@@ -562,6 +564,7 @@ func (r *Router) SamplesCandidate(ctx context.Context, scopeID domain.ID, scopes
 func (r *Router) samples(ctx context.Context, scopeID domain.ID, candidate map[domain.ID]domain.Scope) ([]TraceSample, error) {
 	var s routeSnapshot
 	if err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		s = routeSnapshot{}
 		if candidate != nil {
 			tx = candidateTx{Tx: tx, scopes: candidate}
 		}

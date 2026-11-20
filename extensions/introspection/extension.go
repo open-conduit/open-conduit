@@ -438,8 +438,9 @@ func (x *Extension) Checks() []inproc.Check {
 func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "introspection", Status: inproc.CheckOK, Code: "ok"}
 	var entries []Entry
-	timers := map[domain.ID]domain.Timer{}
+	var timers map[domain.ID]domain.Timer
 	_ = x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
+		timers = map[domain.ID]domain.Timer{}
 		entries, _ = x.entries()
 		all, err := tx.ListTimers()
 		for _, t := range all {

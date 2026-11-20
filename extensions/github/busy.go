@@ -75,6 +75,7 @@ func (t *Tools) busySince(ctx context.Context, b *bound, item string) (*time.Tim
 	}
 	var since *time.Time
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		since = nil
 		data, err := tx.Get(busyNamespace, string(b.work.ID))
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil

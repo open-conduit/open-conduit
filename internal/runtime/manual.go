@@ -105,6 +105,7 @@ func (c *Control) SubmitEvent(ctx context.Context, m ManualEvent) (accepted doma
 	m.DeliveryID = "event/" + m.DeliveryID
 	var refusal error
 	err = c.transact(ctx, func(tx storage.Tx) error {
+		accepted, added, refusal = domain.AcceptedEvent{}, false, nil
 		if old, dup, e := prior(tx, m.DeliveryID); e != nil || dup {
 			accepted = old
 			if e == nil {
@@ -463,6 +464,7 @@ func (c *Control) Wake(ctx context.Context, workID domain.ID, expected domain.Re
 	m.DeliveryID = "event/" + m.DeliveryID
 	var waitID domain.ID
 	err = c.transact(ctx, func(tx storage.Tx) error {
+		waitID = ""
 		w, e := tx.Work(workID)
 		if e != nil {
 			return e

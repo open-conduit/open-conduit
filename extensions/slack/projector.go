@@ -278,6 +278,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	key, textDigest, blocks := intentKey(in.ID), digest(in.Text), blocksDigest(in.Content)
 	var rec intentRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = intentRecord{}
 		found, err := p.get(tx, key, &rec)
 		if err != nil {
 			return err
@@ -504,7 +505,11 @@ type IntentState struct {
 // Lookup reads an intent's durable record (State is "" when unknown).
 func (p *Projector) Lookup(ctx context.Context, id string) (IntentState, error) {
 	var rec intentRecord
-	err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, intentKey(id), &rec); return e })
+	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = intentRecord{}
+		_, e := p.get(tx, intentKey(id), &rec)
+		return e
+	})
 	return IntentState{State: rec.State, TS: rec.TS, Code: rec.Code, Detail: rec.Detail}, err
 }
 
@@ -599,6 +604,7 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 	intents = append(intents, children...)
 	var durable []Intent
 	if err := p.transact(ctx, func(tx storage.Tx) error {
+		durable = nil
 		rows, err := tx.List(p.ns, "intent/")
 		for _, row := range rows {
 			var rec intentRecord

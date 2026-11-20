@@ -33,6 +33,7 @@ func (c *Control) SubmitAction(ctx context.Context, a ActionEvent) (accepted dom
 	}
 	var refusal error
 	err = c.transact(ctx, func(tx storage.Tx) error {
+		accepted, added, refusal = domain.AcceptedEvent{}, false, nil
 		if old, dup, e := deliveryDuplicate(tx, domain.Event{Source: extension.ActionSource, DeliveryID: delivery}); e != nil || dup {
 			accepted = old
 			if e == nil {

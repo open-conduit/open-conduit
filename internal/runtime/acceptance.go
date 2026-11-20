@@ -171,9 +171,8 @@ func (i *Ingress) Pending(ctx context.Context, after uint64, limit int) (page Pe
 	if limit < 1 || limit > 200 {
 		return page, storage.ErrInvalid
 	}
-	page.Items = []PendingEvent{}
-	page.NextSequence = after
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		page = PendingPage{Items: []PendingEvent{}, NextSequence: after}
 		events, e := tx.UnroutedEvents(after, limit+1)
 		if e != nil {
 			return e

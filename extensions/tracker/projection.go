@@ -374,7 +374,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		}
 		key := "issue/" + item.issue
 		var st projectionState
-		if err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, key, &st); return e }); err != nil {
+		if err := p.transact(ctx, func(tx storage.Tx) error {
+			st = projectionState{}
+			_, e := p.get(tx, key, &st)
+			return e
+		}); err != nil {
 			return res, err
 		}
 		want := projectionDigest(p.desired(item.work, item.latest, item.last, st.Work == item.work.ID && st.Closed))

@@ -374,6 +374,7 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 	ns, key := t.o.Type+".tools."+digest(b.src.Settings.Namespace)[:16], "create/"+digest(intentID(ctx, b, t.o.Type+OpIssueCreate, data))[:40]
 	var rec createRecord
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		rec = createRecord{}
 		raw, err := tx.Get(ns, key)
 		if err == nil {
 			return json.Unmarshal(raw, &rec)

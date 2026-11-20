@@ -439,9 +439,11 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
+		// The commit stays callable: the host may ask again when its
+		// transaction aborts and runs again (storage.Retry), possibly
+		// over a different acceptance. It is dropped oldest first below.
 		s.mu.Lock()
 		f := s.commits[p.CommitID]
-		delete(s.commits, p.CommitID)
 		s.mu.Unlock()
 		if f == nil {
 			return nil, protocol.Errorf(protocol.CodeNotFound, "unknown commit")
@@ -720,8 +722,8 @@ func (s *Server) operation(ctx context.Context, method string, raw json.RawMessa
 			s.mu.Lock()
 			s.commits[out.CommitID] = plan.Commit
 			s.order = append(s.order, out.CommitID)
-			// Commits the host never called (its transaction failed before
-			// acceptance) are dropped oldest first.
+			// Commits are dropped oldest first, whether the host called
+			// them or never did (its transaction failed before acceptance).
 			for len(s.order) > 1024 {
 				delete(s.commits, s.order[0])
 				s.order = s.order[1:]

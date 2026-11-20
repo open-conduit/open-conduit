@@ -78,9 +78,10 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 	// existing Work before.
 	const marker = "v2"
 	var done bool
-	needs := map[domain.ID]domain.Work{}
-	keys := map[domain.CorrelationKey]domain.ID{}
+	var needs map[domain.ID]domain.Work
+	var keys map[domain.CorrelationKey]domain.ID
 	err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		needs, keys = map[domain.ID]domain.Work{}, map[domain.CorrelationKey]domain.ID{}
 		var marked struct{}
 		e := getJSON(tx, displayBackfillNamespace, marker, &marked)
 		if done = e == nil; done {
@@ -147,6 +148,7 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 		if d := r.historyDisplay(ctx, w, tail); d != nil {
 			ok := false
 			if err = r.transact(ctx, nil, func(tx storage.Tx) error {
+				ok = false
 				cur, e := tx.Work(id)
 				if e != nil {
 					return e
@@ -174,8 +176,9 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 // rest. nil when none does.
 func (r *Router) historyDisplay(ctx context.Context, w domain.Work, events []domain.ID) *domain.WorkDisplay {
 	ask := func(id domain.ID, d *domain.WorkDisplay) *domain.WorkDisplay {
-		s := routeSnapshot{}
+		var s routeSnapshot
 		err := r.transact(ctx, nil, func(tx storage.Tx) error {
+			s = routeSnapshot{}
 			var e error
 			if s.event, e = tx.Event(id); e != nil {
 				return e

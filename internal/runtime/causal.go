@@ -303,6 +303,7 @@ func (c *Causal) Derive(ctx context.Context, scope, parent domain.ID, e domain.E
 	var refusal error
 	now := c.now()
 	err = c.store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		refusal = nil
 		var er error
 		accepted, added, er = AcceptDerivedInTx(tx, now, c.limits, scope, parent, e)
 		if errors.Is(er, ErrCausalRejected) {
@@ -327,6 +328,7 @@ func (c *Causal) Emit(ctx context.Context, lease domain.LeaseRef, e domain.Event
 	now := c.now()
 	var refusal error
 	err = c.store.Transact(ctx, storage.Guard{Now: now, Lease: &lease}, func(tx storage.Tx) error {
+		refusal = nil
 		x, er := tx.Execution(lease.ExecutionID)
 		if er != nil {
 			return er
@@ -338,13 +340,14 @@ func (c *Causal) Emit(ctx context.Context, lease domain.LeaseRef, e domain.Event
 		if strings.HasPrefix(e.Type, "core.") || strings.HasPrefix(e.Source, "core.") || e.WorkID != "" && e.WorkID != w.ID || e.ExecutionID != "" && e.ExecutionID != x.ID {
 			return storage.ErrInvalid
 		}
-		e.WorkID = w.ID
-		e.ExecutionID = x.ID
+		ev := e
+		ev.WorkID = w.ID
+		ev.ExecutionID = x.ID
 		trigger, er := executionTriggerInTx(tx, x)
 		if er != nil {
 			return er
 		}
-		accepted, added, er = AcceptDerivedInTx(tx, now, c.limits, w.ScopeID, trigger, e)
+		accepted, added, er = AcceptDerivedInTx(tx, now, c.limits, w.ScopeID, trigger, ev)
 		if errors.Is(er, ErrCausalRejected) {
 			refusal = er
 			return nil
@@ -363,8 +366,8 @@ func (c *Causal) RecordRejection(ctx context.Context, err error) error {
 	return c.store.Transact(ctx, storage.Guard{Now: c.now()}, func(tx storage.Tx) error { return recordCausalRejection(tx, err) })
 }
 func (c *Causal) Rejections(ctx context.Context) (out []CausalRejection, err error) {
-	out = []CausalRejection{}
 	err = c.store.Transact(ctx, storage.Guard{Now: c.now()}, func(tx storage.Tx) error {
+		out = []CausalRejection{}
 		rows, er := tx.List(causalRejections, "")
 		if er != nil {
 			return er

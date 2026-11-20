@@ -296,6 +296,7 @@ var ErrNoSession = fmt.Errorf("claude code: no session for this work: %w", exten
 func (e *Executor) Attach(ctx context.Context, work domain.ID) (extension.AttachSpec, error) {
 	var spec extension.AttachSpec
 	err := e.o.Store.Transact(ctx, storage.Guard{Now: e.o.Now()}, func(tx storage.Tx) error {
+		spec = extension.AttachSpec{}
 		var rec record
 		found, err := getJSON(tx, e.o.Namespace, workKey(work), &rec)
 		if err != nil {

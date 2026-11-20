@@ -54,6 +54,7 @@ func (p *Projector) CreateIssue(ctx context.Context, in IssueIntent) (PostedIssu
 	repo, key := p.o.Settings.TrackerRepo, "issue-intent/"+digest(in.ID)[:40]
 	var rec issueRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = issueRecord{}
 		found, err := p.get(tx, key, &rec)
 		if err != nil {
 			return err
@@ -135,6 +136,7 @@ func (p *Projector) redriveIssues(ctx context.Context, limit int) error {
 		rec issueRecord
 	}
 	if err := p.transact(ctx, func(tx storage.Tx) error {
+		pending = nil
 		rows, err := tx.List(p.ns, "issue-intent/")
 		for _, row := range rows {
 			var rec issueRecord

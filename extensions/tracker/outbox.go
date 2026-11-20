@@ -114,6 +114,7 @@ func (o *Outbox) Deliver(ctx context.Context, it OutboxItem, post func(ctx conte
 	key, bodyDigest := outboxKey(it.ID), digest(it.Body)
 	var rec outboxRecord
 	err := o.transact(ctx, func(tx storage.Tx) error {
+		rec = outboxRecord{}
 		found, err := o.get(tx, key, &rec)
 		if err != nil {
 			return err
@@ -197,6 +198,7 @@ func (o *Outbox) Posted(ctx context.Context, id string) (Posted, bool, error) {
 	var rec outboxRecord
 	var ok bool
 	err := o.transact(ctx, func(tx storage.Tx) error {
+		rec = outboxRecord{}
 		found, err := o.get(tx, outboxKey(id), &rec)
 		ok = found && rec.State == StatePosted
 		return err
@@ -207,7 +209,11 @@ func (o *Outbox) Posted(ctx context.Context, id string) (Posted, bool, error) {
 // State returns an item's record state ("" when there is none).
 func (o *Outbox) State(ctx context.Context, id string) (string, error) {
 	var rec outboxRecord
-	err := o.transact(ctx, func(tx storage.Tx) error { _, e := o.get(tx, outboxKey(id), &rec); return e })
+	err := o.transact(ctx, func(tx storage.Tx) error {
+		rec = outboxRecord{}
+		_, e := o.get(tx, outboxKey(id), &rec)
+		return e
+	})
 	return rec.State, err
 }
 

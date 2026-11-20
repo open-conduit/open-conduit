@@ -266,6 +266,7 @@ func (t *Tools) agentsOn(ctx context.Context, b *bound, src Source, p rawPull) (
 	}
 	var out []agentOn
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		out = nil
 		works, err := tx.LiveWorks()
 		if err != nil {
 			return err
@@ -364,6 +365,7 @@ func (t *Tools) stillWorking(ctx context.Context, w domain.Work) (string, error)
 	// an earlier attempt's review must not stand in for it.
 	var latest *domain.Execution
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		latest = nil
 		xs, err := tx.ListExecutions(w.ID)
 		if err != nil {
 			return err
@@ -533,6 +535,7 @@ func (t *Tools) workflowRun(ctx context.Context, b *bound, data json.RawMessage)
 
 func (t *Tools) dispatchRecord(ctx context.Context, key string) (rec dispatchRecord, found bool, err error) {
 	err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		rec, found = dispatchRecord{}, false
 		data, err := tx.Get(dispatchNamespace, key)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil

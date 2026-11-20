@@ -261,6 +261,7 @@ const kvNamespace = "core.extensions"
 func (s StoreKV) StoredKV(ctx context.Context, name string) (int, error) {
 	var v int
 	err := s.Store.Transact(ctx, storage.Guard{Now: s.Now()}, func(tx storage.Tx) error {
+		v = 0
 		raw, err := tx.Get(kvNamespace, name+"/kv_version")
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil

@@ -266,6 +266,7 @@ func TestProductionDependencySubscriptionBackscanAndReplay(t *testing.T) {
 	}
 	var aliases []domain.AcceptedEvent
 	routingRead(t, f, func(tx storage.Tx) error {
+		aliases = nil
 		all, err := tx.Events(0, 0)
 		if err != nil {
 			return err
@@ -382,18 +383,21 @@ func TestProductionDependencySubscriptionRequiresCrossScopeAuthorization(t *test
 		}
 		// A policy can read independent state: this would fail if invoked while the
 		// scheduler held an SQLite write transaction around external policy code.
-		return f.Store.Transact(ctx, storage.Guard{Now: f.Clock.Now()}, func(tx storage.Tx) error {
+		err := f.Store.Transact(ctx, storage.Guard{Now: f.Clock.Now()}, func(tx storage.Tx) error {
 			policy, err := tx.Scope("source-policy")
 			if err != nil {
 				return err
 			}
 			if mutateAncestor {
-				mutateAncestor = false
 				policy.Name = "changed-policy"
 				return tx.PutScope(policy, policy.Revision)
 			}
 			return nil
 		})
+		if err == nil {
+			mutateAncestor = false
+		}
+		return err
 	}
 	authorized, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options)
 	if err != nil {

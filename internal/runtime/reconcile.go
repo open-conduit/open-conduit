@@ -114,6 +114,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 	var claimed ingressState
 	ns := sourceNamespace(r.source)
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		claimed = ingressState{}
 		if e := getJSON(tx, ns, "state", &claimed); e != nil {
 			return e
 		}
@@ -153,6 +154,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 	}
 	result.ScanID = page.ScanID
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		result.Accepted, result.Complete, result.Partial = []domain.AcceptedEvent{}, false, false
 		var state ingressState
 		if e := getJSON(tx, ns, "state", &state); e != nil {
 			return e
@@ -438,6 +440,7 @@ func (i *Ingress) ReconcileDue(ctx context.Context, limit int) ([]ReconcileResul
 	}
 	var last string
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		last = ""
 		e := getJSON(tx, "core.ingress.scheduler", "last_source", &last)
 		if errors.Is(e, storage.ErrNotFound) {
 			return nil

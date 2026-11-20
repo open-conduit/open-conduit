@@ -38,6 +38,7 @@ func (s *Scheduler) RecordStopped(ctx context.Context, ref domain.LeaseRef, resu
 	}
 	recorded := false
 	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		recorded = false
 		state, err := attemptState(tx, ref.ExecutionID)
 		if err != nil {
 			return err

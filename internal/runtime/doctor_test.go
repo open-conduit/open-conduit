@@ -17,34 +17,50 @@ import (
 )
 
 // countingStore counts the attempt states read and refuses a full listing
-// of executions, so a check that walks the whole history fails.
+// of executions, so a check that walks the whole history fails. Only a
+// transaction's last run counts: one rerun after a transient abort reads
+// its state again.
 type countingStore struct {
 	inner   storage.Store
 	reads   atomic.Int64
 	listAll atomic.Int64
 }
 
+// countingRun is what one run of a transaction read.
+type countingRun struct{ reads, listAll int64 }
+
+func (s *countingStore) count(run func(func(storage.Tx) error) error, fn func(storage.Tx) error) error {
+	var c countingRun
+	err := run(func(tx storage.Tx) error {
+		c = countingRun{}
+		return fn(countingTx{tx, &c})
+	})
+	s.reads.Add(c.reads)
+	s.listAll.Add(c.listAll)
+	return err
+}
+
 func (s *countingStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
-	return s.inner.Transact(ctx, g, func(tx storage.Tx) error { return fn(countingTx{tx, s}) })
+	return s.count(func(fn func(storage.Tx) error) error { return s.inner.Transact(ctx, g, fn) }, fn)
 }
 func (s *countingStore) View(ctx context.Context, fn func(storage.Tx) error) error {
-	return s.inner.(storage.Viewer).View(ctx, func(tx storage.Tx) error { return fn(countingTx{tx, s}) })
+	return s.count(func(fn func(storage.Tx) error) error { return s.inner.(storage.Viewer).View(ctx, fn) }, fn)
 }
 
 type countingTx struct {
 	storage.Tx
-	s *countingStore
+	c *countingRun
 }
 
 func (t countingTx) ListExecutions(work domain.ID) ([]domain.Execution, error) {
 	if work == "" {
-		t.s.listAll.Add(1)
+		t.c.listAll++
 	}
 	return t.Tx.ListExecutions(work)
 }
 func (t countingTx) Get(ns, key string) ([]byte, error) {
 	if ns == attemptNamespace {
-		t.s.reads.Add(1)
+		t.c.reads++
 	}
 	return t.Tx.Get(ns, key)
 }

@@ -46,6 +46,7 @@ func calendarEvents(t *testing.T, db storage.Store, now time.Time) []string {
 	t.Helper()
 	var out []string
 	if err := db.Transact(context.Background(), storage.Guard{Now: now}, func(tx storage.Tx) error {
+		out = nil
 		all, err := tx.Events(0, 0)
 		for _, a := range all {
 			if a.Event.Type == "fixture.calendar" {

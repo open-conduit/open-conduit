@@ -256,6 +256,7 @@ func (t *Tools) own(ctx context.Context, b *bound, src Source, p rawPull) error 
 func (t *Tools) trigger(ctx context.Context, b *bound) (domain.ID, error) {
 	var id domain.ID
 	err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		id = ""
 		xs, err := tx.ListExecutions(b.work.ID)
 		if err != nil {
 			return err

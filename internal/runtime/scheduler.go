@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -296,6 +298,24 @@ func (state AttemptState) Usage() extension.Usage {
 		u = addUsage(u, state.Result.Usage)
 	}
 	return u
+}
+
+// clone is a copy of state that shares nothing carryUsage, beginSegment
+// or endSegment change in place, so a transaction that may run again can
+// start each run from the same state.
+func (state AttemptState) clone() AttemptState {
+	state.Segments = slices.Clone(state.Segments)
+	state.InputEventIDs = slices.Clone(state.InputEventIDs)
+	state.Charged = maps.Clone(state.Charged)
+	if state.Result != nil {
+		r := *state.Result
+		state.Result = &r
+	}
+	if state.EarlierUsage != nil {
+		u := *state.EarlierUsage
+		state.EarlierUsage = &u
+	}
+	return state
 }
 
 // carryUsage moves the finished segment's usage into EarlierUsage, so the
@@ -708,8 +728,9 @@ func (s *Scheduler) InspectAttempt(ctx context.Context, id domain.ID) (state Att
 // calls should reach the host and be refused there, on the record. An
 // unknown execution, or one that never had an attempt, holds nothing.
 func (s *Scheduler) Holding(ctx context.Context, ids []domain.ID) (map[domain.ID]bool, error) {
-	out := map[domain.ID]bool{}
+	var out map[domain.ID]bool
 	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		out = map[domain.ID]bool{}
 		for _, id := range ids {
 			x, err := tx.Execution(id)
 			if errors.Is(err, storage.ErrNotFound) {
@@ -749,6 +770,7 @@ func (s *Scheduler) Renew(ctx context.Context, ref domain.LeaseRef) error {
 func (s *Scheduler) Adoptable(ctx context.Context, ref domain.LeaseRef) bool {
 	adoptable := false
 	_ = s.transact(ctx, nil, func(tx storage.Tx) error {
+		adoptable = false
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
 			return err
@@ -1129,6 +1151,8 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 	var gateInput domain.Event
 	// Resolve/validate plugin metadata outside the claim transaction.
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		pinned, granted, scopeRevisions, input, parked, wake = domain.Binding{}, nil, nil, QueuedInput{}, "", wakeReady{}
+		gated, gatePassed, gateInput = false, false, domain.Event{}
 		var e error
 		ready, e = tx.Work(id)
 		if e != nil {
@@ -1258,7 +1282,9 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 		}
 		state.Capabilities = executor.Capabilities()
 	}
+	base := state
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		state, attempt, gateHeld, budgetHeld = base.clone(), Attempt{}, false, false
 		current, e := tx.Work(id)
 		if e != nil {
 			return e
@@ -1950,6 +1976,7 @@ func (s *Scheduler) complete(ctx context.Context, ref domain.LeaseRef, result ex
 		return s.Fail(ctx, ref, result)
 	}
 	return s.transact(ctx, &ref, func(tx storage.Tx) error {
+		result := result
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
 			return err
@@ -2045,6 +2072,7 @@ func (s *Scheduler) Handoff(ctx context.Context, ref domain.LeaseRef, outcome do
 func (s *Scheduler) Timeout(ctx context.Context, ref domain.LeaseRef) error {
 	var intent string
 	err := s.transact(ctx, &ref, func(tx storage.Tx) error {
+		intent = ""
 		state, err := attemptState(tx, ref.ExecutionID)
 		if err != nil {
 			return err

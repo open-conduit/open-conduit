@@ -202,6 +202,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	repo, key, bodyDigest := p.o.Settings.Repo, "intent/"+digest(in.ID)[:40], intentDigest(in)
 	var rec intentRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = intentRecord{}
 		found, err := p.get(tx, key, &rec)
 		if err != nil {
 			return err
@@ -312,6 +313,7 @@ func markReview(in Intent, marker string) ReviewRequest {
 func (p *Projector) IntentComment(ctx context.Context, id string) (commentID int64, url string, ok bool, err error) {
 	var rec intentRecord
 	err = p.transact(ctx, func(tx storage.Tx) error {
+		rec = intentRecord{}
 		found, err := p.get(tx, "intent/"+digest(id)[:40], &rec)
 		ok = found && rec.State == intentPosted && rec.CommentID != 0
 		return err
@@ -563,7 +565,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			}
 			key := "labels/" + strconv.Itoa(item.number)
 			var st labelState
-			if err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, key, &st); return e }); err != nil {
+			if err := p.transact(ctx, func(tx storage.Tx) error {
+				st = labelState{}
+				_, e := p.get(tx, key, &st)
+				return e
+			}); err != nil {
 				return res, err
 			}
 			want := labelDigest(p.desired(item.work, item.latest, item.held))
@@ -631,6 +637,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	// Durable intents (agent tool calls) whose delivery is unfinished.
 	var pending []intentRecord
 	if err := p.transact(ctx, func(tx storage.Tx) error {
+		pending = nil
 		rows, err := tx.List(p.ns, "intent/")
 		for _, row := range rows {
 			var rec intentRecord
@@ -685,7 +692,11 @@ func finishedIntent(item projected) Intent {
 
 func (p *Projector) state(ctx context.Context, intent string) (string, error) {
 	var rec intentRecord
-	err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, "intent/"+digest(intent)[:40], &rec); return e })
+	err := p.transact(ctx, func(tx storage.Tx) error {
+		rec = intentRecord{}
+		_, e := p.get(tx, "intent/"+digest(intent)[:40], &rec)
+		return e
+	})
 	return rec.State, err
 }
 
@@ -703,6 +714,7 @@ func (p *Projector) acknowledge(ctx context.Context, limit int) (int, error) {
 	var cur ackCursor
 	var batch []domain.AcceptedEvent
 	err := p.transact(ctx, func(tx storage.Tx) error {
+		cur = ackCursor{}
 		if _, err := p.get(tx, "ack/cursor", &cur); err != nil {
 			return err
 		}

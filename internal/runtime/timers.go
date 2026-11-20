@@ -97,6 +97,7 @@ func firingKey(id domain.ID, revision domain.Revision) string {
 func (t *Timers) arm(ctx context.Context, scope domain.ID, timer domain.Timer, expected domain.Revision, interval time.Duration, lease *domain.LeaseRef, recurrence ...timerMetadata) error {
 	now := t.now()
 	return t.store.Transact(ctx, storage.Guard{Now: now, Lease: lease}, func(tx storage.Tx) error {
+		timer, scope := timer, scope
 		if interval < 0 || interval > 365*24*time.Hour {
 			return storage.ErrInvalid
 		}
@@ -454,6 +455,7 @@ func rearmInTx(tx storage.Tx, id domain.ID, expected domain.Revision, next *doma
 func (t *Timers) Fire(ctx context.Context, id domain.ID, expected domain.Revision, replacement *domain.Timer) (result TimerFire, err error) {
 	now := t.now()
 	err = t.store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		result = TimerFire{}
 		var previous timerFiring
 		ledgerErr := getJSON(tx, timerFiringNamespace, firingKey(id, expected), &previous)
 		if ledgerErr == nil {
@@ -522,6 +524,7 @@ func (t *Timers) Due(ctx context.Context, limit int) (results []TimerFire, err e
 	}
 	var due []domain.Timer
 	err = t.store.Transact(ctx, storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		due = nil
 		all, e := tx.ListTimers()
 		if e != nil {
 			return e

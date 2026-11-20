@@ -173,6 +173,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// lifts; a held turn fails without a process and retries after the reset.
 	var limit limitRecord
 	if err = e.o.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		limit = limitRecord{}
 		_, err := getJSON(tx, e.o.Namespace, limitKey, &limit)
 		return err
 	}); err != nil {

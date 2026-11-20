@@ -61,6 +61,7 @@ func (a Actions) open(ctx context.Context, t extension.ActionTarget) (Ask, bool,
 	var ok bool
 	now := a.now()
 	err := a.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		ok = false
 		var err error
 		rec, err = latestAsk(tx, t.Work.ID)
 		if errors.Is(err, storage.ErrNotFound) {

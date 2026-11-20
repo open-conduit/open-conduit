@@ -775,6 +775,7 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		if s.work != nil {
 			var prior domain.ID
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
+				prior = ""
 				for _, a := range s.events {
 					if a.Sequence >= s.event.Sequence {
 						break
@@ -1250,6 +1251,7 @@ func (r *Router) PendingInputs(ctx context.Context, work domain.ID) (out []Queue
 }
 func (r *Router) Intents(ctx context.Context, work domain.ID) (out []ControlIntent, err error) {
 	err = r.transact(ctx, nil, func(tx storage.Tx) error {
+		out = nil
 		entries, e := tx.List(intentNamespace, "")
 		if e != nil {
 			return e
@@ -1281,7 +1283,10 @@ func RouteDecisionInTx(tx storage.Tx, event domain.ID) (RouteRecord, bool, error
 }
 
 func (r *Router) Decision(ctx context.Context, event domain.ID) (out RouteRecord, err error) {
-	err = r.transact(ctx, nil, func(tx storage.Tx) error { return getJSON(tx, routeNamespace, identity(string(event)), &out) })
+	err = r.transact(ctx, nil, func(tx storage.Tx) error {
+		out = RouteRecord{}
+		return getJSON(tx, routeNamespace, identity(string(event)), &out)
+	})
 	return
 }
 

@@ -263,8 +263,10 @@ func (i *Ingress) Deliver(ctx context.Context, name string, delivery extension.D
 	if encodeErr != nil || len(encoded) > i.options.MaxPageBytes {
 		return nil, nil, extension.ErrInvalid
 	}
-	accepted, added := []domain.AcceptedEvent{}, []bool{}
+	var accepted []domain.AcceptedEvent
+	var added []bool
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		accepted, added = []domain.AcceptedEvent{}, []bool{}
 		for _, observation := range result.Observations {
 			if err := validateObservation(tx, r, observation); err != nil {
 				return err
@@ -318,8 +320,9 @@ func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
 	}
 	i.mu.RUnlock()
 	sort.Slice(regs, func(a, b int) bool { return regs[a].name < regs[b].name })
-	out := []IngressStatus{}
+	var out []IngressStatus
 	err := i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+		out = []IngressStatus{}
 		for _, r := range regs {
 			var state ingressState
 			if err := getJSON(tx, sourceNamespace(r.source), "state", &state); err != nil {

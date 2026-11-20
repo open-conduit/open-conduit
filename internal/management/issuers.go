@@ -299,6 +299,7 @@ func toWireIssuer(r issuerRecord) wireIssuer {
 func (s *Server) listIssuersRoute(c *call) (int, any, error) {
 	var out []wireIssuer
 	err := s.read(c.ctx, func(tx storage.Tx) error {
+		out = nil
 		rs, err := listIssuers(tx)
 		for _, r := range rs {
 			out = append(out, toWireIssuer(r))

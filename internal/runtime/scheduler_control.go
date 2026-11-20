@@ -46,6 +46,7 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 	var executor extension.Executor
 	var dispatch bool
 	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		intent, state, attempt, event, executor, dispatch = ControlIntent{}, ControlState{}, AttemptState{}, domain.Event{}, nil, false
 		if err := getJSON(tx, intentNamespace, id, &intent); err != nil {
 			return err
 		}

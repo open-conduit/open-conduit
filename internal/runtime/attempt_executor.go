@@ -37,7 +37,9 @@ func (r *Router) BackfillExecutors(ctx context.Context) (int, error) {
 	var after *storage.WorkKey
 	for {
 		var page []domain.Work
+		recorded := 0
 		err := r.transact(ctx, nil, func(tx storage.Tx) error {
+			recorded = 0
 			var e error
 			if page, e = tx.QueryWorks(storage.WorkQuery{Order: storage.WorkCreated, After: after, Limit: executorBackfillPage}); e != nil {
 				return e
@@ -61,7 +63,7 @@ func (r *Router) BackfillExecutors(ctx context.Context) (int, error) {
 					if e = tx.SetExecutionExecutor(x.ID, st.Executor); e != nil {
 						return e
 					}
-					given++
+					recorded++
 				}
 			}
 			if len(page) < executorBackfillPage {
@@ -72,6 +74,7 @@ func (r *Router) BackfillExecutors(ctx context.Context) (int, error) {
 		if err != nil {
 			return given, err
 		}
+		given += recorded
 		if len(page) < executorBackfillPage {
 			return given, nil
 		}

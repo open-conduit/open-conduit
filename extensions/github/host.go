@@ -582,8 +582,9 @@ func (x *Extension) sweepGitTokens(ctx context.Context) error {
 	}
 	store := x.svc().Store
 	err := t.SweepGitTokens(ctx, func(ids []domain.ID) (map[domain.ID]bool, error) {
-		live := map[domain.ID]bool{}
+		var live map[domain.ID]bool
 		err := store.Transact(ctx, storage.Guard{Now: x.now()}, func(tx storage.Tx) error {
+			live = map[domain.ID]bool{}
 			for _, id := range ids {
 				e, err := tx.Execution(id)
 				if errors.Is(err, storage.ErrNotFound) {

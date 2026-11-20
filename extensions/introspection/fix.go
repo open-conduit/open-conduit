@@ -118,6 +118,7 @@ func (t *Tools) fix(ctx context.Context, a extension.Authority, in domain.Payloa
 	var reports []Report
 	var known map[string]bool
 	err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		reports, known = nil, nil
 		all, err := Reports(tx, a.ScopeID)
 		if err != nil {
 			return err
