@@ -81,6 +81,8 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                            (override the config's settings.webhooks for this run; TYPE is a tunnel
                            a package provides, such as ngrok or cloudflared, and JSON its config)
+      [--probe-addr 0.0.0.0:8080]
+                           (also serve /livez and /readyz, with no credential, for an orchestrator's probes)
       [--no-tunnel] [--dry-run] [--no-telemetry] [--no-updates]
       (--webhook-addr takes any free local port; 8787 is only an example)
       (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
@@ -119,7 +121,7 @@ daemon needs. Output goes to <state>/logs/service.log.
 ### `open-conduit health`
 
 ```text
-health                     whether the daemon answers
+health                     the daemon's state and components; exits 1 unless it is ready
 ```
 
 ### `open-conduit doctor`

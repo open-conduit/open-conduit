@@ -46,6 +46,7 @@ type OTel struct {
 	logger   otellog.Logger
 	records  metric.Int64Counter
 	duration metric.Float64Histogram
+	latency  metric.Float64Histogram
 	tokens   metric.Int64Counter
 	cost     metric.Float64Counter
 }
@@ -67,6 +68,9 @@ func NewOTel(o OTelOptions) (*OTel, error) {
 		return nil, err
 	}
 	if x.duration, err = m.Float64Histogram("open_conduit.execution.duration", metric.WithDescription("Attempt wall-clock duration from first claim to terminal outcome"), metric.WithUnit("s")); err != nil {
+		return nil, err
+	}
+	if x.latency, err = m.Float64Histogram("open_conduit.execution.start_latency", metric.WithDescription("Time from a start's trigger Event being accepted to the attempt starting or resuming"), metric.WithUnit("s")); err != nil {
 		return nil, err
 	}
 	if x.tokens, err = m.Int64Counter("open_conduit.execution.tokens", metric.WithDescription("Executor-reported token usage"), metric.WithUnit("{token}")); err != nil {
@@ -216,6 +220,9 @@ func (x *OTel) one(ctx context.Context, r observability.Record) {
 	binding := attribute.String("executor.binding", c.ExecutorBinding)
 	if strings.HasPrefix(r.Name, "execution.") && r.Attributes["execution.duration_ms"] != "" {
 		x.duration.Record(ctx, seconds, metric.WithAttributes(binding, attribute.String("outcome", r.Attributes["outcome.kind"])))
+	}
+	if ms, err := strconv.ParseInt(r.Attributes["execution.start_latency_ms"], 10, 64); err == nil && ms >= 0 {
+		x.latency.Record(ctx, float64(ms)/1000, metric.WithAttributes(binding, attribute.String("record", r.Name)))
 	}
 	if u := r.Usage; u != nil {
 		for kind, v := range map[string]*uint64{"input": u.InputTokens, "output": u.OutputTokens, "cached": u.CachedTokens} {

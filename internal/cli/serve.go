@@ -31,7 +31,10 @@ type ServeRequest struct {
 	// expose it. Empty values fall back to the config's settings.webhooks.
 	WebhookAddr, TunnelKind, PublicURL string
 	TunnelConfig                       json.RawMessage
-	NoTunnel, DryRun                   bool
+	// ProbeAddr enables the probe listener (/livez and /readyz, no
+	// credential) on a TCP address (--probe-addr); off when empty.
+	ProbeAddr        string
+	NoTunnel, DryRun bool
 	// NoTelemetry turns off the anonymous usage reports: --no-telemetry,
 	// or OPEN_CONDUIT_NO_TELEMETRY or DO_NOT_TRACK set in the environment.
 	NoTelemetry bool
@@ -130,7 +133,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -174,7 +177,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 		tunnelConfig = json.RawMessage(rawConfig)
 	}
 	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep, CallTimeout: *call,
-		WebhookAddr: fs.get("webhook-addr"), TunnelKind: kind, TunnelConfig: tunnelConfig, PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun}
+		WebhookAddr: fs.get("webhook-addr"), TunnelKind: kind, TunnelConfig: tunnelConfig, PublicURL: fs.get("public-url"), ProbeAddr: fs.get("probe-addr"), NoTunnel: *noTunnel, DryRun: *dryRun}
 	if *usage {
 		fmt.Fprintln(o.errOut, `open-conduit: --claude-usage is retired and does nothing: set "usage": true in a claude-code binding's config`)
 	}

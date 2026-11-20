@@ -80,7 +80,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		pass.phase("retention", func() { d.retentionPass(ctx, c, &lastSweep) })
 		pass.phase("backup", func() { d.scheduleBackup(ctx) })
 		pass.done(ctx)
-		d.passed()
+		d.passDone()
 		select {
 		case <-ctx.Done():
 			return nil

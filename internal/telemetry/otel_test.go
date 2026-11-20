@@ -50,7 +50,7 @@ func TestOTelMapping(t *testing.T) {
 	c := observability.Correlation{WorkID: "work/w", EventID: "event/e", ExecutionID: "work/w/attempt/1", ScopeID: "ops", ExecutorBinding: "agent", TraceID: trace}
 	in, out := uint64(1200), uint64(300)
 	cost := 0.042
-	started := observability.Record{Name: "execution.started", At: at, Correlation: c, From: "pending", To: "running", Attributes: map[string]string{"trigger.type": "operator.requested", "record_id": "a"}}
+	started := observability.Record{Name: "execution.started", At: at, Correlation: c, From: "pending", To: "running", Attributes: map[string]string{"trigger.type": "operator.requested", "execution.start_latency_ms": "2500", "record_id": "a"}}
 	failed := observability.Record{Name: "execution.failed", At: at.Add(90 * time.Second), Correlation: c, From: "running", To: "failed", Attributes: map[string]string{"outcome.kind": "failed", "execution.duration_ms": "90000", "record_id": "b"}, Usage: &observability.Measurement{InputTokens: &in, OutputTokens: &out, Cost: &cost, Currency: "USD"}}
 	accepted := observability.Record{Name: "event.accepted", At: at, Correlation: observability.Correlation{EventID: "event/root", ScopeID: "ops", TraceID: "not-hex"}, Attributes: map[string]string{"event.type": "operator.requested", "record_id": "c"}}
 	for _, r := range []observability.Record{started, failed, accepted} {
@@ -133,6 +133,15 @@ func TestOTelMapping(t *testing.T) {
 	duration := metrics["open_conduit.execution.duration"].(metricdata.Histogram[float64])
 	if len(duration.DataPoints) != 1 || duration.DataPoints[0].Sum != 90 {
 		t.Fatalf("duration %+v", duration.DataPoints)
+	}
+	latency := metrics["open_conduit.execution.start_latency"].(metricdata.Histogram[float64])
+	if len(latency.DataPoints) != 1 || latency.DataPoints[0].Sum != 2.5 {
+		t.Fatalf("start latency %+v", latency.DataPoints)
+	}
+	for _, kv := range latency.DataPoints[0].Attributes.ToSlice() {
+		if k := string(kv.Key); k != "executor.binding" && k != "record" {
+			t.Fatalf("high-cardinality latency attribute %s", k)
+		}
 	}
 	tokens := metrics["open_conduit.execution.tokens"].(metricdata.Sum[int64])
 	total := int64(0)

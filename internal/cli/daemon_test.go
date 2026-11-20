@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/client"
@@ -97,6 +99,44 @@ func TestHealthAndDoctorWithoutDaemon(t *testing.T) {
 		_, errOut, code = run(cmd)
 		if code != 1 || !strings.Contains(errOut, "operator token file unavailable") || !strings.Contains(errOut, "a daemon is running") {
 			t.Fatalf("%s with daemon, no token: %d %q", cmd, code, errOut)
+		}
+	}
+}
+
+// health prints the daemon's answer and exits 0 only when it is ready, so
+// an exec probe tells a degraded or starting daemon from a ready one.
+func TestHealthExitsByState(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "oc-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	env := map[string]string{"XDG_STATE_HOME": filepath.Join(root, "state"), "XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}
+	stateDir := filepath.Join(root, "state", "open-conduit")
+	if err = os.MkdirAll(filepath.Join(stateDir, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(stateDir, "private", "operator.token"), []byte(`{"token_id": "t1", "token": "secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(stateDir, "management.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	var state atomic.Value
+	go func() {
+		_ = http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"schema": "open-conduit.management.v1", "data": map[string]any{"state": state.Load(), "components": map[string]string{"host_loop": "stalled"}}})
+		}))
+	}()
+	for s, want := range map[string]int{"ready": 0, "degraded": 1, "starting": 1, "stopping": 1} {
+		state.Store(s)
+		var out, errOut bytes.Buffer
+		code := RunOperator("test", "abc", []string{"health"}, Env{Getenv: func(k string) string { return env[k] }, Cwd: root}, &out, &errOut)
+		if code != want || !strings.Contains(out.String(), `"state": "`+s+`"`) {
+			t.Fatalf("%s: exit %d (want %d) %s %s", s, code, want, out.String(), errOut.String())
 		}
 	}
 }
