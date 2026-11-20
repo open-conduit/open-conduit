@@ -407,14 +407,38 @@ func (p *Projector) desired(w domain.Work, latest *domain.Execution, held bool) 
 	return out
 }
 
-func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
-	var out []projected
+// worksCursor keys the projection's change cursor: the since of its next
+// read of Work (storage.LiveOrChanged).
+const worksCursor = "works/cursor"
+
+type changeCursor struct {
+	Since time.Time `json:"since"`
+}
+
+// pass is what one projection pass read: the issues to project, the Work
+// it read for them, and the cursor it read them from.
+type pass struct {
+	items []projected
+	works []domain.Work
+	since time.Time
+}
+
+// snapshot reads the Work of the projector's scope that is live or changed
+// since its cursor, not every Work ever made: finished Work is projected
+// once it settles, and the cursor only passes it then (saveWorksCursor).
+func (p *Projector) snapshot(ctx context.Context) (pass, error) {
+	var out pass
 	err := p.transact(ctx, func(tx storage.Tx) error {
-		out = nil
-		works, err := tx.ListWorks()
+		out = pass{}
+		var cur changeCursor
+		if _, err := p.get(tx, worksCursor, &cur); err != nil {
+			return err
+		}
+		works, err := storage.LiveOrChanged(tx, storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope)}, cur.Since)
 		if err != nil {
 			return err
 		}
+		out.works, out.since = works, cur.Since
 		byIssue := map[int]projected{}
 		for _, w := range works {
 			if string(w.ScopeID) != p.o.Settings.Scope {
@@ -461,8 +485,7 @@ func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
 			switch {
 			case !ok:
 				byIssue[number] = item
-			case prev.work.State.Terminal() && !w.State.Terminal(),
-				prev.work.State.Terminal() == w.State.Terminal() && w.CreatedAt.After(prev.work.CreatedAt):
+			case supersedes(w, prev.work):
 				item.intents = append(prev.intents, item.intents...)
 				byIssue[number] = item
 			default:
@@ -476,11 +499,28 @@ func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
 		}
 		sort.Ints(numbers)
 		for _, n := range numbers {
-			out = append(out, byIssue[n])
+			out.items = append(out.items, byIssue[n])
 		}
 		return nil
 	})
 	return out, err
+}
+
+// supersedes says whether w, rather than prev, is the Work an issue's labels
+// project: live Work over finished, else the later created.
+func supersedes(w, prev domain.Work) bool {
+	return prev.State.Terminal() && !w.State.Terminal() ||
+		prev.State.Terminal() == w.State.Terminal() && w.CreatedAt.After(prev.CreatedAt)
+}
+
+// saveWorksCursor moves the change cursor past the finished Work the pass
+// settled (storage.NextChangeCursor).
+func (p *Projector) saveWorksCursor(ctx context.Context, read pass, unsettled map[domain.ID]bool) error {
+	next := storage.NextChangeCursor(read.since, time.Time{}, read.works, func(w domain.Work) bool { return unsettled[w.ID] })
+	if next.Equal(read.since) {
+		return nil
+	}
+	return p.transact(ctx, func(tx storage.Tx) error { return p.put(tx, worksCursor, changeCursor{Since: next}) })
 }
 
 func labelDigest(labels []string) string {
@@ -540,10 +580,14 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	if limit <= 0 {
 		limit = 50
 	}
-	items, err := p.snapshot(ctx)
+	read, err := p.snapshot(ctx)
 	if err != nil {
 		return res, err
 	}
+	items := read.items
+	// unsettled is the Work whose labels or outcome comments this pass
+	// left to a later one; the change cursor stays before it.
+	unsettled := map[domain.ID]bool{}
 	fail := func(stage string, err error) error {
 		var limitErr *RateLimitError
 		if errors.As(err, &limitErr) {
@@ -561,16 +605,34 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	if p.o.Settings.TrackIssues {
 		for _, item := range items {
 			if budget <= 0 {
-				break
+				unsettled[item.work.ID] = true
+				continue
 			}
 			key := "labels/" + strconv.Itoa(item.number)
 			var st labelState
+			superseded := false
 			if err := p.transact(ctx, func(tx storage.Tx) error {
-				st = labelState{}
-				_, e := p.get(tx, key, &st)
+				st, superseded = labelState{}, false
+				if _, e := p.get(tx, key, &st); e != nil {
+					return e
+				}
+				if !item.work.State.Terminal() || st.Work == "" || st.Work == item.work.ID {
+					return nil
+				}
+				// The pass reads finished Work only once it changes, so
+				// the Work the labels last projected may be one it didn't
+				// read; when that one still wins, the labels stand.
+				last, e := tx.Work(st.Work)
+				if errors.Is(e, storage.ErrNotFound) {
+					return nil
+				}
+				superseded = e == nil && supersedes(last, item.work)
 				return e
 			}); err != nil {
 				return res, err
+			}
+			if superseded {
+				continue
 			}
 			want := labelDigest(p.desired(item.work, item.latest, item.held))
 			// Terminal Work is settled: its labels are applied once.
@@ -581,6 +643,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			budget--
 			desired, closed, err := p.converge(ctx, item)
 			if err != nil {
+				unsettled[item.work.ID] = true
 				if stop := fail("labels", err); stop != nil {
 					return res, stop
 				}
@@ -611,7 +674,8 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	for _, item := range items {
 		for _, in := range item.intents {
 			if intents >= limit {
-				break
+				unsettled[in.Work] = true
+				continue
 			}
 			state, err := p.state(ctx, in.ID)
 			if err != nil {
@@ -624,6 +688,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			state, err = p.Deliver(ctx, in)
 			switch {
 			case err != nil:
+				unsettled[in.Work] = true
 				if stop := fail("comment", err); stop != nil {
 					return res, stop
 				}
@@ -631,7 +696,14 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 				res.Recovered++
 			case state == intentPosted:
 				res.Posted++
+			default:
+				unsettled[in.Work] = true // attempted: its search is not due yet
 			}
+		}
+	}
+	if !p.o.Settings.Projection.DryRun {
+		if err := p.saveWorksCursor(ctx, read, unsettled); err != nil {
+			return res, err
 		}
 	}
 	// Durable intents (agent tool calls) whose delivery is unfinished.

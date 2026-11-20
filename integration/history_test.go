@@ -28,6 +28,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -632,5 +633,139 @@ func TestDoctorChecks(t *testing.T) {
 	out.Reset()
 	if code := cli.RunOperator("t", "c", append(args, "doctor", "--json"), cli.Env{Getenv: func(string) string { return "" }}, &out, &errOut); code != 0 || json.Unmarshal([]byte(out.String()), &client.Doctor{}) != nil {
 		t.Fatalf("doctor --json: %d %q", code, out.String())
+	}
+}
+
+// A retention sweep reads the live Work, the finished Work changed since
+// its change cursor and the finished Work that aged since its age cursor,
+// not every Work ever made (#707): once 60 finished Work are counted, a
+// sweep reads the live one, and once they age and expire whole, a sweep
+// reads the live one again, and the one whose attempt's resource hold is
+// uncertain from the held list rather than every aged Work after it. The
+// control, a store answering every query
+// from the whole list, sweeps the same and fails the bound.
+func TestRetentionSweepReadsTheLiveChangedAndAged(t *testing.T) {
+	for _, unqueried := range []bool{false, true} {
+		ctx := context.Background()
+		store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		clock := conformance.NewClock()
+		write := func(fn func(storage.Tx) error) {
+			t.Helper()
+			if err := store.Transact(ctx, storage.Guard{Now: clock.Now()}, fn); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(func(tx storage.Tx) error {
+			return tx.PutScope(domain.Scope{ID: "s", Name: "s", Bindings: []domain.Binding{{Name: "fixture", Executor: "fixture"}}}, 0)
+		})
+		// finish puts Work id with one attempt run to completion; live
+		// leaves the attempt running and the Work with it.
+		finish := func(id string, live bool) {
+			write(func(tx storage.Tx) error {
+				w := domain.Work{ID: domain.ID(id), Kind: "fixture.work", ScopeID: "s", State: domain.WorkReady}
+				if e := tx.PutWork(w, 0); e != nil {
+					return e
+				}
+				trigger, _, e := runtime.AcceptInTx(tx, "s", historyEvent(clock, id+"/trigger", id))
+				if e != nil {
+					return e
+				}
+				xid := domain.ID(id + "/attempt")
+				if e := tx.PutExecution(domain.Execution{ID: xid, WorkID: w.ID, ExecutorBinding: "fixture", Attempt: 1, State: domain.ExecutionPending, TriggerID: trigger.Event.ID}, 0); e != nil {
+					return e
+				}
+				if _, e := tx.Claim(xid, "owner", time.Minute); e != nil || live {
+					return e
+				}
+				x, e := tx.Execution(xid)
+				if e != nil {
+					return e
+				}
+				x.State, x.Outcome = domain.ExecutionCompleted, &domain.Outcome{Kind: domain.OutcomeCompleted}
+				if e = tx.PutExecution(x, x.Revision); e != nil {
+					return e
+				}
+				if w, e = tx.Work(w.ID); e != nil {
+					return e
+				}
+				w.State = domain.WorkCompleted
+				return tx.PutWork(w, w.Revision)
+			})
+		}
+		for i := range 60 {
+			finish(fmt.Sprintf("work-%02d", i), false)
+		}
+		finish("live", true)
+		// stuck's attempt has a resource hold that was never confirmed
+		// released, so its content can't expire; it comes first in the age
+		// order, ahead of the 60.
+		finish("aaa-stuck", false)
+		write(func(tx storage.Tx) error {
+			h := sha256.New()
+			fmt.Fprintf(h, "%d:%s", len("aaa-stuck/attempt"), "aaa-stuck/attempt")
+			state, _ := json.Marshal(map[string]any{"ExecutionID": "aaa-stuck/attempt", "WorkID": "aaa-stuck", "Excluded": false})
+			return tx.Put("core.scheduler.attempts", hex.EncodeToString(h.Sum(nil)), state)
+		})
+		read := 0
+		counted := recordCounter{Store: store, read: &read, unqueried: unqueried}
+		router, err := runtime.NewRouter(counted, clock.Now, runtime.RouterOptions{Generation: "g", Handlers: map[string]extension.RouteHandler{}, Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: routingFixtureExecutor{}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sched, err := runtime.NewScheduler(counted, clock.Now, router, runtime.SchedulerOptions{Owner: "owner", LeaseDuration: time.Minute, Generation: "g", Executors: map[string]extension.Executor{"fixture": routingFixtureExecutor{}}, KeptFinished: 24 * time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sweep := func() runtime.RetentionResult {
+			t.Helper()
+			read = 0
+			r, err := sched.SweepRetention(ctx, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		}
+		// touch changes the live Work, so the change cursor, a lag behind
+		// the latest change read, passes what came before.
+		touch := func() {
+			write(func(tx storage.Tx) error {
+				w, e := tx.Work("live")
+				if e != nil {
+					return e
+				}
+				return tx.PutWork(w, w.Revision)
+			})
+		}
+		bound := func(stage string, limit int) {
+			t.Helper()
+			if unqueried == (read <= limit) {
+				t.Fatalf("unqueried %v, %s: a sweep read %d records, bound %d", unqueried, stage, read, limit)
+			}
+		}
+		if r := sweep(); len(r.Expired) != 0 {
+			t.Fatalf("expired within kept_finished_days: %+v", r)
+		}
+		clock.Advance(2 * storage.ChangeLag)
+		touch()
+		sweep()
+		sweep()
+		// The live Work and its attempt, and the first finished Work not
+		// yet aged.
+		bound("counted", 3)
+		// A day on, the 60 have aged: one sweep expires them whole.
+		clock.Advance(25 * time.Hour)
+		touch()
+		if r := sweep(); len(r.Expired) != 60 {
+			t.Fatalf("aged sweep expired %d, want 60", len(r.Expired))
+		}
+		// The stuck Work's hold doesn't hold the age cursor back: it is read
+		// from the held list (it and its attempt), beside the live Work, its
+		// attempt and the first not yet aged.
+		sweep()
+		bound("expired", 5)
 	}
 }

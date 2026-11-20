@@ -296,40 +296,30 @@ func (t *storeTx) Work(id domain.ID) (domain.Work, error) {
 
 func (t *storeTx) ListWorks() ([]domain.Work, error) { return t.h.Works(t.ctx, "") }
 
-// LiveWorks filters ListWorks: the host serves no narrower read.
+// LiveWorks reads the Work not finished through state.works, which the host
+// serves from its index: the cost follows the live set.
 func (t *storeTx) LiveWorks() ([]domain.Work, error) {
-	works, err := t.ListWorks()
+	works, err := t.h.QueryWorks(t.ctx, storage.WorkQuery{States: storage.LiveWorkStates}, nil)
 	if err != nil {
 		return nil, err
 	}
-	out := []domain.Work{}
-	for _, w := range works {
-		if !w.State.Terminal() {
-			out = append(out, w)
-		}
-	}
-	return out, nil
+	sort.Slice(works, func(i, j int) bool { return works[i].ID < works[j].ID })
+	return works, nil
 }
 
-// QueryWorks, CountWorks and WorkFacets select from ListWorks: the host
-// serves no narrower read.
+// QueryWorks reads through state.works, which the host serves from its
+// indexes. CountWorks and WorkFacets read every Work q selects, so their
+// cost follows those Work, not every Work ever made.
 func (t *storeTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
-	if !q.Order.Valid() {
-		return nil, storage.ErrInvalid
-	}
-	works, err := t.ListWorks()
-	if err != nil {
-		return nil, err
-	}
-	page, _ := storage.SelectWorks(works, q)
-	return page, nil
+	return t.h.QueryWorks(t.ctx, q, nil)
 }
 func (t *storeTx) CountWorks(q storage.WorkQuery) (int, error) {
 	f, err := t.WorkFacets(q)
 	return f.Count, err
 }
 func (t *storeTx) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
-	works, err := t.ListWorks()
+	q.After, q.Limit = nil, 0
+	works, err := t.h.QueryWorks(t.ctx, q, nil)
 	if err != nil {
 		return storage.WorkFacets{}, err
 	}
@@ -365,19 +355,17 @@ func (t *storeTx) LiveExecutions() ([]domain.Execution, error) {
 	return out, nil
 }
 
+// WorkByCorrelation reads the Work owning k through state.works, which the
+// host answers from its correlation index.
 func (t *storeTx) WorkByCorrelation(k domain.CorrelationKey) (domain.Work, error) {
-	works, err := t.ListWorks()
+	works, err := t.h.QueryWorks(t.ctx, storage.WorkQuery{}, &k)
 	if err != nil {
 		return domain.Work{}, err
 	}
-	for _, w := range works {
-		for _, own := range w.CorrelationKeys {
-			if own == k {
-				return w, nil
-			}
-		}
+	if len(works) == 0 {
+		return domain.Work{}, storage.ErrNotFound
 	}
-	return domain.Work{}, storage.ErrNotFound
+	return works[0], nil
 }
 
 func (t *storeTx) ListExecutions(work domain.ID) ([]domain.Execution, error) {
@@ -407,17 +395,9 @@ func (t *storeTx) ListExecutions(work domain.ID) ([]domain.Execution, error) {
 	return xs, nil
 }
 
+// Execution reads one attempt through state.execution.
 func (t *storeTx) Execution(id domain.ID) (domain.Execution, error) {
-	xs, err := t.ListExecutions("")
-	if err != nil {
-		return domain.Execution{}, err
-	}
-	for _, x := range xs {
-		if x.ID == id {
-			return x, nil
-		}
-	}
-	return domain.Execution{}, storage.ErrNotFound
+	return t.h.Execution(t.ctx, id)
 }
 
 func (t *storeTx) Event(id domain.ID) (domain.AcceptedEvent, error) {
@@ -558,17 +538,10 @@ func (t *storeTx) LatestSequence() (uint64, error) {
 	return out.Sequence, nil
 }
 
+// EventByDelivery reads one Event through state.delivery, which the host
+// answers from its delivery index.
 func (t *storeTx) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
-	all, err := t.Events(0, 0)
-	if err != nil {
-		return domain.AcceptedEvent{}, err
-	}
-	for _, a := range all {
-		if a.Event.Source == source && a.Event.DeliveryID == deliveryID {
-			return a, nil
-		}
-	}
-	return domain.AcceptedEvent{}, storage.ErrNotFound
+	return t.h.EventByDelivery(t.ctx, source, deliveryID)
 }
 
 func (t *storeTx) ListScopes() ([]domain.Scope, error) {

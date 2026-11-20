@@ -198,18 +198,12 @@ func (p *Projector) wantedMessages(ctx context.Context) ([]wanted, error) {
 	var as []asking
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		as = nil
-		works, err := tx.ListWorks()
+		works, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), States: askingStates})
 		if err != nil {
 			return err
 		}
-		byID := make(map[domain.ID]domain.Work, len(works))
+		f := newFamily(tx)
 		for _, w := range works {
-			byID[w.ID] = w
-		}
-		for _, w := range works {
-			if string(w.ScopeID) != p.o.Settings.Scope || w.State != domain.WorkWaiting && w.State != domain.WorkReady {
-				continue
-			}
 			binding, err := latestBinding(tx, w.ID)
 			if err != nil {
 				return err
@@ -217,7 +211,9 @@ func (p *Projector) wantedMessages(ctx context.Context) ([]wanted, error) {
 			a := asking{asker: asker{work: w, who: p.who(w, binding)}}
 			if c, t, ok := p.Thread(w); ok {
 				a.channel, a.thread = c, t
-			} else if anc, ok := p.conversationOf(w, byID); ok {
+			} else if anc, ok, err := p.conversationOf(w, f); err != nil {
+				return err
+			} else if ok {
 				a.channel, a.thread, _ = p.Thread(anc)
 			}
 			as = append(as, a)

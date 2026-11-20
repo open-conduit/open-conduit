@@ -504,6 +504,18 @@ func TestTrackerCompletedClosedIssueDropsTheClaim(t *testing.T) {
 			// yet landed): still claimed, so nobody else picks it up.
 			labelled(finished, l.Claimed)
 			labelled(failed, l.Claimed, l.Status("help"))
+			// A later change moves the projection's change cursor past the
+			// finished Work (#707): the completed Work on an open issue is
+			// still read, from the watch list, until its issue closes.
+			e.clock.Add(2 * storage.ChangeLag)
+			e.read(func(tx storage.Tx) error {
+				w, err := tx.Work(works[done])
+				if err != nil {
+					return err
+				}
+				return tx.PutWork(w, w.Revision)
+			})
+			e.converge()
 			for _, key := range []string{finished, failed} {
 				f.move(key, f.done)
 			}

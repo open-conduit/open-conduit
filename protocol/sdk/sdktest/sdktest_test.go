@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
@@ -262,5 +263,85 @@ func TestStoreWorkEventsReadsOnlyTheWorksEvents(t *testing.T) {
 	}
 	if read <= 3 {
 		t.Fatalf("negative control: scanning state.events read only %d events; the bound catches nothing", read)
+	}
+}
+
+// storeReads reads through sdk.Store over 2,500 finished Work in s1 with
+// three live among them: the live Work, the Work changed since a time in
+// updated order, one Work by its key, one attempt by ID and the facets of
+// the finished. It reports what came back and how many Work and Execution
+// records the host sent.
+func storeReads(t *testing.T, opts ...sdktest.Option) (live, changed []domain.ID, owner domain.ID, attempt domain.ID, facets storage.WorkFacets, read int) {
+	t.Helper()
+	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	var works []domain.Work
+	for i := range 2500 {
+		state := domain.WorkCompleted
+		if i == 10 || i == 1200 || i == 2400 {
+			state = domain.WorkRunning
+		}
+		works = append(works, domain.Work{ID: domain.ID(fmt.Sprintf("w-%04d", i)), Kind: "acme.job", ScopeID: "s1", State: state,
+			CorrelationKeys: []domain.CorrelationKey{{Source: "acme", ExternalID: fmt.Sprint(i)}},
+			CreatedAt:       at.Add(time.Duration(i) * time.Second), UpdatedAt: at.Add(time.Duration(i) * time.Second)})
+	}
+	h := sdktest.New(t, task(func(ctx context.Context, h *sdk.Host) error {
+		return sdk.NewStore(h).Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+			ws, err := tx.LiveWorks()
+			if err != nil {
+				return err
+			}
+			for _, w := range ws {
+				live = append(live, w.ID)
+			}
+			if ws, err = tx.QueryWorks(storage.WorkQuery{UpdatedSince: at.Add(2497 * time.Second), Order: storage.WorkUpdated}); err != nil {
+				return err
+			}
+			for _, w := range ws {
+				changed = append(changed, w.ID)
+			}
+			w, err := tx.WorkByCorrelation(domain.CorrelationKey{Source: "acme", ExternalID: "1200"})
+			if err != nil {
+				return err
+			}
+			owner = w.ID
+			x, err := tx.Execution("x-1200")
+			if err != nil {
+				return err
+			}
+			attempt = x.WorkID
+			facets, err = tx.WorkFacets(storage.WorkQuery{States: []domain.WorkState{domain.WorkCompleted}, Limit: 1})
+			return err
+		})
+	}), append([]sdktest.Option{sdktest.WithScopes(domain.Scope{ID: "s1"}), sdktest.WithWorks(works...), sdktest.WithExecutions(domain.Execution{ID: "x-1200", WorkID: "w-1200", Attempt: 1, State: domain.ExecutionRunning})}, opts...)...)
+	if err := h.RunTask(context.Background(), "acme-sync"); err != nil {
+		t.Fatal(err)
+	}
+	return live, changed, owner, attempt, facets, h.RecordsRead()
+}
+
+// sdk.Store's Work and attempt reads go through state.works' query and
+// state.execution, so the host sends what each selects, not every Work
+// ever made (#707), and a read selecting more than a page pages. A host
+// that ignores the query (one that predates it) gets the same answers,
+// and is the negative control: it fails the bound.
+func TestStoreWorkReadsFollowWhatTheySelect(t *testing.T) {
+	check := func(name string, live, changed []domain.ID, owner, attempt domain.ID, facets storage.WorkFacets) {
+		t.Helper()
+		if !slices.Equal(live, []domain.ID{"w-0010", "w-1200", "w-2400"}) || !slices.Equal(changed, []domain.ID{"w-2497", "w-2498", "w-2499"}) ||
+			owner != "w-1200" || attempt != "w-1200" || facets.Count != 2497 || !slices.Equal(facets.ScopeIDs, []domain.ID{"s1"}) {
+			t.Fatalf("%s: live %v changed %v owner %s attempt %s facets %+v", name, live, changed, owner, attempt, facets)
+		}
+	}
+	live, changed, owner, attempt, facets, read := storeReads(t)
+	check("indexed", live, changed, owner, attempt, facets)
+	// The facets read every finished Work (2,497, three pages); the
+	// rest read eight records.
+	if read > 2497+8 {
+		t.Fatalf("the reads took %d records from the host, want at most %d", read, 2497+8)
+	}
+	live, changed, owner, attempt, facets, read = storeReads(t, sdktest.WithUnqueriedWorks())
+	check("unqueried", live, changed, owner, attempt, facets)
+	if read <= 2497+8 {
+		t.Fatalf("negative control: a host ignoring the query sent only %d records; the bound catches nothing", read)
 	}
 }

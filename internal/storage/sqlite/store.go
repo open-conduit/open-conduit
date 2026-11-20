@@ -550,6 +550,9 @@ type transaction struct {
 	ctx    context.Context
 	now    time.Time
 	live   bool
+	// workStamp is the UpdatedAt this transaction gives the Work it writes
+	// (workStampInTx), once the first write has found it.
+	workStamp time.Time
 }
 
 // usable reports why no more statements may run in the transaction, if any.

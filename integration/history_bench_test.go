@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,8 +15,10 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -266,17 +269,31 @@ func BenchmarkHistoryCapacity(b *testing.B) {
 }
 
 // A retention sweep with nothing to expire: every Work finished within
-// kept_finished_days, one attempt each.
+// kept_finished_days, one attempt each. As in a running daemon, an earlier
+// sweep has counted the finished Work and the clock has moved on since, so
+// a sweep reads the live Work and what changed since its cursors (#707).
 func BenchmarkHistoryRetention(b *testing.B) {
-	benchHistory(b, func(b *testing.B, h *history) {
-		if _, err := h.sched.SweepRetention(context.Background(), 100); err != nil {
-			b.Fatal(err)
-		}
-	})
+	for _, n := range historySizes {
+		b.Run(fmt.Sprintf("events=%d", n), func(b *testing.B) {
+			h := seedHistory(b, n)
+			h.clock.Advance(2 * storage.ChangeLag)
+			for range 2 {
+				if _, err := h.sched.SweepRetention(context.Background(), 100); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ResetTimer()
+			for range b.N {
+				if _, err := h.sched.SweepRetention(context.Background(), 100); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
-// Every Work, in one transaction: what startReady read before LiveWorks, and
-// what the retention sweep still reads.
+// Every Work, in one transaction: what startReady read before LiveWorks,
+// and the retention sweep and the projections before #707.
 func BenchmarkHistoryListWorks(b *testing.B) {
 	benchHistory(b, func(b *testing.B, h *history) {
 		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error { _, e := tx.ListWorks(); return e }); err != nil {
@@ -298,5 +315,55 @@ func BenchmarkHistoryWorkEvents(b *testing.B) {
 		}); err != nil {
 			b.Fatal(err)
 		}
+	})
+}
+
+// historyService is the extension host's side of the protocol for a
+// package configured in the history's scope, as the daemon serves state
+// reads to a projection.
+func historyService(b *testing.B, h *history) *extproc.Service {
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "fixture", Version: "1.0.0", Command: []string{"./fixture"}}
+	s, err := extproc.NewService(m, extproc.Deps{Store: h.store, Now: h.clock.Now, Scopes: func() []domain.ID { return []domain.ID{"history-scope"} }})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return s
+}
+
+func historyWorks(b *testing.B, s *extproc.Service, p protocol.StateParams) int {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		b.Fatal(err)
+	}
+	out, err := s.Handle(context.Background(), "state.works", raw)
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Encode the answer, as the host does across stdio.
+	data, err := json.Marshal(out)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return len(data)
+}
+
+// A settled projection pass's reads of Work through the extension host
+// (#707): the scope's live Work, and the finished Work changed since its
+// cursor, each served from the store's indexes in a View and encoded as
+// the host sends them. Every seeded Work finished before the cursor.
+func BenchmarkHistoryProjectionReads(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		s := historyService(b, h)
+		since := h.clock.Now().Add(time.Second)
+		historyWorks(b, s, protocol.WorksParams(storage.WorkQuery{ScopeID: "history-scope", States: storage.LiveWorkStates}, nil))
+		historyWorks(b, s, protocol.WorksParams(storage.WorkQuery{ScopeID: "history-scope", States: []domain.WorkState{domain.WorkCompleted, domain.WorkFailed, domain.WorkCancelled}, UpdatedSince: since, Order: storage.WorkUpdated}, nil))
+	})
+}
+
+// The same pass's read before #707: every Work of the scope through
+// state.works, encoded as the host sends it.
+func BenchmarkHistoryProjectionFullList(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		historyWorks(b, historyService(b, h), protocol.StateParams{ScopeID: "history-scope"})
 	})
 }

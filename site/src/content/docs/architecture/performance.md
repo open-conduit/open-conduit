@@ -237,7 +237,27 @@ Before is the code as of #388, which read every Work, Execution and Wait in thes
 
 Before, an idle pass at a million Events spent about 0.4 s of every second in `Poll` and the two Work lists, all holding the only connection, and each claim added a third of a second. After, the idle pass reads only what is live and costs the same at every size.
 
-What still grows is the retention sweep, which reads every Work record (109 ms at a million Events, 40,000 Work) and its markers, once every 10 minutes. The full Work list is still what management and the projections read.
+What still grew was the retention sweep, which read every Work record and its markers, and the projections, which read the full Work list; #707 below removed both.
+
+### Retention and projections at a million Events (#707)
+
+Two more passes, beside the retention sweep:
+
+- **Projection reads**: what a settled projection pass reads of Work through the extension host, the scope's live Work and the finished Work changed since its cursor (two `state.works` queries), served in a View and encoded as the host sends them.
+- **Projection full list**: the same pass before #707, every Work of the scope through `state.works`, encoded. The GitHub, tracker and Slack projections each made it every five seconds, holding the writer.
+
+The retention sweep is timed as a running daemon makes it: an earlier sweep has counted the finished Work and the clock has moved on. One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, without `-race`, 20 iterations, on a machine busy with other work (so the smallest sizes are noisy):
+
+| Pass | Events | Before | After |
+| --- | ---: | ---: | ---: |
+| Retention (every 10 minutes) | 1,000 | 0.19 ms | 7.1 ms |
+| | 50,000 | 7.9 ms | 3.9 ms |
+| | 1,000,000 | 190 ms | 2.1 ms |
+| Projection (every 5 s, each projection) | 1,000 | 0.54 ms | 0.92 ms |
+| | 50,000 | 20 ms | 0.77 ms |
+| | 1,000,000 | 435 ms | 1.1 ms |
+
+Before is the code as of #353 for retention and the full list for projections. Both now allocate the same at every size (41 KB a sweep, 40 KB a pass) where the full list allocated 183 MB at a million Events. The full `ListWorks` read alone, which retention and every projection made, took 167 ms at a million Events. `TestGitHubProjectionPassReadsTheLiveAndChanged` and `TestRetentionSweepReadsTheLiveChangedAndAged` bound the records each reads, against a store that answers every query from the whole list.
 
 ## Operator views (#523)
 
@@ -308,7 +328,7 @@ The trigger costs most because it carries the whole pending batch each way. Its 
 
 - No load or soak test exists. The timed figures are the extension transport prototype's, the history benchmarks and the in-transaction call budget.
 - Event-ingress throughput, end-to-end scheduler latency, SQLite transaction hold and wait times, recovery time with a large backlog, and daemon RSS, CPU and disk growth under load are all unmeasured.
-- The retention sweep reads every Work record, about 190 ms every 10 minutes at a million Events ([history growth](#history-growth)). Draining an unrouted backlog grows with the backlog's square.
+- Draining an unrouted backlog grows with the backlog's square.
 - The host loop is serial, so one slow reconcile page delays starting Work. No test measures by how much.
 - `admission_limit` is configurable but not enforced by the daemon.
 - The SQLite file has no compaction or Event retention: Events and their acceptance and route records are kept for ever, and they are most of the file.

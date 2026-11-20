@@ -34,6 +34,7 @@ import (
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Clock is the host's clock. Pass conformance.NewClock() and advance it in
@@ -140,6 +141,11 @@ func WithKV(namespace, key string, value []byte) Option {
 // write it relies on doesn't land.
 func WithCommitFailure() Option { return func(h *Host) { h.failCommits = true } }
 
+// WithUnqueriedWorks makes state.works ignore its query and answer every
+// readable Work in one response, as a host that predates the query did, so
+// a test bounding what an extension reads has a negative control.
+func WithUnqueriedWorks() Option { return func(h *Host) { h.unqueried = true } }
+
 // WithKVVersion sets the KV layout the host has recorded for the
 // extension, so Configure asks it to migrate from that version (default:
 // the manifest's kv_version, so no migration runs).
@@ -180,18 +186,21 @@ type Host struct {
 	kv         map[string]map[string][]byte
 	kvVersion  int
 	// failCommits makes every kv.commit fail (WithCommitFailure).
-	failCommits bool
-	commits     []protocol.KVCommitParams
-	secrets     map[secretKey]map[string]string
-	sources     map[string]protocol.SourceDecl
-	writers     map[string]*writer
-	artifacts   []Artifact
-	captured    []protocol.TelemetryEvent
-	authority   extension.Authority
-	calls       int
-	eventsRead  int
-	tunnels     map[string]chan<- string
-	seeds       []func() // run once every option is applied (the clock is set)
+	failCommits  bool
+	commits      []protocol.KVCommitParams
+	secrets      map[secretKey]map[string]string
+	sources      map[string]protocol.SourceDecl
+	writers      map[string]*writer
+	artifacts    []Artifact
+	captured     []protocol.TelemetryEvent
+	authority    extension.Authority
+	calls        int
+	eventsRead   int
+	worksRead    int
+	attemptsRead int
+	unqueried    bool
+	tunnels      map[string]chan<- string
+	seeds        []func() // run once every option is applied (the clock is set)
 }
 
 type secretKey struct {
@@ -569,6 +578,15 @@ func (h *Host) EventsRead() int {
 	return h.eventsRead
 }
 
+// RecordsRead is how many Work and Execution records state.work,
+// state.works, state.executions and state.execution have sent the
+// extension: what its reads of coordination state cost, whatever it kept.
+func (h *Host) RecordsRead() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.worksRead + h.attemptsRead
+}
+
 // Commits returns each kv.commit batch the host applied, in order.
 // Refused batches (a failed check) are not included.
 func (h *Host) Commits() []protocol.KVCommitParams {
@@ -695,7 +713,7 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
 		return out, nil
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.execution", "state.event", "state.delivery", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.pending", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -1021,6 +1039,7 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 	case "state.work":
 		for _, w := range h.works {
 			if w.ID == domain.ID(p.ID) && h.allowedLocked(w.ScopeID) {
+				h.worksRead++
 				return protocol.FromWork(w), nil
 			}
 		}
@@ -1029,11 +1048,24 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 		if p.ScopeID != "" && !h.allowedLocked(domain.ID(p.ScopeID)) {
 			return nil, unauthorized("scope is not configured for this extension")
 		}
-		list := []protocol.Work{}
+		q, key, err := p.Query()
+		if err != nil {
+			return nil, protocol.Errorf(protocol.CodeInvalid, "malformed works query")
+		}
+		var readable []domain.Work
 		for _, w := range h.works {
-			if h.allowedLocked(w.ScopeID) && (p.ScopeID == "" || w.ScopeID == domain.ID(p.ScopeID)) {
-				list = append(list, protocol.FromWork(w))
+			if h.allowedLocked(w.ScopeID) && (key == nil || slices.Contains(w.CorrelationKeys, *key)) {
+				readable = append(readable, w)
 			}
+		}
+		page, _ := storage.SelectWorks(readable, q)
+		if h.unqueried {
+			page = readable
+		}
+		h.worksRead += len(page)
+		list := []protocol.Work{}
+		for _, w := range page {
+			list = append(list, protocol.FromWork(w))
 		}
 		return list, nil
 	case "state.waits":
@@ -1072,7 +1104,30 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 				list = append(list, protocol.FromExecution(x))
 			}
 		}
+		h.attemptsRead += len(list)
 		return list, nil
+	case "state.execution":
+		for _, x := range h.executions {
+			if x.ID != domain.ID(p.ID) {
+				continue
+			}
+			for _, w := range h.works {
+				if w.ID == x.WorkID && h.allowedLocked(w.ScopeID) {
+					h.attemptsRead++
+					return protocol.FromExecution(x), nil
+				}
+			}
+		}
+		return nil, notFound
+	case "state.delivery":
+		for _, a := range h.events {
+			if scope := h.causal[a.Event.ID].scope; p.Source != "" && a.Event.Source == p.Source && a.Event.DeliveryID == p.DeliveryID && h.allowedLocked(scope) {
+				out := protocol.FromAccepted(a)
+				out.ScopeID = string(scope)
+				return out, nil
+			}
+		}
+		return nil, notFound
 	case "state.event":
 		for _, a := range h.events {
 			if scope := h.causal[a.Event.ID].scope; a.Event.ID == domain.ID(p.ID) && h.allowedLocked(scope) {

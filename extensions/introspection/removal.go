@@ -45,7 +45,7 @@ func Retired(tx storage.Tx, configured map[domain.ID]bool) ([]domain.Work, error
 			live[*t.Event.CorrelationKey] = true
 		}
 	}
-	works, err := tx.ListWorks()
+	works, err := retirable(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -85,4 +85,19 @@ func runKey(w domain.Work) (domain.CorrelationKey, bool) {
 		}
 	}
 	return domain.CorrelationKey{}, false
+}
+
+// retirable is the Work of the extension's kinds that a removal could
+// cancel: not finished and not running. It is a query for each kind, so it
+// reads that Work, not every Work ever made.
+func retirable(tx storage.Tx) ([]domain.Work, error) {
+	var out []domain.Work
+	for _, kind := range WorkKinds() {
+		works, err := tx.QueryWorks(storage.WorkQuery{Kind: kind, States: []domain.WorkState{domain.WorkReady, domain.WorkWaiting}})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, works...)
+	}
+	return out, nil
 }

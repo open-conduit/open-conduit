@@ -899,3 +899,109 @@ func TestGitHubIngressSurvivesRestartMidGeneration(t *testing.T) {
 		t.Fatalf("absence after resumed generation: %d", n)
 	}
 }
+
+// recordCounter counts the Work and Execution records a projection's reads
+// return. With unqueried set it answers QueryWorks from the whole list, as
+// state.works did before it took a query (#707): the negative control for
+// the bound, which reads the same and costs every Work ever made.
+type recordCounter struct {
+	storage.Store
+	read      *int
+	unqueried bool
+}
+
+func (s recordCounter) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(recordCounterTx{Tx: tx, s: s}) })
+}
+
+type recordCounterTx struct {
+	storage.Tx
+	s recordCounter
+}
+
+func (t recordCounterTx) ListWorks() ([]domain.Work, error) {
+	works, err := t.Tx.ListWorks()
+	*t.s.read += len(works)
+	return works, err
+}
+
+func (t recordCounterTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	if t.s.unqueried {
+		all, err := t.ListWorks()
+		page, _ := storage.SelectWorks(all, q)
+		return page, err
+	}
+	works, err := t.Tx.QueryWorks(q)
+	*t.s.read += len(works)
+	return works, err
+}
+
+func (t recordCounterTx) Work(id domain.ID) (domain.Work, error) {
+	*t.s.read++
+	return t.Tx.Work(id)
+}
+
+func (t recordCounterTx) ListExecutions(work domain.ID) ([]domain.Execution, error) {
+	xs, err := t.Tx.ListExecutions(work)
+	*t.s.read += len(xs)
+	return xs, err
+}
+
+// A projection pass reads the Work of its scope that is live or changed
+// since its cursor, not every Work ever made: once 40 finished issues are
+// projected, a pass reads the one live issue's records, however many
+// finished ones the store holds (#707). Work that finishes later is still
+// projected, once. The control, a store answering every query from the
+// whole list, projects the same and fails the bound.
+func TestGitHubProjectionPassReadsTheLiveAndChanged(t *testing.T) {
+	for _, unqueried := range []bool{false, true} {
+		e := newGitHubEnv(t)
+		read := 0
+		p, err := gh.NewProjector(gh.ProjectorOptions{Store: recordCounter{Store: e.store, read: &read, unqueried: unqueried}, Client: e.client, Settings: e.settings,
+			Now: e.clock.Now, SearchDelay: 30 * time.Second, Writers: e.writers, Scope: ghScope})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.projector = p
+		var finished []int
+		for i := range 40 {
+			finished = append(finished, e.fake.OpenIssue("Finished "+strconv.Itoa(i), "", ghAlice))
+		}
+		live := e.fake.OpenIssue("Live", "", ghAlice)
+		last := e.fake.OpenIssue("Finishes later", "", ghAlice)
+		e.reconcile()
+		e.route()
+		for _, n := range finished {
+			w, _ := e.workFor("issue/" + strconv.Itoa(n))
+			e.finishAttempt(e.startAttempt(w.ID), domain.WorkCompleted, nil)
+		}
+		lw, _ := e.workFor("issue/" + strconv.Itoa(live))
+		turn := e.startAttempt(lw.ID)
+		e.clock.Add(time.Second)
+		for range 3 {
+			e.converge()
+		}
+		if !equal(e.fake.Labels(finished[0]), "might-be-done") || !equal(e.fake.Labels(live), "agent-in-progress") {
+			t.Fatalf("projection: finished %v live %v", e.fake.Labels(finished[0]), e.fake.Labels(live))
+		}
+		// The cursor stays a lag behind the latest change it read, so it
+		// passes the settled Work once a later change comes: here the live
+		// Work's turn ending.
+		e.clock.Add(2 * storage.ChangeLag)
+		e.finishAttempt(turn, domain.WorkWaiting, nil)
+		e.converge()
+		read = 0
+		e.converge()
+		// The live issue and the one still ready, each with its attempts.
+		if bound := 4; unqueried == (read <= bound) {
+			t.Fatalf("unqueried %v: a settled pass read %d records, bound %d", unqueried, read, bound)
+		}
+		lastWork, _ := e.workFor("issue/" + strconv.Itoa(last))
+		e.finishAttempt(e.startAttempt(lastWork.ID), domain.WorkCompleted, nil)
+		e.clock.Add(time.Second)
+		e.converge()
+		if !equal(e.fake.Labels(last), "might-be-done") {
+			t.Fatalf("unqueried %v: Work finished after the cursor moved: %v", unqueried, e.fake.Labels(last))
+		}
+	}
+}

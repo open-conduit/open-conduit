@@ -135,16 +135,29 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 				pending[rec.Work] = append(pending[rec.Work], rec)
 			}
 		}
-		works, err := tx.ListWorks()
+		// The live conversations, and those finished with a record not
+		// yet done.
+		works, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), Kind: WorkKind, States: storage.LiveWorkStates})
 		if err != nil {
 			return err
 		}
-		children := map[domain.ID][]domain.Work{}
+		f := newFamily(tx)
 		for _, w := range works {
-			if w.ParentID != "" {
-				children[w.ParentID] = append(children[w.ParentID], w)
+			f.works[w.ID] = w
+		}
+		for id := range pending {
+			if _, live := f.works[id]; live {
+				continue
+			}
+			w, ok, err := f.work(id)
+			if err != nil {
+				return err
+			}
+			if ok {
+				works = append(works, w)
 			}
 		}
+		sort.Slice(works, func(i, j int) bool { return works[i].ID < works[j].ID })
 		for _, w := range works {
 			if string(w.ScopeID) != p.o.Settings.Scope || w.Kind != WorkKind {
 				continue
@@ -173,7 +186,11 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 					latest = &a
 				}
 			}
-			kids := children[w.ID]
+			kids, err := f.children(w.ID)
+			if err != nil {
+				return err
+			}
+			kids = slices.Clone(kids)
 			sort.Slice(kids, func(i, j int) bool { return kids[i].CreatedAt.Before(kids[j].CreatedAt) })
 			binding := ""
 			xs, err := tx.ListExecutions(w.ID)
@@ -192,7 +209,7 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 					v.rec.Ended = true
 				}
 				v.children = runChildren(kids, r, v.rec.Ended, latest)
-				if v.askers, err = p.askersOf(tx, v.children, children); err != nil {
+				if v.askers, err = p.askersOf(tx, v.children, f); err != nil {
 					return err
 				}
 				out = append(out, v)
@@ -207,7 +224,7 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 			_ = json.Unmarshal(latest.Event.Data.Data, &pl)
 			rec := progressRecord{Work: w.ID, Run: latest.Event.ID, Seq: latest.Sequence, At: latest.Event.ReceivedAt, Channel: channel, Thread: thread, Message: pl.TS, Binding: binding}
 			v := runView{rec: rec, work: w, latest: latest, children: runChildren(kids, rec, false, latest)}
-			if v.askers, err = p.askersOf(tx, v.children, children); err != nil {
+			if v.askers, err = p.askersOf(tx, v.children, f); err != nil {
 				return err
 			}
 			out = append(out, v)
@@ -218,13 +235,13 @@ func (p *Projector) progressRuns(ctx context.Context) ([]runView, error) {
 }
 
 // askersOf are each of kids' subtrees, when the entry shows child requests.
-func (p *Projector) askersOf(tx storage.Tx, kids []domain.Work, children map[domain.ID][]domain.Work) (map[domain.ID][]asker, error) {
+func (p *Projector) askersOf(tx storage.Tx, kids []domain.Work, f *family) (map[domain.ID][]asker, error) {
 	if !p.o.Settings.ChildRequests || p.o.Requests == nil {
 		return nil, nil
 	}
 	out := map[domain.ID][]asker{}
 	for _, k := range kids {
-		as, err := p.subtree(tx, k, children)
+		as, err := p.subtree(tx, k, f)
 		if err != nil {
 			return nil, err
 		}

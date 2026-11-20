@@ -62,6 +62,55 @@ func (b brokenStepBackTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 	return b.Tx.Renew(ref, ttl)
 }
 
+// clockStamped stamps each Work it writes with the transaction's clock,
+// as storage did before #707, so a Work written after the clock steps back
+// carries a time before changes a reader has already seen.
+type clockStamped struct {
+	storage.Store
+	stamps map[domain.ID]time.Time
+}
+type clockStampedTx struct {
+	storage.Tx
+	b   *clockStamped
+	now time.Time
+}
+
+func (b *clockStamped) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(&clockStampedTx{Tx: tx, b: b, now: g.Now}) })
+}
+func (t *clockStampedTx) PutWork(w domain.Work, expected domain.Revision) error {
+	if err := t.Tx.PutWork(w, expected); err != nil {
+		return err
+	}
+	t.b.stamps[w.ID] = t.now
+	return nil
+}
+func (t *clockStampedTx) Claim(id domain.ID, owner string, ttl time.Duration) (domain.LeaseRef, error) {
+	ref, err := t.Tx.Claim(id, owner, ttl)
+	if x, e := t.Tx.Execution(id); err == nil && e == nil {
+		t.b.stamps[x.WorkID] = t.now
+	}
+	return ref, err
+}
+func (t *clockStampedTx) restamp(w domain.Work) domain.Work {
+	if at, ok := t.b.stamps[w.ID]; ok {
+		w.UpdatedAt = at
+	}
+	return w
+}
+func (t *clockStampedTx) Work(id domain.ID) (domain.Work, error) {
+	w, err := t.Tx.Work(id)
+	return t.restamp(w), err
+}
+func (t *clockStampedTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	all, err := t.Tx.QueryWorks(storage.WorkQuery{})
+	for i := range all {
+		all[i] = t.restamp(all[i])
+	}
+	page, _ := storage.SelectWorks(all, q)
+	return page, err
+}
+
 // serialView reads in a write transaction, so a View queues behind every
 // Transact, as every read did before Views.
 type serialView struct{ *reference.Memory }
@@ -473,6 +522,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
+		{"work_changes_stamped_in_order_across_clock_step_back", "not listed as changed", func() storage.Store { return &clockStamped{Store: reference.New(), stamps: map[domain.ID]time.Time{}} }},
 		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
 		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
 		{"unrouted_input_follows_work_attempts_and_keys", "unrouted input of a Work", func() storage.Store { return brokenUnroutedInput{reference.New()} }},

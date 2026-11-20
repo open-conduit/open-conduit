@@ -408,13 +408,27 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 	}
 	w.Revision = expected + 1
 	w.LatestExecutor = old.LatestExecutor
+	w.UpdatedAt = t.workStamp()
 	w.CreatedAt = old.CreatedAt
 	if !exists {
-		w.CreatedAt = t.now
+		w.CreatedAt = w.UpdatedAt
 	}
-	w.UpdatedAt = t.now
 	t.data.Works[w.ID] = copyOf(w)
 	return nil
+}
+
+// workStamp is the UpdatedAt a Work written now carries: the
+// transaction's now, or the latest UpdatedAt already stored when the clock
+// has stepped back, so a Work's change is never stamped before one a
+// reader has already seen.
+func (t *transaction) workStamp() time.Time {
+	stamp := t.now
+	for _, w := range t.data.Works {
+		if w.UpdatedAt.After(stamp) {
+			stamp = w.UpdatedAt
+		}
+	}
+	return stamp
 }
 func (t *transaction) Execution(id domain.ID) (domain.Execution, error) {
 	v, ok := t.data.Executions[id]
@@ -540,7 +554,7 @@ func (t *transaction) Claim(id domain.ID, owner string, ttl time.Duration) (doma
 		}
 		w.State = domain.WorkRunning
 		w.Revision++
-		w.UpdatedAt = t.now
+		w.UpdatedAt = t.workStamp()
 		t.data.Works[w.ID] = w
 	}
 	x.Lease = domain.Lease{Owner: owner, Epoch: x.Lease.Epoch + 1, ExpiresAt: t.now.Add(ttl)}

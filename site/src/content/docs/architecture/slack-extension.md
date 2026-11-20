@@ -419,7 +419,7 @@ If the new host starts with an empty state directory instead, the entry register
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
 - **Progress messages.** These have been exercised only against the `slacktest` fake; the `plan` block and its updates follow Slack's documented shape and the issue's probe. A plan block and an `actions` block in the same message is not documented by Slack. A turn's status summary isn't shown, and the final reply isn't streamed.
 - **Feedback buttons.** These have been exercised only against the `slacktest` fake; the block follows Slack's documented shape, and issue #674's probe showed `context_actions` renders in a message. The fake doesn't model Slack's own pressed state on the buttons.
-- **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
+- **Volume.** The projector reads its scope's live Work each pass, and the finished Work changed since its change cursor for outcome replies (as GitHub's does, #707); a request's or prompt's Work is read by state, and a child's ancestors and children one by one. The router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
 
 ## History
 

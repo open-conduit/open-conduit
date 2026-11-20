@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"time"
 
@@ -35,6 +36,127 @@ const (
 	retentionIndexNamespace   = "core.retention.index"
 	retentionIndexKey         = "pending"
 )
+
+// retentionCursorNamespace keeps the sweep's cursors (retentionCursor), so
+// a sweep reads the Work that can have something to expire, not every Work
+// ever made.
+const (
+	retentionCursorNamespace = "core.retention.cursor"
+	retentionCursorKey       = "works"
+)
+
+// retentionHeldNamespace lists the finished Work a sweep could not settle
+// because an attempt's resource hold is uncertain, keyed like the other
+// markers. The cursors pass it, and each sweep reads it from this list
+// until it settles, so one stuck attempt costs one read a sweep, not a
+// re-read of everything after it.
+const retentionHeldNamespace = "core.retention.held"
+
+// retentionCursor is where the sweep reads finished Work from. Changed is
+// the change cursor (storage.NextChangeCursor) of Work that finished since
+// the last sweeps, which a sweep expires by count; Aged is the last
+// finished Work, in order of its last change (storage.WorkUpdated), that
+// the sweep has expired whole once older than kept_finished_days (nil
+// before any). Neither passes finished Work a sweep left unsettled. Kept is
+// the kept_executions they were read with.
+type retentionCursor struct {
+	Changed time.Time
+	Aged    *storage.WorkKey
+	Kept    int
+}
+
+// retentionAgedPage is the most finished Work one read of the aged list
+// takes. The first read takes one, and each after it twice as many, so a
+// sweep with nothing aged reads one record.
+const retentionAgedPage = 256
+
+// retentionCandidates is the Work a sweep looks at, in ID order: the live
+// Work and the finished Work changed since cur.Changed (changed), the
+// finished Work last changed after cur.Aged and by finishedBefore (aged,
+// in that order, at most limit of them), and the held Work (held, by ID).
+// Each is read through the store's indexes or by ID, so the sweep's cost
+// follows them, not every Work ever made.
+func retentionCandidates(tx storage.Tx, cur retentionCursor, finishedBefore time.Time, limit int) (works, changed, aged []domain.Work, held map[domain.ID]bool, err error) {
+	if changed, err = storage.LiveOrChanged(tx, storage.WorkQuery{}, cur.Changed); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	rows, err := tx.List(retentionHeldNamespace, "")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	held = make(map[domain.ID]bool, len(rows))
+	var heldWorks []domain.Work
+	for _, row := range rows {
+		var id domain.ID
+		if err = json.Unmarshal(row.Value, &id); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		w, err := tx.Work(id)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		held[id] = true
+		heldWorks = append(heldWorks, w)
+	}
+	q := storage.WorkQuery{States: []domain.WorkState{domain.WorkCompleted, domain.WorkFailed, domain.WorkCancelled}, Order: storage.WorkUpdated, After: cur.Aged, Limit: 1}
+	// At most limit aged Work a sweep: it can expire no more than that, and
+	// the cursor carries on from the last one next sweep.
+	for len(aged) < limit {
+		q.Limit = min(q.Limit, limit-len(aged))
+		page, err := tx.QueryWorks(q)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		for _, w := range page {
+			if w.UpdatedAt.After(finishedBefore) {
+				page = nil
+				break
+			}
+			aged = append(aged, w)
+		}
+		if len(page) < q.Limit {
+			break
+		}
+		k := q.Order.Key(page[len(page)-1])
+		q.After, q.Limit = &k, min(2*q.Limit, retentionAgedPage)
+	}
+	seen := map[domain.ID]bool{}
+	for _, w := range append(append(slices.Clone(changed), aged...), heldWorks...) {
+		if !seen[w.ID] {
+			seen[w.ID] = true
+			works = append(works, w)
+		}
+	}
+	sort.Slice(works, func(i, j int) bool { return works[i].ID < works[j].ID })
+	return works, changed, aged, held, nil
+}
+
+// nextAgedCursor is the aged cursor after a sweep read aged after since:
+// the last of them before the first it left unsettled. Finished Work does
+// not change again, so the cursor needs no lag behind it.
+func nextAgedCursor(since *storage.WorkKey, aged []domain.Work, unsettled map[domain.ID]bool) *storage.WorkKey {
+	next := since
+	for _, w := range aged {
+		if unsettled[w.ID] {
+			break
+		}
+		k := storage.WorkUpdated.Key(w)
+		next = &k
+	}
+	return next
+}
+
+// hasKey says whether namespace holds key.
+func hasKey(tx storage.Tx, namespace, key string) (bool, error) {
+	_, err := tx.Get(namespace, key)
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
 
 // retentionHoldNamespace holds the retention holds, each keyed by its ID
 // with its expiry as the value. While one is live the sweep releases no
@@ -232,52 +354,70 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 		if e := indexRetentionPending(tx); e != nil {
 			return e
 		}
-		doneRows, e := tx.List(retentionDoneNamespace, "")
+		var cur retentionCursor
+		if e := getJSON(tx, retentionCursorNamespace, retentionCursorKey, &cur); e != nil && !errors.Is(e, storage.ErrNotFound) {
+			return e
+		}
+		if kept < cur.Kept {
+			// A lower kept_executions has more to expire on finished Work
+			// already counted: read it all again, once.
+			cur.Changed = time.Time{}
+		}
+		works, changed, aged, held, e := retentionCandidates(tx, cur, finishedBefore, limit)
 		if e != nil {
 			return e
 		}
-		done := make(map[string]bool, len(doneRows))
-		for _, row := range doneRows {
-			done[row.Key] = true
-		}
-		countedRows, e := tx.List(retentionCountedNamespace, "")
-		if e != nil {
-			return e
-		}
-		counted := make(map[string]int, len(countedRows))
-		for _, row := range countedRows {
-			var n int
-			if e = json.Unmarshal(row.Value, &n); e != nil {
-				return e
+		// unsettled is the finished Work this sweep's limit left work on;
+		// the cursors stay before it, so the next sweep reads it again.
+		// Finished Work an uncertain hold leaves goes on the held list
+		// instead, which the cursors pass.
+		unsettled := map[domain.ID]bool{}
+		hold := func(w domain.Work, on bool) error {
+			switch {
+			case on && !held[w.ID]:
+				return putJSON(tx, retentionHeldNamespace, retentionKey(w.ID), w.ID)
+			case !on && held[w.ID]:
+				return tx.Delete(retentionHeldNamespace, retentionKey(w.ID))
 			}
-			counted[row.Key] = n
+			return nil
 		}
-		// Work records are read in full (there are far fewer than attempts
-		// or Events); attempts only for Work that can have one to expire.
-		works, e := tx.ListWorks()
-		if e != nil {
-			return e
-		}
-		for _, w := range works {
+		for i, w := range works {
 			work := w.ID
-			if done[retentionKey(work)] {
+			if len(result.Expired) >= limit {
+				for _, rest := range works[i:] {
+					unsettled[rest.ID] = true
+				}
+				break
+			}
+			if done, e := hasKey(tx, retentionDoneNamespace, retentionKey(work)); e != nil {
+				return e
+			} else if done {
+				if e := hold(w, false); e != nil {
+					return e
+				}
 				continue
 			}
 			finishedAge := w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
-			if n, ok := counted[retentionKey(work)]; ok && w.State.Terminal() && !finishedAge && n <= kept {
+			var n int
+			if e := getJSON(tx, retentionCountedNamespace, retentionKey(work), &n); e == nil && w.State.Terminal() && !finishedAge && n <= kept {
+				if e := hold(w, false); e != nil {
+					return e
+				}
 				continue // Nothing more to expire until it reaches kept_finished_days.
+			} else if e != nil && !errors.Is(e, storage.ErrNotFound) {
+				return e
 			}
 			attempts, e := tx.ListExecutions(work)
 			if e != nil {
 				return e
 			}
 			if len(attempts) == 0 {
+				if e := hold(w, false); e != nil {
+					return e
+				}
 				continue
 			}
 			sort.Slice(attempts, func(i, j int) bool { return attempts[i].Attempt > attempts[j].Attempt })
-			if len(result.Expired) >= limit {
-				break
-			}
 			// A Work whose newest attempt is still live has not finished.
 			finished := attempts[0].State.Terminal() && finishedAge
 			// allExpired stays true while every attempt has a ledger entry,
@@ -318,22 +458,41 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 				}
 				result.Expired = append(result.Expired, x.ID)
 			}
-			if allExpired {
+			counted := w.State.Terminal() && !finished && countSettled
+			switch {
+			case allExpired:
 				if e := tx.Put(retentionDoneNamespace, retentionKey(work), []byte("{}")); e != nil {
 					return e
 				}
 				if e := tx.Delete(retentionCountedNamespace, retentionKey(work)); e != nil {
 					return e
 				}
-			} else if w.State.Terminal() && !finished && countSettled {
+			case counted:
 				// A finished Work gets no new attempts, so until it is old
 				// enough to expire whole, later sweeps need not read it.
 				if e := putJSON(tx, retentionCountedNamespace, retentionKey(work), kept); e != nil {
 					return e
 				}
 			}
+			if !w.State.Terminal() {
+				continue // Live Work is read every sweep.
+			}
+			left := !allExpired && !counted
+			if left && len(result.Expired) >= limit {
+				// The limit stopped it: the cursors wait for it.
+				unsettled[work] = true
+				continue
+			}
+			// What is left is held by an uncertain resource: the held list
+			// reads it again until it settles.
+			if e := hold(w, left); e != nil {
+				return e
+			}
 		}
-		return nil
+		cur.Changed = storage.NextChangeCursor(cur.Changed, now, changed, func(w domain.Work) bool { return unsettled[w.ID] })
+		cur.Aged = nextAgedCursor(cur.Aged, aged, unsettled)
+		cur.Kept = kept
+		return putJSON(tx, retentionCursorNamespace, retentionCursorKey, cur)
 	})
 	if err != nil {
 		return RetentionResult{}, err

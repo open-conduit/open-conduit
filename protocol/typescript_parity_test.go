@@ -54,6 +54,7 @@ var typescriptWire = map[string]any{
 	"KVDelete":             protocol.KVDelete{},
 	"KVCommitParams":       protocol.KVCommitParams{},
 	"StateParams":          protocol.StateParams{},
+	"WorkCursor":           protocol.WorkCursor{},
 	"EventAcceptParams":    protocol.EventAcceptParams{},
 	"EventAcceptResult":    protocol.EventAcceptResult{},
 	"SecretResolveParams":  protocol.SecretResolveParams{},

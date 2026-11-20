@@ -102,6 +102,12 @@ func (t waitsTx) ListWorks() ([]domain.Work, error) {
 	return out, nil
 }
 
+func (t waitsTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	all, _ := t.ListWorks()
+	page, _ := storage.SelectWorks(all, q)
+	return page, nil
+}
+
 // An extension reads and cancels Work of its own declared kinds in any
 // scope, so it can retire Work left where its entry was removed (#428);
 // another kind's Work outside its scopes stays not found and uncancellable.
