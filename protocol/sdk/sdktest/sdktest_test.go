@@ -60,6 +60,46 @@ func TestKVVersionsAndConflicts(t *testing.T) {
 	}
 }
 
+// A key a Store transaction read that changes before it commits applies
+// nothing and is storage.ErrTransient, which storage.Retry reruns over the
+// new value; a conflict rereading cannot cure stays ErrConflict.
+func TestStoreReadConflictIsTransient(t *testing.T) {
+	var direct, retried error
+	runs, moves := 0, 1
+	h := sdktest.New(t, task(func(ctx context.Context, h *sdk.Host) error {
+		bump := func(tx storage.Tx) error {
+			v, err := tx.Get("acme.things", "a")
+			if err != nil {
+				return err
+			}
+			if runs++; runs == 1 {
+				// Another writer moves the key after this run read it.
+				moves++
+				if err := h.Commit(ctx, protocol.KVCommitParams{Puts: []protocol.KVPut{{Namespace: "acme.things", Key: "a", Value: []byte(fmt.Sprint(moves))}}}); err != nil {
+					return err
+				}
+			}
+			return tx.Put("acme.things", "a", append(v, '+'))
+		}
+		direct = sdk.NewStore(h).Transact(ctx, storage.Guard{}, bump)
+		runs = 0
+		retried = storage.Retry(sdk.NewStore(h), storage.RetryPolicy{Attempts: 2}).Transact(ctx, storage.Guard{}, bump)
+		return nil
+	}), sdktest.WithKV("acme.things", "a", []byte("1")))
+	if err := h.RunTask(context.Background(), "acme-sync"); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(direct, storage.ErrTransient) || errors.Is(direct, storage.ErrConflict) {
+		t.Fatalf("a moved read: %v, want ErrTransient", direct)
+	}
+	if retried != nil || runs != 2 {
+		t.Fatalf("retried: %v after %d runs", retried, runs)
+	}
+	if got := h.KV("acme.things"); string(got["a"]) != "3+" {
+		t.Fatalf("kv %q, want the rerun's write over the new value", got)
+	}
+}
+
 func TestStateIsScoped(t *testing.T) {
 	clock := conformance.NewClock()
 	var works []domain.Work

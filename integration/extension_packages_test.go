@@ -593,8 +593,8 @@ func TestSDKStoreOverProtocol(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// A concurrent change to a key the transaction read is a conflict and
-	// applies nothing.
+	// A concurrent change to a key the transaction read applies nothing and
+	// is a transient abort, which storage.Retry reruns.
 	err = store.Transact(ctx, g, func(tx storage.Tx) error {
 		if _, err := tx.Get(notes.IndexNS, "k"); err != nil {
 			return err
@@ -604,7 +604,7 @@ func TestSDKStoreOverProtocol(t *testing.T) {
 		}
 		return tx.Put(notes.IndexNS, "j", []byte("3"))
 	})
-	if !errors.Is(err, storage.ErrConflict) {
+	if !errors.Is(err, storage.ErrTransient) {
 		t.Fatalf("concurrent change: %v", err)
 	}
 	if v, _, _ := host.Get(ctx, notes.IndexNS, "j"); string(v) != "2" {

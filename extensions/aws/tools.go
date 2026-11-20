@@ -85,7 +85,7 @@ func (t tools) register(ext *sdk.Extension) {
 func (t tools) caller(ctx context.Context, a extension.Authority) (string, error) {
 	var w domain.Work
 	var x domain.Execution
-	err := sdk.NewStore(sdk.HostFrom(ctx)).Transact(ctx, storage.Guard{Now: t.st.o.Now()}, func(tx storage.Tx) error {
+	err := storage.Retry(sdk.NewStore(sdk.HostFrom(ctx)), storage.DefaultRetry).Transact(ctx, storage.Guard{Now: t.st.o.Now()}, func(tx storage.Tx) error {
 		var err error
 		if w, err = tx.Work(a.WorkID); err != nil {
 			return err
