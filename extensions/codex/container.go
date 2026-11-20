@@ -19,7 +19,8 @@ import (
 // container the driver is containerDriver: the same loop in /bin/sh, run
 // as the container's command. It runs each turn as RunSegment does and
 // takes the follow-up turn's events from the .md beside each inbox entry,
-// which Inject renders on the host.
+// which Inject renders on the host. As for the host's driver, an entry is
+// delivered only once its .json is there, and each Event is taken once.
 
 // containerPath is a container's PATH unless the binding's env sets one:
 // the daemon's own names host directories.
@@ -51,21 +52,23 @@ n=0
 while :; do
   [ -n "$t" ] || t=$(thread)
   if [ "$c" -ne 0 ] || [ -z "$t" ] || [ "$n" -ge ` + fmt.Sprint(maxFollowUp) + ` ]; then exit "$c"; fi
-  p=
+  p= q=
   for f in "$d/` + inboxDir + `"/*.md; do
-    [ -e "$f" ] || continue
-    g=${f##*-}; g=${g%.md}
-    [ -e "$d/` + inboxDir + `/consumed/$g" ] || p="$p $g"
+    [ -e "${f%.md}.json" ] || continue
+    b=${f##*/}; b=${b%.md}; g=${b##*-}
+    [ -e "$d/` + inboxDir + `/consumed/$g" ] && continue
+    case " $q " in *" $g "*) continue ;; esac
+    p="$p $b" q="$q $g"
   done
   [ -n "$p" ] || exit 0
   {
     cat "$d/` + interjectionFile + `"; sep=
-    for g in $p; do printf '%s' "$sep"; cat "$d/` + inboxDir + `"/*-"$g.md"; sep='
+    for b in $p; do printf '%s' "$sep"; cat "$d/` + inboxDir + `/$b.md"; sep='
 
 '; done
   } >"$d/` + followUpFile + `"
   turn "$d/` + followUpFile + `" "$@"; c=$?
-  for g in $p; do : >"$d/` + inboxDir + `/consumed/$g"; done
+  for g in $q; do : >"$d/` + inboxDir + `/consumed/$g"; done
   n=$((n+1))
 done`
 

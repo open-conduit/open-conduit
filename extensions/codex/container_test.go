@@ -2,6 +2,8 @@ package codex_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -96,6 +98,24 @@ func TestCodexInAContainer(t *testing.T) {
 	if err := e.Inject(context.Background(), "exec-1", domain.Event{ID: "ev-late", Type: "github.issue.comment", Data: domain.Payload{Data: []byte(`{"author":"alex","body":"also this"}`)}}); err != nil {
 		t.Fatal(err)
 	}
+	// What a failed Inject and its retry leave: an earlier entry for the
+	// same Event with no .json, and one for another Event. Neither is
+	// delivered, so the follow-up turn shows the Event once.
+	inbox, _ := filepath.Glob(filepath.Join(f.state, "runs", "*", "*", "inbox"))
+	if len(inbox) != 1 {
+		t.Fatalf("inboxes %v", inbox)
+	}
+	sum := sha256.Sum256([]byte("ev-late"))
+	late := hex.EncodeToString(sum[:12])
+	orphan := sha256.Sum256([]byte("ev-orphan"))
+	for name, body := range map[string]string{
+		"000009-" + hex.EncodeToString(orphan[:12]) + ".md": "ORPHAN",
+		"000000-" + late + ".md":                            "DUPLICATE",
+	} {
+		if err := os.WriteFile(filepath.Join(inbox[0], name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(barrier, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +164,7 @@ func TestCodexInAContainer(t *testing.T) {
 	if follow := f.read("call-2"); !strings.HasPrefix(follow, "exec\nresume\n") || !strings.HasSuffix(follow, "\nthread-1\n-\n") {
 		t.Fatalf("follow-up turn:\n%s", follow)
 	}
-	if in := f.read("stdin-2"); !strings.HasPrefix(in, "## Arrived during this turn\n\n") || !strings.Contains(in, "also this") {
+	if in := f.read("stdin-2"); !strings.HasPrefix(in, "## Arrived during this turn\n\n") || strings.Count(in, "also this") != 1 || strings.Contains(in, "ORPHAN") || strings.Contains(in, "DUPLICATE") {
 		t.Fatalf("follow-up message:\n%s", in)
 	}
 	if _, err := os.Stat(filepath.Join(f.fake, "call-3")); err == nil {
