@@ -36,6 +36,64 @@ const (
 	retentionIndexKey         = "pending"
 )
 
+// retentionHoldNamespace holds the retention holds, each keyed by its ID
+// with its expiry as the value. While one is live the sweep releases no
+// content (HoldRetention).
+const retentionHoldNamespace = "core.retention.hold"
+
+type retentionHold struct{ Until time.Time }
+
+// HoldRetention commits, or renews, the retention hold id until until, in
+// tx. While a hold is live, SweepRetention deletes no artifact content: it
+// records expirations as ever and leaves their content pending until no
+// hold is live. A backup takes one in its own transaction before it
+// snapshots, renews it while it copies and releases it when done. That is
+// enough under serializable transactions: a release whose pending list was
+// read before the hold committed acts only on expirations committed before
+// the hold, and so before the snapshot, which then records those attempts
+// as expired and has no need of their content; one read after it sees the
+// hold. A hold its holder never releases (it crashed) delays the sweep
+// only until until. An empty ID, or a zero until, is ErrInvalid.
+func HoldRetention(tx storage.Tx, id string, until time.Time) error {
+	if id == "" || until.IsZero() {
+		return storage.ErrInvalid
+	}
+	return putJSON(tx, retentionHoldNamespace, id, retentionHold{Until: until.UTC()})
+}
+
+// ReleaseRetention removes the retention hold id, in tx. An absent hold is
+// nil.
+func ReleaseRetention(tx storage.Tx, id string) error {
+	if id == "" {
+		return storage.ErrInvalid
+	}
+	return tx.Delete(retentionHoldNamespace, id)
+}
+
+// retentionHeld reports whether a retention hold is live at now, and
+// removes the ones that lapsed.
+func retentionHeld(tx storage.Tx, now time.Time) (bool, error) {
+	rows, err := tx.List(retentionHoldNamespace, "")
+	if err != nil {
+		return false, err
+	}
+	held := false
+	for _, row := range rows {
+		var h retentionHold
+		if err = json.Unmarshal(row.Value, &h); err != nil {
+			return false, err
+		}
+		if now.Before(h.Until) {
+			held = true
+			continue
+		}
+		if err = tx.Delete(retentionHoldNamespace, row.Key); err != nil {
+			return false, err
+		}
+	}
+	return held, nil
+}
+
 // indexRetentionPending adds every unreleased ledger entry to the pending
 // list, once per store.
 func indexRetentionPending(tx storage.Tx) error {
@@ -134,6 +192,9 @@ type RetentionResult struct {
 	Expired  []domain.ID
 	Released []domain.ID
 	Pending  int
+	// Held is set when a retention hold was live, so the sweep released no
+	// content (HoldRetention).
+	Held bool
 }
 
 func retentionKey(id domain.ID) string { return identity(string(id)) }
@@ -277,8 +338,13 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 	if err != nil {
 		return RetentionResult{}, err
 	}
+	// The holds are read in the transaction that reads what to release
+	// (HoldRetention says why that is enough).
 	var pending []retentionRecord
 	if err = s.transact(ctx, nil, func(tx storage.Tx) (e error) {
+		if result.Held, e = retentionHeld(tx, s.now()); e != nil {
+			return e
+		}
 		pending, e = pendingRetention(tx)
 		return e
 	}); err != nil {
@@ -290,7 +356,9 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			continue
 		}
 		artifactsDone := r.ArtifactsReleased
-		if !artifactsDone {
+		// While a hold is live, content waits; private state does not, as
+		// a backup copies none of it.
+		if !artifactsDone && !result.Held {
 			artifactsDone = true
 			for _, ref := range r.Artifacts {
 				if s.options.Artifacts == nil {
@@ -320,7 +388,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			}
 			current.ArtifactsReleased = artifactsDone
 			current.Forgotten = forgotten
-			if !artifactsDone {
+			if !artifactsDone && !result.Held {
 				current.ArtifactFailures++
 			}
 			if !forgotten {

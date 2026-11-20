@@ -118,7 +118,7 @@ func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *ti
 	} else {
 		*lastSweep = d.now()
 	}
-	d.collectArtifacts(ctx)
+	d.collectArtifacts(ctx, c)
 	d.pruneReported()
 	if c.toolbelt != nil {
 		if _, err := c.toolbelt.SweepToolbelt(ctx, toolbeltGrace, passLimit); err != nil && ctx.Err() == nil {
@@ -640,32 +640,13 @@ func errorCode(err error) string {
 	return "internal"
 }
 
-// collectArtifacts removes artifact content no execution references once it
-// is older than ArtifactGrace: orphans an interrupted publication left, or
-// content published but never attached. Executors attach what they publish
-// in the same result, so the grace far exceeds the publish-to-attach window.
-func (d *daemon) collectArtifacts(ctx context.Context) {
+// collectArtifacts removes artifact content no attempt references once it
+// is older than ArtifactGrace (Scheduler.CollectArtifacts).
+func (d *daemon) collectArtifacts(ctx context.Context, c *components) {
 	if d.artifacts == nil {
 		return
 	}
-	var live map[string]bool
-	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		live = map[string]bool{}
-		xs, err := tx.ListExecutions("")
-		if err != nil {
-			return err
-		}
-		for _, x := range xs {
-			for _, ref := range x.AllArtifacts() {
-				live[ref.ID] = true
-			}
-		}
-		return nil
-	})
-	if err == nil {
-		err = d.artifacts.Collect(ctx, d.now().Add(-d.o.ArtifactGrace), live)
-	}
-	if err != nil && ctx.Err() == nil {
+	if _, err := c.scheduler.CollectArtifacts(ctx, d.artifacts, d.now().Add(-d.o.ArtifactGrace)); err != nil && ctx.Err() == nil {
 		d.report("artifacts", "", errorCode(err))
 		return
 	}
