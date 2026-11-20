@@ -113,8 +113,11 @@ func withAdditions(body, extra string) string {
 // interjection is the follow-up turn's message for Events injected while
 // a turn ran.
 func interjection(events []domain.Event) string {
-	return "## Arrived during this turn\n\nThis came in while you were working. Take it into account now, as you would the events at the start of a turn, then end the turn again with your status.\n\n" + RenderEvents(events)
+	return interjectionHeader + RenderEvents(events)
 }
+
+// interjectionHeader starts a follow-up turn's message, before the events.
+const interjectionHeader = "## Arrived during this turn\n\nThis came in while you were working. Take it into account now, as you would the events at the start of a turn, then end the turn again with your status.\n\n"
 
 // RenderEvents is the generic renderer: it knows no service schema and
 // reads the common fields many payloads carry (author, kind, number, path,

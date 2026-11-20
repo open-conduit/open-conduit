@@ -24,7 +24,9 @@ import (
 // each accepted Event there as <order>-<id digest>.json. When a turn ends,
 // the segment driver reads what is pending, starts `codex exec resume`
 // with it and, once that turn has run, acknowledges each event with
-// inbox/consumed/<id digest>. The result reports acknowledged events, and
+// inbox/consumed/<id digest>. Beside each entry Inject writes the event
+// as the follow-up turn shows it (<order>-<id digest>.md), which a
+// container's driver reads in place of the .json. The result reports acknowledged events, and
 // only those core put in the inbox, as Result.ConsumedInputs. The inbox
 // lives on disk, so an adopted segment keeps receiving input; once the
 // result is recorded nothing more is accepted.
@@ -76,7 +78,14 @@ func (e *Executor) Inject(ctx context.Context, id domain.ID, ev domain.Event) er
 			return nil // a retried dispatch of the same Event
 		}
 	}
-	return writeJSON(filepath.Join(dir, fmt.Sprintf("%06d-%s.json", len(entries)+1, digest)), toInput(ev))
+	// The event as the follow-up turn shows it goes first, for a driver
+	// that can't render it (a container's): an entry is delivered once its
+	// .json is there.
+	name := fmt.Sprintf("%06d-%s", len(entries)+1, digest)
+	if err := writeFile(filepath.Join(dir, name+".md"), []byte(renderEvent(ev))); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(dir, name+".json"), toInput(ev))
 }
 
 // inboxEntries lists delivered event files in delivery order.

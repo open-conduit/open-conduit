@@ -5,7 +5,7 @@ description: "How the Codex CLI executor runs agent turns as detached segments o
 
 The Codex executor runs each agent turn as a detached `codex exec --json` segment on the Work's Codex thread, resumes that thread on the Work's next turn, takes Events injected mid-turn as follow-up turns on the same thread, and gives the agent its toolbelt over MCP. The executor is [`extensions/codex`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex). It reaches the daemon only as a package, [`extensions/codex/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex/pkg), served over [`protocol/sdk`](../extension-packaging/) like the shell package. Nothing in the daemon knows about Codex: a binding names executor `codex`, and the host binds it from the capabilities in the package's manifest. The release archive bundles the package as `extensions/codex/` beside the binaries ([install](../../start/install/)). The executor imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another.
 
-It advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`, the stop, forget and interactive launch controls, and `resource_mode`. It does not advertise `sandbox`, `container` or attach (see [limitations](#limitations)).
+It advertises `interrupt`, `inject`, `resume`, `workspace`, `container` and `toolbelt: mcp`, the stop, forget and interactive launch controls, `resource_mode` and `version_probe`. It does not advertise `sandbox` or attach (see [limitations](#limitations)).
 
 ## Why Codex, and how its capabilities map
 
@@ -52,7 +52,7 @@ Codex has no plugin skills to start a turn on, so the playbook's text starts the
 
 Injection follows the [generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement):
 
-- `Inject` writes the Event to `inbox/<order>-<digest>.json` under the segment's finalize lock. A retried dispatch of the same Event is not written twice.
+- `Inject` writes the Event to `inbox/<order>-<digest>.json` under the segment's finalize lock, after the Event as a follow-up turn shows it (`<order>-<digest>.md`), which a [container's driver](#in-a-container) reads instead. A retried dispatch of the same Event is not written twice.
 - The proof is the driver's acknowledgement, written once the follow-up turn that carried the Event has run. The result reports acknowledged Events as `Result.ConsumedInputs`, so core consumes them with the turn and starts no further attempt for them. The data reports `injected: {accepted, consumed}`.
 - An Event accepted after the driver's last look at the inbox has no proof. It stays pending and is presented to the next attempt, as the contract requires.
 - After the result is recorded, or for an execution this instance does not hold, `Inject` returns `extension.ErrNotAccepting`.
@@ -97,6 +97,19 @@ A thread whose last turn ended with more than `handoff_tokens` of context (defau
 
 When the attempt has a toolbelt token and the host names its toolbelt directory (`ExecutionContext.ToolbeltDir`), every turn's `-c mcp_servers.open-conduit.*` overrides define the stdio server `open-conduit`: `<toolbelt dir>/os mcp`, with `OS_ENDPOINT` and `OS_TOKEN_FILE`. That file is the host-kept `ToolbeltTokenFile`, or else a private 0600 file in the segment directory. The token itself is never in codex's arguments or environment. Adoption replaces the token file, and `os mcp` re-reads it on every call. The tools are those `os mcp` serves to Claude Code ([toolbelt over MCP](../claude-code-executor/#toolbelt-over-mcp)), and Codex names them the same way (`mcp__open-conduit__call`), so the playbooks need no change.
 
+## In a container
+
+A binding with a `container` ([the container contract](../sandboxes/#containers)) runs each segment in a container the host makes for it, through the attempt's `ExecutionContext.Container`. Recovery, interrupt, stop and the outcomes are the same as on the host; what changes is where codex runs and what it is given.
+
+- **The driver.** The host's driver is this package's own binary, which the image doesn't have. In a container the wrapper starts the container instead, and the container's command is the same loop in `/bin/sh` (`containerDriver`): it runs each turn with the same arguments, finds a new thread in the first `thread.started` event, and for a follow-up turn reads the pending entries' `.md` files beside `inbox/<order>-<digest>.json`, which `Inject` renders on the host, after the header the launch writes to `interjection.md`. It acknowledges them as the host's driver does. The image needs `/bin/sh`, `sed`, `head` and codex.
+- **The Work's home.** `HOME` is the Work's own home (`ExecutionContext.ContainerHome`), which the host mounts read-write at the same path in every container the Work runs in, and `CODEX_HOME` is `<home>/.codex`, made on first use. Codex keeps its sessions there, so the next segment, in a new container, resumes the thread from the home, and the context check reads the session file there on the host. The operator's own `~/.codex`, with its login, config and any MCP servers or hooks in it, is never mounted.
+- **Credentials.** The host's Codex login doesn't reach the container, so a container binding signs in with a selected secret: an API key mapped with `secret_env` to `CODEX_API_KEY` (which `codex exec` signs in with when its home holds no login; it doesn't read `OPENAI_API_KEY`) or the `provider`'s `api_key_secret`. Every selected secret, the provider's key and any variable named as a credential (`*_TOKEN`, `*_API_KEY`, `*_SECRET`, `*_PASSWORD`) leave the environment and go in the launch's `Secrets`, which the provider keeps out of the container's own environment and its inspect output.
+- **Environment.** `HOME`, `CODEX_HOME` and `TMPDIR` are the container's, and `PATH` is a Linux one (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, after the provider's toolbelt directory) unless the binding's `env` sets one.
+- **The toolbelt.** The MCP server is the container's own `os` (first on its `PATH`): `-c mcp_servers.open-conduit.command="os"` and `-c mcp_servers.open-conduit.env_vars=["OS_ENDPOINT","OS_TOKEN_FILE"]`, so codex passes the server the endpoint and token file from its own environment, where the provider has moved the endpoint to its forward. The token is in the file, never in the environment.
+- **Needs.** The launch needs its workspace and the Work's home (write), the token's directory (read), the toolbelt socket and one host: the provider's `base_url` host, or `api.openai.com`. A grant whose `network.allow` doesn't hold that host refuses the launch as `sandbox_denied`, and nothing runs. The hosts the work itself needs (GitHub, a package registry) are the grant's to allow.
+- **Codex's own sandbox.** `sandbox` is still passed as `sandbox_mode`. The container is the boundary, and Codex's `workspace-write` and `read-only` sandboxes rely on kernel features a container may not give it, so the default `danger-full-access` is the one to use in one.
+- **Doctor.** The package names `<binary> --version` with the container's `PATH` as its version probe (`extension.VersionProber`), so the container provider's doctor check runs it in the binding's image and fails when codex isn't there.
+
 ## Workspace and environment
 
 With a binding resource, a segment calls `Acquire({Mode: workspace_mode (default "work"), Params: {"branch": …} when branch is set})`, and reports that mode to configuration validation (`resource_mode`). A setup failure or an unavailable workspace is a structured failure with no process. Without a resource the turn runs in the binding's `dir` (which must exist) or in a private folder that stays the same for the Work. A binding with both a resource and `dir` fails as `invalid_config`. An `invalid_config` result, or a workspace the provider refused as `extension.ErrInvalid`, is marked `Permanent` and not retried.
@@ -107,7 +120,7 @@ The environment follows B05:
 2. **Provider layer.** `OS_*` names are dropped.
 3. **Run layer** (`ExecutionContext.Env`), with `extension.ApplyEnv`. When there is one and a toolbelt, codex also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so the layer can call `os`.
 4. **Binding `env`.**
-5. **Selected secrets.** An API key comes only from a secret mapped with `secret_env` (for example `OPENAI_API_KEY`). A Codex login lives in `CODEX_HOME` (default `~/.codex`). The `provider`'s `api_key_secret` goes in `OC_PROVIDER_API_KEY`, the provider's `env_key`, and not under its own name.
+5. **Selected secrets.** An API key comes only from a secret mapped with `secret_env` (`CODEX_API_KEY`, which `codex exec` signs in with). A Codex login lives in `CODEX_HOME` (default `~/.codex`). The `provider`'s `api_key_secret` goes in `OC_PROVIDER_API_KEY`, the provider's `env_key`, and not under its own name.
 6. **Execution identity** (`OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`).
 
 ## Binding config
@@ -150,14 +163,16 @@ The config is strict and validated at load. Every field is optional:
   - adoption by a second instance without a second launch, interrupt and lower-epoch refusal
   - config validation and the resource mode
   - a `provider` (`provider_test.go`): its overrides in codex's arguments with the key only in its `env_key` and never under the secret's own name, no `env_key` for a keyless provider, and its refusals, a Chat Completions wire protocol in a raw override among them, with raw provider overrides on a binding without one as the accepted control
+  - a container binding (`container_test.go`, with a broker that runs the plan on the host): the `/bin/sh` driver with the Work's home as `HOME` and `CODEX_HOME`, the API key and a `*_TOKEN` variable in the launch's secrets and not its environment, the container's `os` as the MCP server, the needs, a follow-up turn for an injected Event, the next segment resuming the thread, a refused launch, a missing home and a provider's host
   - a cold thread left for a new one from the note, a warm one resuming and `cold_turns: resume` resuming a cold one (`TestColdThreadHandsOff`)
   - a large thread left for a new one from the note, a smaller one resuming, `handoff_tokens: 0` always resuming, and `auto_compact_tokens` in codex's arguments (`TestLargeThreadHandsOff`)
 - `open-conduit extension certify` certifies the package (`TestCertificationFirstPartyPackages`). Its fixture command writes a fake codex into the runner's directory, so certification never runs the real CLI.
+- [`TestDockerCodex`](https://github.com/open-conduit/open-conduit/blob/main/integration/container_codex_test.go) runs codex in a real Docker container with a stand-in codex: the Work's home as `HOME` and `CODEX_HOME`, the key inside but not in `docker inspect`, `os context` reaching the toolbelt through the forward from codex's environment, the state directory's `private/` unreadable, the next segment resuming the thread from the home in a new container, and a grant without the model's API refused with nothing run.
 - [`TestDaemonCodexExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_codex_test.go) runs the composed daemon with the package installed and `extensiontest.FakeCodex`. The fake reads its context through the real `os mcp`. An Event submitted mid-turn is taken in by a follow-up turn and starts no attempt, and the next Event resumes the thread as attempt 2.
 
 ## Limitations
 
 - **Rendering.** Inputs use the generic renderer. Claude Code asks the host to render each input through the extension that owns it (`event.render_owned`), so it gets the GitHub and Slack renderers with their reply hints; the Codex executor doesn't ask yet.
 - **No attach.** There is no `codex resume` takeover through `open-conduit work attach`.
-- **No process sandbox or container.** The package advertises neither, though the extension protocol carries both host brokers (`sandbox.plan`, `container.launch`) as Claude Code uses them. Codex's own `sandbox_mode` is the binding's `sandbox`.
+- **No process sandbox.** The package runs in a [container](#in-a-container) but doesn't advertise a process sandbox (`sandbox.plan`). Codex's own `sandbox_mode` is the binding's `sandbox`.
 - **Limits.** A usage limit is retried on core's backoff, because Codex's error gives no reset time the executor can read.

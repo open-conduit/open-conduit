@@ -37,18 +37,19 @@ const Name = codex.Name
 const Version = "0.1.0"
 
 // Manifest declares the executor's capabilities (interrupt, inject,
-// resume, workspace, the MCP toolbelt), its stop, forget and interactive
-// launch controls, and that it says which workspace mode a binding requests
-// and which playbook it starts on.
+// resume, workspace, the MCP toolbelt, a container), its stop, forget and
+// interactive launch controls, and that it says which workspace mode a
+// binding requests, which playbook it starts on and how to probe for codex
+// in a container's image.
 func Manifest() protocol.Manifest {
 	c := codex.Capabilities()
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Codex",
 		Summary: "Runs agent turns on the Codex CLI, with the toolbelt over MCP.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
-			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
+			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Container: c.Container},
 			Controls:     protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true},
-			ResourceMode: true, Playbook: true, Fields: codex.BindingFields()}}}}
+			ResourceMode: true, Playbook: true, VersionProbe: true, Fields: codex.BindingFields()}}}}
 }
 
 // executor creates the codex executor on first use, once the state
@@ -105,6 +106,12 @@ func (x *executor) ResourceMode(raw json.RawMessage) string {
 	return codex.ResourceMode(raw)
 }
 func (x *executor) Playbook(raw json.RawMessage) string { return codex.Playbook(raw) }
+
+// VersionProbe is `codex --version` as a container launch runs it, which
+// the container provider's doctor check runs in the binding's image.
+func (x *executor) VersionProbe(raw json.RawMessage) ([]string, []string) {
+	return codex.VersionProbe(raw)
+}
 func (x *executor) ConfigWarnings(raw json.RawMessage) []string {
 	return codex.ConfigWarnings(raw)
 }
@@ -186,4 +193,5 @@ var _ interface {
 	extension.ForgetExecutor
 	extension.ResourceModer
 	extension.ConfigWarner
+	extension.VersionProber
 } = (*executor)(nil)
