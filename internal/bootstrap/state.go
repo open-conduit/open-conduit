@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,7 +16,6 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
-	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -32,7 +30,13 @@ func StateOps() *cli.StateOps {
 
 // locked opens a stopped instance's state directory under its daemon lock.
 func locked(stateDir string) (*management.Lock, error) {
-	if _, err := os.Stat(filepath.Join(stateDir, "conduit.db")); err != nil {
+	c, err := coordinationOf(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if present, err := c.backend.Present(context.Background(), c.location); err != nil {
+		return nil, err
+	} else if !present {
 		return nil, fmt.Errorf("no Open Conduit database in %s", stateDir)
 	}
 	lock, err := management.AcquireLock(stateDir)
@@ -50,7 +54,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 		return cli.BackupInfo{}, err
 	}
 	defer lock.Close()
-	store, err := sqlite.Open(ctx, filepath.Join(stateDir, "conduit.db"))
+	c, store, err := openState(ctx, stateDir)
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
@@ -63,7 +67,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, store, files, build, retentionExpired); err != nil {
+	if err := backup.Create(ctx, destination, c.name, store, files, build, retentionExpired); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
@@ -81,7 +85,7 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	return cli.BackupInfo{Path: bundle, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}, nil
+	return cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}, nil
 }
 
 // VerifyBundle restores a bundle into a private temporary directory, checks
@@ -97,10 +101,10 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
 		return info, err
 	}
-	store, err := sqlite.Open(ctx, filepath.Join(dest, "conduit.db"))
+	_, store, err := openState(ctx, dest)
 	if err != nil {
 		return info, err
 	}
@@ -109,7 +113,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	return info, err
 }
 
-func scopeIDs(ctx context.Context, store *sqlite.Store) ([]string, error) {
+func scopeIDs(ctx context.Context, store storage.Store) ([]string, error) {
 	var out []string
 	err := store.Transact(ctx, storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error {
 		scopes, err := tx.ListScopes()
@@ -132,7 +136,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -143,7 +147,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 		return info, err
 	}
 	info.TokenFile = token
-	store, err := sqlite.Open(ctx, filepath.Join(destination, "conduit.db"))
+	_, store, err := openState(ctx, destination)
 	if err != nil {
 		return info, err
 	}
@@ -160,7 +164,7 @@ func RecoverOperator(ctx context.Context, stateDir, tokenPath string) error {
 		return err
 	}
 	defer lock.Close()
-	store, err := sqlite.Open(ctx, filepath.Join(stateDir, "conduit.db"))
+	_, store, err := openState(ctx, stateDir)
 	if err != nil {
 		return err
 	}
@@ -188,25 +192,23 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	if _, err := os.Lstat(filepath.Join(stateDir, "management.sock")); err == nil {
 		add("socket", "info", "stale_socket", "a socket from an unclean stop remains; the next start removes it after its ownership checks")
 	}
-	tmp, err := os.MkdirTemp("", "oc-check-")
+	c, err := coordinationOf(stateDir)
 	if err != nil {
-		return r, err
+		add("database", "fail", "storage_unavailable", err.Error())
+		return r, nil
 	}
-	defer os.RemoveAll(tmp)
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := copyFile(filepath.Join(stateDir, "conduit.db"+suffix), filepath.Join(tmp, "conduit.db"+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			add("database", "fail", "unreadable", "the database could not be copied for inspection")
-			return r, nil
-		}
-	}
-	store, err := sqlite.Open(ctx, filepath.Join(tmp, "conduit.db"))
+	// An inspection changes nothing, not even the record format a newer
+	// binary would read.
+	store, err := c.backend.Inspect(ctx, c.location)
 	if err != nil {
 		code, remedy := "open_failed", "restore the latest verified bundle into a new state directory (backup restore)"
 		msg := err.Error()
 		switch {
-		case errors.Is(err, sqlite.ErrRecordsNewer):
+		case errors.Is(err, storage.ErrRecordsNewer):
 			code, remedy = "records_newer", "a newer Open Conduit wrote these records and this binary would drop the fields it doesn't know: run that binary, or restore the bundle taken before the upgrade"
-		case strings.Contains(msg, "newer than supported"):
+		case errors.Is(err, storage.ErrInUse):
+			code, remedy = "in_use", "another daemon or command owns this coordination state (a storage.json in another state directory may name the same database): stop it first"
+		case errors.Is(err, storage.ErrSchemaNewer):
 			code, remedy = "schema_newer", "a newer Open Conduit migrated this database: run that binary, or restore the bundle taken before the upgrade"
 		case strings.Contains(msg, "explicit migration required"), strings.Contains(msg, "metadata"):
 			code = "schema_unrecognized"
@@ -234,7 +236,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		return s
 	}
 	var refs, missing, timerCount int
-	err = store.Transact(ctx, storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error {
+	err = store.View(ctx, func(tx storage.Tx) error {
 		ss, err := tx.ListScopes()
 		if err != nil {
 			return err
@@ -325,21 +327,4 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		r.Scopes = append(r.Scopes, *s)
 	}
 	return r, nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	return err
 }

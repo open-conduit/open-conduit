@@ -71,19 +71,37 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, db, files, "test-build", nil); err != nil {
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(ctx, bundle, db, files, "test-build", nil); err == nil {
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err == nil {
 		t.Fatal("overwrote existing backup")
 	}
 	// Later coordination state is deliberately outside the captured snapshot.
 	if err := db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error { return tx.Put("fixture", "later", []byte("new")) }); err != nil {
 		t.Fatal(err)
 	}
+	// What the caller records goes into the staged directory: a failure
+	// publishes nothing, and success publishes it with the state.
+	refused := filepath.Join(root, "refused")
+	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, func(string, string) error { return errors.New("record failed") }); err == nil {
+		t.Fatal("restore published despite a failed record")
+	}
+	if _, err := os.Lstat(refused); !os.IsNotExist(err) {
+		t.Fatalf("a failed record left a published directory: %v", err)
+	}
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, now, nil); err != nil {
+	record := func(dir, backend string) error {
+		if dir == destination || backend != sqlite.Name {
+			return fmt.Errorf("record got %s, %s", dir, backend)
+		}
+		return os.WriteFile(filepath.Join(dir, "recorded"), []byte(backend), 0o600)
+	}
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, record); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "recorded")); err != nil {
+		t.Fatalf("record not published with the state: %v", err)
 	}
 	restored, err := sqlite.Open(ctx, filepath.Join(destination, "conduit.db"))
 	if err != nil {
@@ -125,7 +143,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil); err == nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -157,7 +175,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, now, nil); err == nil {
+			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -172,7 +190,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := filepath.Join(root, "missing-content-backup")
-	if err := Create(ctx, failed, db, files, "test-build", nil); err == nil {
+	if err := Create(ctx, failed, sqlite.Name, db, files, "test-build", nil); err == nil {
 		t.Fatal("accepted backup missing referenced content")
 	}
 	if _, err := os.Lstat(failed); !errors.Is(err, os.ErrNotExist) {

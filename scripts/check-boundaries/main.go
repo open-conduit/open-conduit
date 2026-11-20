@@ -154,7 +154,9 @@ func allowed(owner, dependency string, test bool) bool {
 	case under(owner, "internal/artifacts"):
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/artifacts")
 	case under(owner, "internal/backup"):
-		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/backup") || under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts")
+		// Bundles compose over the storage lifecycle contract (#767); only
+		// the package's own tests pick a real backend.
+		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/backup") || test && under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts")
 	case under(owner, "internal/telemetry"):
 		// Lifecycle export pipeline: public contracts plus the OpenTelemetry API.
 		return public(dependency) || under(dependency, "internal/telemetry")

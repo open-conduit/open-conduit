@@ -98,6 +98,9 @@ func verifySnapshot(ctx context.Context, path string) error {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
+	if version > SchemaVersion {
+		return fmt.Errorf("sqlite: snapshot %w (schema %d; this binary supports %d)", storage.ErrSchemaNewer, version, SchemaVersion)
+	}
 	if version != SchemaVersion {
 		return fmt.Errorf("sqlite: snapshot schema %d unsupported; expected %d", version, SchemaVersion)
 	}
@@ -205,25 +208,7 @@ func Restore(ctx context.Context, snapshotPath, destination string, now time.Tim
 	if err != nil {
 		return err
 	}
-	err = restored.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		t := tx.(*transaction)
-		xs, e := t.ListExecutions("")
-		if e != nil {
-			return e
-		}
-		for _, x := range xs {
-			if x.Lease.Owner != "" || !x.Lease.ExpiresAt.IsZero() {
-				x.Lease.Owner = ""
-				x.Lease.ExpiresAt = time.Time{}
-				x.Revision++
-				x.UpdatedAt = now
-				if e = t.writeExecution(x, true); e != nil {
-					return e
-				}
-			}
-		}
-		return nil
-	})
+	err = restored.Fence(ctx, now)
 	if err == nil {
 		_, err = restored.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	}

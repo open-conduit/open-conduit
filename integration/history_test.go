@@ -396,14 +396,14 @@ esac`
 		r, err := runtime.RetentionInTx(tx, id)
 		return r.Expired, err
 	}
-	if err = backup.Create(ctx, bundle, h.store, h.artifacts, "test-build", expired); err != nil {
+	if err = backup.Create(ctx, bundle, "sqlite", h.store, h.artifacts, "test-build", expired); err != nil {
 		t.Fatalf("backup after retention: %v", err)
 	}
 	info, err := backup.Inspect(bundle)
 	if err != nil || info.Omitted != len(x1.Artifacts) || info.Artifacts != len(x2.Artifacts) {
 		t.Fatalf("bundle after retention: %+v %v", info, err)
 	}
-	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now(), expired); err != nil {
+	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now(), expired, storage.LookupBackend, nil); err != nil {
 		t.Fatalf("restore after retention: %v", err)
 	}
 }
