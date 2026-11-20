@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,3 +298,81 @@ func TestCheckAuthComparesGrantedScopesWithTheManifest(t *testing.T) {
 		t.Fatalf("revoked: %+v", r)
 	}
 }
+
+// init slack --receiver http sets up an app that receives over HTTP: its
+// manifest has Socket Mode off and the connection's Events API and
+// interactivity Request URLs under the public URL, it takes the bot token
+// and the signing secret (no app-level token, and no Socket Mode is
+// opened), and the connection holds the signing secret.
+func TestSlackSetupForAnHTTPApp(t *testing.T) {
+	fake := slacktest.New("T0123", "xoxb-good")
+	defer fake.Close()
+	fake.AddMember("C0SUPPORT", "support")
+	secret := "8f742231b10e8888abcd990000000a5a"
+	h := &scriptedHost{state: t.TempDir(), answers: []string{"xoxb-good", "not a secret", secret}, choices: []int{0}}
+	r, err := slack.Setup{}.Setup(context.Background(), h, []string{"--api-url", fake.URL, "--receiver", "http", "--public-url", "https://hooks.example.com/"})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, h.out.String())
+	}
+	if fake.Calls("apps.connections.open") != 0 || strings.Contains(h.out.String(), "xapp-") || h.stored["slack-signing-secret"] != secret || h.stored["slack-app-token"] != "" {
+		t.Fatalf("credentials: %v\n%s", h.stored, h.out.String())
+	}
+	u, err := url.Parse(h.opened[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Settings struct {
+			Events struct {
+				RequestURL string `json:"request_url"`
+			} `json:"event_subscriptions"`
+			Interactivity struct {
+				Enabled    bool   `json:"is_enabled"`
+				RequestURL string `json:"request_url"`
+			} `json:"interactivity"`
+			Socket bool `json:"socket_mode_enabled"`
+		} `json:"settings"`
+	}
+	if err := json.Unmarshal([]byte(u.Query().Get("manifest_json")), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Settings.Socket || m.Settings.Events.RequestURL != "https://hooks.example.com/slack/slack" || !m.Settings.Interactivity.Enabled || m.Settings.Interactivity.RequestURL != "https://hooks.example.com/slack/slack/interactivity" {
+		t.Fatalf("manifest: %+v", m.Settings)
+	}
+	var conn struct {
+		SecretRefs map[string]string `json:"secret_refs"`
+	}
+	if err = json.Unmarshal(r.Connections[0], &conn); err != nil || conn.SecretRefs["bot_token"] != "keyring:slack-bot-token" || conn.SecretRefs["signing_secret"] != "keyring:slack-signing-secret" || conn.SecretRefs["app_token"] != "" {
+		t.Fatalf("connection: %v %s", err, r.Connections[0])
+	}
+	var s supportScope
+	if err = json.Unmarshal(r.Scope, &s); err != nil || s.Extensions[0].Config.Receiver != "http" || s.Extensions[0].Config.SigningSecret != "" {
+		t.Fatalf("entry: %v %s", err, r.Scope)
+	}
+	if summary := strings.Join(r.Summary, "\n"); !strings.Contains(summary, "POST https://hooks.example.com/slack/slack/interactivity") || !strings.Contains(summary, "receiver http") {
+		t.Fatalf("summary:\n%s", summary)
+	}
+
+	// The public URL can come from the stored config; without one, or with
+	// an app-level token, or a URL Slack won't post to, it is refused.
+	refs := []string{"--receiver", "http", "--bot-token", "env:BOT", "--signing-secret", "env:SIGNING", "--team", "T0123", "--channel", "C0SUPPORT"}
+	stored := &configHost{scriptedHost: scriptedHost{state: t.TempDir()}, config: []byte(`{"settings":{"webhooks":{"public_url":"https://oc.example.com"}}}`)}
+	if r, err = (slack.Setup{}).Setup(context.Background(), stored, refs); err != nil || !strings.Contains(strings.Join(r.Summary, "\n"), "POST https://oc.example.com/slack/slack ") {
+		t.Fatalf("stored public URL: %v %v", err, r.Summary)
+	}
+	for _, args := range [][]string{refs, append(refs, "--public-url", "http://plain.example.com"), append(refs, "--public-url", "https://x.example.com", "--app-token", "env:APP"),
+		{"--receiver", "both"}, {"--signing-secret", "env:S"}, {"--public-url", "https://x.example.com"},
+		{"--receiver", "http", "--public-url", "https://x.example.com", "--bot-token", "env:BOT", "--team", "T0123", "--channel", "C0SUPPORT"}} {
+		if _, err := (slack.Setup{}).Setup(context.Background(), &scriptedHost{state: t.TempDir()}, args); !errors.Is(err, extension.ErrSetupUsage) {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+}
+
+// configHost is scriptedHost with an existing config document.
+type configHost struct {
+	scriptedHost
+	config []byte
+}
+
+func (h *configHost) Config() []byte { return h.config }

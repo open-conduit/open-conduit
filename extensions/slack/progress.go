@@ -425,14 +425,17 @@ func planTask(id, title, status string) map[string]any {
 }
 
 // progressBlocks lays the plan out: the plan block and, while the run is
-// live and the entry names who may stop it, a Stop button. Each layout gets
+// live, the entry names who may stop it and a press can reach it, a Stop
+// button. Each layout gets
 // its own block IDs, as Slack asks of an updated plan. The digest is of
 // what is shown, so an unchanged plan is never sent again.
 func (p *Projector) progressBlocks(work domain.ID, pl runPlan) ([]map[string]any, string) {
-	raw, _ := json.Marshal([]any{pl.title, pl.tasks, pl.live && len(p.o.Settings.StopUsers) > 0})
+	// Stop is shown only where a press can be received (Settings.Presses).
+	stop := pl.live && len(p.o.Settings.StopUsers) > 0 && p.o.Settings.Presses()
+	raw, _ := json.Marshal([]any{pl.title, pl.tasks, stop})
 	d := digest(string(raw))[:16]
 	blocks := []map[string]any{{"type": "plan", "block_id": "oc_plan_" + d, "title": pl.title, "tasks": pl.tasks}}
-	if pl.live && len(p.o.Settings.StopUsers) > 0 {
+	if stop {
 		v, _ := json.Marshal(buttonValue{Work: work})
 		blocks = append(blocks, map[string]any{"type": "actions", "block_id": "oc_stop_" + d, "elements": []map[string]any{{
 			"type": "button", "action_id": stopAction, "style": "danger", "value": string(v),

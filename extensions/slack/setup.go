@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,6 +25,13 @@ import (
 // workspace-free scope: a claude-code binding on the slack-thread playbook
 // with the slack.* tools, the slack route with
 // active policy inject, and the Socket Mode ingress entry.
+//
+// With --receiver http the app receives over HTTP instead (issue #743): its
+// manifest has Socket Mode off and the connection's Events API and
+// interactivity Request URLs under the URL that reaches the webhook
+// listener (--public-url, or settings.webhooks.public_url), and it takes the
+// bot token and the app's signing secret, which the connection holds. No
+// app-level token is needed.
 type Setup struct{}
 
 // ThreadOperations are the toolbelt operations of the binding init writes.
@@ -44,14 +52,63 @@ var (
 
 func (Setup) SetupInfo() extension.SetupInfo {
 	return extension.SetupInfo{Type: Type, Summary: "add a workspace-free scope whose agent works Slack threads",
-		Usage: "[--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]"}
+		Usage: "[--scope ID] [--name APP] [--channel C…] [--start all|mention] [--receiver socket|http] [--public-url URL] [--bot-token REF (--app-token REF | --signing-secret REF) --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]"}
 }
 
 func setupUsage(msg string) error { return fmt.Errorf("%w: %s", extension.ErrSetupUsage, msg) }
 
+// setupHTTP checks the flags of --receiver http: an https public URL with
+// no path beyond the listener's root, and no app-level token.
+func setupHTTP(f setupFlags) error {
+	if f.appRef != "" {
+		return setupUsage("--receiver http needs no --app-token: give --signing-secret instead")
+	}
+	if f.publicURL == "" {
+		return setupUsage("--receiver http needs the URL Slack reaches the webhook listener at: give --public-url https://… or set settings.webhooks.public_url")
+	}
+	u, err := url.Parse(f.publicURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return setupUsage("--public-url must be an https URL (Slack posts only to https), without a query")
+	}
+	return nil
+}
+
 type setupFlags struct {
 	scope, name, connection, channel, start, apiURL, botRef, appRef, team, botUser, via, dir string
-	noOpen                                                                                   bool
+	// receiver is socket or http; http takes signingRef instead of appRef,
+	// and publicURL is the URL that reaches the webhook listener.
+	receiver, signingRef, publicURL string
+	noOpen                          bool
+}
+
+// http reports whether the app receives over HTTP (--receiver http).
+func (f setupFlags) http() bool { return f.receiver == ReceiverHTTP }
+
+// urls are an HTTP app's Request URLs, nil for Socket Mode.
+func (f setupFlags) urls() *AppURLs {
+	if !f.http() {
+		return nil
+	}
+	u := HTTPURLs(f.publicURL, f.connection)
+	return &u
+}
+
+// storedPublicURL is settings.webhooks.public_url of the existing config.
+func storedPublicURL(host extension.SetupHost) string {
+	if host == nil {
+		return ""
+	}
+	var doc struct {
+		Settings struct {
+			Webhooks struct {
+				PublicURL string `json:"public_url"`
+			} `json:"webhooks"`
+		} `json:"settings"`
+	}
+	if json.Unmarshal(host.Config(), &doc) != nil {
+		return ""
+	}
+	return doc.Settings.Webhooks.PublicURL
 }
 
 func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string) (extension.SetupResult, error) {
@@ -71,8 +128,31 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	fs.StringVar(&f.via, "via", "", "")
 	fs.BoolVar(&f.noOpen, "no-open", false, "")
 	fs.StringVar(&f.dir, "dir", "", "")
+	fs.StringVar(&f.receiver, "receiver", ReceiverSocket, "")
+	fs.StringVar(&f.signingRef, "signing-secret", "", "")
+	fs.StringVar(&f.publicURL, "public-url", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return extension.SetupResult{}, setupUsage("init slack " + Setup{}.SetupInfo().Usage)
+	}
+	if f.receiver != ReceiverSocket && f.receiver != ReceiverHTTP {
+		return extension.SetupResult{}, setupUsage("--receiver is socket or http")
+	}
+	if f.http() {
+		if f.publicURL == "" {
+			f.publicURL = storedPublicURL(host)
+		}
+		if err := setupHTTP(f); err != nil {
+			return extension.SetupResult{}, err
+		}
+		// The second credential is the signing secret: the checks below
+		// read it where they read the app-level token.
+		f.appRef = f.signingRef
+	} else if f.signingRef != "" || f.publicURL != "" {
+		return extension.SetupResult{}, setupUsage("--signing-secret and --public-url are for --receiver http")
+	}
+	second := "--app-token"
+	if f.http() {
+		second = "--signing-secret"
 	}
 	switch {
 	case !idPattern.MatchString(f.scope) || !idPattern.MatchString(f.connection):
@@ -84,9 +164,9 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	case f.via != "" && f.via != "slack-cli":
 		return extension.SetupResult{}, setupUsage("--via takes slack-cli")
 	case (f.botRef == "") != (f.appRef == ""):
-		return extension.SetupResult{}, setupUsage("give both --bot-token and --app-token references, or neither (to be prompted)")
+		return extension.SetupResult{}, setupUsage("give both --bot-token and " + second + " references, or neither (to be prompted)")
 	case f.botRef != "" && (!refPattern.MatchString(f.botRef) || !refPattern.MatchString(f.appRef)):
-		return extension.SetupResult{}, setupUsage("--bot-token and --app-token take references (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never tokens")
+		return extension.SetupResult{}, setupUsage("--bot-token and " + second + " take references (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never tokens")
 	case f.botRef != "" && (!slackIDPattern.MatchString(f.team) || f.channel == ""):
 		return extension.SetupResult{}, setupUsage("with token references, also give --team T… and --channel C… (nothing can be verified without the tokens)")
 	case strings.TrimSpace(f.name) == "" || len(f.name) > 35:
@@ -118,10 +198,17 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 		if f.botRef, err = host.StoreSecret(f.connection+"-bot-token", v.bot); err != nil {
 			return extension.SetupResult{}, fmt.Errorf("storing the bot token: %w", err)
 		}
-		if f.appRef, err = host.StoreSecret(f.connection+"-app-token", v.app); err != nil {
-			return extension.SetupResult{}, fmt.Errorf("storing the app token: %w", err)
+		if f.http() {
+			if f.appRef, err = host.StoreSecret(f.connection+"-signing-secret", v.app); err != nil {
+				return extension.SetupResult{}, fmt.Errorf("storing the signing secret: %w", err)
+			}
+			summary = append(summary, "verified   auth.test as "+v.botUser+" in "+v.team)
+		} else {
+			if f.appRef, err = host.StoreSecret(f.connection+"-app-token", v.app); err != nil {
+				return extension.SetupResult{}, fmt.Errorf("storing the app token: %w", err)
+			}
+			summary = append(summary, "verified   auth.test as "+v.botUser+" in "+v.team+"; Socket Mode connection opened")
 		}
-		summary = append(summary, "verified   auth.test as "+v.botUser+" in "+v.team+"; Socket Mode connection opened")
 		if len(v.missing) > 0 {
 			summary = append(summary, "warning    the bot token lacks "+strings.Join(v.missing, ", ")+": reinstall the app from the manifest")
 		}
@@ -141,14 +228,24 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	if f.dir != "" {
 		folder = f.dir + " (its CLAUDE.md and files, used as-is)"
 	}
+	tokens := "tokens     " + f.connection + " connection: bot " + refScheme(f.botRef) + ", app " + refScheme(f.appRef)
+	next := []string{"open-conduit serve                   start the daemon (Socket Mode needs no public endpoint)",
+		"open-conduit doctor --check-secrets  check the tokens, granted scopes and the socket"}
+	if f.http() {
+		u := f.urls()
+		tokens = "tokens     " + f.connection + " connection: bot " + refScheme(f.botRef) + ", signing secret " + refScheme(f.appRef)
+		summary = append(summary, "events     POST "+u.Events+" (the app's Events API Request URL)",
+			"presses    POST "+u.Interactivity+" (the app's Interactivity Request URL)")
+		next = []string{"open-conduit serve                   start the daemon; " + f.publicURL + " must reach its webhook listener",
+			"in the app's Event Subscriptions page, retry the Request URL if Slack could not verify it before serve started",
+			"open-conduit doctor --check-secrets  check the token, granted scopes and the routes"}
+	}
 	r.Summary = append([]string{"scope      " + f.scope + " (workspace-free: no checkout, no Git provider)",
-		"channel    " + f.channel + " in team " + f.team + " (receiver socket, start " + f.start + ")",
+		"channel    " + f.channel + " in team " + f.team + " (receiver " + f.receiver + ", start " + f.start + ")",
 		"agent      claude-code on the " + ThreadPlaybook + " playbook, active policy inject",
 		"folder     " + folder,
-		"tokens     " + f.connection + " connection: bot " + refScheme(f.botRef) + ", app " + refScheme(f.appRef)}, summary...)
-	r.Next = []string{"open-conduit serve                   start the daemon (Socket Mode needs no public endpoint)",
-		"open-conduit doctor --check-secrets  check the tokens, granted scopes and the socket",
-		"invite the app to more channels and add their IDs with: open-conduit config set /scopes/" + f.scope + "/extensions/" + f.scope + "/config/channels '[…]'"}
+		tokens}, summary...)
+	r.Next = append(next, "invite the app to more channels and add their IDs with: open-conduit config set /scopes/"+f.scope+"/extensions/"+f.scope+"/config/channels '[…]'")
 	return r, nil
 }
 
@@ -199,7 +296,7 @@ func createApp(ctx context.Context, host extension.SetupHost, f setupFlags) erro
 			return setupUsage("--via slack-cli needs the slack CLI on PATH; leave --via out to use the create-app page")
 		}
 		dir := filepath.Join(host.StateDir(), "slack-app", f.scope)
-		if err := writeCLIProject(dir, f.name); err != nil {
+		if err := writeCLIProject(dir, f.name, f.urls()); err != nil {
 			return fmt.Errorf("preparing the slack CLI project: %w", err)
 		}
 		host.Printf("Creating the app %q with the slack CLI from %s (the manifest is the project's local manifest).\n", f.name, dir)
@@ -209,8 +306,12 @@ func createApp(ctx context.Context, host extension.SetupHost, f setupFlags) erro
 			return fmt.Errorf("slack app install failed: %w", err)
 		}
 	} else {
-		url := CreateAppURL(f.name)
-		host.Printf("Step 1. Create the Slack app from Open Conduit's manifest (Socket Mode, a bot user, the scopes and events it needs).\n")
+		url := CreateAppURLFor(f.name, f.urls())
+		if f.http() {
+			host.Printf("Step 1. Create the Slack app from Open Conduit's manifest (a bot user, the scopes and events it needs, and its Request URLs under %s).\n", f.publicURL)
+		} else {
+			host.Printf("Step 1. Create the Slack app from Open Conduit's manifest (Socket Mode, a bot user, the scopes and events it needs).\n")
+		}
 		if f.noOpen {
 			host.Printf("Open: %s\n", url)
 		} else if err := host.OpenURL(url); err != nil {
@@ -220,6 +321,13 @@ func createApp(ctx context.Context, host extension.SetupHost, f setupFlags) erro
 		if haveCLI {
 			host.Printf("(The slack CLI is on PATH: init slack --via slack-cli creates the app with it instead.)\n")
 		}
+	}
+	if f.http() {
+		host.Printf("\nStep 2. Copy the credentials:\n" +
+			"  - Bot token: OAuth & Permissions -> Bot User OAuth Token (xoxb-...).\n" +
+			"  - Signing secret: Basic Information -> App Credentials -> Signing Secret.\n" +
+			"Then invite the app to the channel it should watch: /invite @" + f.name + "\n\n")
+		return nil
 	}
 	host.Printf("\nStep 2. Copy the tokens:\n" +
 		"  - Bot token: OAuth & Permissions -> Bot User OAuth Token (xoxb-...).\n" +
@@ -231,12 +339,12 @@ func createApp(ctx context.Context, host extension.SetupHost, f setupFlags) erro
 
 // writeCLIProject is a minimal slack CLI project whose manifest is local:
 // the get-manifest hook prints manifest.json.
-func writeCLIProject(dir, name string) error {
+func writeCLIProject(dir, name string, urls *AppURLs) error {
 	if err := os.MkdirAll(filepath.Join(dir, ".slack"), 0o700); err != nil {
 		return err
 	}
 	files := map[string][]byte{
-		"manifest.json":      ManifestJSON(name),
+		"manifest.json":      AppManifestJSON(name, urls),
 		".slack/hooks.json":  []byte(`{"hooks": {"get-manifest": "cat manifest.json"}}` + "\n"),
 		".slack/config.json": []byte(`{"manifest": {"source": "local"}}` + "\n"),
 	}
@@ -248,13 +356,32 @@ func writeCLIProject(dir, name string) error {
 	return nil
 }
 
+// signingPattern is the shape of a Slack app's signing secret.
+var signingPattern = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
+
+// askSigningSecret prompts for the app's signing secret.
+func askSigningSecret(host extension.SetupHost) (string, error) {
+	for tries := 0; tries < 3; tries++ {
+		value, err := host.Prompt("Signing secret (Basic Information -> App Credentials)", extension.Prompt{Secret: true})
+		if err != nil {
+			return "", err
+		}
+		if value = strings.TrimSpace(value); signingPattern.MatchString(value) {
+			return value, nil
+		}
+		host.Printf("That does not look like a signing secret; paste the hex string from App Credentials.\n")
+	}
+	return "", errors.New("no valid signing secret entered")
+}
+
 type verified struct {
 	bot, app, team, botUser, channel string
 	missing                          []string
 }
 
-// verifyTokens prompts for both tokens, checks them against Slack and picks
-// the channel. Nothing is stored until both verify.
+// verifyTokens prompts for both tokens (the bot token and the signing
+// secret, for an HTTP app), checks them against Slack and picks the
+// channel. Nothing is stored until both verify.
 func verifyTokens(ctx context.Context, host extension.SetupHost, f setupFlags, conn ConnectionConfig) (verified, error) {
 	var v verified
 	ask := func(question, prefix string) (string, error) {
@@ -274,7 +401,11 @@ func verifyTokens(ctx context.Context, host extension.SetupHost, f setupFlags, c
 	if v.bot, err = ask("Bot token (xoxb-…)", "xoxb-"); err != nil {
 		return v, err
 	}
-	if v.app, err = ask("App-level token (xapp-…, connections:write)", "xapp-"); err != nil {
+	if f.http() {
+		if v.app, err = askSigningSecret(host); err != nil {
+			return v, err
+		}
+	} else if v.app, err = ask("App-level token (xapp-…, connections:write)", "xapp-"); err != nil {
 		return v, err
 	}
 	cfg, err := ParseConnection(mustJSON(conn))
@@ -299,10 +430,16 @@ func verifyTokens(ctx context.Context, host extension.SetupHost, f setupFlags, c
 	if len(v.missing) > 0 {
 		host.Printf("Warning: the bot token lacks %s; reinstall the app from the manifest to grant them.\n", strings.Join(v.missing, ", "))
 	}
-	if _, err := client.OpenConnection(cx); err != nil {
-		return v, fmt.Errorf("the app-level token cannot open Socket Mode (apps.connections.open %s): it needs connections:write and Socket Mode on", ErrorCode(err))
+	if f.http() {
+		// Slack has no API to check a signing secret: the first signed
+		// request does, and doctor reports one it refused.
+		host.Printf("Verified: bot %s in workspace %s.\n", id.User, id.Team)
+	} else {
+		if _, err := client.OpenConnection(cx); err != nil {
+			return v, fmt.Errorf("the app-level token cannot open Socket Mode (apps.connections.open %s): it needs connections:write and Socket Mode on", ErrorCode(err))
+		}
+		host.Printf("Verified: bot %s in workspace %s; Socket Mode connection allowed.\n", id.User, id.Team)
 	}
-	host.Printf("Verified: bot %s in workspace %s; Socket Mode connection allowed.\n", id.User, id.Team)
 	v.channel, err = pickChannel(cx, host, client, f)
 	return v, err
 }
@@ -354,8 +491,13 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 // result builds the connection and the workspace-free scope.
 func result(f setupFlags, conn ConnectionConfig) (extension.SetupResult, error) {
-	connection := map[string]any{"id": f.connection, "type": Type, "config": conn,
-		"secret_refs": map[string]any{SecretBotToken: f.botRef, SecretAppToken: f.appRef}}
+	refs := map[string]any{SecretBotToken: f.botRef, SecretAppToken: f.appRef}
+	if f.http() {
+		// The connection's signing secret serves its Request URLs, for
+		// every receiver http entry of the app.
+		refs = map[string]any{SecretBotToken: f.botRef, SecretSigning: f.appRef}
+	}
+	connection := map[string]any{"id": f.connection, "type": Type, "config": conn, "secret_refs": refs}
 	requires := map[string]any{"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false}
 	config := map[string]any{"playbook": ThreadPlaybook, "args": "{key}"}
 	if f.dir != "" {
@@ -363,7 +505,7 @@ func result(f setupFlags, conn ConnectionConfig) (extension.SetupResult, error) 
 	}
 	agent := map[string]any{"name": "agent", "executor": "claude-code", "connection": f.connection, "requires": requires,
 		"operations": ThreadOperations, "secret_names": []string{}, "config": config}
-	entry := ExtensionConfig{Namespace: "slack/" + f.team, Scope: f.scope, Team: f.team, Channels: []string{f.channel}, Start: f.start, BotUserID: f.botUser, Receiver: ReceiverSocket}
+	entry := ExtensionConfig{Namespace: "slack/" + f.team, Scope: f.scope, Team: f.team, Channels: []string{f.channel}, Start: f.start, BotUserID: f.botUser, Receiver: f.receiver}
 	scope := map[string]any{"id": f.scope, "name": "Slack",
 		"authorization": map[string]any{"connections": []string{f.connection}, "read_scopes": []string{}, "operations": ThreadOperations},
 		"bindings":      []any{agent},

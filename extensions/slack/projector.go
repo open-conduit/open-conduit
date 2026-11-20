@@ -185,6 +185,9 @@ type Intent struct {
 	// and a line saying how it ended (issue #762). Nil for anything else.
 	Asks  *promptAsks
 	Shown []map[string]any
+	// Replies is a prompt's without buttons (Settings.Presses): the action
+	// a reply in the thread naming one of its choices answers.
+	Replies *promptReplies
 }
 
 // promptAsks names the request a prompt asks: its provider and ID.
@@ -222,6 +225,10 @@ type intentRecord struct {
 	Asks   *promptAsks       `json:"asks,omitempty"`
 	Shown  []json.RawMessage `json:"shown,omitempty"`
 	Closed bool              `json:"closed,omitempty"`
+	// Replies is a prompt's answered by a reply (Intent.Replies); Answered
+	// marks one a reply has answered, so later replies are not taken.
+	Replies  *promptReplies `json:"replies,omitempty"`
+	Answered bool           `json:"answered,omitempty"`
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -286,7 +293,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Execution: in.Execution, Channel: in.Channel, Thread: in.Thread, TextDigest: textDigest,
 				BlocksDigest: blocks, Broadcast: in.Broadcast, State: IntentPending, CreatedAt: p.o.Now().UTC(), Cause: in.Cause, Binding: in.Binding, Feedback: in.Feedback,
-				Asks: in.Asks, Shown: raws(in.Shown)}
+				Asks: in.Asks, Shown: raws(in.Shown), Replies: in.Replies}
 			if in.Durable {
 				rec.Text, rec.Content = in.Text, in.Content
 			}
@@ -603,8 +610,9 @@ func (p *Projector) saveWorksCursor(ctx context.Context, read outcomePass, unset
 }
 
 // Converge runs one bounded pass: outcome replies, unfinished durable
-// (tool) intents, uploads whose share's answer was lost and request
-// messages (request_messages). Rate limits and credential failures stop the pass; other
+// (tool) intents, uploads whose share's answer was lost, request
+// messages (request_messages), closing settled prompts and, for an entry
+// without buttons, the replies that answer its prompts. Rate limits and credential failures stop the pass; other
 // per-item failures are reported as safe codes and retried next pass, as
 // is a host's refusal to list a Work's actions or requests.
 func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, error) {
@@ -720,6 +728,14 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 		n, codes, err := p.closePrompts(ctx, limit-done)
 		done += n
 		res.Posted += n
+		res.Codes = append(res.Codes, codes...)
+		if err != nil {
+			return res, err
+		}
+	}
+	if done < limit {
+		n, codes, err := p.answerReplies(ctx, limit-done)
+		done += n
 		res.Codes = append(res.Codes, codes...)
 		if err != nil {
 			return res, err

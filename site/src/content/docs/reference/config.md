@@ -666,7 +666,7 @@ Connection `secret_refs`:
 | --- | --- | --- |
 | `bot_token` |  | Required. xoxb-… |
 | `app_token` |  | xapp-… for Socket Mode |
-| `signing_secret` |  | verifies the connection's Events API Request URL (POST /slack/<connection>) for its receiver http entries |
+| `signing_secret` |  | verifies the connection's Events API and interactivity Request URLs (POST /slack/<connection>, POST /slack/<connection>/interactivity) for its receiver http entries |
 
 Extension entry `config`:
 
@@ -683,8 +683,8 @@ Extension entry `config`:
 | `claim_from` | `registration` | registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time |
 | `history_hours` |  |  |
 | `refresh_minutes` |  |  |
-| `receiver` | `socket` | One of socket, http, none. |
-| `signing_secret` |  | names a selected scope secret that verifies the entry's own route (POST /slack/<scope>/<entry>); without it, receiver http takes the connection's |
+| `receiver` | `socket` | how messages and button presses arrive: Socket Mode, the HTTP Request URLs, or neither (reconcile only, and no buttons: a prompt is answered by a reply in its thread) One of socket, http, none. |
+| `signing_secret` |  | names a selected scope secret that verifies the entry's own routes (POST /slack/<scope>/<entry> and its /interactivity); without it, receiver http takes the connection's |
 | `projection` |  | {"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)} |
 | `post` |  |  |
 | `progress` |  | {"enabled": true, "stop": ["slack:U…"]}: one live progress message per run in its thread, with a Stop button for those listed |

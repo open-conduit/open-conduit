@@ -134,6 +134,18 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	if strings.Contains(string(r.Scope), `"resource"`) || strings.Contains(string(r.Scope), "git") {
 		t.Fatalf("init slack scope reaches a Git concept: %s", r.Scope)
 	}
+	// So does an HTTP app's (--receiver http): the connection holds the
+	// signing secret, and no app-level token is named.
+	r, err = sl.Setup{}.Setup(context.Background(), nil, []string{"--receiver", "http", "--public-url", "https://oc.example.com", "--bot-token", "keyring:slack-bot-token", "--signing-secret", "keyring:slack-signing-secret", "--team", "T0123", "--channel", "C0SUPPORT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err = cli.MergeSetup(nil, r, false); err != nil {
+		t.Fatal(err)
+	}
+	if diags, err := bootstrap.ValidateConfig(doc); err != nil || len(diags) != 0 || strings.Contains(string(doc), "app_token") || !strings.Contains(string(doc), `"receiver": "http"`) {
+		t.Fatalf("init slack --receiver http output: %v %v\n%s", diags, err, doc)
+	}
 	// The setups come from the bundled packages (#477), each its own.
 	releaseLayout(t)
 	names := map[string]bool{}

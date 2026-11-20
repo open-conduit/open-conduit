@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"slices"
+	"strings"
 )
 
 // The Slack app this extension needs, as one source of truth: the
@@ -71,9 +72,37 @@ var AppMethods = map[string][]string{"apps.connections.open": {"connections:writ
 // Manifest is the Slack app manifest: Socket Mode on, a bot user, BotScopes,
 // DirectScopes and BotEvents, and the App Home messages tab, without which
 // people cannot write to the app directly.
-func Manifest(name string) map[string]any {
+func Manifest(name string) map[string]any { return AppManifest(name, nil) }
+
+// AppURLs are an HTTP app's Request URLs on the daemon's webhook listener:
+// the Events API's and interactivity's (button presses).
+type AppURLs struct {
+	Events        string
+	Interactivity string
+}
+
+// HTTPURLs are the Request URLs of the connection conn under public, the
+// URL that reaches the webhook listener: POST /slack/<conn> and POST
+// /slack/<conn>/interactivity, which deliver to every receiver http entry
+// of the connection.
+func HTTPURLs(public, conn string) AppURLs {
+	base := strings.TrimSuffix(public, "/") + "/" + Type + "/" + conn
+	return AppURLs{Events: base, Interactivity: base + "/" + InteractivityPath}
+}
+
+// AppManifest is Manifest for an app that receives over Socket Mode (urls
+// nil) or over HTTP at urls, with Socket Mode off.
+func AppManifest(name string, urls *AppURLs) map[string]any {
 	if name == "" {
 		name = "Open Conduit"
+	}
+	events := map[string]any{"bot_events": BotEvents}
+	// Interactivity carries button presses: over Socket Mode, which needs
+	// no request URL, or to the interactivity Request URL.
+	interactivity := map[string]any{"is_enabled": true}
+	if urls != nil {
+		events["request_url"] = urls.Events
+		interactivity["request_url"] = urls.Interactivity
 	}
 	return map[string]any{
 		"display_information": map[string]any{"name": name,
@@ -82,26 +111,30 @@ func Manifest(name string) map[string]any {
 			"app_home": map[string]any{"home_tab_enabled": false, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false}},
 		"oauth_config": map[string]any{"scopes": map[string]any{"bot": append(slices.Clone(BotScopes), DirectScopes...)}},
 		"settings": map[string]any{
-			"event_subscriptions": map[string]any{"bot_events": BotEvents},
-			// Interactivity carries a prompt's button presses, over Socket
-			// Mode, so it needs no request URL.
-			"interactivity":          map[string]any{"is_enabled": true},
+			"event_subscriptions":    events,
+			"interactivity":          interactivity,
 			"org_deploy_enabled":     false,
-			"socket_mode_enabled":    true,
+			"socket_mode_enabled":    urls == nil,
 			"token_rotation_enabled": false,
 		},
 	}
 }
 
 // ManifestJSON is the manifest as JSON.
-func ManifestJSON(name string) []byte {
-	data, _ := json.Marshal(Manifest(name))
+func ManifestJSON(name string) []byte { return AppManifestJSON(name, nil) }
+
+// AppManifestJSON is AppManifest as JSON.
+func AppManifestJSON(name string, urls *AppURLs) []byte {
+	data, _ := json.Marshal(AppManifest(name, urls))
 	return data
 }
 
 // CreateAppURL opens Slack's create-app page prefilled with the manifest.
-func CreateAppURL(name string) string {
-	return "https://api.slack.com/apps?new_app=1&manifest_json=" + url.QueryEscape(string(ManifestJSON(name)))
+func CreateAppURL(name string) string { return CreateAppURLFor(name, nil) }
+
+// CreateAppURLFor is CreateAppURL with AppManifest(name, urls).
+func CreateAppURLFor(name string, urls *AppURLs) string {
+	return "https://api.slack.com/apps?new_app=1&manifest_json=" + url.QueryEscape(string(AppManifestJSON(name, urls)))
 }
 
 // MissingScopes lists BotScopes a token lacks (granted is Slack's

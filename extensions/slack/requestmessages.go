@@ -128,6 +128,11 @@ func (p *Projector) requestMessages(ctx context.Context, limit int) (int, []stri
 		return false
 	}
 	for _, w := range want {
+		if !p.o.Settings.Presses() {
+			// A DM's buttons would take no press (receiver none): none is
+			// sent, and doctor says so. One already sent still closes.
+			break
+		}
 		if n >= limit {
 			return n, codes, nil
 		}
