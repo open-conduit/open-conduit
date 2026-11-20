@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,24 @@ type release struct {
 	archive []byte
 	sum     string
 	checks  atomic.Int32
+	// bundle is served as checksums.txt.sigstore.json (signed(checksums)
+	// when empty); noBundle serves none.
+	bundle   string
+	noBundle bool
+}
+
+// signed is the stand-in signature the test Verify accepts for checksums.
+func signed(checksums []byte) string {
+	s := sha256.Sum256(append([]byte("signed by the release workflow:"), checksums...))
+	return hex.EncodeToString(s[:])
+}
+
+// fakeVerify accepts a bundle only when it is signed(checksums).
+func fakeVerify(_ context.Context, bundle, checksums []byte) error {
+	if string(bundle) != signed(checksums) {
+		return errors.New("bad signature")
+	}
+	return nil
 }
 
 func (r *release) handler(t *testing.T) http.Handler {
@@ -55,13 +74,27 @@ func (r *release) handler(t *testing.T) http.Handler {
 		r.checks.Add(1)
 		_, _ = w.Write([]byte(`{"tag_name": "` + r.tag + `", "html_url": "https://github.com/` + Repo + `/releases/tag/` + r.tag + `"}`))
 	})
-	mux.HandleFunc("GET /"+Repo+"/releases/download/"+r.tag+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+	sums := func() []byte {
 		sum := r.sum
 		if sum == "" {
 			s := sha256.Sum256(r.archive)
 			sum = hex.EncodeToString(s[:])
 		}
-		_, _ = w.Write([]byte("0000  open-conduit_" + strings.TrimPrefix(r.tag, "v") + "_darwin_arm64.tar.gz\n" + sum + "  " + name + "\n"))
+		return []byte("0000  open-conduit_" + strings.TrimPrefix(r.tag, "v") + "_darwin_arm64.tar.gz\n" + sum + "  " + name + "\n")
+	}
+	mux.HandleFunc("GET /"+Repo+"/releases/download/"+r.tag+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(sums())
+	})
+	mux.HandleFunc("GET /"+Repo+"/releases/download/"+r.tag+"/checksums.txt.sigstore.json", func(w http.ResponseWriter, _ *http.Request) {
+		if r.noBundle {
+			http.NotFound(w, nil)
+			return
+		}
+		b := r.bundle
+		if b == "" {
+			b = signed(sums())
+		}
+		_, _ = w.Write([]byte(b))
 	})
 	mux.HandleFunc("GET /"+Repo+"/releases/download/"+r.tag+"/"+name, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(r.archive)
@@ -79,7 +112,7 @@ func updater(t *testing.T, r *release) (*Updater, string) {
 			t.Fatal(err)
 		}
 	}
-	return &Updater{Executable: filepath.Join(dir, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "arm64", HTTP: srv.Client()}, dir
+	return &Updater{Executable: filepath.Join(dir, "open-conduit"), API: srv.URL, Download: srv.URL, GOOS: "linux", GOARCH: "arm64", HTTP: srv.Client(), Verify: fakeVerify}, dir
 }
 
 func read(t *testing.T, path string) string {
@@ -113,11 +146,11 @@ func TestNewer(t *testing.T) {
 }
 
 func TestLatestAndInstall(t *testing.T) {
-	r := &release{tag: "v1.9.0"}
+	r := &release{tag: "v2.0.0"}
 	r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit", "os": "new os", "README.md": "readme", "docs/x.md": "doc"})
 	u, dir := updater(t, r)
 	rel, err := u.Latest(context.Background())
-	if err != nil || rel.Version != "1.9.0" || !strings.HasSuffix(rel.URL, "/releases/tag/v1.9.0") {
+	if err != nil || rel.Version != "2.0.0" || !strings.HasSuffix(rel.URL, "/releases/tag/v2.0.0") {
 		t.Fatalf("latest: %+v %v", rel, err)
 	}
 	if err := u.Install(context.Background(), rel.Version); err != nil {
@@ -144,7 +177,7 @@ func TestInstallReplacesTheBundledExtensions(t *testing.T) {
 		"none":    {"open-conduit": "new open-conduit", "os": "new os"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := &release{tag: "v1.9.0", archive: archive(t, files)}
+			r := &release{tag: "v2.0.0", archive: archive(t, files)}
 			u, dir := updater(t, r)
 			for _, f := range []string{"extensions/setup/setup-extension", "extensions/setup/old.md", "extensions/stale/x"} {
 				path := filepath.Join(dir, filepath.FromSlash(f))
@@ -155,7 +188,7 @@ func TestInstallReplacesTheBundledExtensions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := u.Install(context.Background(), "1.9.0"); err != nil {
+			if err := u.Install(context.Background(), "2.0.0"); err != nil {
 				t.Fatal(err)
 			}
 			entries, _ := os.ReadDir(dir)
@@ -185,9 +218,9 @@ func TestInstallReplacesTheBundledExtensions(t *testing.T) {
 
 func TestInstallRefusesABadArchive(t *testing.T) {
 	for name, r := range map[string]*release{
-		"checksum mismatch":  {tag: "v1.9.0", sum: strings.Repeat("ab", 32)},
-		"missing os":         {tag: "v1.9.0"},
-		"escaping extension": {tag: "v1.9.0"},
+		"checksum mismatch":  {tag: "v2.0.0", sum: strings.Repeat("ab", 32)},
+		"missing os":         {tag: "v2.0.0"},
+		"escaping extension": {tag: "v2.0.0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit"})
@@ -198,7 +231,7 @@ func TestInstallRefusesABadArchive(t *testing.T) {
 				r.archive = archive(t, map[string]string{"open-conduit": "new", "os": "new", "extensions/../evil": "x"})
 			}
 			u, dir := updater(t, r)
-			if err := u.Install(context.Background(), "1.9.0"); err == nil {
+			if err := u.Install(context.Background(), "2.0.0"); err == nil {
 				t.Fatal("installed")
 			}
 			if read(t, filepath.Join(dir, "open-conduit")) != "old open-conduit" || read(t, filepath.Join(dir, "os")) != "old os" {
@@ -208,6 +241,84 @@ func TestInstallRefusesABadArchive(t *testing.T) {
 				t.Fatalf("left behind: %v", entries)
 			}
 		})
+	}
+}
+
+// A signed-era release installs only once checksums.txt's signature
+// verifies: a missing bundle, a bundle that doesn't sign the served
+// checksums, or a failed check installs nothing, even unsigned installs
+// allowed. The negative control is the signed case in TestLatestAndInstall.
+func TestInstallRefusesAnUnverifiedRelease(t *testing.T) {
+	for name, r := range map[string]*release{
+		"no bundle":      {tag: "v2.0.0", noBundle: true},
+		"bad signature":  {tag: "v2.0.0", bundle: "forged"},
+		"wrong checksum": {tag: "v2.0.0", bundle: signed([]byte("another list"))},
+	} {
+		for _, unsigned := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/unsigned=%v", name, unsigned), func(t *testing.T) {
+				r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit", "os": "new os"})
+				u, dir := updater(t, r)
+				install := u.Install
+				if unsigned {
+					install = u.InstallUnsigned
+				}
+				err := install(context.Background(), "2.0.0")
+				if err == nil || !strings.Contains(err.Error(), "nothing was installed") {
+					t.Fatalf("install: %v", err)
+				}
+				if read(t, filepath.Join(dir, "open-conduit")) != "old open-conduit" || read(t, filepath.Join(dir, "os")) != "old os" {
+					t.Fatal("old binaries touched")
+				}
+				if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+					t.Fatalf("left behind: %v", entries)
+				}
+			})
+		}
+	}
+}
+
+// A release from before FirstSigned has no signature: Install refuses it
+// without downloading anything, and only InstallUnsigned installs it.
+func TestInstallRefusesAnUnsignedReleaseUnlessAsked(t *testing.T) {
+	r := &release{tag: "v1.14.0", noBundle: true}
+	r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit", "os": "new os"})
+	u, dir := updater(t, r)
+	verified := false
+	u.Verify = func(context.Context, []byte, []byte) error { verified = true; return nil }
+	if err := u.Install(context.Background(), "1.14.0"); !errors.Is(err, ErrUnsigned) {
+		t.Fatalf("install: %v", err)
+	}
+	if read(t, filepath.Join(dir, "open-conduit")) != "old open-conduit" {
+		t.Fatal("installed an unsigned release")
+	}
+	if err := u.InstallUnsigned(context.Background(), "1.14.0"); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(dir, "open-conduit")) != "new open-conduit" || verified {
+		t.Fatalf("unsigned install: verified %v", verified)
+	}
+}
+
+func TestSigned(t *testing.T) {
+	for v, want := range map[string]bool{"1.14.0": false, "1.14.9": false, "0.9.0": false, "1.15.0": true, "1.15.0-rc.1": true, "1.16.0": true, "2.0.0": true, "6.10.0": true} {
+		s, _ := parse(v)
+		if s.signed() != want {
+			t.Errorf("%s signed = %v", v, !want)
+		}
+	}
+}
+
+// With no verifier, a signed release installs nothing.
+func TestInstallWithoutAVerifierFailsClosed(t *testing.T) {
+	r := &release{tag: "v2.0.0"}
+	r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit", "os": "new os"})
+	u, dir := updater(t, r)
+	u.Verify = nil
+	if err := u.Install(context.Background(), "2.0.0"); err == nil || !strings.Contains(err.Error(), "can't verify release signatures") {
+		t.Fatalf("install: %v", err)
+	}
+	if read(t, filepath.Join(dir, "open-conduit")) != "old open-conduit" {
+		t.Fatal("installed without verifying")
 	}
 }
 

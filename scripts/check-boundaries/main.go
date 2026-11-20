@@ -160,6 +160,11 @@ func allowed(owner, dependency string, test bool) bool {
 	case under(owner, "internal/telemetry"):
 		// Lifecycle export pipeline: public contracts plus the OpenTelemetry API.
 		return public(dependency) || under(dependency, "internal/telemetry")
+	case under(owner, "internal/provenance"):
+		// Sigstore signature verification (#710): the standard library and
+		// sigstore-go, nothing of this module's. The entrypoint wires it in,
+		// so internal/cli and the os toolbelt don't carry it.
+		return under(dependency, "internal/provenance")
 	case under(owner, "internal/config"):
 		return dependency == "domain" || dependency == "extension" || under(dependency, "internal/config")
 	case under(owner, "client"):

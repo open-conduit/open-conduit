@@ -13,16 +13,20 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 )
 
-const upgradeHelp = `Usage: open-conduit upgrade [--check] [--version VERSION] [--no-restart] [--json]
+const upgradeHelp = `Usage: open-conduit upgrade [--check] [--version VERSION [--allow-unsigned]] [--no-restart] [--json]
 
 Installs the latest release in place of this open-conduit and the os beside
-it, after checking the archive against the release's checksums.txt, then
-restarts the background service so the daemon runs the new version.
+it, then restarts the background service so the daemon runs the new version.
+The release's checksums.txt must carry a signature made by its release
+workflow on main, and the archive must match checksums.txt; otherwise
+nothing is installed.
 
-  --check       only say whether a newer release is out
-  --version V   install release V (for example 1.9.0) instead of the latest
-  --no-restart  leave the background service running the old version
-  --json        print the result as JSON
+  --check           only say whether a newer release is out
+  --version V       install release V (for example 2.0.0) instead of the latest
+  --allow-unsigned  with --version, allow a release from before v` + upgrade.FirstSigned + `,
+                    which has no signature, on its checksums alone
+  --no-restart      leave the background service running the old version
+  --json            print the result as JSON
 
 A Homebrew install is upgraded with brew: ` + upgrade.BrewCommand + `.
 `
@@ -43,13 +47,17 @@ func (o *operator) selfUpgrade(args []string) int {
 	fs.SetOutput(o.errOut)
 	check := fs.Bool("check", false, "")
 	want := fs.String("version", "", "")
+	allowUnsigned := fs.Bool("allow-unsigned", false, "")
 	noRestart := fs.Bool("no-restart", false, "")
 	asJSON := fs.Bool("json", false, "")
 	fs.Usage = func() { fmt.Fprint(o.out, upgradeHelp) }
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil || fs.NArg() != 0 {
-		return usageError(o.errOut, "expected upgrade [--check] [--version VERSION] [--no-restart] [--json]")
+		return usageError(o.errOut, "expected upgrade [--check] [--version VERSION [--allow-unsigned]] [--no-restart] [--json]")
+	}
+	if *allowUnsigned && *want == "" {
+		return usageError(o.errOut, "--allow-unsigned needs --version: the latest release is always signed")
 	}
 	u := o.env.Updater
 	if u == nil {
@@ -97,8 +105,15 @@ func (o *operator) selfUpgrade(args []string) int {
 		}
 		target = rel.Version
 	}
-	if err := u.Install(ctx, target); err != nil {
+	install := u.Install
+	if *allowUnsigned {
+		install = u.InstallUnsigned
+	}
+	if err := install(ctx, target); err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: upgrade: %s\n", err)
+		if errors.Is(err, upgrade.ErrUnsigned) {
+			fmt.Fprintln(o.errOut, "pass --allow-unsigned to install it on its checksums alone")
+		}
 		return 1
 	}
 	res.Installed = target

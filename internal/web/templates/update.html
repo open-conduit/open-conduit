@@ -27,7 +27,7 @@
     <p>This install belongs to Homebrew, so brew upgrades it. Run this, and Homebrew restarts the background service on the new version:</p>
     <pre class="code-block">{{$d.Brew}}</pre>
     {{- else}}
-    <p>Updating downloads the release, checks it against the release's checksums and replaces <code>open-conduit</code> and <code>os</code>.{{if $d.Manual}} No background service runs the daemon, so restart <code>open-conduit serve</code> afterwards to run the new version.{{else}} The background service then restarts on the new version.{{end}}</p>
+    <p>Updating downloads the release, verifies the signature on its checksums, checks the archive against them and replaces <code>open-conduit</code> and <code>os</code>.{{if $d.Manual}} No background service runs the daemon, so restart <code>open-conduit serve</code> afterwards to run the new version.{{else}} The background service then restarts on the new version.{{end}}</p>
     <form method="post" action="/update" class="row-gap">
       <input type="hidden" name="csrf" value="{{$.Page.CSRF}}">
       <input type="hidden" name="version" value="{{$d.Latest.Version}}">
