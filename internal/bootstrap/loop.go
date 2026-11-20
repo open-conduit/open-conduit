@@ -103,14 +103,12 @@ func (d *daemon) loop(ctx context.Context) error {
 }
 
 // retentionPass runs the retention sweep and artifact collection once
-// RetentionInterval has passed since the last sweep. Both take the artifact
-// store's exclusive gate, which a running backup holds shared for its whole
-// artifact copy, and a waiting writer would also block every artifact read
-// and write behind it. So while a backup runs the pass is skipped, leaving
-// lastSweep where it was, and the first pass after the backup runs it. It
-// reports whether it ran.
+// RetentionInterval has passed since the last sweep. It runs during a
+// backup too: the backup's retention hold defers the sweep's deletes
+// (runtime.HoldRetention), and collection never deletes content an attempt
+// references. It reports whether it ran.
 func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *time.Time) bool {
-	if d.now().Sub(*lastSweep) < d.o.RetentionInterval || d.backupRunning() {
+	if d.now().Sub(*lastSweep) < d.o.RetentionInterval {
 		return false
 	}
 	if _, err := c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
@@ -118,7 +116,7 @@ func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *ti
 	} else {
 		*lastSweep = d.now()
 	}
-	d.collectArtifacts(ctx)
+	d.collectArtifacts(ctx, c)
 	d.pruneReported()
 	if c.toolbelt != nil {
 		if _, err := c.toolbelt.SweepToolbelt(ctx, toolbeltGrace, passLimit); err != nil && ctx.Err() == nil {
@@ -640,32 +638,13 @@ func errorCode(err error) string {
 	return "internal"
 }
 
-// collectArtifacts removes artifact content no execution references once it
-// is older than ArtifactGrace: orphans an interrupted publication left, or
-// content published but never attached. Executors attach what they publish
-// in the same result, so the grace far exceeds the publish-to-attach window.
-func (d *daemon) collectArtifacts(ctx context.Context) {
+// collectArtifacts removes artifact content no attempt references once it
+// is older than ArtifactGrace (Scheduler.CollectArtifacts).
+func (d *daemon) collectArtifacts(ctx context.Context, c *components) {
 	if d.artifacts == nil {
 		return
 	}
-	var live map[string]bool
-	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		live = map[string]bool{}
-		xs, err := tx.ListExecutions("")
-		if err != nil {
-			return err
-		}
-		for _, x := range xs {
-			for _, ref := range x.AllArtifacts() {
-				live[ref.ID] = true
-			}
-		}
-		return nil
-	})
-	if err == nil {
-		err = d.artifacts.Collect(ctx, d.now().Add(-d.o.ArtifactGrace), live)
-	}
-	if err != nil && ctx.Err() == nil {
+	if _, err := c.scheduler.CollectArtifacts(ctx, d.artifacts, d.now().Add(-d.o.ArtifactGrace)); err != nil && ctx.Err() == nil {
 		d.report("artifacts", "", errorCode(err))
 		return
 	}

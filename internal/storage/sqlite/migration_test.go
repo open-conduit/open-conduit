@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func TestMigrationFailureRollsBack(t *testing.T) {
@@ -170,4 +173,63 @@ func TestOpenRewritesLegacyTurnSchemas(t *testing.T) {
 	if schema != "jira.status.v1" {
 		t.Fatalf("the rewrite ran again on a store that recorded it: %q", schema)
 	}
+}
+
+// TestReferencedArtifactsCoverEarlierAndForeignWrites proves the reverse
+// lookup behind ReferencedArtifacts: opening a store from before it fills
+// it from the attempts already recorded, and its triggers keep it current
+// for writes that never went through this binary's code (an older binary's,
+// here raw SQL), including an update that drops a ref.
+func TestReferencedArtifactsCoverEarlierAndForeignWrites(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// A store from before the lookup: no table, no triggers, no backfill.
+	for _, q := range []string{
+		`DROP TRIGGER execution_artifacts_insert`, `DROP TRIGGER execution_artifacts_update`, `DROP TRIGGER execution_artifacts_delete`,
+		`DROP TABLE execution_artifacts`, `DELETE FROM metadata WHERE key='backfill_execution_artifacts'`,
+		`INSERT INTO scopes VALUES ('s',NULL,'{}')`, `INSERT INTO works VALUES ('w','s',NULL,'{}')`,
+		`INSERT INTO executions VALUES ('x1','w',1,0,CAST('{"ID":"x1","Artifacts":[{"ID":"latest","Size":1}],"EarlierArtifacts":[{"ID":"earlier","Size":1}]}' AS BLOB))`,
+		`INSERT INTO executions VALUES ('x2','w',2,0,CAST('{"ID":"x2","Artifacts":null}' AS BLOB))`,
+	} {
+		if _, err = db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	referenced := func(label string, want ...string) {
+		t.Helper()
+		s, err := Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		var got []string
+		if err = s.View(ctx, func(tx storage.Tx) (e error) {
+			got, e = tx.ReferencedArtifacts([]string{"latest", "earlier", "added", "x1"})
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: referenced %q, want %q", label, got, want)
+		}
+	}
+	referenced("backfilled", "earlier", "latest")
+	if _, err = db.Exec(`UPDATE executions SET record=CAST('{"ID":"x2","Artifacts":[{"ID":"added","Size":1}]}' AS BLOB) WHERE id='x2'`); err != nil {
+		t.Fatal(err)
+	}
+	referenced("a foreign insert of a ref", "added", "earlier", "latest")
+	if _, err = db.Exec(`UPDATE executions SET record=CAST('{"ID":"x1","Artifacts":[{"ID":"latest","Size":1}]}' AS BLOB) WHERE id='x1'`); err != nil {
+		t.Fatal(err)
+	}
+	referenced("a foreign update dropping a ref", "added", "latest")
 }

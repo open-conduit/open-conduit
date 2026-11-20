@@ -186,6 +186,15 @@ type Tx interface {
 	// refs or an invalid ref (empty ID, negative size, a duplicate) is
 	// ErrInvalid, and an unknown attempt ErrNotFound.
 	PublishFinishedArtifacts(execution domain.ID, refs []domain.ArtifactRef) error
+	// ReferencedArtifacts returns the IDs among ids that some attempt
+	// references, as one of its Artifacts or EarlierArtifacts, each once and
+	// in byte order. Content no attempt references is an orphan (a
+	// publication interrupted before its result was recorded, or content
+	// never attached), which collection may delete once it is old enough.
+	// Its cost follows len(ids), not the
+	// attempts retained. More than MaxReferenceQuery IDs, or an empty one,
+	// is ErrInvalid.
+	ReferencedArtifacts(ids []string) ([]string, error)
 	// Claim enters running on both Work and Execution and advances the lease epoch.
 	Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error)
 	// Renew extends the lease to now+ttl, keeping the stored expiry when

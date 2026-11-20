@@ -67,7 +67,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, c.name, store, files, build, retentionExpired); err != nil {
+	if err := backup.Create(ctx, destination, c.name, store, files, build, retention(time.Now)); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
@@ -78,6 +78,13 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 func retentionExpired(tx storage.Tx, id domain.ID) (bool, error) {
 	r, err := runtime.RetentionInTx(tx, id)
 	return r.Expired, err
+}
+
+// retention is the runtime's retention ledger as a backup uses it: what has
+// expired, and the hold that keeps the sweep from deleting content while
+// the backup copies it, its expiry set on now, the clock the sweep reads.
+func retention(now func() time.Time) backup.Retention {
+	return backup.Retention{Expired: retentionExpired, Hold: runtime.HoldRetention, Release: runtime.ReleaseRetention, Now: now}
 }
 
 func bundleInfo(bundle string) (cli.BackupInfo, error) {
@@ -101,7 +108,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, artifacts.Backend, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)
@@ -137,7 +144,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, artifacts.Backend, recordChoice); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {

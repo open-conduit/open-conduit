@@ -39,3 +39,55 @@ func PublishedArtifacts(x domain.Execution, refs []domain.ArtifactRef) (out doma
 	x.Artifacts = slices.Clone(refs)
 	return x, true, nil
 }
+
+// MaxReferenceQuery is the most IDs one ReferencedArtifacts call takes: a
+// List page.
+const MaxReferenceQuery = 1000
+
+// ReferencedIn is ReferencedArtifacts over xs, for a store that answers it
+// by reading its attempts: the IDs among ids that one of xs references, as
+// one of its Artifacts or EarlierArtifacts, each once and in byte order.
+// More than MaxReferenceQuery IDs, or an empty one, is ErrInvalid.
+func ReferencedIn(xs []domain.Execution, ids []string) ([]string, error) {
+	wanted, err := referenceQuery(ids)
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]bool{}
+	for _, x := range xs {
+		for _, ref := range x.AllArtifacts() {
+			if wanted[ref.ID] {
+				found[ref.ID] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(found))
+	for id := range found {
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// referenceQuery checks a ReferencedArtifacts query and returns its IDs as
+// a set.
+func referenceQuery(ids []string) (map[string]bool, error) {
+	if len(ids) > MaxReferenceQuery {
+		return nil, ErrInvalid
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return nil, ErrInvalid
+		}
+		set[id] = true
+	}
+	return set, nil
+}
+
+// ValidReferenceQuery reports whether ids is a query ReferencedArtifacts
+// takes, for a backend that answers it another way.
+func ValidReferenceQuery(ids []string) error {
+	_, err := referenceQuery(ids)
+	return err
+}

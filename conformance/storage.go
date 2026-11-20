@@ -102,6 +102,7 @@ func StorageCases() []StorageCase {
 		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", finishedArtifacts},
+		{"referenced_artifacts_follow_attempts", referencedArtifacts},
 		{"sequences_visible_in_order_to_a_waiting_reader", sequenceVisibility},
 		{"kv_prefixes_and_order_are_bytes", kvBytes},
 		{"transient_aborts_commit_nothing_and_retry", transientAborts},
@@ -201,6 +202,94 @@ func finishedArtifacts(s storage.Store) error {
 		return fmt.Errorf("finished artifacts: after the Work's cancel: %w", err)
 	}
 	return check("a later turn's after the Work's cancel", fenced.Revision+2, second, first)
+}
+
+// referencedArtifacts: ReferencedArtifacts reports exactly the asked-for
+// IDs some attempt references, latest or earlier, once each and in byte
+// order, through a transaction and a View; a rolled-back attachment
+// references nothing. An empty ID and an oversized query are refused.
+func referencedArtifacts(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if _, err := claim(s, c); err != nil {
+		return err
+	}
+	latest := domain.ArtifactRef{ID: "b-latest", Size: 2, MediaType: "text/plain"}
+	earlier := domain.ArtifactRef{ID: "a-earlier", Size: 1, MediaType: "text/plain"}
+	// The query asks for refs out of order, an orphan, a repeat and IDs
+	// that only share a prefix with a referenced one.
+	query := []string{"b-latest", "orphan", "a-earlier", "b-latest", "a-", "b-latest-2"}
+	referenced := func(label string, want ...string) error {
+		ask := func(tx storage.Tx) error {
+			got, err := tx.ReferencedArtifacts(query)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(got, want) {
+				return fmt.Errorf("referenced artifacts: %s: got %q, want %q", label, got, want)
+			}
+			return nil
+		}
+		if err := transact(s, c, ask); err != nil {
+			return err
+		}
+		return storage.View(context.Background(), s, c.Now(), ask)
+	}
+	if err := referenced("before any is attached"); err != nil {
+		return err
+	}
+	attach := func(tx storage.Tx) error {
+		x, err := tx.Execution("execution")
+		if err != nil {
+			return err
+		}
+		x.State = domain.ExecutionCancelled
+		x.Artifacts = []domain.ArtifactRef{earlier}
+		return tx.PutExecution(x, x.Revision)
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := attach(tx); err != nil {
+			return err
+		}
+		return errRollback
+	}); !errors.Is(err, errRollback) {
+		return fmt.Errorf("referenced artifacts: rollback: %v", err)
+	}
+	if err := referenced("after a rolled-back attachment"); err != nil {
+		return err
+	}
+	if err := transact(s, c, attach); err != nil {
+		return err
+	}
+	if err := referenced("an attempt's latest", "a-earlier"); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		return tx.PublishFinishedArtifacts("execution", []domain.ArtifactRef{latest})
+	}); err != nil {
+		return err
+	}
+	if err := referenced("one latest and one earlier", "a-earlier", "b-latest"); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		if got, err := tx.ReferencedArtifacts(nil); err != nil || len(got) != 0 {
+			return fmt.Errorf("referenced artifacts: an empty query: %q, %v", got, err)
+		}
+		if _, err := tx.ReferencedArtifacts([]string{"a-earlier", ""}); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("referenced artifacts: an empty ID: got %v, want %v", err, storage.ErrInvalid)
+		}
+		oversized := make([]string, storage.MaxReferenceQuery+1)
+		for i := range oversized {
+			oversized[i] = fmt.Sprintf("id-%d", i)
+		}
+		if _, err := tx.ReferencedArtifacts(oversized); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("referenced artifacts: an oversized query: got %v, want %v", err, storage.ErrInvalid)
+		}
+		return nil
+	})
 }
 
 // eventActor checks that an Event's Actor and the client it acted through

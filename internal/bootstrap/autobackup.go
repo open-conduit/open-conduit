@@ -89,13 +89,6 @@ func (d *daemon) startBackups(name string, db storage.Database) error {
 	return nil
 }
 
-// backupRunning reports whether a scheduled backup is in progress.
-func (d *daemon) backupRunning() bool {
-	d.backups.mu.Lock()
-	defer d.backups.mu.Unlock()
-	return d.backups.running
-}
-
 // scheduleBackup starts a scheduled backup in the background when one is due
 // and none is running. The loop goes on meanwhile: the database snapshot
 // briefly holds the store's connection, and the artifact copy pins the
@@ -141,7 +134,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
-	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retentionExpired); err != nil {
+	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
