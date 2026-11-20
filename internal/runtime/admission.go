@@ -86,158 +86,210 @@ type AdmissionResult struct {
 	Admitted, Held, Released []domain.ID
 }
 
+// admissionPlan is what one admission pass would change.
+type admissionPlan struct {
+	stale               []string
+	legacy              []domain.ID
+	admit, hold         []domain.Work
+	release             []domain.Work
+	holdScope           []domain.ID
+	holdLimit, holdOpen []int
+}
+
+func (p admissionPlan) empty() bool {
+	return len(p.stale)+len(p.legacy)+len(p.admit)+len(p.hold)+len(p.release) == 0
+}
+
 // Admit is the admission pass. In creation order, it admits each open
 // root Work not yet admitted while its scope and every ancestor are under
 // their limits, and holds the rest; held Work is released, oldest first,
 // as places free. It forgets finished Work's admission. The daemon runs it
-// before it starts ready Work.
+// before it starts ready Work. It plans in a read-only view and writes only
+// when the plan changes something, planning again in the write.
 func (s *Scheduler) Admit(ctx context.Context) (out AdmissionResult, err error) {
+	var plan admissionPlan
+	if err = storage.View(ctx, s.store, s.now(), func(tx storage.Tx) (e error) { plan, e = s.planAdmission(tx); return }); err != nil || plan.empty() {
+		return out, err
+	}
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		out = AdmissionResult{}
 		now := s.now()
-		works, e := tx.LiveWorks()
+		plan, e := s.planAdmission(tx)
 		if e != nil {
 			return e
 		}
-		live := make(map[string]bool, len(works))
-		for _, w := range works {
-			live[identity(string(w.ID))] = true
-		}
-		rows, e := tx.List(admittedNamespace, "")
-		if e != nil {
-			return e
-		}
-		for _, row := range rows {
-			if !live[row.Key] {
-				if e = tx.Delete(admittedNamespace, row.Key); e != nil {
-					return e
-				}
-			}
-		}
-		if len(s.options.AdmissionLimits) == 0 {
-			// With no limit left, nothing stays held for one.
-			for _, w := range works {
-				h, held, e := HoldInTx(tx, w.ID)
-				if e != nil {
-					return e
-				}
-				if held && h.Kind == HoldKindAdmission {
-					if e = releaseAdmissionInTx(tx, now, w); e != nil {
-						return e
-					}
-					out.Released = append(out.Released, w.ID)
-				}
-			}
-			return nil
-		}
-		chains := map[domain.ID][]domain.ID{}
-		chainOf := func(scope domain.ID) ([]domain.ID, error) {
-			if c, ok := chains[scope]; ok {
-				return c, nil
-			}
-			c, err := scopeChain(tx, scope)
-			chains[scope] = c
-			return c, err
-		}
-		counts := map[domain.ID]int{}
-		type candidate struct {
-			work domain.Work
-			hold *Hold
-		}
-		var waiting []candidate
-		for _, w := range works {
-			if !s.subjectToAdmission(w) {
-				continue
-			}
-			ok, e := admittedInTx(tx, w.ID)
-			if e != nil {
+		for _, key := range plan.stale {
+			if e = tx.Delete(admittedNamespace, key); e != nil {
 				return e
 			}
-			if !ok {
-				// Work that has had an attempt was admitted before
-				// admission was enforced.
-				xs, e := tx.ListExecutions(w.ID)
-				if e != nil {
-					return e
-				}
-				if len(xs) > 0 {
-					if e = admitInTx(tx, now, w.ID, ""); e != nil {
-						return e
-					}
-					ok = true
-				}
-			}
-			if ok {
-				chain, e := chainOf(w.ScopeID)
-				if e != nil {
-					return e
-				}
-				for _, scope := range chain {
-					counts[scope]++
-				}
-				continue
-			}
-			h, held, e := HoldInTx(tx, w.ID)
-			if e != nil {
-				return e
-			}
-			switch {
-			case !held:
-				waiting = append(waiting, candidate{work: w})
-			case h.Kind == HoldKindAdmission:
-				waiting = append(waiting, candidate{work: w, hold: &h})
-			}
-			// Work another hold holds waits for that hold first.
 		}
-		// The oldest Work is let in first: held Work by when it was held,
-		// which is its creation order too.
-		sort.SliceStable(waiting, func(i, j int) bool {
-			a, b := waiting[i].work, waiting[j].work
-			if !a.CreatedAt.Equal(b.CreatedAt) {
-				return a.CreatedAt.Before(b.CreatedAt)
-			}
-			return a.ID < b.ID
-		})
-		for _, c := range waiting {
-			chain, e := chainOf(c.work.ScopeID)
-			if e != nil {
+		// Work admitted before admission was enforced is recorded, not news.
+		for _, id := range plan.legacy {
+			if e = admitInTx(tx, now, id, ""); e != nil {
 				return e
 			}
-			full := domain.ID("")
-			limit := 0
-			for _, scope := range chain {
-				if l := s.options.AdmissionLimits[scope]; l > 0 && counts[scope] >= l {
-					full, limit = scope, l
-					break
-				}
-			}
-			if full != "" {
-				if c.hold == nil {
-					if e = holdForAdmissionInTx(tx, now, c.work, full, limit, counts[full]); e != nil {
-						return e
-					}
-					out.Held = append(out.Held, c.work.ID)
-				}
-				continue
-			}
-			for _, scope := range chain {
-				counts[scope]++
-			}
-			if c.hold == nil {
-				if e = admitInTx(tx, now, c.work.ID, ""); e != nil {
-					return e
-				}
-				out.Admitted = append(out.Admitted, c.work.ID)
-				continue
-			}
-			if e = releaseAdmissionInTx(tx, now, c.work); e != nil {
+		}
+		for _, w := range plan.admit {
+			if e = admitInTx(tx, now, w.ID, ""); e != nil {
 				return e
 			}
-			out.Released = append(out.Released, c.work.ID)
+			out.Admitted = append(out.Admitted, w.ID)
+		}
+		for i, w := range plan.hold {
+			if e = holdForAdmissionInTx(tx, now, w, plan.holdScope[i], plan.holdLimit[i], plan.holdOpen[i]); e != nil {
+				return e
+			}
+			out.Held = append(out.Held, w.ID)
+		}
+		for _, w := range plan.release {
+			if e = releaseAdmissionInTx(tx, now, w); e != nil {
+				return e
+			}
+			out.Released = append(out.Released, w.ID)
 		}
 		return nil
 	})
 	return out, err
+}
+
+// planAdmission reads, once each, the open Work, the admission records and
+// the holds, and works out the pass. Only Work with neither a record nor a
+// hold (new Work, or Work from before admission was enforced) has its
+// attempts listed, so held Work costs no reads beyond the listings.
+func (s *Scheduler) planAdmission(tx storage.Tx) (p admissionPlan, err error) {
+	works, err := tx.LiveWorks()
+	if err != nil {
+		return p, err
+	}
+	live := make(map[string]bool, len(works))
+	for _, w := range works {
+		live[identity(string(w.ID))] = true
+	}
+	rows, err := tx.List(admittedNamespace, "")
+	if err != nil {
+		return p, err
+	}
+	admittedSet := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if live[row.Key] {
+			admittedSet[row.Key] = true
+		} else {
+			p.stale = append(p.stale, row.Key)
+		}
+	}
+	holdRows, err := tx.List(holdNamespace, "")
+	if err != nil {
+		return p, err
+	}
+	holds := make(map[string]Hold, len(holdRows))
+	for _, row := range holdRows {
+		var h Hold
+		if err = json.Unmarshal(row.Value, &h); err != nil {
+			return p, err
+		}
+		holds[row.Key] = h
+	}
+	if len(s.options.AdmissionLimits) == 0 {
+		// With no limit left, nothing stays held for one.
+		for _, w := range works {
+			if h, ok := holds[identity(string(w.ID))]; ok && h.Kind == HoldKindAdmission {
+				p.release = append(p.release, w)
+			}
+		}
+		return p, nil
+	}
+	chains := map[domain.ID][]domain.ID{}
+	chainOf := func(scope domain.ID) ([]domain.ID, error) {
+		if c, ok := chains[scope]; ok {
+			return c, nil
+		}
+		c, err := scopeChain(tx, scope)
+		chains[scope] = c
+		return c, err
+	}
+	counts := map[domain.ID]int{}
+	count := func(w domain.Work) error {
+		chain, err := chainOf(w.ScopeID)
+		for _, scope := range chain {
+			counts[scope]++
+		}
+		return err
+	}
+	var waiting []domain.Work
+	for _, w := range works {
+		if !s.subjectToAdmission(w) {
+			continue
+		}
+		key := identity(string(w.ID))
+		if admittedSet[key] {
+			if err = count(w); err != nil {
+				return p, err
+			}
+			continue
+		}
+		h, held := holds[key]
+		switch {
+		case held && h.Kind == HoldKindAdmission:
+			waiting = append(waiting, w)
+		case held:
+			// Work another hold holds waits for that hold first.
+		default:
+			// Work that has had an attempt was admitted before admission
+			// was enforced; it is recorded once and counted.
+			xs, err := tx.ListExecutions(w.ID)
+			if err != nil {
+				return p, err
+			}
+			if len(xs) > 0 {
+				p.legacy = append(p.legacy, w.ID)
+				if err = count(w); err != nil {
+					return p, err
+				}
+				continue
+			}
+			waiting = append(waiting, w)
+		}
+	}
+	// The oldest Work is let in first, in creation order.
+	sort.SliceStable(waiting, func(i, j int) bool {
+		a, b := waiting[i], waiting[j]
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return a.ID < b.ID
+	})
+	for _, w := range waiting {
+		chain, err := chainOf(w.ScopeID)
+		if err != nil {
+			return p, err
+		}
+		full, limit := domain.ID(""), 0
+		for _, scope := range chain {
+			if l := s.options.AdmissionLimits[scope]; l > 0 && counts[scope] >= l {
+				full, limit = scope, l
+				break
+			}
+		}
+		held := holds[identity(string(w.ID))].Kind == HoldKindAdmission
+		if full != "" {
+			if !held {
+				p.hold = append(p.hold, w)
+				p.holdScope = append(p.holdScope, full)
+				p.holdLimit = append(p.holdLimit, limit)
+				p.holdOpen = append(p.holdOpen, counts[full])
+			}
+			continue
+		}
+		for _, scope := range chain {
+			counts[scope]++
+		}
+		if held {
+			p.release = append(p.release, w)
+		} else {
+			p.admit = append(p.admit, w)
+		}
+	}
+	return p, nil
 }
 
 // AdmissionNotice is the data of a core.admission.held or

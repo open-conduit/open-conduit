@@ -92,6 +92,9 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 			c.defaultHash = s.Hash
 		}
 	}
+	if err := dropImplicitAdmissionLimit(ctx, store, now, registry); err != nil {
+		return nil, err
+	}
 	generation, normalized, err := StoredGeneration(ctx, store, now)
 	if err != nil {
 		return nil, err

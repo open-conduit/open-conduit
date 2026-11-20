@@ -480,11 +480,15 @@ func (v *validator) resolve(id string) *effective {
 		}
 		e.concurrency = min(l, e.concurrency)
 	}
+	// admission_limit has no default: unset (zero) is no cap, and a scope
+	// may set one where no ancestor does.
 	if l := sc.Limits.AdmissionLimit; l > 0 {
-		if l > e.admission {
+		if e.admission > 0 && l > e.admission {
 			v.fail(path+"/limits/admission_limit", "limit_widening", "scope limits may only narrow ancestors")
 		}
-		e.admission = min(l, e.admission)
+		if e.admission == 0 || l < e.admission {
+			e.admission = l
+		}
 	}
 	for k, ref := range sc.SecretRefs {
 		if ref == "" {

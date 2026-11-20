@@ -176,7 +176,7 @@ func TestInheritance(t *testing.T) {
 	if _, ok := child.SecretRefs["temporary"]; ok || child.SecretRefs["retained"] != "env:RETAINED" {
 		t.Fatalf("secret refs %v", child.SecretRefs)
 	}
-	if child.ParentID != "parent" || !child.Enabled || child.Concurrency != 4 || child.AdmissionLimit != 10 {
+	if child.ParentID != "parent" || !child.Enabled || child.Concurrency != 4 || child.AdmissionLimit != 0 {
 		t.Fatalf("child %+v", child)
 	}
 	if !slices.Equal(child.Authorization.Operations, []string{"emit", "read_context", "declare_outcome"}) {
@@ -578,7 +578,7 @@ func TestDomainScopes(t *testing.T) {
 	if d.Config.Schema != ScopeSchema || json.Unmarshal(d.Config.Data, &meta) != nil {
 		t.Fatalf("config %+v", d.Config)
 	}
-	if !meta.Enabled || meta.Limits.Concurrency != 4 || meta.Limits.AdmissionLimit != 10 || !slices.Equal(meta.Authorization.Connections, []string{"code"}) ||
+	if !meta.Enabled || meta.Limits.Concurrency != 4 || meta.Limits.AdmissionLimit != 0 || !slices.Equal(meta.Authorization.Connections, []string{"code"}) ||
 		meta.Bindings["run"].Connection != "code" || meta.Bindings["run"].Resource.Provider != "git" || len(meta.Extensions) != 1 || meta.Extensions[0].Type != "code_ingress" {
 		t.Fatalf("meta %+v", meta)
 	}
@@ -1313,5 +1313,37 @@ func TestIsolationRequired(t *testing.T) {
 	scope(m, 0)["authorization"].(map[string]any)["isolation"] = "optional"
 	if _, err := Validate(encode(t, m), reg); err == nil || !slices.Contains(codes(diagnostics(t, err)), "invalid_value") {
 		t.Fatalf("isolation optional: %v", err)
+	}
+}
+
+// TestAdmissionLimitOptIn: admission_limit has no default. Unset, no scope
+// is capped; a scope may set one where no ancestor does, and its
+// descendants may only narrow it.
+func TestAdmissionLimitOptIn(t *testing.T) {
+	base := generic(t, example(t, "inheritance"))
+	s, err := Validate(encode(t, base), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, sc := range s.Scopes {
+		if sc.AdmissionLimit != 0 {
+			t.Fatalf("scope %s capped at %d without admission_limit", id, sc.AdmissionLimit)
+		}
+	}
+	m := clone(t, base)
+	scope(m, 1)["limits"] = map[string]any{"admission_limit": 3}
+	if s, err = Validate(encode(t, m), registry()); err != nil {
+		t.Fatal(err)
+	}
+	parent, child := s.Scopes[domain.ID(scope(m, 0)["id"].(string))], s.Scopes[domain.ID(scope(m, 1)["id"].(string))]
+	if parent.AdmissionLimit != 0 || child.AdmissionLimit != 3 {
+		t.Fatalf("parent %d, child %d", parent.AdmissionLimit, child.AdmissionLimit)
+	}
+	m = clone(t, base)
+	m["settings"].(map[string]any)["admission_limit"] = 2
+	scope(m, 1)["limits"] = map[string]any{"admission_limit": 3}
+	_, err = Validate(encode(t, m), registry())
+	if got := codes(diagnostics(t, err)); !slices.Contains(got, "limit_widening") {
+		t.Fatalf("a scope widened settings.admission_limit: %v", got)
 	}
 }

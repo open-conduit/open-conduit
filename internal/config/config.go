@@ -558,7 +558,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil}
+	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil}
 	fields := []struct {
 		key string
 		dst *int
@@ -1116,9 +1116,13 @@ func (d *Document) normalized(redact bool) any {
 		scopes = append(scopes, m)
 	}
 	settings := map[string]any{
-		"concurrency": s.Concurrency, "admission_limit": s.AdmissionLimit, "reconcile_seconds": s.ReconcileSeconds,
+		"concurrency": s.Concurrency, "reconcile_seconds": s.ReconcileSeconds,
 		"timeout_seconds": s.TimeoutSeconds, "kept_executions": s.KeptExecutions, "retry_delays_seconds": s.RetryDelaysSeconds,
 		"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute, "job_concurrency": s.JobConcurrency,
+	}
+	// admission_limit has no default (#706): only a set one is written.
+	if s.AdmissionLimit > 0 {
+		settings["admission_limit"] = s.AdmissionLimit
 	}
 	// Only configured budgets join the hash, so configurations without them
 	// keep their generation hash.

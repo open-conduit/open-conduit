@@ -21,7 +21,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `admission_limit` | integer |  | `10` | Most open Work each scope has admitted at once, counting its descendants' Work. Work beyond it is created as usual and held until admitted Work in the scope finishes; ready, running and waiting Work all hold a place. A scope's limits.admission_limit can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
+| `admission_limit` | integer |  |  | Most open Work each scope has admitted at once, counting its descendants' Work. No default: unset, no scope is capped. Work beyond it is created as usual and held until admitted Work in the scope finishes; ready, running and waiting Work all hold a place. A scope's limits.admission_limit can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `budgets` | array of object |  |  | Usage limits the host enforces before it starts a turn: at most max of unit per Work, per scope or across every scope, over the Work's life or each UTC day or week. Work over a limit is held with the reason. |
 | `causal_max_depth` | integer |  | `32` | How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `causal_per_minute` | integer |  | `128` | How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
@@ -89,7 +89,7 @@ Each entry of `scopes`.
 
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `admission_limit` | integer |  |  | Most open Work admitted in this scope and its descendants at once, at most the parent's. |
+| `admission_limit` | integer |  |  | Most open Work admitted in this scope and its descendants at once, at most the parent's when the parent or settings sets one. |
 | `concurrency` | integer |  |  | Most attempts running in this scope at once, at most the parent's. |
 
 ## authorization

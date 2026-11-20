@@ -728,8 +728,8 @@ func scopeLimits(s *config.Snapshot) map[domain.ID]int {
 }
 
 // admissionLimits gives the scheduler each scope's admission_limit, as
-// validation narrowed it down the scope tree (settings.admission_limit at
-// the root). The scheduler counts a scope's Work against every ancestor
+// validation narrowed it down the scope tree from settings.admission_limit.
+// The field has no default, so a config that sets it nowhere caps nothing. The scheduler counts a scope's Work against every ancestor
 // too, so a parent's limit bounds its descendants together.
 func admissionLimits(s *config.Snapshot) map[domain.ID]int {
 	out := map[domain.ID]int{}
