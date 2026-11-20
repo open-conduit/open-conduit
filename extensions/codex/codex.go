@@ -145,9 +145,10 @@ func New(o Options) (*Executor, error) {
 }
 
 // Capabilities are what the executor implements. Resume relaunches a
-// woken attempt as a new segment on the same thread.
+// woken attempt as a new segment on the same thread, and Container runs a
+// binding's segments in its container.
 func Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true, Container: true}
 }
 
 func (e *Executor) Capabilities() domain.Capabilities { return Capabilities() }
@@ -330,7 +331,8 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 			return e.preset(ctx, rn, "start_failed", "could not prepare codex")
 		}
 	}
-	if spec.Args, err = e.codexArgs(cfg, r, dir); err != nil {
+	contained := r.Context.Container != nil
+	if spec.Args, err = e.codexArgs(cfg, r, dir, contained); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare the toolbelt")
 	}
 	if err = writeJSON(filepath.Join(dir, specFile), spec); err != nil {
@@ -340,18 +342,57 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err != nil {
 		return e.preset(ctx, rn, "invalid_config", "invalid codex binding config")
 	}
+	// A container binding keeps codex's home in the Work's own, and its
+	// credentials out of the environment.
+	var secrets []string
+	if contained {
+		if env, secrets, err = containerHome(cfg, r.Context.ContainerHome, env, r.Context.Secrets); err != nil {
+			return e.preset(ctx, rn, extension.ContainerReason(err), err.Error())
+		}
+		if r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.toolbeltDir(r) != "" {
+			// codex passes these on to its MCP server (env_vars); the
+			// provider moves the endpoint to its forward.
+			env = setEnv(env, "OS_ENDPOINT", r.Context.ToolbeltEndpoint)
+			env = setEnv(env, "OS_TOKEN_FILE", tokenFile(r, dir))
+		}
+		if err = writeFile(filepath.Join(dir, interjectionFile), []byte(interjectionHeader)); err != nil {
+			return e.preset(ctx, rn, "start_failed", "could not prepare codex")
+		}
+	}
 	if err = writeJSON(filepath.Join(dir, "turn.json"), turnRecord{Work: r.Work.ID, Kind: string(kind), HandoffReason: reason, CodexHome: codexHome(env), Structured: *cfg.Structured, StatusSchema: domain.TurnSchema}); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
 	}
 	argv := append(append([]string{}, e.o.Driver...), dir)
+	var plan extension.SandboxPlan
+	if contained {
+		// The container runs the driver in /bin/sh. It needs its workspace,
+		// the Work's home, its token and toolbelt socket and the model's
+		// API; the run directory is the container's own.
+		needs := extension.SandboxNeeds{Write: []string{workdir, r.Context.ContainerHome}, Hosts: []string{cfg.apiHost()}}
+		if r.Context.ToolbeltTokenFile != "" {
+			needs.Read = append(needs.Read, filepath.Dir(r.Context.ToolbeltTokenFile))
+		}
+		if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
+			needs.Sockets = []string{sock}
+		}
+		if plan, err = r.Context.Container.Launch(ctx, needs, extension.SandboxLaunch{Argv: containerArgv(dir, spec), Dir: workdir, Env: env, RunDir: dir, Secrets: secrets}); err != nil {
+			return e.preset(ctx, rn, extension.ContainerReason(err), err.Error())
+		}
+		argv, env = plan.Argv, plan.Env
+	}
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, log, log
+	// A workspace at the container's site isn't on the host: the wrapper
+	// runs where the plan says.
+	if plan.Dir != "" {
+		cmd.Dir = plan.Dir
+	}
 	detach(cmd)
 	if err = cmd.Start(); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not start codex")
 	}
 	rn.pid, rn.done = cmd.Process.Pid, make(chan struct{})
-	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid})
+	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid, Signals: plan.Signals})
 	go func() {
 		state, _ := cmd.Process.Wait()
 		rn.mu.Lock()
@@ -365,20 +406,18 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 
 // codexArgs are the options every turn of the segment passes: the
 // sandbox, no approvals, the model, the toolbelt's MCP server, the
-// provider and the binding's extra arguments.
-func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string) ([]string, error) {
+// provider and the binding's extra arguments. In a container, `os` is the
+// container's own (first on its PATH) and the server takes its endpoint
+// and token file from codex's environment.
+func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string, contained bool) ([]string, error) {
 	args := []string{"--skip-git-repo-check", "-c", "sandbox_mode=" + tomlString(cfg.Sandbox), "-c", `approval_policy="never"`}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	toolbelt := r.Context.ToolbeltDir
-	if toolbelt == "" {
-		toolbelt = e.o.ToolbeltDir
-	}
+	toolbelt := e.toolbeltDir(r)
 	if r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && toolbelt != "" {
-		token := r.Context.ToolbeltTokenFile
-		if token == "" {
-			token = filepath.Join(dir, "token")
+		token := tokenFile(r, dir)
+		if token != r.Context.ToolbeltTokenFile {
 			if err := writeFile(token, []byte(r.Context.ToolbeltToken+"\n")); err != nil {
 				return nil, err
 			}
@@ -386,16 +425,52 @@ func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string) ([]
 		// The token itself never appears in codex's config or environment:
 		// `os mcp` reads the file, which adoption replaces.
 		prefix := "mcp_servers." + mcpServer + "."
-		args = append(args,
-			"-c", prefix+"command="+tomlString(filepath.Join(toolbelt, "os")),
-			"-c", prefix+`args=["mcp"]`,
-			"-c", prefix+"env={OS_ENDPOINT="+tomlString(r.Context.ToolbeltEndpoint)+",OS_TOKEN_FILE="+tomlString(token)+"}")
+		if contained {
+			args = append(args,
+				"-c", prefix+`command="os"`,
+				"-c", prefix+`args=["mcp"]`,
+				"-c", prefix+`env_vars=["OS_ENDPOINT","OS_TOKEN_FILE"]`)
+		} else {
+			args = append(args,
+				"-c", prefix+"command="+tomlString(filepath.Join(toolbelt, "os")),
+				"-c", prefix+`args=["mcp"]`,
+				"-c", prefix+"env={OS_ENDPOINT="+tomlString(r.Context.ToolbeltEndpoint)+",OS_TOKEN_FILE="+tomlString(token)+"}")
+		}
 	}
 	if n := cfg.AutoCompactTokens; n != nil && *n > 0 {
 		args = append(args, "-c", "model_auto_compact_token_limit="+strconv.FormatInt(*n, 10))
 	}
 	args = append(args, cfg.providerArgs()...)
 	return append(args, cfg.ExtraArgs...), nil
+}
+
+// toolbeltDir is the directory holding the `os` a run reaches the toolbelt
+// through: the one the host names for the run, else the executor's own.
+func (e *Executor) toolbeltDir(r extension.RunRequest) string {
+	if r.Context.ToolbeltDir != "" {
+		return r.Context.ToolbeltDir
+	}
+	return e.o.ToolbeltDir
+}
+
+// tokenFile is the toolbelt credential file the MCP server reads: the
+// host-kept one, else the segment's own.
+func tokenFile(r extension.RunRequest, dir string) string {
+	if r.Context.ToolbeltTokenFile != "" {
+		return r.Context.ToolbeltTokenFile
+	}
+	return filepath.Join(dir, "token")
+}
+
+// setEnv sets name in a KEY=VALUE list, in place of any value it had.
+func setEnv(env []string, name, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != name {
+			out = append(out, kv)
+		}
+	}
+	return append(out, name+"="+value)
 }
 
 // tomlString quotes a value as a TOML basic string (JSON's escapes are
@@ -642,9 +717,27 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	if !alive {
 		if !exists(filepath.Join(dir, "exit")) && !exists(filepath.Join(dir, "stop.json")) {
-			return nil, extension.ErrNotAdoptable
+			// A container's exit stands for the wrapper's lost one, once the
+			// host proves it is the container pinned.
+			if r.Context.Container == nil {
+				return nil, extension.ErrNotAdoptable
+			}
+			exit, err := r.Context.Container.Adopt(ctx, false)
+			if err != nil || !exit.Exited {
+				return nil, errors.Join(extension.ErrNotAdoptable, err)
+			}
+			if err := writeFile(filepath.Join(dir, "exit"), []byte(strconv.Itoa(exit.ExitCode)+"\n")); err != nil {
+				return nil, err
+			}
 		}
 		return adopt()
+	}
+	// A live segment of a container binding is adopted only once the host
+	// proves it still runs inside its container.
+	if r.Context.Container != nil {
+		if _, err := r.Context.Container.Adopt(ctx, true); err != nil {
+			return nil, errors.Join(extension.ErrNotAdoptable, err)
+		}
 	}
 	// Replace the process credential before acknowledging adoption. Runtime has
 	// already revoked lower-epoch tokens.

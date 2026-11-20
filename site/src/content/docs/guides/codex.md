@@ -61,7 +61,7 @@ open-conduit config set /scopes/web/bindings/agent/pass_env '["CODEX_HOME", "HTT
 
 ### Use an API key
 
-Codex otherwise uses your `codex login`. To use an OpenAI API key instead, store it, select it on the binding and map it to `OPENAI_API_KEY`:
+Codex otherwise uses your `codex login`. To use an OpenAI API key instead, store it, select it on the binding and map it to `CODEX_API_KEY`, the variable `codex exec` signs in with (it doesn't read `OPENAI_API_KEY` without a login):
 
 ```sh
 open-conduit secret set openai
@@ -69,10 +69,19 @@ open-conduit secret set openai
 
 ```json
 "secret_names": ["openai"],
-"config": { "playbook": "work-issue", "secret_env": { "openai": "OPENAI_API_KEY" } }
+"config": { "playbook": "work-issue", "secret_env": { "openai": "CODEX_API_KEY" } }
 ```
 
 The scope's `secret_refs` names `openai`, as for any secret ([configuration and secrets](/open-conduit/guides/configuration/)).
+
+### Run Codex in a container
+
+A binding with a `container` runs each turn in a container, so the agent can reach only what the container's config grants: not your home, your own Codex login, or Open Conduit's state. [Process sandboxes and containers](/open-conduit/architecture/sandboxes/#containers) describes the config and the Docker provider.
+
+- **The image** needs Codex on its `PATH` (or at the binding's `binary`) and `/bin/sh`, `sed` and `head`. `open-conduit doctor` runs `codex --version` in it and fails if Codex isn't there.
+- **Sign in with a secret.** Your `codex login` stays on the host. Select an API key and map it to `CODEX_API_KEY` as [above](#use-an-api-key), or use a `provider` with its `api_key_secret`. Codex's sessions live in the Work's own home, so its next turn resumes the thread in a new container.
+- **Allow the model's API.** The container's `network.allow` must hold `api.openai.com`, or the provider's host, or the turn is refused before it starts. Add the hosts the work needs as well, such as `github.com`.
+- **Leave `sandbox` at its default**, `danger-full-access`: the container is the boundary, and Codex's own sandboxes may not work inside one.
 
 ## What's different from Claude Code
 
@@ -80,7 +89,7 @@ An agent on Codex works an issue in the same turns: it starts on the issue, ends
 
 - **No attach.** `open-conduit work attach` can't take over a Codex session yet. Run `codex resume` in the workspace if you need to look inside one.
 - **Plainer messages.** The agent gets each event's type, author, title, link and text, but not the reply hints Claude Code gets, such as which operation answers an inline review comment. It finds those with the GitHub tools itself.
-- **No process sandbox or container.** A binding with `sandbox` or `container` is refused for Codex. Use the `sandbox` setting above, Codex's own sandbox, instead.
+- **Containers, not process sandboxes.** A binding can run Codex in a [container](#run-codex-in-a-container). A binding with a process `sandbox` is refused for Codex; use a container, or the `sandbox` setting above, Codex's own sandbox.
 - **Usage limits** are retried after a backoff, because Codex doesn't say when a limit resets.
 
 Each turn's Codex events are kept with the run as its transcript artifact, and Codex's own error output as its log.
