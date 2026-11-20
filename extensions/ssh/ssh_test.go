@@ -432,7 +432,23 @@ func TestCollectConformance(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(f.ws, "out.txt")); err == nil {
 				return errors.New("the run's file is on the host while it runs")
 			}
-			return os.WriteFile(release, nil, 0o600)
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				return err
+			}
+			// The run goes on without its helper to its exit.
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				st, err := f.p.Inspect(ctx, c.Ref)
+				if err != nil {
+					return err
+				}
+				if !st.Running {
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return errors.New("the orphaned run never exited")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
 		},
 	})
 	if err != nil {

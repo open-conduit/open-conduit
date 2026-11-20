@@ -240,8 +240,8 @@ type CollectorFixture struct {
 	File, Content string
 	// Orphan starts a created container's argv as its wrapper, then kills
 	// the wrapper while the run still runs (as a daemon's machine
-	// restarting takes it), and returns once the wrapper is dead. The run
-	// then goes on to its exit without it.
+	// restarting takes it), and returns once the run has gone on to its
+	// exit without it.
 	Orphan func(extension.ContainerCreated) error
 }
 
@@ -278,24 +278,16 @@ func CheckContainerCollector(f CollectorFixture) error {
 		if err := f.Orphan(created); err != nil {
 			return owner, pin, fmt.Errorf("start the run and kill its wrapper: %v", err)
 		}
-		// The run goes on without its wrapper to its exit.
-		deadline := time.Now().Add(time.Minute)
-		for {
-			st, err := f.Provider.Inspect(ctx, extension.ContainerRef{ID: pin.ID})
-			if err != nil {
-				return owner, pin, fmt.Errorf("inspect the orphaned run: %v", err)
-			}
-			if !st.Running && !st.StartedAt.IsZero() {
-				if st.ExitCode != f.Code {
-					return owner, pin, fmt.Errorf("the orphaned run exited %d, not %d", st.ExitCode, f.Code)
-				}
-				return owner, pin, nil
-			}
-			if st.Gone || time.Now().After(deadline) {
-				return owner, pin, fmt.Errorf("the orphaned run never exited: %+v", st)
-			}
-			time.Sleep(10 * time.Millisecond)
+		st, err := f.Provider.Inspect(ctx, extension.ContainerRef{ID: pin.ID})
+		switch {
+		case err != nil:
+			return owner, pin, fmt.Errorf("inspect the orphaned run: %v", err)
+		case st.Gone || st.Running || st.StartedAt.IsZero():
+			return owner, pin, fmt.Errorf("the orphaned run must have run and exited, there to collect: %+v", st)
+		case st.ExitCode != f.Code:
+			return owner, pin, fmt.Errorf("the orphaned run exited %d, not %d", st.ExitCode, f.Code)
 		}
+		return owner, pin, nil
 	}
 	has := func(when string) error {
 		raw, err := os.ReadFile(f.File)
