@@ -139,11 +139,19 @@ func TestFaultsNeverYieldReference(t *testing.T) {
 			if _, e = s.Open(ctx, storage.ArtifactRef{ID: id}); !errors.Is(e, storage.ErrNotFound) {
 				t.Fatalf("failed publication visible: %v", e)
 			}
-			for _, dir := range []string{"pending", "objects"} {
-				entries, e := os.ReadDir(filepath.Join(s.root, dir))
+			entries, e := os.ReadDir(filepath.Join(s.root, "pending"))
+			if e != nil || len(entries) != 0 {
+				t.Fatalf("leaked pending: %v %v", entries, e)
+			}
+			prefixes, e := s.prefixes()
+			for _, prefix := range prefixes {
+				entries, e := os.ReadDir(filepath.Join(s.objects(), prefix))
 				if e != nil || len(entries) != 0 {
-					t.Fatalf("leaked %s: %v %v", dir, entries, e)
+					t.Fatalf("leaked objects/%s: %v %v", prefix, entries, e)
 				}
+			}
+			if e != nil {
+				t.Fatal(e)
 			}
 		})
 	}
@@ -167,7 +175,7 @@ func TestCancellationAndCorruption(t *testing.T) {
 	if _, e = s.Open(ctx, forged); !errors.Is(e, storage.ErrInvalid) {
 		t.Fatal(e)
 	}
-	if e = os.WriteFile(filepath.Join(s.root, "objects", ref.ID, "data"), []byte("changed"), 0600); e != nil {
+	if e = os.WriteFile(filepath.Join(s.objectDir(ref.ID), "data"), []byte("changed"), 0600); e != nil {
 		t.Fatal(e)
 	}
 	r, e := s.Open(ctx, ref)
@@ -273,7 +281,7 @@ func TestPrivatePathsAndExclusiveOwnership(t *testing.T) {
 		t.Fatal("symlink root accepted")
 	}
 	ref := publish(t, s, "hello")
-	path := filepath.Join(s.root, "objects", ref.ID, "data")
+	path := filepath.Join(s.objectDir(ref.ID), "data")
 	if e := os.Remove(path); e != nil {
 		t.Fatal(e)
 	}
@@ -406,4 +414,89 @@ func TestArtifactCrashHelper(t *testing.T) {
 	fmt.Println(string(b))
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	os.Exit(0)
+}
+
+// TestOpenFansOutTheFlatLayout: objects a store published at objects/<ID>
+// (before the fan-out layout) move to objects/<prefix>/<ID> when it is
+// opened, and read and list as before, digest or not.
+func TestOpenFansOutTheFlatLayout(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "artifacts")
+	s, e := Open(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ref := publish(t, s, "published flat")
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	// Put it back where an older binary kept it, with its meta.json as one
+	// wrote it: no digest in the ref.
+	if e = os.Rename(filepath.Join(dir, "objects", ref.ID[:2], ref.ID), filepath.Join(dir, "objects", ref.ID)); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Remove(filepath.Join(dir, "objects", ref.ID[:2])); e != nil {
+		t.Fatal(e)
+	}
+	metaPath := filepath.Join(dir, "objects", ref.ID, "meta.json")
+	b, e := os.ReadFile(metaPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var m metadata
+	if e = json.Unmarshal(b, &m); e != nil {
+		t.Fatal(e)
+	}
+	m.Ref.SHA256 = ""
+	if b, e = json.Marshal(m); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(metaPath, b, 0o600); e != nil {
+		t.Fatal(e)
+	}
+	s, e = Open(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	if _, e = os.Stat(filepath.Join(dir, "objects", ref.ID)); !os.IsNotExist(e) {
+		t.Fatalf("the flat object stayed: %v", e)
+	}
+	if content(t, s, ref) != "published flat" {
+		t.Fatal("moved object reads differently")
+	}
+	page, e := s.List(ctx, "", 10)
+	if e != nil || len(page) != 1 || page[0].Ref != ref {
+		t.Fatalf("listed %+v, %v; want %+v with its digest", page, e, ref)
+	}
+}
+
+// TestListPagesAcrossPrefixes: with enough objects that prefixes are
+// shared, pages that start and end inside a prefix directory still list
+// every object once, in ID order.
+func TestListPagesAcrossPrefixes(t *testing.T) {
+	s := store(t)
+	want := map[string]bool{}
+	for i := 0; i < 120; i++ { // many of the 256 prefixes then hold several
+		want[publish(t, s, fmt.Sprint(i)).ID] = true
+	}
+	after, seen := "", 0
+	for {
+		page, e := s.List(ctx, after, 7)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, a := range page {
+			if a.Ref.ID <= after || !want[a.Ref.ID] {
+				t.Fatalf("listed %s after %s", a.Ref.ID, after)
+			}
+			after = a.Ref.ID
+			seen++
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("listed %d of %d", seen, len(want))
+	}
 }

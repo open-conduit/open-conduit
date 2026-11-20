@@ -20,7 +20,7 @@ func harness(b storage.ArtifactBackend) conformance.ArtifactHarness {
 		Backend:  b,
 		Location: func(t *testing.T, dir string) string { return filepath.Join(dir, "artifacts") },
 		Corrupt: func(t *testing.T, location string, ref storage.ArtifactRef) {
-			path := filepath.Join(location, "objects", ref.ID, "data")
+			path := filepath.Join(location, "objects", ref.ID[:2], ref.ID, "data")
 			b, err := os.ReadFile(path)
 			if err != nil || len(b) == 0 {
 				t.Fatalf("corrupt %s: %v", path, err)
