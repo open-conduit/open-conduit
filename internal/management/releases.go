@@ -31,6 +31,7 @@ func (s *Server) installRelease(c *call) (int, any, error) {
 	if err = c.decode(&in); err != nil {
 		return 0, nil, err
 	}
+	c.note("version", in.Version)
 	if s.o.Releases == nil {
 		err = fail(404, "updates_off", "this daemon doesn't install releases: its binary is managed some other way (serve --no-updates)")
 		return 0, nil, err

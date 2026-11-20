@@ -64,7 +64,10 @@ func (c *Control) SubmitAction(ctx context.Context, a ActionEvent) (accepted dom
 			refusal = err
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return auditAccepted(tx, a.ScopeID, accepted, added)
 	})
 	if err == nil && refusal != nil {
 		return domain.AcceptedEvent{}, false, refusal

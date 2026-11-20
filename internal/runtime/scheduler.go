@@ -796,10 +796,10 @@ var ErrLeaseLost = fmt.Errorf("%w: renewal refused", storage.ErrLeaseLost)
 // renews ref on every tick until ctx ends or the lease is lost. The
 // returned context ends with the hold, with cause ErrLeaseLost when the
 // lease was lost, so a launch or an observation under it stops at once;
-// lost is closed only then. A renewal that fails for any other reason,
-// storage.ErrTransient included, is passed to report and retried on the
-// next tick. stop ends the hold and
-// waits for its renewer. A host takes ticks every LeaseDuration/3 or so.
+// lost is closed only then, after that cause is set. A renewal that fails
+// for any other reason, storage.ErrTransient included, is passed to report
+// and retried on the next tick. stop ends the hold and waits for its
+// renewer. A host takes ticks every LeaseDuration/3 or so.
 func (s *Scheduler) Hold(parent context.Context, ref domain.LeaseRef, ticks <-chan time.Time, report func(error)) (ctx context.Context, lost <-chan struct{}, stop func()) {
 	held, cancel := context.WithCancelCause(parent)
 	gone := make(chan struct{})
@@ -821,8 +821,11 @@ func (s *Scheduler) Hold(parent context.Context, ref domain.LeaseRef, ticks <-ch
 			// unchanged. It is reported and the next tick renews again,
 			// so contention never ends a healthy attempt.
 			if errors.Is(err, storage.ErrLeaseLost) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrInvalid) || errors.Is(err, storage.ErrNotFound) {
-				close(gone)
+				// The cause is set before lost closes, so whoever sees
+				// lost (and may stop the hold at once) reads ErrLeaseLost,
+				// never a later stop's context.Canceled.
 				cancel(ErrLeaseLost)
+				close(gone)
 				return
 			}
 			if report != nil {

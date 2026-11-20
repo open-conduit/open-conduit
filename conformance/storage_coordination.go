@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -284,6 +285,94 @@ func transientAborts(s storage.Store) error {
 		}
 		if n := eventCount(tx); n != contenders {
 			return fmt.Errorf("transient: %d Events after %d contenders", n, contenders)
+		}
+		return nil
+	})
+}
+
+// auditLedger: the audit ledger numbers its records 1, 2, 3 with no gap a
+// rolled-back append leaves, times them by the Guard, chains each to the
+// one before (domain.VerifyAuditChain), ignores a writer's sequence, time
+// and hashes, keeps every field, pages exclusively after a sequence, and
+// refuses a record without an action or outcome, and any append in a View.
+func auditLedger(s storage.Store) error {
+	c := NewClock()
+	forged := domain.AuditRecord{Sequence: 40, At: c.Now().Add(-time.Hour), Prev: "forged", Hash: "forged"}
+	first := forged
+	first.Actor, first.Via, first.Action, first.Target, first.Outcome = "operator:alice", "operator:acme-ui", "POST /v1/config/apply", "config", domain.AuditOK
+	first.Detail = map[string]string{"generation": "7"}
+	var got domain.AuditRecord
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if _, err := tx.AppendAudit(domain.AuditRecord{Outcome: domain.AuditOK}); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("audit: a record without an action: got %v, want ErrInvalid", err)
+		}
+		if _, err := tx.AppendAudit(domain.AuditRecord{Action: "POST /v1/auth/revoke"}); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("audit: a record without an outcome: got %v, want ErrInvalid", err)
+		}
+		var err error
+		got, err = tx.AppendAudit(first)
+		return err
+	}); err != nil {
+		return err
+	}
+	if got.Sequence != 1 || got.Prev != "" || !got.At.Equal(c.Now()) || got.Hash != got.Digest() {
+		return fmt.Errorf("audit: the first record was not numbered, timed and hashed by storage: %+v", got)
+	}
+	c.Advance(time.Second)
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if _, err := tx.AppendAudit(domain.AuditRecord{Action: "POST /v1/secrets/{id}", Outcome: domain.AuditOK}); err != nil {
+			return err
+		}
+		return errRollback
+	}); !errors.Is(err, errRollback) {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		for _, outcome := range []string{"forbidden_role", "unauthenticated"} {
+			if _, err := tx.AppendAudit(domain.AuditRecord{Action: "GET /v1/doctor", Outcome: outcome, EventID: "manual/1"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := storage.View(context.Background(), s, c.Now(), func(tx storage.Tx) error {
+		if _, err := tx.AppendAudit(domain.AuditRecord{Action: "x", Outcome: domain.AuditOK}); err == nil {
+			return fmt.Errorf("audit: a View appended a record")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return storage.View(context.Background(), s, c.Now(), func(tx storage.Tx) error {
+		all, err := tx.AuditRecords(0, 0)
+		if err != nil {
+			return err
+		}
+		if len(all) != 3 {
+			return fmt.Errorf("audit: got %d records, want 3 (the rolled-back append kept, or one lost)", len(all))
+		}
+		if _, _, err = domain.VerifyAuditChain(0, "", all); err != nil {
+			return fmt.Errorf("audit: %v", err)
+		}
+		want := first
+		want.Sequence, want.At, want.Prev, want.Hash = got.Sequence, got.At, got.Prev, got.Hash
+		if !reflect.DeepEqual(all[0], want) {
+			return fmt.Errorf("audit: the first record changed in storage: got %+v, want %+v", all[0], want)
+		}
+		if all[1].EventID != "manual/1" || all[1].Outcome != "forbidden_role" || !all[1].At.Equal(c.Now()) {
+			return fmt.Errorf("audit: the second record changed in storage: %+v", all[1])
+		}
+		page, err := tx.AuditRecords(1, 1)
+		if err != nil {
+			return err
+		}
+		if len(page) != 1 || page[0].Sequence != 2 {
+			return fmt.Errorf("audit: after 1, limit 1: got %+v, want record 2", page)
+		}
+		if rest, err := tx.AuditRecords(3, 0); err != nil || len(rest) != 0 {
+			return fmt.Errorf("audit: after the last record: got %d records, %v", len(rest), err)
 		}
 		return nil
 	})

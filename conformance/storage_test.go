@@ -340,6 +340,72 @@ func (b brokenActorTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	return b.Tx.AcceptEvent(e)
 }
 
+// autoincrementAudit numbers audit records from a counter that a rolled-back
+// transaction still advances, as an identity column does, so the ledger
+// has a gap where the rollback was.
+type autoincrementAudit struct {
+	storage.Store
+	next      uint64
+	committed []domain.AuditRecord
+}
+type autoincrementAuditTx struct {
+	storage.Tx
+	s       *autoincrementAudit
+	now     time.Time
+	pending *[]domain.AuditRecord
+}
+
+func (b *autoincrementAudit) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	var pending []domain.AuditRecord
+	err := b.Store.Transact(ctx, g, func(tx storage.Tx) error {
+		pending = nil
+		return fn(autoincrementAuditTx{tx, b, g.Now, &pending})
+	})
+	if err == nil {
+		b.committed = append(b.committed, pending...)
+	}
+	return err
+}
+func (b *autoincrementAudit) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return b.Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error { return fn(storage.ReadOnly(tx)) })
+}
+func (t autoincrementAuditTx) AppendAudit(r domain.AuditRecord) (domain.AuditRecord, error) {
+	all := append(slices.Clone(t.s.committed), *t.pending...)
+	prev := ""
+	if len(all) > 0 {
+		prev = all[len(all)-1].Hash
+	}
+	sealed, ok := domain.SealAudit(r, t.s.next, prev, t.now)
+	if !ok {
+		return domain.AuditRecord{}, storage.ErrInvalid
+	}
+	t.s.next++
+	*t.pending = append(*t.pending, sealed)
+	return sealed, nil
+}
+func (t autoincrementAuditTx) AuditRecords(after uint64, limit int) ([]domain.AuditRecord, error) {
+	out := []domain.AuditRecord{}
+	for _, r := range append(slices.Clone(t.s.committed), *t.pending...) {
+		if r.Sequence > after && (limit <= 0 || len(out) < limit) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// viaLostAudit stores audit records without the client their actor acted
+// through, as a store mapping records to columns might if it missed one.
+type viaLostAudit struct{ storage.Store }
+type viaLostAuditTx struct{ storage.Tx }
+
+func (b viaLostAudit) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(viaLostAuditTx{tx}) })
+}
+func (t viaLostAuditTx) AppendAudit(r domain.AuditRecord) (domain.AuditRecord, error) {
+	r.Via = ""
+	return t.Tx.AppendAudit(r)
+}
+
 // brokenVia stores Events without the client their actor acted through,
 // as a store might that added Actor's column and missed Via's.
 type brokenVia struct{ storage.Store }
@@ -540,6 +606,8 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		}},
 		{"kv_prefixes_and_order_are_bytes", "prefix matched a wildcard", func() storage.Store { return likeKV{reference.New()} }},
 		{"kv_prefixes_and_order_are_bytes", "not in byte order", func() storage.Store { return collatedKV{reference.New()} }},
+		{"audit_ledger_numbers_chains_and_pages", "does not chain", func() storage.Store { return &autoincrementAudit{Store: reference.New()} }},
+		{"audit_ledger_numbers_chains_and_pages", "changed in storage", func() storage.Store { return viaLostAudit{reference.New()} }},
 		{"transient_aborts_commit_nothing_and_retry", "reported as a conflict", func() storage.Store {
 			return &abortOnce{Store: reference.New(), abort: storage.ErrConflict, seen: map[string]bool{}}
 		}},

@@ -100,6 +100,15 @@ func TestProductionOperatorInterruptKeepsTheWork(t *testing.T) {
 		if a.Event.Type != "core.manual.interrupt" || a.Event.Actor != "operator:alex" || a.Event.WorkID != r.work {
 			t.Fatalf("interrupt event: %+v", a.Event)
 		}
+		// The audit ledger has the interrupt once, replay or not, in the
+		// interrupt's own transaction, pointing at its Event.
+		audit, err := tx.AuditRecords(0, 0)
+		if err != nil {
+			return err
+		}
+		if len(audit) != 1 || audit[0].EventID != event || audit[0].Actor != "operator:alex" || audit[0].Action != "core.manual.interrupt" || audit[0].Target != "work/"+string(r.work) || audit[0].Outcome != domain.AuditOK {
+			t.Fatalf("audit ledger after interrupt and replay: %+v", audit)
+		}
 		w, err := tx.Work(r.work)
 		if err != nil {
 			return err

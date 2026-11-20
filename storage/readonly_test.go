@@ -17,7 +17,7 @@ type delegated struct{ storage.Tx }
 // inner transaction. A method is a write by its name, so a write added to Tx
 // without a refusal in ReadOnly fails here.
 func TestReadOnlyRefusesEveryWrite(t *testing.T) {
-	writes := []string{"Accept", "Mark", "Put", "Delete", "Claim", "Renew", "Release", "Fire", "Set", "Publish"}
+	writes := []string{"Accept", "Mark", "Put", "Delete", "Claim", "Renew", "Release", "Fire", "Set", "Publish", "Append"}
 	tx := reflect.ValueOf(storage.ReadOnly(delegated{}))
 	typ := reflect.TypeFor[storage.Tx]()
 	refused := 0
@@ -49,7 +49,7 @@ func TestReadOnlyRefusesEveryWrite(t *testing.T) {
 			t.Errorf("%s is a read, but ReadOnly does not hand it on", m.Name)
 		}
 	}
-	if refused != 17 {
-		t.Errorf("refused %d writes, want 17", refused)
+	if refused != 18 {
+		t.Errorf("refused %d writes, want 18", refused)
 	}
 }

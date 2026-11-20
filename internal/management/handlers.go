@@ -1031,7 +1031,7 @@ func (s *Server) applyConfig(c *call) (int, any, error) {
 		}
 		data = []byte(*in.ConfigText)
 	}
-	generation, hash, err := s.o.Config.Apply(c.ctx, data, in.CandidateHash, expected)
+	generation, hash, err := s.o.Config.Apply(c.ctx, data, in.CandidateHash, expected, s.configRecorder(c))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1077,7 +1077,7 @@ func (s *Server) applyInclude(c *call) (status int, data any, err error) {
 		}
 		fragment = []byte(*in.FragmentText)
 	}
-	generation, hash, err := s.o.Config.ApplyFragment(c.ctx, name, fragment, in.ExpectedHash, func(parent string) bool { return c.sees(domain.ID(parent)) })
+	generation, hash, err := s.o.Config.ApplyFragment(c.ctx, name, fragment, in.ExpectedHash, func(parent string) bool { return c.sees(domain.ID(parent)) }, s.configRecorder(c))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1253,8 +1253,12 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		}
 		// The replacement keeps the caller's expiry: rotating never
 		// extends how long a credential lasts.
-		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ActFor, r.ExpiresAt)
-		return err
+		if file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ActFor, r.ExpiresAt); err != nil {
+			return err
+		}
+		c.target = "credential/" + r.TokenID
+		c.note("replacement", file.TokenID)
+		return s.auditInTx(tx, c)
 	})
 	if err != nil {
 		return 0, nil, err
@@ -1274,6 +1278,10 @@ func (s *Server) revoke(c *call) (int, any, error) {
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
+	}
+	c.target = "credential/" + in.TokenID
+	if in.Reason != "" && len(in.Reason) <= 500 {
+		c.note("reason", in.Reason)
 	}
 	if strings.HasPrefix(in.TokenID, "otok_") {
 		var at time.Time
@@ -1310,7 +1318,11 @@ func (s *Server) revoke(c *call) (int, any, error) {
 			}
 			at = r.RevokedAt
 			b, _ = json.Marshal(r)
-			return tx.Put(authNamespace, "operator/"+digest, b)
+			if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
+				return err
+			}
+			c.note("operator", extension.CallerOperator+":"+r.name())
+			return s.auditInTx(tx, c)
 		})
 		if err != nil {
 			return 0, nil, err
@@ -1445,8 +1457,16 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 			}
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, in.ActFor, expires)
-		return err
+		if file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, in.ActFor, expires); err != nil {
+			return err
+		}
+		c.target = "credential/" + file.TokenID
+		c.note("operator", extension.CallerOperator+":"+in.Name)
+		c.note("role", in.Role)
+		c.note("grants", grantsNote(in.Grants))
+		c.note("act_for", in.ActFor)
+		c.note("expires_at", ts(expires))
+		return s.auditInTx(tx, c)
 	})
 	if err != nil {
 		return 0, nil, err

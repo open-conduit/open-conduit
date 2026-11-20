@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -390,9 +391,10 @@ func TestProductionSchedulerHoldEndsOnLostLease(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a renewal past the lease did not lose it")
 	}
-	<-ctx.Done()
-	if !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
-		t.Fatalf("cause %v, want the lease lost", context.Cause(ctx))
+	// The cause is set by the time lost closes, so a caller that stops
+	// the hold on seeing lost still reads the lease lost.
+	if ctx.Err() == nil || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
+		t.Fatalf("cause %v once lost closed, want the lease lost", context.Cause(ctx))
 	}
 }
 
@@ -405,11 +407,25 @@ type abortingRenewals struct {
 	mu    sync.Mutex
 	fails int
 	err   error
+	// log is each renewal transaction's outcome: what its callback
+	// returned and what Transact did, for a failure to show.
+	log []string
 }
 
 func (s *abortingRenewals) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	var aborted bool
-	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(abortingRenewalsTx{tx, s, &aborted}) })
+	var inner []error
+	err := s.Store.Transact(ctx, g, func(tx storage.Tx) error {
+		e := fn(abortingRenewalsTx{tx, s, &aborted})
+		inner = append(inner, e)
+		return e
+	})
+	if g.Lease != nil {
+		s.mu.Lock()
+		s.log = append(s.log, fmt.Sprintf("callback %v, transact %v", inner, err))
+		s.mu.Unlock()
+	}
+	return err
 }
 
 type abortingRenewalsTx struct {
@@ -478,7 +494,16 @@ func TestProductionSchedulerHoldSurvivesTransientAborts(t *testing.T) {
 		stop()
 		if tc.lost {
 			if held || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
-				t.Fatalf("control: a conflicting renewal kept the lease (cause %v)", context.Cause(ctx))
+				// Say what the renewals reported instead, so a failure on
+				// a loaded runner shows why the conflict didn't reach them.
+				var got []error
+				for len(reported) > 0 {
+					got = append(got, <-reported)
+				}
+				store.mu.Lock()
+				left, log := store.fails, store.log
+				store.mu.Unlock()
+				t.Fatalf("control: a conflicting renewal kept the lease (cause %v; reported %v; %d injected failures left; renewals %q)", context.Cause(ctx), got, left, log)
 			}
 			continue
 		}

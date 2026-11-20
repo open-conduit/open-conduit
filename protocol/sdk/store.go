@@ -629,6 +629,13 @@ func (t *storeTx) Wait(domain.ID) (domain.Wait, error)          { return domain.
 func (t *storeTx) PutWait(domain.Wait, domain.Revision) error   { return ErrReadOnly }
 func (t *storeTx) PutScope(domain.Scope, domain.Revision) error { return ErrReadOnly }
 
+// The audit ledger is the host's: an extension reads it through the
+// management API's GET /v1/audit, with an operator credential.
+func (t *storeTx) AppendAudit(domain.AuditRecord) (domain.AuditRecord, error) {
+	return domain.AuditRecord{}, ErrReadOnly
+}
+func (t *storeTx) AuditRecords(uint64, int) ([]domain.AuditRecord, error) { return nil, ErrReadOnly }
+
 var _ storage.Store = (*Store)(nil)
 
 // Artifacts is storage.Artifacts over the host's artifact.* methods: Create

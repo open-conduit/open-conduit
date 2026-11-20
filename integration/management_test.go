@@ -962,7 +962,7 @@ func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
 			t.Fatalf("validate: %v", err)
 		}
 		_, gen := configs.Current()
-		if _, _, err = configs.Apply(ctx, data, snapshot.Hash, gen); err != nil {
+		if _, _, err = configs.Apply(ctx, data, snapshot.Hash, gen, nil); err != nil {
 			t.Fatalf("apply: %v", err)
 		}
 		if configs.Enabled("web") != want || !configs.Enabled("ops") {
@@ -1373,7 +1373,7 @@ func TestManagementRefusalFollowsThePinnedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = configs.Apply(ctx, []byte(managementConfig), s.Hash, 1); err != nil {
+	if _, _, err = configs.Apply(ctx, []byte(managementConfig), s.Hash, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := check("2", "ext.edit"); got != "" {
