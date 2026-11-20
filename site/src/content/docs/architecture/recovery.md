@@ -27,12 +27,18 @@ open-conduit --data-dir ~/.local/state/open-conduit-restored serve
 open-conduit auth recover                                 # a lost or ambiguous operator token: revokes every operator credential, writes a fresh one
 ```
 
-- **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](../backup-bundles/)). Keep bundles owner-only: they hold private Work, Events, config snapshots and executor continuity.
-- **What a bundle does not hold.** It holds no credentials, config, secrets, executor run directories (`executors/`), workspaces (`resources/git/`) or logs. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
+- **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](../backup-bundles/)). The database holds every committed config generation, secret references included, each self-contained, so a restored daemon starts from the active one without a config file. With the file missing, doctor reports `disk_missing` and `open-conduit config export` writes the active generation back out ([config management](../config-management/)). It also holds the extensions' KV and every Execution's recovery metadata. Keep bundles owner-only: they hold private Work, Events, config and executor continuity.
+- **What a bundle does not hold.**
+  - Secret values: keyring entries, `secrets.json` beside the config file, and what `env:`, `cmd:` and provider references read. Doctor's `secrets` check shows the references that don't resolve.
+  - Installed packages, which live beside the config file (`extension install`). A restore reports the entries of the restored generation that name a type no installed package provides (`unregistered`); install those packages before starting.
+  - The folders an `includes` entry names. The restored generation needs none of them, but `config export` writes the `includes` entries back, so a later `config apply` of that file reads them.
+  - Extensions' private state directories (`extensions/`), which are host-local caches ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
+  - The agents' own logins and sessions, executor run directories (`executors/`), workspaces (`resources/git/`) and logs. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
 - **Restore.**
   - A restore never replaces an existing directory.
   - It fences every backed-up lease, so an old execution credential can never commit.
   - It revokes the bundle's operator credential and writes a fresh `private/operator.token` (`auth recover` under the lock).
+  - It reports the config generation it restored (`config_generation`) and that generation's `unregistered` entries, checked against the packages installed beside the config file (`--config FILE`, default the operator's).
   - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
   - Worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone.
   - The restored installation keeps its [container host label](../sandboxes/#the-host-label), the ID its containers carry, since it is the same installation: it still recognises the containers its runs left on a shared runtime, and reconciles them. Never run the old installation and the restored one at once against the same container runtime (a remote Docker context, an SSH runner, a cloud account): with one label, each removes the other's live runs as executions it doesn't know. Stop the old daemon for good before starting the restored one; to run both, restore into a fresh installation instead, which means starting without the bundle.
@@ -50,7 +56,7 @@ While it runs, the daemon publishes a bundle of its own state every `--backup-in
 
 ## Restoring after a bad release or lost state
 
-Restore puts the bundle's database and artifacts back. The rest of the data directory (installed extensions, workspaces, executor run directories, logs) stays where it is. The paths below are the defaults; substitute `--data-dir` if you set one.
+Restore puts the bundle's database and artifacts back, and with the database the config generation the bundle was taken on. The rest of the data directory (extensions' private state, workspaces, executor run directories, logs) stays where it is, and may be from after the bundle. Installed packages and the config file, beside the config, aren't touched either: the daemon starts from the restored generation whatever the file says, and doctor reports the file as out of step (`pending_edit`) until you apply one. Applying an older file over the restored generation replaces it, so check the diff first. The paths below are the defaults; substitute `--data-dir` if you set one.
 
 ```sh
 open-conduit service stop                          # or stop serve

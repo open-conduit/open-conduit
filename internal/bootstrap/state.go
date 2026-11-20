@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -166,8 +168,37 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 		return info, err
 	}
 	defer store.Close()
-	info.Scopes, err = scopeIDs(ctx, store)
+	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
+		return info, err
+	}
+	info.ConfigGeneration, info.Unregistered, err = restoredConfig(ctx, store, o.ConfigPath)
 	return info, err
+}
+
+// restoredConfig reads the committed config generation a restore brought
+// back and checks it against the packages installed beside configPath, as
+// the daemon will when it starts from it. It returns the generation and the
+// entries naming a type nothing here provides. The bundle carries the
+// generation but not the packages, which live beside the config file.
+func restoredConfig(ctx context.Context, store storage.Store, configPath string) (uint64, []cli.ConfigEntry, error) {
+	gen, normalized, err := management.StoredGeneration(ctx, store, func() time.Time { return time.Now().UTC() })
+	if err != nil || gen == 0 {
+		return 0, nil, err
+	}
+	reg := registry(map[string]extension.Executor{})
+	pkgs := offlineExternal(&reg, configPath, "", normalized)
+	defer pkgs.close()
+	var invalid *config.ValidationError
+	if _, err := config.Validate(normalized, reg); !errors.As(err, &invalid) {
+		return gen, nil, nil
+	}
+	var out []cli.ConfigEntry
+	for _, d := range invalid.Diagnostics {
+		if d.Code == "unknown_registration" {
+			out = append(out, cli.ConfigEntry{Path: d.Path, Message: d.Message})
+		}
+	}
+	return gen, out, nil
 }
 
 // RecoverOperator is the locked local credential reset (B05): it revokes
