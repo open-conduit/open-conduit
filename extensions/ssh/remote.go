@@ -28,7 +28,9 @@ const marker = "open-conduit-remote-"
 
 // prelude defines alive: whether the run in directory $1 with ID $2 still
 // has its stub, the leader of its own process group (p, its PID) whose
-// arguments carry the run's nonce.
+// arguments carry the run's nonce. show asks alive before it reads the
+// run's status: the stub records its status before it ends, so a run seen
+// ended always shows the status it recorded, never none (read as killed).
 const prelude = `D="$HOME/` + runsDir + `"
 alive() {
   [ -f "$1/pid" ] || return 1
@@ -41,11 +43,12 @@ alive() {
 show() {
   d="$D/$1"
   if [ ! -f "$d/record.json" ]; then echo "gone $1"; return; fi
+  a=; if alive "$d" "$1"; then a=1; fi
   printf 'record %s ' "$1"; tr -d '\n' < "$d/record.json"; echo
   if [ -f "$d/started" ]; then echo "started $1 $(cat "$d/started")"; fi
   if [ -f "$d/exit" ]; then echo "exit $1 $(cat "$d/exit")"; fi
   if [ -f "$d/pid" ]; then echo "pid $1"; fi
-  if alive "$d" "$1"; then echo "running $1"; fi
+  if [ -n "$a" ]; then echo "running $1"; fi
 }
 guard() {
   case "$R$1" in /|'') echo "refusing to replace /" >&2; exit 3;; esac
