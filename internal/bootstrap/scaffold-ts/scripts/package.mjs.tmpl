@@ -1,0 +1,59 @@
+// Lays out the installable package in OUT (default dist/{{NAME}}): the
+// manifest, certification.json, the playbooks, and one executable,
+// {{NAME}}-extension, bundled with esbuild so the package needs nothing
+// but Node to run.
+//
+//   node scripts/package.mjs [OUT]
+//
+// Two things make the package run the same wherever the daemon starts it:
+//   - The bundle is CommonJS, and the package carries its own package.json
+//     saying so. Node reads an extensionless file as the nearest
+//     package.json says, so without it a "type": "module" one above OUT
+//     would load the bundle as ESM and it would fail.
+//   - Its first line names the Node that ran this script by absolute path,
+//     not `env node`, so the daemon (whose PATH may find another Node, or
+//     none) runs it with the Node it was built and tested with. Package
+//     again after changing Node.
+import { execFileSync } from "node:child_process";
+import { chmodSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const out = resolve(process.argv[2] ?? join(root, "dist", "{{NAME}}"));
+const bin = join(out, "{{NAME}}-extension");
+
+// A #! line ends at the first space, so a path with one can't be named there.
+if (/\s/.test(process.execPath)) {
+  console.error(
+    `node is at ${process.execPath}, which has a space in it; run this with a node whose path has none (a symlink will do)`,
+  );
+  process.exit(1);
+}
+
+rmSync(out, { recursive: true, force: true });
+mkdirSync(out, { recursive: true });
+await build({
+  entryPoints: [join(root, "src", "main.ts")],
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "cjs",
+  conditions: ["development"],
+  banner: { js: `#!${process.execPath}` },
+  outfile: bin,
+  logLevel: "warning",
+});
+chmodSync(bin, 0o755);
+writeFileSync(join(out, "package.json"), '{ "type": "commonjs" }\n');
+writeFileSync(
+  join(out, "open-conduit-extension.json"),
+  execFileSync(bin, ["package-manifest"]),
+);
+writeFileSync(
+  join(out, "certification.json"),
+  execFileSync(bin, ["package-certification"]),
+);
+cpSync(join(root, "playbooks"), join(out, "playbooks"), { recursive: true });
+console.log(`packaged ${out} (node ${process.execPath})`);

@@ -28,6 +28,12 @@ import (
 //go:embed scaffold
 var scaffoldFiles embed.FS
 
+// scaffold-ts/ is the TypeScript package (--lang ts), with {{NAME}} and
+// {{SDK}} (the @open-conduit/sdk dependency) substituted.
+//
+//go:embed scaffold-ts
+var scaffoldTSFiles embed.FS
+
 const coreModule = "github.com/open-conduit/open-conduit"
 
 // unresolved is the version go.mod requires when a replace directive
@@ -47,6 +53,9 @@ func scaffoldPath(name, tmpl string) string {
 	case "playbooks/playbook.md":
 		return "playbooks/" + name + ".md"
 	}
+	if p == "prettierignore" {
+		return ".prettierignore"
+	}
 	if rest, ok := strings.CutPrefix(p, "github/"); ok {
 		return ".github/" + rest
 	}
@@ -56,17 +65,18 @@ func scaffoldPath(name, tmpl string) string {
 // newPackage writes the repository and runs `go mod tidy` in it, so its
 // go.sum is complete.
 func newPackage(version, commit string, r cli.NewRequest) (cli.NewResult, error) {
-	out := cli.NewResult{Name: r.Name, Dir: r.Dir, Module: r.Module}
+	out := cli.NewResult{Name: r.Name, Dir: r.Dir, Module: r.Module, Lang: "go"}
 	if err := checkPackageName(r.Name); err != nil {
 		return out, err
 	}
+	if err := checkEmpty(out.Dir); err != nil {
+		return out, err
+	}
+	if r.Lang == "ts" {
+		return newTSPackage(version, r)
+	}
 	if out.Module == "" {
 		out.Module = "example.com/" + r.Name
-	}
-	if entries, err := os.ReadDir(out.Dir); err == nil && len(entries) > 0 {
-		return out, fmt.Errorf("%s already exists and is not empty; choose another with --dir", out.Dir)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return out, err
 	}
 	gocmd, goErr := exec.LookPath("go")
 	replace := ""
@@ -98,24 +108,8 @@ func newPackage(version, commit string, r cli.NewRequest) (cli.NewResult, error)
 		out.Requires = strings.TrimSpace(string(raw))
 	}
 	values := strings.NewReplacer("{{NAME}}", r.Name, "{{MODULE}}", out.Module, "{{CORE_VERSION}}", out.Requires, "{{REPLACE}}", replace)
-	err := fs.WalkDir(scaffoldFiles, "scaffold", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		raw, err := scaffoldFiles.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		rel := scaffoldPath(r.Name, strings.TrimPrefix(p, "scaffold/"))
-		dst := filepath.Join(out.Dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		out.Files = append(out.Files, rel)
-		return os.WriteFile(dst, []byte(values.Replace(string(raw))), 0o644)
-	})
-	sort.Strings(out.Files)
-	if err != nil {
+	var err error
+	if out.Files, err = writeScaffold(scaffoldFiles, "scaffold", r.Name, out.Dir, values); err != nil {
 		return out, err
 	}
 	if goErr != nil {
@@ -143,6 +137,71 @@ func newPackage(version, commit string, r cli.NewRequest) (cli.NewResult, error)
 		return out, fmt.Errorf("wrote %s, but `go mod tidy` failed there (%v): %s; run it again once that is fixed", out.Dir, err, strings.TrimSpace(log.String()))
 	}
 	return out, nil
+}
+
+// newTSPackage writes a TypeScript package (--lang ts). Its package.json
+// depends on this release's @open-conduit/sdk, or with --replace on the
+// checkout's sdk/typescript. Nothing is installed: npm install needs the
+// network, so the result says to run it.
+func newTSPackage(version string, r cli.NewRequest) (cli.NewResult, error) {
+	out := cli.NewResult{Name: r.Name, Dir: r.Dir, Lang: "ts"}
+	if r.Module != "" {
+		return out, errors.New("--module names a Go module; a TypeScript package has none")
+	}
+	switch {
+	case r.Replace != "":
+		sdk := filepath.Join(r.Replace, "sdk", "typescript")
+		if _, err := os.Stat(filepath.Join(sdk, "package.json")); err != nil {
+			return out, fmt.Errorf("--replace %s: not an Open Conduit checkout with the TypeScript SDK (no sdk/typescript/package.json)", r.Replace)
+		}
+		out.Requires = "file:" + filepath.ToSlash(sdk)
+	case releaseVersion.MatchString(version):
+		// The SDK is released with the core, under the same version.
+		out.Requires = strings.TrimPrefix(version, "v")
+	default:
+		return out, errors.New("this open-conduit is a development build, which has no released @open-conduit/sdk to depend on; build against a checkout with --replace DIR")
+	}
+	values := strings.NewReplacer("{{NAME}}", r.Name, "{{SDK}}", out.Requires)
+	var err error
+	if out.Files, err = writeScaffold(scaffoldTSFiles, "scaffold-ts", r.Name, out.Dir, values); err != nil {
+		return out, err
+	}
+	out.Notes = append(out.Notes, "run `npm install` in "+out.Dir+" before `make check`; `make lint` and `make certify` run the open-conduit on PATH")
+	return out, nil
+}
+
+// checkEmpty refuses a directory that exists and holds anything.
+func checkEmpty(dir string) error {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s already exists and is not empty; choose another with --dir", dir)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// writeScaffold writes root's templates into dir with values substituted,
+// returning the paths written, sorted.
+func writeScaffold(files embed.FS, root, name, dir string, values *strings.Replacer) ([]string, error) {
+	var written []string
+	err := fs.WalkDir(files, root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := files.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel := scaffoldPath(name, strings.TrimPrefix(p, root+"/"))
+		dst := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		written = append(written, rel)
+		return os.WriteFile(dst, []byte(values.Replace(string(raw))), 0o644)
+	})
+	sort.Strings(written)
+	return written, err
 }
 
 // seedFromCheckout copies an Open Conduit checkout's requirements (as

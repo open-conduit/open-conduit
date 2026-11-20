@@ -113,11 +113,14 @@ type CheckFinding struct {
 }
 
 // NewRequest is `extension new`: a package repository named Name in Dir,
-// with Go module path Module (default example.com/<name>). Replace, when
-// set, is an Open Conduit checkout go.mod builds against.
+// written in Lang ("go", the default, or "ts"), with Go module path Module
+// (default example.com/<name>; Go only). Replace, when set, is an Open
+// Conduit checkout the package builds against: go.mod's replace for Go,
+// the checkout's sdk/typescript for TypeScript.
 type NewRequest struct {
 	Name    string
 	Dir     string
+	Lang    string
 	Module  string
 	Replace string
 }
@@ -127,7 +130,10 @@ type NewResult struct {
 	Name   string `json:"name"`
 	Dir    string `json:"dir"`
 	Module string `json:"module"`
-	// Requires is the Open Conduit version go.mod requires.
+	// Lang is the language the package is written in ("go" or "ts").
+	Lang string `json:"lang"`
+	// Requires is the Open Conduit version go.mod requires, or the
+	// @open-conduit/sdk a TypeScript package.json depends on.
 	Requires string   `json:"requires"`
 	Files    []string `json:"files"`
 	Notes    []string `json:"notes,omitempty"`
@@ -153,10 +159,11 @@ type ExtensionOps struct {
 }
 
 const extensionHelp = `Usage: open-conduit extension COMMAND [--config PATH]
-  new NAME [--dir DIR] [--module PATH] [--replace DIR] [--json]
+  new NAME [--lang go|ts] [--dir DIR] [--module PATH] [--replace DIR] [--json]
                                 start a package repository in DIR (default ./NAME) whose make check passes first time:
                                 one operation, NAME.hello, its tests, a Makefile, CI, a playbook and a README;
-                                go.mod requires this release of open-conduit (--replace builds against a checkout instead)
+                                it requires this release of open-conduit (Go) or @open-conduit/sdk (--lang ts);
+                                --replace builds against a checkout instead
   list [--json]                 installed packages (in <config dir>/extensions)
   inspect DIR [--json]          check a package directory offline
   check DIR [--json] [--allow NAME,…]
@@ -201,7 +208,7 @@ func (o *operator) extension(args []string) int {
 	}
 	sub := args[0]
 	rest, bools := boolFlags(args[1:], "json", "force")
-	f := newFlags(sub, "config", "report", "sha256", "allow", "dir", "module", "replace")
+	f := newFlags(sub, "config", "report", "sha256", "allow", "dir", "module", "replace", "lang")
 	pos, err := f.parse(rest)
 	if err != nil {
 		return usageError(o.errOut, "invalid extension flags")
@@ -220,9 +227,14 @@ func (o *operator) extension(args []string) int {
 	case "new":
 		name, ok := one("NAME")
 		if !ok {
-			return usageError(o.errOut, "expected extension new NAME [--dir DIR] [--module PATH] [--replace DIR]")
+			return usageError(o.errOut, "expected extension new NAME [--lang go|ts] [--dir DIR] [--module PATH] [--replace DIR]")
 		}
-		r := NewRequest{Name: name, Dir: o.abs(name), Module: f.get("module")}
+		r := NewRequest{Name: name, Dir: o.abs(name), Lang: f.get("lang"), Module: f.get("module")}
+		switch r.Lang {
+		case "", "go", "ts":
+		default:
+			return usageError(o.errOut, "--lang is go or ts")
+		}
 		if d := f.get("dir"); d != "" {
 			r.Dir = o.abs(d)
 		}
@@ -237,11 +249,19 @@ func (o *operator) extension(args []string) int {
 		if err != nil || bools["json"] {
 			return o.emit(res, err)
 		}
-		fmt.Fprintf(o.out, "Created the %s package in %s (module %s, open-conduit %s)\n", res.Name, res.Dir, res.Module, res.Requires)
+		if res.Lang == "ts" {
+			fmt.Fprintf(o.out, "Created the %s package in %s (TypeScript, @open-conduit/sdk %s)\n", res.Name, res.Dir, res.Requires)
+		} else {
+			fmt.Fprintf(o.out, "Created the %s package in %s (module %s, open-conduit %s)\n", res.Name, res.Dir, res.Module, res.Requires)
+		}
 		for _, n := range res.Notes {
 			fmt.Fprintf(o.out, "  %s\n", n)
 		}
-		fmt.Fprintf(o.out, "Next: cd %s && make check, then see its README for what to change first.\n", res.Dir)
+		next := "make check"
+		if res.Lang == "ts" {
+			next = "npm install && make check"
+		}
+		fmt.Fprintf(o.out, "Next: cd %s && %s, then see its README for what to change first.\n", res.Dir, next)
 		return 0
 	case "list":
 		l, err := ops.List(path)
