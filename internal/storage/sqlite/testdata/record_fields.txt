@@ -1,4 +1,4 @@
-format 6
+format 7
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -24,12 +24,14 @@ AcceptedEvent.Sequence uint64
 Execution.Artifacts slice
 Execution.Artifacts.ID string
 Execution.Artifacts.MediaType string
+Execution.Artifacts.SHA256 string
 Execution.Artifacts.Size int64
 Execution.Attempt uint32
 Execution.CreatedAt struct
 Execution.EarlierArtifacts slice
 Execution.EarlierArtifacts.ID string
 Execution.EarlierArtifacts.MediaType string
+Execution.EarlierArtifacts.SHA256 string
 Execution.EarlierArtifacts.Size int64
 Execution.Executor string
 Execution.ExecutorBinding string

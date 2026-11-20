@@ -203,6 +203,11 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 				return fmt.Errorf("backup: duplicate artifact")
 			}
 			seen[item.Ref.ID] = true
+			// A ref recorded with a digest must name the bytes the
+			// manifest vouches for; Import then checks them against it.
+			if item.Ref.SHA256 != "" && item.Ref.SHA256 != item.SHA256 {
+				return fmt.Errorf("backup: artifact digest mismatch")
+			}
 			r, err := pin.Open(ctx, item.Ref)
 			if err != nil {
 				return err

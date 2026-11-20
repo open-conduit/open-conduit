@@ -191,7 +191,8 @@ func TestRetentionRecoveryAndPinnedBackup(t *testing.T) {
 		t.Fatal(e)
 	}
 	io.WriteString(active, "still writing")
-	if e = s.Recover(ctx); e != nil {
+	// Recovery, as Open runs it, keeps this store's own active writers.
+	if e = s.cleanup(ctx, time.Time{}, nil, true); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = active.Write([]byte(" more")); e != nil {
@@ -362,10 +363,7 @@ func TestCrashRecovery(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			defer s.Close()
-			if e = s.Recover(ctx); e != nil {
-				t.Fatal(e)
-			}
+			defer s.Close() // Open has removed the killed process's pending stream
 			if phase == "committed" {
 				if content(t, s, ref) != "durable payload" {
 					t.Fatal("lost committed content")

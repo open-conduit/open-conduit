@@ -1162,9 +1162,10 @@ func (h *Host) artifact(method string, raw json.RawMessage) (any, error) {
 		return struct{}{}, nil
 	case "artifact.commit":
 		delete(h.writers, p.Writer)
-		ref := domain.ArtifactRef{ID: "artifact/" + digest(fmt.Sprint(len(h.artifacts))+"\x00"+string(w.data)), Size: int64(len(w.data)), MediaType: w.mediaType}
+		sum := sha256.Sum256(w.data)
+		ref := domain.ArtifactRef{ID: "artifact/" + digest(fmt.Sprint(len(h.artifacts))+"\x00"+string(w.data)), Size: int64(len(w.data)), MediaType: w.mediaType, SHA256: hex.EncodeToString(sum[:])}
 		h.artifacts = append(h.artifacts, Artifact{Ref: ref, Data: w.data})
-		return protocol.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+		return protocol.FromArtifact(ref), nil
 	}
 	delete(h.writers, p.Writer) // artifact.abort
 	return struct{}{}, nil

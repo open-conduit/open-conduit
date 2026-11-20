@@ -1132,7 +1132,7 @@ func (s *Service) artifact(ctx context.Context, method string, raw json.RawMessa
 		if err != nil {
 			return nil, err
 		}
-		return protocol.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+		return protocol.FromArtifact(ref), nil
 	}
 	return struct{}{}, w.Close()
 }

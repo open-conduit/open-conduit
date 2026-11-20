@@ -482,6 +482,8 @@ export const ArtifactRef = t.object(
     id: t.string(),
     size: t.integer(),
     media_type: t.optional(t.string()),
+    // The content's SHA-256; return the ref artifact.commit gave unchanged.
+    sha256: t.optional(t.string()),
   },
   open,
 );

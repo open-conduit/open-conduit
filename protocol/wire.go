@@ -234,6 +234,19 @@ type ArtifactRef struct {
 	ID        string `json:"id"`
 	Size      int64  `json:"size"`
 	MediaType string `json:"media_type,omitempty"`
+	// SHA256 is the content's digest (domain.ArtifactRef.SHA256). An
+	// extension returns the ref artifact.commit gave it unchanged.
+	SHA256 string `json:"sha256,omitempty"`
+}
+
+// FromArtifact is r on the wire.
+func FromArtifact(r domain.ArtifactRef) ArtifactRef {
+	return ArtifactRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType, SHA256: r.SHA256}
+}
+
+// Domain is r as the domain records it.
+func (r ArtifactRef) Domain() domain.ArtifactRef {
+	return domain.ArtifactRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType, SHA256: r.SHA256}
 }
 
 func fromArtifacts(rs []domain.ArtifactRef) []ArtifactRef {
@@ -242,7 +255,7 @@ func fromArtifacts(rs []domain.ArtifactRef) []ArtifactRef {
 	}
 	out := make([]ArtifactRef, len(rs))
 	for i, r := range rs {
-		out[i] = ArtifactRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType}
+		out[i] = FromArtifact(r)
 	}
 	return out
 }
@@ -252,7 +265,7 @@ func toArtifacts(rs []ArtifactRef) []domain.ArtifactRef {
 	}
 	out := make([]domain.ArtifactRef, len(rs))
 	for i, r := range rs {
-		out[i] = domain.ArtifactRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType}
+		out[i] = r.Domain()
 	}
 	return out
 }

@@ -437,11 +437,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.startBackups(backend.name, store); err != nil {
 		return fmt.Errorf("backups: %w", err)
 	}
-	// The state lock is held and nothing writes yet: pending streams are a
-	// killed process's unfinished writes.
-	if err = d.artifacts.Recover(ctx); err != nil {
-		return fmt.Errorf("artifact recovery: %w", err)
-	}
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}

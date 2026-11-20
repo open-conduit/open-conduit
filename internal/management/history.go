@@ -170,7 +170,7 @@ func toRun(r runtime.Run) wireRun {
 			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}
 		}
 		for _, a := range g.Artifacts {
-			seg.Artifacts = append(seg.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType})
+			seg.Artifacts = append(seg.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, SHA256: a.SHA256})
 		}
 		out.Segments = append(out.Segments, seg)
 	}

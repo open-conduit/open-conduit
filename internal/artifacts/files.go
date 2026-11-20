@@ -23,12 +23,27 @@ import (
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var ErrClosed = errors.New("artifact store or writer closed")
-var ErrCorrupt = errors.New("artifact content is corrupt")
 
+// ErrCorrupt is the contract's storage.ErrCorrupt.
+var ErrCorrupt = storage.ErrCorrupt
+
+// metadata is an object's meta.json. Ref carries the digest from record
+// format 7 on; SHA256 repeats it, and is the only digest an object
+// published before then has.
 type metadata struct {
 	Ref         storage.ArtifactRef
 	SHA256      string
 	PublishedAt time.Time
+}
+
+// matches reports whether ref names this object exactly. A ref without a
+// digest (recorded before digests) matches on its other fields, and is
+// verified against the digest the object stored.
+func (m metadata) matches(ref storage.ArtifactRef) bool {
+	if ref.SHA256 == "" {
+		ref.SHA256 = m.Ref.SHA256
+	}
+	return ref == m.Ref
 }
 
 // Store is an exclusively opened artifact directory. Pin blocks Delete/Collect
@@ -44,8 +59,30 @@ type Store struct {
 	fault func(string) error
 }
 
-// Open creates private subdirectories and acquires an exclusive process lock.
-// Call Recover after opening to remove stale pre-publication streams.
+// Backend is the file store as a storage.ArtifactBackend, registered as
+// "files". A location is the absolute path of the store's directory.
+var Backend storage.ArtifactBackend = backend{}
+
+// BackendName is the name Backend is registered under.
+const BackendName = "files"
+
+func init() { storage.RegisterArtifactBackend(BackendName, Backend) }
+
+type backend struct{}
+
+func (backend) Open(ctx context.Context, location string) (storage.ArtifactStore, error) {
+	if !filepath.IsAbs(location) {
+		return nil, fmt.Errorf("artifacts: location %q is not an absolute path: %w", location, storage.ErrInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return Open(location)
+}
+
+// Open creates private subdirectories and acquires an exclusive process
+// lock, then removes the unpublished streams a process that held it before
+// left behind: the lock proves no other process still owns them.
 func Open(root string) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -83,7 +120,12 @@ func Open(root string) (*Store, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	return &Store{root: root, lock: lock, active: map[string]*writer{}}, nil
+	s := &Store{root: root, lock: lock, active: map[string]*writer{}}
+	if err = s.cleanup(context.Background(), time.Time{}, nil, true); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 func privateDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
@@ -173,12 +215,14 @@ func (s *Store) create(ctx context.Context, id, mediaType string) (*writer, erro
 }
 
 type writer struct {
-	mu       sync.Mutex
-	store    *Store
-	file     *os.File
-	dir      string
-	hash     hash.Hash
-	ref      storage.ArtifactRef
+	mu    sync.Mutex
+	store *Store
+	file  *os.File
+	dir   string
+	hash  hash.Hash
+	ref   storage.ArtifactRef
+	// expect is the digest an Import must arrive at; empty for Create.
+	expect   string
 	closed   bool
 	writeErr error
 }
@@ -265,7 +309,12 @@ func (w *writer) Commit(ctx context.Context) (ref storage.ArtifactRef, err error
 	if err = w.file.Close(); err != nil {
 		return ref, err
 	}
-	m := metadata{Ref: w.ref, SHA256: hex.EncodeToString(w.hash.Sum(nil)), PublishedAt: time.Now().UTC()}
+	digest := hex.EncodeToString(w.hash.Sum(nil))
+	if w.expect != "" && digest != w.expect {
+		return ref, ErrCorrupt
+	}
+	w.ref.SHA256 = digest
+	m := metadata{Ref: w.ref, SHA256: digest, PublishedAt: time.Now().UTC()}
 	bytes, e := json.Marshal(m)
 	if e != nil {
 		return ref, e
@@ -371,6 +420,13 @@ func (s *Store) readMetadata(id string) (metadata, error) {
 	if m.Ref.ID != id || m.Ref.Size < 0 || m.Ref.MediaType == "" || !idPattern.MatchString(m.SHA256) || m.PublishedAt.IsZero() {
 		return m, ErrCorrupt
 	}
+	switch m.Ref.SHA256 {
+	case "":
+		m.Ref.SHA256 = m.SHA256 // published before refs carried digests
+	case m.SHA256:
+	default:
+		return m, ErrCorrupt
+	}
 	return m, nil
 }
 func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
@@ -381,7 +437,7 @@ func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClose
 	if err != nil {
 		return nil, err
 	}
-	if m.Ref != ref {
+	if !m.matches(ref) {
 		return nil, storage.ErrInvalid
 	}
 	path := filepath.Join(s.root, "objects", ref.ID, "data")
@@ -399,7 +455,7 @@ func (s *Store) open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClose
 	if err != nil {
 		return nil, err
 	}
-	return &reader{file: f, ctx: ctx, hash: sha256.New(), expected: m.SHA256, size: ref.Size}, nil
+	return &reader{file: f, ctx: ctx, hash: sha256.New(), expected: m.Ref.SHA256, size: ref.Size}, nil
 }
 
 type reader struct {
@@ -446,7 +502,7 @@ func (s *Store) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	if err != nil {
 		return err
 	}
-	if m.Ref != ref {
+	if !m.matches(ref) {
 		return storage.ErrInvalid
 	}
 	if err = os.RemoveAll(filepath.Join(s.root, "objects", ref.ID)); err != nil {
@@ -491,16 +547,27 @@ func (p *Pinned) Close() error {
 	return nil
 }
 
-// Import restores a selected immutable ID into a new isolated artifact store.
-// The caller must fully read the source; size and source read errors abort it.
+// Import restores a selected immutable ID into a new isolated artifact store
+// (storage.ArtifactStore.Import). It reads the source to its end; a short or
+// long source, a digest other than ref's, or a source read error publishes
+// nothing.
 func (s *Store) Import(ctx context.Context, ref storage.ArtifactRef, source io.Reader) error {
-	if ref.Size < 0 || ref.Size == int64(^uint64(0)>>1) {
+	if ref.Size < 0 || ref.Size == int64(^uint64(0)>>1) || (ref.SHA256 != "" && !storage.ValidDigest(ref.SHA256)) {
 		return storage.ErrInvalid
+	}
+	if _, err := s.readMetadata(ref.ID); err == nil {
+		return storage.ErrConflict
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
 	}
 	w, err := s.create(ctx, ref.ID, ref.MediaType)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return storage.ErrConflict // another import of the ID is under way
+		}
 		return err
 	}
+	w.expect = ref.SHA256
 	defer func() {
 		if !w.closed {
 			_ = w.Close()
@@ -517,9 +584,44 @@ func (s *Store) Import(ctx context.Context, ref storage.ArtifactRef, source io.R
 	return err
 }
 
-// Recover removes only stale unpublished streams. The exclusive directory lock
-// proves another process cannot still own them; active writers are preserved.
-func (s *Store) Recover(ctx context.Context) error { return s.cleanup(ctx, time.Time{}, nil, true) }
+// List pages committed objects in ID order (storage.ArtifactStore.List).
+func (s *Store) List(ctx context.Context, after string, limit int) ([]storage.StoredArtifact, error) {
+	if limit < 1 || limit > 1000 {
+		return nil, storage.ErrInvalid
+	}
+	s.gate.RLock()
+	defer s.gate.RUnlock()
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(s.root, "objects"))
+	if err != nil {
+		return nil, err
+	}
+	out := []storage.StoredArtifact{}
+	// ReadDir sorts by name, which for hex IDs is byte order.
+	for _, entry := range entries {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		id := entry.Name()
+		if id <= after {
+			continue
+		}
+		m, err := s.readMetadata(id)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue // deleted since the directory was read
+		}
+		if err != nil {
+			return nil, fmt.Errorf("artifacts: object %s: %w", id, err)
+		}
+		out = append(out, storage.StoredArtifact{Ref: m.Ref, PublishedAt: m.PublishedAt})
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
 
 // Collect deletes aged committed objects absent from liveIDs and stale pending
 // streams. The caller supplies a complete protected reference set; it must not
@@ -614,4 +716,4 @@ func (s *Store) Close() error {
 	return result
 }
 
-var _ storage.Artifacts = (*Store)(nil)
+var _ storage.ArtifactStore = (*Store)(nil)

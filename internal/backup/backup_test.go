@@ -151,6 +151,13 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var m manifest
+	if err := json.Unmarshal(original, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Artifacts) != 1 || m.Artifacts[0].Ref != ref || ref.SHA256 == "" || m.Artifacts[0].SHA256 != ref.SHA256 {
+		t.Fatalf("manifest artifacts %+v, want %+v with its digest", m.Artifacts, ref)
+	}
 	for _, test := range []struct {
 		name   string
 		change func(*manifest)
@@ -158,6 +165,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		{"missing_reference", func(m *manifest) { m.Artifacts = nil }},
 		{"omitted_unexpired_reference", func(m *manifest) { m.Omitted, m.Artifacts = []domain.ArtifactRef{m.Artifacts[0].Ref}, nil }},
 		{"changed_artifact_digest", func(m *manifest) { m.Artifacts[0].SHA256 = strings.Repeat("0", 64) }},
+		{"ref_digest_disagrees", func(m *manifest) { m.Artifacts[0].Ref.SHA256 = strings.Repeat("0", 64) }},
 		{"changed_database_digest", func(m *manifest) { m.DatabaseSHA256 = strings.Repeat("0", 64) }},
 		{"newer_manifest", func(m *manifest) { m.Version++ }},
 	} {

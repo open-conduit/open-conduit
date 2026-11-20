@@ -160,6 +160,7 @@ type wireArtifact struct {
 	ID          string `json:"id"`
 	Size        int64  `json:"size"`
 	MediaType   string `json:"media_type,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
 	WorkID      string `json:"work_id,omitempty"`
 	ExecutionID string `json:"execution_id,omitempty"`
 	// Segment is the number (from 1) of the run's segment whose turn
@@ -362,7 +363,7 @@ func toOutcome(o *domain.Outcome) *wireOutcome {
 func toExecution(x domain.Execution, scope domain.ID) wireExecution {
 	out := wireExecution{ID: string(x.ID), WorkID: string(x.WorkID), ScopeID: string(scope), ExecutorBinding: x.ExecutorBinding, Attempt: x.Attempt, State: string(x.State), TriggerID: string(x.TriggerID), Lease: wireLease{Owner: x.Lease.Owner, Epoch: u64(x.Lease.Epoch), ExpiresAt: ts(x.Lease.ExpiresAt)}, Outcome: toOutcome(x.Outcome), Artifacts: []wireArtifact{}, TraceID: x.TraceID, StartedAt: tsPtr(x.StartedAt), FinishedAt: tsPtr(x.FinishedAt), Revision: u64(uint64(x.Revision)), CreatedAt: ts(x.CreatedAt), UpdatedAt: ts(x.UpdatedAt)}
 	for _, a := range x.Artifacts {
-		out.Artifacts = append(out.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType})
+		out.Artifacts = append(out.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, SHA256: a.SHA256})
 	}
 	return out
 }

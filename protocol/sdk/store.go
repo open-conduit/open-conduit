@@ -637,7 +637,7 @@ func (w *artifactWriter) Commit(ctx context.Context) (storage.ArtifactRef, error
 	if err := w.h.Call(ctx, "artifact.commit", protocol.ArtifactTarget{Writer: w.id}, &ref); err != nil {
 		return storage.ArtifactRef{}, err
 	}
-	return storage.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+	return ref.Domain(), nil
 }
 
 var _ storage.Artifacts = (*Artifacts)(nil)
