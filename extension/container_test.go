@@ -258,6 +258,7 @@ func TestParseContainerConfig(t *testing.T) {
 		`{"image":"` + testImage + `","network":{"allow":["http://x"]}}`,
 		`{"image":"` + testImage + `","limits":{"cpus":-1}}`,
 		`{"image":"` + testImage + `","unknown":1}`,
+		`{"image":"` + testImage + `","connection":"Cloud Account"}`,
 	} {
 		if _, err := extension.ParseContainerConfig([]byte(bad)); err == nil {
 			t.Errorf("%s accepted", bad)
@@ -265,6 +266,9 @@ func TestParseContainerConfig(t *testing.T) {
 	}
 	if _, err := extension.ParseContainerConfig(containerConfig(testImage, `,"limits":{"cpus":4,"memory":"8g","pids":2048}`).Data); err != nil {
 		t.Errorf("good config: %v", err)
+	}
+	if c, err := extension.ParseContainerConfig(containerConfig(testImage, `,"connection":"cloud-a"`).Data); err != nil || c.Connection != "cloud-a" {
+		t.Errorf("a config naming a connection: %+v %v", c, err)
 	}
 }
 

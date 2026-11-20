@@ -291,6 +291,23 @@ type Container struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config"`
 }
+
+// ConnectionID is the connection the container's config names for its
+// provider to reach its API with (extension.ContainerConfig.Connection),
+// "" for none or a config that isn't an object.
+func (c *Container) ConnectionID() string {
+	if c == nil {
+		return ""
+	}
+	var cfg struct {
+		Connection string `json:"connection"`
+	}
+	if json.Unmarshal(c.Config, &cfg) != nil {
+		return ""
+	}
+	return cfg.Connection
+}
+
 type Binding struct {
 	Name, Executor, Connection string
 	Requires                   domain.Capabilities

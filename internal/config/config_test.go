@@ -892,6 +892,61 @@ func TestContainerBinding(t *testing.T) {
 	}
 }
 
+// TestContainerConnection: a binding's container config may name a
+// connection for its provider (extension.ContainerConfig.Connection) when
+// the provider's package declares the connection's type and the scope
+// grants it. A connection of another package's type, one the scope doesn't
+// grant and one that doesn't exist are refused.
+func TestContainerConnection(t *testing.T) {
+	const image = "ghcr.io/acme/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	reg := registry()
+	reg.Connections["cloud"] = nil
+	reg.Containers = map[string]func(json.RawMessage) error{"pod": nil, "docker": nil}
+	reg.ContainerOwners = map[string]string{"pod": "cloud", "docker": "docker"}
+	reg.ConnectionOwners = map[string]string{"cloud": "cloud", "code": "github"}
+	reg.Executors["coding_agent"] = interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true, Container: true}}}
+	build := func(provider, conn string, grant bool) map[string]any {
+		m := generic(t, example(t, "sandboxed"))
+		m["connections"] = append(m["connections"].([]any), map[string]any{"id": "cloud-a", "type": "cloud", "config": map[string]any{}, "secret_refs": map[string]any{"token": "env:CLOUD_A"}})
+		if grant {
+			auth := m["scopes"].([]any)[0].(map[string]any)["authorization"].(map[string]any)
+			auth["connections"] = append(auth["connections"].([]any), "cloud-a")
+		}
+		b := entry(m, 0, "bindings", 0)
+		delete(b, "sandbox")
+		b["container"] = map[string]any{"provider": provider, "config": map[string]any{"image": image, "write": []any{"{workspace}"}, "connection": conn}}
+		return m
+	}
+	snap, err := Validate(encode(t, build("pod", "cloud-a", true)), reg)
+	if err != nil {
+		t.Fatalf("%+v", diagnostics(t, err))
+	}
+	if b, _ := snap.Scopes["engineering"].Binding("run"); b.Container.ConnectionID() != "cloud-a" {
+		t.Fatalf("container %+v", b.Container)
+	}
+	for _, tc := range []struct {
+		name, provider, conn string
+		grant                bool
+		code                 string
+	}{
+		{"not granted by the scope", "pod", "cloud-a", false, "connection_denied"},
+		{"of another package's type", "pod", "code", true, "connection_type"},
+		{"to a provider whose package declares no connection", "docker", "cloud-a", true, "connection_type"},
+		{"that doesn't exist", "pod", "nope", true, "unknown_connection"},
+	} {
+		_, err := Validate(encode(t, build(tc.provider, tc.conn, tc.grant)), reg)
+		found := false
+		for _, d := range diagnostics(t, err) {
+			if d.Path == "scopes/0/bindings/0/container/config/connection" && d.Code == tc.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s", tc.name, diagnostics(t, err), tc.code)
+		}
+	}
+}
+
 // TestBindingTimeout: a binding's timeout_seconds (05-02) reaches the domain
 // binding the scheduler pins, survives normalization, and is bounded like
 // settings.timeout_seconds.

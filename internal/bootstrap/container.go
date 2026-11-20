@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +43,55 @@ type containerState struct {
 	// couldn't collect among it), for doctor; nil when it did it all.
 	mu     sync.Mutex
 	failed error
+	// withheld are the credentials each container provider's package has
+	// resolved for its connections, by provider type
+	// (extension.ContainerBinding.Withheld).
+	withheld withheldCredentials
+}
+
+// maxWithheld bounds the credentials kept for each provider type: the
+// newest are kept, so a rotated credential's old value goes in time.
+const maxWithheld = 64
+
+// withheldCredentials are the credentials container providers' packages
+// resolved, kept in memory only, so a launch carrying one is refused.
+type withheldCredentials struct {
+	mu     sync.Mutex
+	byType map[string][]string
+}
+
+// add records values resolved by the package providing types.
+func (w *withheldCredentials) add(types map[string]bool, values map[string]string) {
+	if len(types) == 0 || len(values) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.byType == nil {
+		w.byType = map[string][]string{}
+	}
+	for typ := range types {
+		kept := w.byType[typ]
+		for _, v := range values {
+			if v == "" || slices.Contains(kept, v) {
+				continue
+			}
+			kept = append(kept, v)
+		}
+		if len(kept) > maxWithheld {
+			kept = slices.Clone(kept[len(kept)-maxWithheld:])
+		}
+		w.byType[typ] = kept
+	}
+}
+
+// of is the credentials withheld from provider typ's launches.
+func (w *withheldCredentials) of(typ string) func() []string {
+	return func() []string {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return slices.Clone(w.byType[typ])
+	}
 }
 
 // reconcileFailed is what the last container reconcile pass couldn't do.
@@ -291,6 +341,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Placed: func(at extension.Placement) { placeWork(workHome, desc.Provider, at) },
 		// Bound again with the site, so the resource can be made there;
 		// a binding that can't be bound again keeps the host's.
+		Withheld: d.containers.withheld.of(desc.Provider),
 		AtSite: func(site extension.Site) extension.ResourceBroker {
 			if r, err := d.bindResourcesAt(ctx, state, site); err == nil && r != nil {
 				return r
@@ -605,6 +656,7 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 		Config:   domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
 		Host:     d.containerHost(),
 		Attach:   true,
+		Withheld: d.containers.withheld.of(desc.Provider),
 		// An attach goes where the Work last ran, and never moves it.
 		Name:      desc.Provider,
 		Prefer:    prefer,

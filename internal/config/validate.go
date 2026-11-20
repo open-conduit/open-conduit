@@ -80,6 +80,10 @@ type Registry struct {
 	// connection types, by type, so validation can see which package
 	// resolves a connection's secrets (a provider's own credentials).
 	ConnectionOwners map[string]string
+	// ContainerOwners are the registration names of the packages that
+	// provide container types, by type, so a binding's container may name
+	// only a connection of a type its provider's package declares.
+	ContainerOwners map[string]string
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -606,6 +610,9 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if b.Connection != "" && !slices.Contains(e.auth.Connections, b.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
 		}
+		if id := b.Container.ConnectionID(); id != "" && !slices.Contains(e.auth.Connections, id) {
+			v.fail(p+"/container/config/connection", "connection_denied", "connection is not granted by the scope authorization")
+		}
 		for k, kind := range b.WorkKinds {
 			if !slices.Contains(e.auth.WorkKinds, kind) {
 				v.fail(fmt.Sprintf("%s/work_kinds/%d", p, k), "work_kind_denied", "kind is not in the scope authorization's work_kinds; add it there or remove it here")
@@ -956,9 +963,31 @@ func (v *validator) contained(p string, b Binding) {
 			v.fail(p+"/container/config", "invalid_config", err.Error())
 		}
 	}
+	v.containerConnection(p, b)
 	if b.Sandbox == nil {
 		v.sandboxed(p, b)
 	}
+}
+
+// containerConnection refuses a container that names a connection its
+// provider's package can't resolve: one of a type another package, or
+// none, declares. Whether the scope grants it is checked with the scope.
+func (v *validator) containerConnection(p string, b Binding) {
+	id := b.Container.ConnectionID()
+	if id == "" {
+		return
+	}
+	for _, c := range v.doc.Connections {
+		if c.ID != id {
+			continue
+		}
+		owner := v.reg.ContainerOwners[b.Container.Provider]
+		if owner == "" || v.reg.ConnectionOwners[c.Type] != owner {
+			v.fail(p+"/container/config/connection", "connection_type", fmt.Sprintf("connection %s is of type %s, which container provider %s doesn't declare; name a connection of a type its package declares, or remove connection", id, c.Type, b.Container.Provider))
+		}
+		return
+	}
+	v.fail(p+"/container/config/connection", "unknown_connection", "no connection has this id; define it under connections or remove connection")
 }
 
 // entrySandbox checks an extension entry's sandbox: only a type that
@@ -1422,11 +1451,14 @@ func (s *Snapshot) BindingConnections(scope domain.ID, connTypes map[string]bool
 }
 
 // ExtensionConnection returns connection id when an extension whose entry
-// types are entryTypes and connection types are connTypes may act as it in
-// scope (B05): the scope has an entry of one of entryTypes, the connection
-// is of one of connTypes and granted by the scope authorization, and one of
-// those entries or one of the scope's bindings names it.
-func (s *Snapshot) ExtensionConnection(scope domain.ID, id string, entryTypes, connTypes map[string]bool) (Connection, bool) {
+// types are entryTypes, connection types connTypes and container provider
+// types containerTypes may act as it in scope (B05): the connection is of
+// one of connTypes and granted by the scope authorization, and either the
+// scope has an entry of one of entryTypes and one of those entries or one
+// of the scope's bindings names it, or one of the scope's bindings runs in
+// a container of one of containerTypes whose config names it
+// (extension.ContainerConfig.Connection).
+func (s *Snapshot) ExtensionConnection(scope domain.ID, id string, entryTypes, connTypes, containerTypes map[string]bool) (Connection, bool) {
 	e, ok := s.Scopes[scope]
 	if !ok || id == "" || !slices.Contains(e.Authorization.Connections, id) {
 		return Connection{}, false
@@ -1439,7 +1471,10 @@ func (s *Snapshot) ExtensionConnection(scope domain.ID, id string, entryTypes, c
 		}
 	}
 	named = named || slices.ContainsFunc(e.Bindings, func(b Binding) bool { return b.Connection == id })
-	if !entry || !named {
+	contained := slices.ContainsFunc(e.Bindings, func(b Binding) bool {
+		return b.Container != nil && containerTypes[b.Container.Provider] && b.Container.ConnectionID() == id
+	})
+	if !(entry && named) && !contained {
 		return Connection{}, false
 	}
 	for _, c := range s.Connections {

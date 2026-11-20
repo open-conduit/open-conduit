@@ -628,6 +628,10 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 	for _, x := range m.Provides.Extensions {
 		extTypes[x.Type] = true
 	}
+	containerTypes := map[string]bool{}
+	for _, c := range m.Provides.Containers {
+		containerTypes[c.Type] = true
+	}
 	snapshot := func() *config.Snapshot {
 		s, _ := d.extensionSnapshot()
 		return s
@@ -653,7 +657,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return out
 		},
-		Secrets:        d.scopedSecrets(m.Name, extTypes, connTypes),
+		Secrets:        d.scopedSecrets(m.Name, extTypes, connTypes, containerTypes),
 		BindingSecrets: d.bindingSecrets(m),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 			accepted, added, err := d.ingress.Deliver(ctx, name, delivery)
@@ -716,14 +720,18 @@ func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domai
 	}
 }
 
-// scopedSecrets resolves, for an extension whose entry and connection types
-// are extTypes and connTypes, only names bound to its own entries in the
-// scope: their selected secret names, or the secret names of a connection
-// of one of its types that one of them or one of the scope's bindings names
-// (B05, config.Snapshot.ExtensionConnection). It is the one host resolver
-// for every package, and resolves for pkg, so a provider package is never
-// asked for a credential of its own through a scheme it serves.
-func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+// scopedSecrets resolves, for an extension whose entry, connection and
+// container provider types are extTypes, connTypes and containerTypes,
+// only names bound to it in the scope: its entries' selected secret names,
+// or the secret names of a connection of one of its types that one of its
+// entries or one of the scope's bindings names, or that the container
+// config of a binding using one of its container providers names (B05,
+// config.Snapshot.ExtensionConnection). It is the one host resolver for
+// every package, and resolves for pkg, so a provider package is never
+// asked for a credential of its own through a scheme it serves. What a
+// container provider's package resolves for a connection is withheld from
+// its launches (withheldCredentials).
+func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes, containerTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 		resolver := d.resolver.For(pkg)
 		s, _ := d.extensionSnapshot()
@@ -747,7 +755,7 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes map[string]bool) 
 			}
 			return resolver.ResolveNames(ctx, scope, names)
 		}
-		c, ok := s.ExtensionConnection(id, connection, extTypes, connTypes)
+		c, ok := s.ExtensionConnection(id, connection, extTypes, connTypes, containerTypes)
 		if !ok {
 			return nil, extension.ErrUnauthorized
 		}
@@ -763,6 +771,7 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes map[string]bool) 
 			}
 			out[n] = v
 		}
+		d.containers.withheld.add(containerTypes, out)
 		return out, nil
 	}
 }
