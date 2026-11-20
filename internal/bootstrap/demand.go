@@ -357,11 +357,27 @@ func packageUsed(s *config.Snapshot, m protocol.Manifest) bool {
 		return false
 	}
 	connTypes := connectionTypes(s)
+	// A secret reference of a scheme the package serves needs it to
+	// resolve (manifest secret_schemes).
+	serves := func(refs map[string]string) bool {
+		for _, ref := range refs {
+			scheme, _, ok := strings.Cut(ref, ":")
+			if ok && slices.ContainsFunc(m.Provides.SecretSchemes, func(d protocol.SecretSchemeDecl) bool { return d.Scheme == scheme }) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range s.Connections {
+		if serves(c.SecretRefs) {
+			return true
+		}
+	}
 	for _, scope := range s.Scopes {
 		if scope == nil {
 			continue
 		}
-		if usesExtension(scope, m) {
+		if serves(scope.SecretRefs) || usesExtension(scope, m) {
 			return true
 		}
 		// An entry that runs its processes in a sandbox uses the sandbox's

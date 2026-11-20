@@ -20,14 +20,15 @@ import (
 // control: the same scope without that use doesn't count.
 func TestPackageUsedThroughEverythingAScopeGivesIt(t *testing.T) {
 	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
-		Connections: []protocol.TypeDecl{{Type: "acme-api"}},
-		Extensions:  []protocol.ExtensionDecl{{Type: "acme"}},
-		Routes:      []protocol.RouteDecl{{Handler: "acme"}},
-		Executors:   []protocol.ExecutorDecl{{Name: "acme-agent"}},
-		Resources:   []protocol.ResourceDecl{{Type: "acme-disk"}},
-		Sandboxes:   []protocol.SandboxDecl{{Type: "acme-jail"}},
-		Containers:  []protocol.ContainerDecl{{Type: "acme-box"}},
-		Operations:  []protocol.OperationDecl{{Name: "acme.ping"}},
+		Connections:   []protocol.TypeDecl{{Type: "acme-api"}},
+		Extensions:    []protocol.ExtensionDecl{{Type: "acme"}},
+		Routes:        []protocol.RouteDecl{{Handler: "acme"}},
+		Executors:     []protocol.ExecutorDecl{{Name: "acme-agent"}},
+		Resources:     []protocol.ResourceDecl{{Type: "acme-disk"}},
+		Sandboxes:     []protocol.SandboxDecl{{Type: "acme-jail"}},
+		Containers:    []protocol.ContainerDecl{{Type: "acme-box"}},
+		Operations:    []protocol.OperationDecl{{Name: "acme.ping"}},
+		SecretSchemes: []protocol.SecretSchemeDecl{{Scheme: "acme-vault"}},
 	}}
 	conns := []config.Connection{{ID: "api", Type: "acme-api"}, {ID: "other", Type: "other"}}
 	snap := func(scope config.EffectiveScope) *config.Snapshot {
@@ -52,6 +53,7 @@ func TestPackageUsedThroughEverythingAScopeGivesIt(t *testing.T) {
 		"grant":          {bound(config.Binding{Grants: []config.Grant{{Name: "g", Operations: []string{"acme.ping"}}}}), bound(config.Binding{Grants: []config.Grant{{Name: "g", Operations: []string{"wait"}}}})},
 		"connection":     {bound(config.Binding{Connection: "api"}), bound(config.Binding{Connection: "other"})},
 		"entry sandbox":  {config.EffectiveScope{Extensions: []config.Extension{{Name: "a", Type: "other", Sandbox: &config.Sandbox{Provider: "acme-jail"}}}}, config.EffectiveScope{Extensions: []config.Extension{{Name: "a", Type: "other", Sandbox: &config.Sandbox{Provider: "srt"}}}}},
+		"secret scheme":  {config.EffectiveScope{SecretRefs: map[string]string{"token": "acme-vault:prod/token"}}, config.EffectiveScope{SecretRefs: map[string]string{"token": "env:TOKEN"}}},
 		"disabled scope": {config.EffectiveScope{Enabled: false, Extensions: []config.Extension{{Name: "a", Type: "acme"}}}, config.EffectiveScope{}},
 	} {
 		if !packageUsed(snap(c.uses), m) {
