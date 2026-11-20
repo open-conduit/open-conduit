@@ -59,22 +59,12 @@ func UnreadInputsInTx(tx storage.Tx, work domain.ID) ([]UnreadInput, error) {
 // unroutedFor is the accepted Events not yet routed that would go to w: an
 // Event that targets it and whose route owner is w.
 func unroutedFor(tx storage.Tx, w domain.Work) ([]domain.AcceptedEvent, error) {
-	events, err := tx.UnroutedEvents(0, 0)
+	events, err := unroutedInputTo(tx, w, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 	var out []domain.AcceptedEvent
 	for _, a := range events {
-		if a.Routed {
-			continue
-		}
-		target, e := potentiallyTargets(tx, a.Event, w)
-		if e != nil {
-			return nil, e
-		}
-		if !target {
-			continue
-		}
 		owner, e := routeOwner(tx, a.Event)
 		if e != nil && !errors.Is(e, storage.ErrNotFound) {
 			return nil, e

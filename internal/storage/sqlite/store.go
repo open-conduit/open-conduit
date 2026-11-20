@@ -328,6 +328,10 @@ var indexes = []string{
 		`WHEN ` + recordRefs("OLD") + ` IS NOT ` + recordRefs("NEW") + ` BEGIN ` +
 		`DELETE FROM execution_artifacts WHERE execution_id=OLD.id; ` + insertExecutionArtifacts + `; END`,
 	`CREATE TRIGGER IF NOT EXISTS execution_artifacts_delete AFTER DELETE ON executions BEGIN DELETE FROM execution_artifacts WHERE execution_id=OLD.id; END`,
+	`CREATE INDEX IF NOT EXISTS events_unrouted_work ON events(` + eventWork + `, sequence) WHERE ` + unrouted,
+	`CREATE INDEX IF NOT EXISTS events_unrouted_execution ON events(` + eventExecution + `, sequence) WHERE ` + unrouted,
+	`CREATE INDEX IF NOT EXISTS events_unrouted_key ON events(` + eventKeySource + `, ` + eventKeyID + `, sequence) WHERE ` + unrouted,
+	`CREATE INDEX IF NOT EXISTS events_unrouted_type ON events(` + eventType + `, sequence) WHERE ` + unrouted,
 }
 
 // executionRefs selects (artifact ID, attempt ID) for every ref the record
@@ -357,6 +361,20 @@ var insertExecutionArtifacts = `INSERT OR IGNORE INTO execution_artifacts(artifa
 const (
 	eventWork  = "json_extract(CAST(record AS TEXT),'$.Event.WorkID')"
 	routedWork = "json_extract(CAST(record AS TEXT),'$.RoutedWorkID')"
+)
+
+// eventExecution, eventKeySource, eventKeyID and eventType are the attempt
+// an event names, its correlation key and its type. With eventWork, the
+// events_unrouted_* partial indexes cover them on the unrouted backlog
+// only, so routing reads one Work's earlier input (UnroutedInput) and the
+// scheduler its own timer Events (UnroutedOfType) by a search, not a scan
+// of the backlog (#705); queries must repeat the expressions, and
+// unrouted, for SQLite to use them.
+const (
+	eventExecution = "json_extract(CAST(record AS TEXT),'$.Event.ExecutionID')"
+	eventKeySource = "json_extract(CAST(record AS TEXT),'$.Event.CorrelationKey.Source')"
+	eventKeyID     = "json_extract(CAST(record AS TEXT),'$.Event.CorrelationKey.ExternalID')"
+	eventType      = "json_extract(CAST(record AS TEXT),'$.Event.Type')"
 )
 
 // eventScope is the Scope recorded for an event, empty when none is: records

@@ -474,24 +474,11 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	// Join its route checkpoints in acceptance order before the winner checkpoint.
 	// Only unrouted input can join, and the scan cursor may have passed it, so
 	// read it from the boundary rather than from the candidates.
-	earlier, err := tx.UnroutedEvents(wait.AfterSequence, 0)
+	earlier, err := unroutedInputTo(tx, work, wait.AfterSequence, winner.Sequence)
 	if err != nil {
 		return "", err
 	}
 	for _, a := range earlier {
-		if a.Sequence >= winner.Sequence {
-			break
-		}
-		if a.Routed {
-			continue
-		}
-		target, er := potentiallyTargets(tx, a.Event, work)
-		if er != nil {
-			return "", er
-		}
-		if !target {
-			continue
-		}
 		scope, er := scopeForEvent(tx, a)
 		if er != nil {
 			return "", er
@@ -1407,17 +1394,13 @@ func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id doma
 		return false, err
 	}
 	skipped := skip != nil && skip.EventID == a.Event.ID && !waitMatches(*active, asSuccessorInput(inherited, current, a)) && !timeoutMatches(meta, a)
-	all, err := tx.UnroutedEvents(0, 0)
+	// The Work's earlier input, then the Event itself, in acceptance order.
+	all, err := unroutedInputTo(tx, work, 0, a.Sequence)
 	if err != nil {
 		return false, err
 	}
+	all = append(all, a)
 	for _, prior := range all {
-		if prior.Sequence > a.Sequence {
-			break
-		}
-		if prior.Routed {
-			continue
-		}
 		if skipped && prior.Event.ID == a.Event.ID {
 			if er := putJSON(tx, routeNamespace, identity(string(skip.EventID)), *skip); er != nil {
 				return false, er

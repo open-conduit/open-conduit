@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -158,6 +158,11 @@ drill:
 # against 1k, 10k and 50k retained events on real SQLite. Not part of check.
 bench-history:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkHistory' -benchtime 20x -benchmem ./integration
+
+# #705 the routing pass draining a backlog of 1k and 10k unrouted events,
+# the state an outage leaves, on real SQLite. Not part of check.
+bench-backlog:
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkBacklogDrain' -benchtime 3x -benchmem ./integration
 
 # The in-transaction extension calls' performance budget (#428), without
 # -race so the numbers are the protocol's: make check runs the same test

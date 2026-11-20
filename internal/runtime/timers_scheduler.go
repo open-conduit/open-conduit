@@ -468,14 +468,12 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 			}
 			switch phase {
 			case "events":
-				events, e := tx.UnroutedEvents(0, 0)
+				events, e := tx.UnroutedOfType([]string{"core.retry.due", domain.TypeExecutionTimeout})
 				if e != nil {
 					return e
 				}
 				for _, a := range events {
-					if !a.Routed && (a.Event.Type == "core.retry.due" || a.Event.Type == domain.TypeExecutionTimeout) {
-						ids = append(ids, a.Event.ID)
-					}
+					ids = append(ids, a.Event.ID)
 				}
 			case "waits":
 				waits, e := tx.ActiveWaits()

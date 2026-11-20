@@ -96,6 +96,25 @@ func (b brokenWorkEventsTx) WorkEvents(work domain.ID, after uint64, limit int) 
 	return out, err
 }
 
+// brokenUnroutedInput misses input that names one of the Work's attempts
+// and not the Work itself.
+type brokenUnroutedInput struct{ storage.Store }
+type brokenUnroutedInputTx struct{ storage.Tx }
+
+func (b brokenUnroutedInput) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenUnroutedInputTx{tx}) })
+}
+func (b brokenUnroutedInputTx) UnroutedInput(target storage.InputTarget, after, before uint64) ([]domain.AcceptedEvent, error) {
+	all, err := b.Tx.UnroutedInput(target, after, before)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if a.Event.WorkID == target.Work || a.Event.CorrelationKey != nil && slices.Contains(target.Keys, *a.Event.CorrelationKey) {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
 // brokenScopeEvents reads only recorded scopes: "" matches nothing, so
 // Events not yet backfilled go missing.
 type brokenScopeEvents struct{ storage.Store }
@@ -456,6 +475,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
 		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
 		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
+		{"unrouted_input_follows_work_attempts_and_keys", "unrouted input of a Work", func() storage.Store { return brokenUnroutedInput{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "latest attempt is claude's", func() storage.Store { return anyAttemptExecutor{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "every Work by creation", func() storage.Store { return textTimes{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "within scopes", func() storage.Store { return unboundedWithin{reference.New()} }},
