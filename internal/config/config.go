@@ -251,7 +251,18 @@ type Authorization struct {
 	// WorkKinds are the kinds of child Work this scope's bindings may be
 	// granted to ask for (Binding.WorkKinds; optional, empty grants none).
 	WorkKinds []string `json:"work_kinds,omitempty"`
+	// Isolation is IsolationRequired when every binding in the scope must
+	// run confined: in a sandbox or a container, unless its executor runs
+	// no process the agent controls (domain.Capabilities.NoProcess). It is
+	// the operator's own rule. A descendant scope inherits it and can't
+	// drop it, whether it writes its own authorization or not. Empty
+	// requires nothing.
+	Isolation string `json:"isolation,omitempty"`
 }
+
+// IsolationRequired is Authorization.Isolation for a scope whose bindings
+// must all run in a sandbox or container.
+const IsolationRequired = "required"
 
 // WorkKind reports whether s has the shape of a Work kind an operator names
 // in config: lower-case words joined by dots (agent.task.engineer).
@@ -834,7 +845,7 @@ func (c *checker) scope(n *node, path string) ScopeConfig {
 	if a := n.field("authorization"); a != nil {
 		p := path + "/authorization"
 		out.Authorization = &Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}
-		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes", "work_kinds") {
+		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes", "work_kinds", "isolation") {
 			out.Authorization = &Authorization{
 				Connections: c.list(a.field("connections"), p+"/connections", idPattern),
 				Operations:  c.list(a.field("operations"), p+"/operations", grantPattern),
@@ -843,6 +854,9 @@ func (c *checker) scope(n *node, path string) ScopeConfig {
 			}
 			if k := a.field("work_kinds"); k != nil {
 				out.Authorization.WorkKinds = c.list(k, p+"/work_kinds", kindPattern)
+			}
+			if i := a.field("isolation"); i != nil {
+				out.Authorization.Isolation, _ = c.enum(i, p+"/isolation", IsolationRequired)
 			}
 		}
 	}

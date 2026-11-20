@@ -103,8 +103,10 @@ func NewHoldExecutor() *HoldExecutorImpl {
 	return &HoldExecutorImpl{attempts: map[domain.ID]*holdAttempt{}, Now: time.Now}
 }
 
+// Capabilities: the hold runs in the package and acts only through the
+// toolbelt, so it runs no process (NoProcess).
 func (h *HoldExecutorImpl) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Toolbelt: extension.ToolbeltSDK}
+	return domain.Capabilities{Toolbelt: extension.ToolbeltSDK, NoProcess: true}
 }
 
 type holdHandle struct {

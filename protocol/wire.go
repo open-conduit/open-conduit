@@ -362,11 +362,11 @@ func (w Wait) Domain() domain.Wait {
 // manifest's executor capability declaration, which is also its wire shape).
 // FromCapabilities is c on the wire.
 func FromCapabilities(c domain.Capabilities) Capabilities {
-	return Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container}
+	return Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container, NoProcess: c.NoProcess}
 }
 
 func (c Capabilities) Domain() domain.Capabilities {
-	return domain.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container}
+	return domain.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container, NoProcess: c.NoProcess}
 }
 
 type Binding struct {

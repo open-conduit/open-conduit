@@ -658,7 +658,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Served: &d.served, Environment: d.runEnvironment,
-		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
+		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Isolation: d.configs.Isolation, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds, Budgets: budgets(set.Budgets),
 	}); err != nil {

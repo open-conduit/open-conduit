@@ -385,6 +385,13 @@
           },
           "uniqueItems": true,
           "description": "Kinds of child Work this scope's bindings may be granted to ask for with create_work (a binding's work_kinds). Empty grants none."
+        },
+        "isolation": {
+          "type": "string",
+          "enum": [
+            "required"
+          ],
+          "description": "`required`: every binding in the scope must run in a sandbox or a container, unless its executor declares that it runs no process the agent controls (no_process). Config check refuses one that doesn't, and a launch or recovery that would run unconfined fails closed. Descendant scopes inherit it and can't drop it, even when they write their own authorization. Omitted, nothing is required."
         }
       },
       "required": [

@@ -143,10 +143,13 @@ type EffectiveScope struct {
 	Enabled                     bool
 	Concurrency, AdmissionLimit int
 	Authorization               Authorization
-	Bindings                    []Binding
-	Routes                      []Route
-	Extensions                  []Extension
-	SecretRefs                  map[string]string
+	// IsolationScope is the scope that set Authorization.Isolation: this
+	// one or the ancestor it is inherited from ("" when none requires it).
+	IsolationScope domain.ID
+	Bindings       []Binding
+	Routes         []Route
+	Extensions     []Extension
+	SecretRefs     map[string]string
 	// Source is the included folder the scope came from, or "".
 	Source string
 	// EntryOperations are the entry operations in effect in the scope:
@@ -229,10 +232,12 @@ type effective struct {
 	concurrency int
 	admission   int
 	auth        Authorization
-	refs        map[string]string
-	bindings    slots[Binding]
-	routes      slots[Route]
-	extensions  slots[Extension]
+	// isolationScope is the scope that set auth.Isolation, or "".
+	isolationScope string
+	refs           map[string]string
+	bindings       slots[Binding]
+	routes         slots[Route]
+	extensions     slots[Extension]
 	// resolved are the scope's bindings with their operations lists
 	// resolved against its authorization, by name.
 	resolved map[string]Binding
@@ -427,7 +432,7 @@ func (v *validator) resolve(id string) *effective {
 	e := &effective{enabled: true, concurrency: v.doc.Settings.Concurrency, admission: v.doc.Settings.AdmissionLimit,
 		auth: Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}, refs: map[string]string{}}
 	if parent != nil {
-		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
+		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, parent.isolationScope, maps.Clone(parent.refs),
 			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil, nil}
 	}
 	e.enabled = e.enabled && sc.Enabled
@@ -457,8 +462,17 @@ func (v *validator) resolve(id string) *effective {
 		}
 		ops := v.resolveOperations(a.Operations, ceiling, path+"/authorization/operations", "authority_widening",
 			"child authorization must be a subset of the parent's effective operations")
+		inherited := e.auth.Isolation
 		e.auth = *a
 		e.auth.Operations = ops
+		// The requirement is a restriction, not a grant: an authorization
+		// that doesn't restate it still has it, so no descendant drops it.
+		if inherited != "" {
+			e.auth.Isolation = inherited
+		}
+	}
+	if e.isolationScope == "" && e.auth.Isolation != "" {
+		e.isolationScope = id
 	}
 	if l := sc.Limits.Concurrency; l > 0 {
 		if l > e.concurrency {
@@ -569,6 +583,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if own {
 			v.registration(p, b)
 		}
+		v.isolated(p, scopeID, e, b)
 		resolved := b
 		resolved.Playbook, resolved.PlaybookOperations = v.playbook(b)
 		resolved.Operations = v.resolveOperations(b.Operations, e.auth.Operations, p+"/operations", "operation_denied",
@@ -702,6 +717,26 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 			}
 		}
 	}
+}
+
+// isolated refuses a binding that would run unconfined in a scope whose
+// authorization requires isolation: one with neither a sandbox nor a
+// container, whose executor doesn't declare that it runs no process the
+// agent controls. An unregistered executor declares nothing, so it is
+// refused too. The binding's grants run under the binding's own sandbox or
+// container, so checking it covers them.
+func (v *validator) isolated(p, scopeID string, e *effective, b Binding) {
+	if e.auth.Isolation == "" || b.Sandbox != nil || b.Container != nil {
+		return
+	}
+	if exec, ok := v.reg.Executors[b.Executor]; ok && exec.Capabilities().NoProcess {
+		return
+	}
+	inherited := ""
+	if e.isolationScope != scopeID {
+		inherited = ", which scope " + scopeID + " inherits,"
+	}
+	v.fail(p, "isolation_required", fmt.Sprintf("scope %s requires every binding to run in a sandbox or container (its authorization.isolation)%s and executor %s runs processes; add a sandbox or container to the binding, or disable it in scope %s", e.isolationScope, inherited, b.Executor, scopeID))
 }
 
 // registration performs context-free executor, capability and resource checks.
@@ -1220,7 +1255,7 @@ func (v *validator) snapshot() *Snapshot {
 		id := domain.ID(sc.ID)
 		s.Order = append(s.Order, id)
 		s.Scopes[id] = &EffectiveScope{ID: id, ParentID: domain.ID(sc.Parent), Name: sc.Name, Enabled: e.enabled,
-			Concurrency: e.concurrency, AdmissionLimit: e.admission, Authorization: e.auth,
+			Concurrency: e.concurrency, AdmissionLimit: e.admission, Authorization: e.auth, IsolationScope: domain.ID(e.isolationScope),
 			Bindings: e.activeBindings(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source,
 			EntryOperations: slices.Clone(e.entryOps)}
 	}
