@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -286,6 +287,27 @@ func (e *Endpoints) close(id domain.ID) error {
 // Reconcile closes every endpoint, served or only left on disk by an earlier
 // daemon, whose execution live does not report as nonterminal.
 func (e *Endpoints) Reconcile(live func([]domain.ID) (map[domain.ID]bool, error)) error {
+	_, err := e.reconcile(live)
+	return err
+}
+
+// ForgetRuns removes the run directories (and fallback socket
+// directories) in stateDir/runs whose execution keep does not report,
+// offline: an in-place restore calls it for the executions the restored
+// database doesn't know. It returns the executions whose directories it
+// removed. The caller must hold the daemon lock.
+func ForgetRuns(lock *Lock, stateDir string, keep func([]domain.ID) (map[domain.ID]bool, error)) ([]domain.ID, error) {
+	if _, err := os.Lstat(filepath.Join(stateDir, "runs")); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	e, err := NewEndpoints(lock, stateDir, "", func(domain.ID) http.Handler { return http.NotFoundHandler() })
+	if err != nil {
+		return nil, err
+	}
+	return e.reconcile(keep)
+}
+
+func (e *Endpoints) reconcile(live func([]domain.ID) (map[domain.ID]bool, error)) ([]domain.ID, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ids := map[domain.ID]bool{}
@@ -294,7 +316,7 @@ func (e *Endpoints) Reconcile(live func([]domain.ID) (map[domain.ID]bool, error)
 	}
 	entries, err := os.ReadDir(e.root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, entry := range entries {
 		if b, err := os.ReadFile(filepath.Join(e.root, entry.Name(), endpointID)); err == nil && len(b) > 0 {
@@ -302,23 +324,29 @@ func (e *Endpoints) Reconcile(live func([]domain.ID) (map[domain.ID]bool, error)
 		}
 	}
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	list := make([]domain.ID, 0, len(ids))
 	for id := range ids {
 		list = append(list, id)
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i] < list[j] })
 	keep, err := live(list)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var errs []error
+	var closed []domain.ID
 	for _, id := range list {
 		if !keep[id] {
-			errs = append(errs, e.close(id))
+			if err := e.close(id); err != nil {
+				errs = append(errs, err)
+			} else {
+				closed = append(closed, id)
+			}
 		}
 	}
-	return errors.Join(errs...)
+	return closed, errors.Join(errs...)
 }
 
 // Shutdown stops serving every socket and keeps the run directories: the

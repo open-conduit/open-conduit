@@ -407,7 +407,7 @@ Each button's value carries the Work that posted the reply, the attempt and the 
 
 ## Moving to a new host
 
-Copy the state, not just the config. Stop the daemon, `backup create` a bundle, and on the new host `backup restore` it and point the daemon at the restored directory ([backups](../../guides/backups/)). The bundle carries every Work and its thread keys, its waits, and the entry's start points and marked-thread records, so waiting conversations continue in their threads and nothing is claimed twice.
+Copy the state, not just the config. Stop the daemon, `backup create` a bundle, and on the new host `backup restore` it into the daemon's state directory ([backups](../../guides/backups/#move-to-a-new-host)). The bundle carries every Work and its thread keys, its waits, and the entry's start points and marked-thread records, so waiting conversations continue in their threads and nothing is claimed twice.
 
 If the new host starts with an empty state directory instead, the entry registers afresh and its start point is the new daemon's first start. No thread from before then is claimed, and the conversations the old daemon was holding open are not continued: a person's reply in one of those threads reaches no Work. Doctor's `slack` check counts the threads whose replies carry an earlier daemon's marker. To continue them, stop the new daemon and restore the old state instead. To have the new daemon claim recent history anyway, set `claim_from` to a time (or `all`); threads with marked replies are still not claimed.
 

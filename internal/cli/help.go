@@ -45,6 +45,8 @@ var helpGroups = []helpGroup{
 		{"serve", `  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]
         [--backup-interval 24h] [--backups-kept 7] [--backup-dir DIR]
                              (scheduled online backups into <data-dir>/backups; --backup-interval 0 turns them off)
+        [--restore BUNDLE]   (restore BUNDLE in place before serving, as backup restore --in-place does, once:
+                             a start that finds the directory restored from it already serves it as it is)
         [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                              (override the config's settings.webhooks for this run; TYPE is a tunnel
                              a package provides, such as ngrok or cloudflared, and JSON its config)
@@ -105,7 +107,7 @@ var helpGroups = []helpGroup{
   auth operators | auth add NAME --out FILE [--role admin|configure|operate|view] [--grants SCOPE=ROLE,...] [--ttl DURATION] [--act-for KIND]   list operator credentials; issue one for a named operator (default role operate, or only its --grants: view, operate or configure at each scope's subtree), recorded as operator:NAME, that expires after --ttl (e.g. 8h) if given, and that may act for KIND:ID subjects with --act-for (operator: for operators, within both's authority)
   auth issuers | auth issuer set ID --type TYPE [--config JSON] [--groups JSON] [--grants JSON] | auth issuer remove ID   list, trust or stop trusting an identity provider issuer (admin); its credentials are recorded as operator:ID:SUBJECT, with the role --groups maps their groups to and the scoped roles --grants rows ({group, scope, role}) give them
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file`},
-		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC] [--config FILE]   (daemon stopped; restore writes a new state directory, its artifacts into an empty store, and reports why its config generation would not validate against the installed packages)`},
+		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--config FILE]   (daemon stopped; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)`},
 		{"state", `  state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status`},
 		{"extension", `  extension list|inspect DIR|install DIR|update DIR|rollback NAME|remove NAME [--force]   manage extension packages (next serve)
   extension certify DIR [--json] [--report FILE]   run the conformance runner on a package`},

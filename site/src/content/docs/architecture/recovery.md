@@ -22,8 +22,8 @@ These commands are offline. They take the state directory's exclusive daemon loc
 ```sh
 open-conduit backup create ~/backups/oc-2026-10-26        # an absent path; the database snapshot plus referenced artifacts, with a SHA-256 manifest
 open-conduit backup verify ~/backups/oc-2026-10-26        # restores into a private temporary directory, checks every digest and reference, removes it
-open-conduit backup restore ~/backups/oc-2026-10-26 --to ~/.local/state/open-conduit-restored
-open-conduit --data-dir ~/.local/state/open-conduit-restored serve
+open-conduit backup restore ~/backups/oc-2026-10-26 --in-place   # into the daemon's own state directory, moving what it replaces aside
+open-conduit backup restore ~/backups/oc-2026-10-26 --to ~/oc-copy   # or into a new directory, to inspect or move it
 open-conduit auth recover                                 # a lost or ambiguous operator token: revokes every operator credential, writes a fresh one
 ```
 
@@ -35,12 +35,12 @@ open-conduit auth recover                                 # a lost or ambiguous 
   - Extensions' private state directories (`extensions/`), which are host-local caches ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
   - The agents' own logins and sessions, executor run directories (`executors/`), workspaces (`resources/git/`) and logs. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
 - **Restore.**
-  - A restore never replaces an existing directory.
+  - `--in-place` restores into the daemon's own state directory (`--data-dir`), the one to use to put a bundle back where the daemon runs ([runbook](#restoring-after-a-bad-release-or-lost-state)). `--to DIR` writes a new directory and never replaces an existing one.
   - It fences every backed-up lease, so an old execution credential can never commit.
   - It revokes the bundle's operator credential and writes a fresh `private/operator.token` (`auth recover` under the lock).
   - It reports the config generation it restored (`config_generation`) and validates it as the daemon will at start, against the packages installed beside the config file (`--config FILE`, default the operator's). Every diagnostic is listed under `config_problems`: a type no installed package provides (`unknown_registration`), a package that couldn't start, an entry a package rejects. With any, the daemon won't start from that generation (below).
   - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
-  - Worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone.
+  - After `--to`, worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone. `--in-place` keeps the workspaces where they are, and the git provider reconciles them against the restored database (below).
   - The restored installation keeps its [container host label](../sandboxes/#the-host-label), the ID its containers carry, since it is the same installation: it still recognises the containers its runs left on a shared runtime, and reconciles them. Never run the old installation and the restored one at once against the same container runtime (a remote Docker context, an SSH runner, a cloud account): with one label, each removes the other's live runs as executions it doesn't know. Stop the old daemon for good before starting the restored one; to run both, restore into a fresh installation instead, which means starting without the bundle.
 - **Timing.** The running daemon takes a bundle itself on a schedule (below). Also take one by hand before every binary upgrade and keep it: the scheduled ones rotate, and after an upgrade they hold the newer binary's records.
 
@@ -56,28 +56,52 @@ While it runs, the daemon publishes a bundle of its own state every `--backup-in
 
 ## Restoring after a bad release or lost state
 
-Restore puts the bundle's database and artifacts back, and with the database the config generation the bundle was taken on. The rest of the data directory (extensions' private state, workspaces, executor run directories, logs) stays where it is, and may be from after the bundle. Installed packages and the config file, beside the config, aren't touched either: while the restored generation validates, the daemon starts from it whatever the file says, and doctor reports the file as out of step (`pending_edit`) until you apply one. Applying the file replaces the restored generation, so check the diff first. When the restored generation doesn't validate (`backup restore` listed `config_problems`, say a package removed since the bundle), the daemon publishes the config file over it as a new generation if the file validates, and refuses to start if it doesn't or there is none. Fix the problems before starting to keep the restored config. The paths below are the defaults; substitute `--data-dir` if you set one.
+Restore puts the bundle's database and artifacts back, and with the database the config generation the bundle was taken on. Installed packages and the config file, beside the config, aren't touched: while the restored generation validates, the daemon starts from it whatever the file says, and doctor reports the file as out of step (`pending_edit`) until you apply one. Applying the file replaces the restored generation, so check the diff first. When the restored generation doesn't validate (the restore listed `config_problems`, say a package removed since the bundle), the daemon publishes the config file over it as a new generation if the file validates, and refuses to start if it doesn't or there is none. Fix the problems before starting to keep the restored config.
 
 ```sh
 open-conduit service stop                          # or stop serve
 ls ~/.local/state/open-conduit/backups              # pick the newest bundle from before the problem
 open-conduit backup verify ~/.local/state/open-conduit/backups/conduit-20261102T090000Z
-open-conduit backup restore ~/.local/state/open-conduit/backups/conduit-20261102T090000Z --to ~/.local/state/oc-restored
-
-cd ~/.local/state/open-conduit
-mkdir before-restore
-mv conduit.db conduit.db-wal conduit.db-shm artifacts private/operator.token before-restore/ 2>/dev/null
-mv ~/.local/state/oc-restored/conduit.db ~/.local/state/oc-restored/artifacts .
-mv ~/.local/state/oc-restored/private/operator.token private/
-
-open-conduit state check                           # database schema_1, artifacts complete
+open-conduit backup restore ~/.local/state/open-conduit/backups/conduit-20261102T090000Z --in-place
 open-conduit service start                         # with the binary the bundle came from, when going back a release
 ```
 
+`backup restore --in-place` works on the daemon's own state directory (`--data-dir`, or the default) under its lock, so it refuses while the daemon runs. In order, it:
+
+1. Verifies the bundle and restores it into a stage inside the state directory, so every later step is a rename on one filesystem. The stage gets a fresh `private/operator.token` (the bundle's credentials are revoked) and a `restored.json` naming the bundle. A bundle that fails verification, or one a newer binary wrote, changes nothing.
+2. Writes a journal, `restore-in-progress.json`, naming the stage, the move-aside directory and every item to move.
+3. Moves the state it replaces into `before-restore-<UTC time>/`: `conduit.db` with its `-wal`, `-shm` and lock files, `artifacts/`, `storage.json`, `restored.json` and `private/operator.token`. The directory's other keys (`private/cursor.key`, the web view's sign-in) stay.
+4. Renames the staged state into place, then removes the stage and the journal.
+5. Removes the toolbelt run directories and sockets (`runs/`) of executions the restored database doesn't know.
+6. Runs `state check` on the result and reports it with the rest (`in_place`): what was moved aside (`moved_aside`, `moved_items`), the runs removed (`removed_runs`), and what stays from after the bundle (`later_timeline`). It exits 1 when the check finds problems.
+
+If the restore stops part way through the swap (a crash, a full disk), the journal stays and the daemon and the other offline commands refuse the directory. Run the same `backup restore BUNDLE --in-place` again: it finishes the swap from the journal and doesn't restore a second time.
+
+What stays from after the bundle is reported, never deleted, since its layout belongs to its owner:
+
+- `executors/<name>/`: the executor's private state. The restored executions recover or retry, and no process from before the bundle is adopted. Run directories of executions from after the bundle stay until you remove them.
+- `resources/<type>/`: workspaces. The provider reconciles each lease against the restored database when the daemon starts, so a lease whose owner it doesn't know comes back unknown. The git provider removes such a workspace once it is idle, and keeps one with unpushed or uncommitted work, which doctor reports.
+- `containers/<type>/`: the container provider reconciles its containers when the daemon starts, removing those of executions the restored database doesn't know.
+- `extensions/<name>/`: an extension's private directory, a cache it rebuilds as it needs ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
+- `homes/` and `logs/`, as they are.
+- A database or artifact store outside the directory that the replaced `storage.json` named stays where it is, named by the copy in `before-restore-*/`.
+
+Afterwards:
+
 - To go back a release, install the older binary before starting. A bundle a newer binary took may hold records the older one refuses (`records_newer`); pick one from before the upgrade.
-- The restored `operator.token` is new: the bundle's credentials were revoked, so clients read the new file.
+- Clients read the new `operator.token`.
 - Work that happened after the bundle is re-derived from the services when reconcile runs, apart from declared one-shot deliveries. Attempts running at backup time are recovered or retried, never adopted.
-- Keep `before-restore/` until the restored instance has run for a while, then delete it and `~/.local/state/oc-restored`.
+- Keep `before-restore-*/` until the restored instance has run for a while, then delete it. It holds the replaced database, so the state directory needs room for a second copy of it while the restore runs.
+
+### In a container
+
+When the daemon is the container's process, there's no shell to stop it and run the restore. Give `serve` the bundle instead, from a mounted volume:
+
+```sh
+open-conduit serve --restore /backups/conduit-20261102T090000Z
+```
+
+Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
 
 ## SQLite migration recovery
 
@@ -85,8 +109,8 @@ Schema migrations run inside one immediate transaction at open (`internal/storag
 
 | Symptom | Cause | Recovery |
 | --- | --- | --- |
-| `stored schema is newer than this binary supports` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade into a new directory. Never edit `user_version`. |
-| `stored records are newer than this binary writes` (`state check`: `records_newer`) | A newer binary, whose records have fields this one doesn't know, wrote the database, and an older binary was started on it. Opening it would drop those fields from every record the older binary rewrote | Run the newer binary again. To go back, restore the bundle taken before the upgrade (`backup restore BUNDLE --to DIR`) and start the older binary there. Never edit `record_format`. |
+| `stored schema is newer than this binary supports` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade (`backup restore BUNDLE --in-place`). Never edit `user_version`. |
+| `stored records are newer than this binary writes` (`state check`: `records_newer`) | A newer binary, whose records have fields this one doesn't know, wrote the database, and an older binary was started on it. Opening it would drop those fields from every record the older binary rewrote | Run the newer binary again. To go back, restore the bundle taken before the upgrade (`backup restore BUNDLE --in-place`) and start the older binary. Never edit `record_format`. |
 | `unversioned nonempty database; explicit migration required` or `schema metadata mismatch` (`schema_unrecognized`) | The file is not an Open Conduit database, or was altered by hand | Point `--data-dir` at the right directory, or restore the latest bundle. |
 | `storage.json: storage: no backend "NAME" is built into this binary` or another `storage.json` error (`state check`: `storage_unavailable`) | The state directory's [storage choice](../domain-storage/#backend-lifecycle) names a backend this binary was not built with, or is malformed | Run a binary built with that backend, or fix `storage.json`. Nothing falls back to SQLite. |
 | `storage.json: artifacts: storage: no artifact backend "NAME" is built into this binary` or another `storage.json: artifacts` error (`state check`: `artifacts_unavailable`) | The state directory's [artifact choice](../domain-storage/#backend-lifecycle) names an artifact backend this binary was not built with, a relative location, or is malformed | Run a binary built with that backend, or fix `storage.json`. Nothing falls back to the file store. |
@@ -112,7 +136,7 @@ Per scope it also gives Work by state, live executions, active waits, and `drain
 Recovery order:
 
 1. Copy the whole state directory aside (daemon stopped).
-2. If `database` fails, restore the newest bundle that `backup verify` accepts into a new directory, and start there. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
+2. If `database` fails, restore the newest bundle that `backup verify` accepts in place (`backup restore BUNDLE --in-place`), and start. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
 3. If only artifacts are missing, the coordination state is sound. The run content of those executions is lost; take a fresh bundle once `state check` passes.
 4. A stale socket or lock needs nothing: start the daemon.
 

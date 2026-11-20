@@ -155,6 +155,9 @@ func (o *operator) serviceInstall(h *ServiceHost, args []string) int {
 	if code >= 0 {
 		return code
 	}
+	if r.Restore != "" {
+		return usageError(o.errOut, "service install takes no --restore: stop the service, run backup restore BUNDLE --in-place, then start it")
+	}
 	argv := []string{h.Executable, "--data-dir", r.StateDir}
 	if r.Socket != "" {
 		argv = append(argv, "--socket", r.Socket)

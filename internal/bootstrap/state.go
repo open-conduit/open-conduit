@@ -26,7 +26,7 @@ import (
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {
-	return &cli.StateOps{Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, Check: CheckState, RecoverOperator: RecoverOperator}
+	return &cli.StateOps{Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
 }
 
 // locked opens a stopped instance's state directory under its daemon lock.
@@ -43,6 +43,10 @@ func locked(stateDir string) (*management.Lock, error) {
 	lock, err := management.AcquireLock(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: stop the daemon first (or use open-conduit doctor while it runs)", err)
+	}
+	if err := restoreInterrupted(stateDir); err != nil {
+		lock.Close()
+		return nil, err
 	}
 	return lock, nil
 }
@@ -207,6 +211,11 @@ func RecoverOperator(ctx context.Context, stateDir, tokenPath string) error {
 		return err
 	}
 	defer lock.Close()
+	return recoverOperator(ctx, stateDir, tokenPath)
+}
+
+// recoverOperator is RecoverOperator for a caller holding the lock.
+func recoverOperator(ctx context.Context, stateDir, tokenPath string) error {
 	_, store, err := openState(ctx, stateDir)
 	if err != nil {
 		return err
@@ -218,6 +227,18 @@ func RecoverOperator(ctx context.Context, stateDir, tokenPath string) error {
 // CheckState diagnoses a stopped instance's state directory without
 // changing it: the database is examined through a private copy.
 func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
+	lock, err := locked(stateDir)
+	if err != nil {
+		r := cli.StateReport{StateDir: stateDir}
+		r.Checks = append(r.Checks, cli.StateCheck{Name: "lock", Status: "fail", Code: "in_use_or_unsafe", Message: err.Error()})
+		return r, nil
+	}
+	defer lock.Close()
+	return checkState(ctx, stateDir)
+}
+
+// checkState is CheckState for a caller holding the lock.
+func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	r := cli.StateReport{StateDir: stateDir, OK: true}
 	add := func(name, status, code, msg string) {
 		r.Checks = append(r.Checks, cli.StateCheck{Name: name, Status: status, Code: code, Message: msg})
@@ -225,12 +246,6 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 			r.OK = false
 		}
 	}
-	lock, err := locked(stateDir)
-	if err != nil {
-		add("lock", "fail", "in_use_or_unsafe", err.Error())
-		return r, nil
-	}
-	defer lock.Close()
 	add("lock", "ok", "stopped", "no daemon owns the directory; permissions are owner-only")
 	if _, err := os.Lstat(filepath.Join(stateDir, "management.sock")); err == nil {
 		add("socket", "info", "stale_socket", "a socket from an unclean stop remains; the next start removes it after its ownership checks")
@@ -244,7 +259,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	// binary would read.
 	store, err := c.backend.Inspect(ctx, c.location)
 	if err != nil {
-		code, remedy := "open_failed", "restore the latest verified bundle into a new state directory (backup restore)"
+		code, remedy := "open_failed", "restore the latest verified bundle (backup restore BUNDLE --in-place)"
 		msg := err.Error()
 		switch {
 		case errors.Is(err, storage.ErrRecordsNewer):
@@ -264,7 +279,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	defer store.Close()
 	// Open runs only quick_check; an offline check can afford the full one.
 	if err := store.IntegrityCheck(ctx); err != nil {
-		add("database", "fail", "corrupt", "restore the latest verified bundle into a new state directory (backup restore)")
+		add("database", "fail", "corrupt", "restore the latest verified bundle (backup restore BUNDLE --in-place)")
 		return r, nil
 	}
 	add("database", "ok", "schema_1", fmt.Sprintf("schema %d, integrity and foreign keys pass", store.SchemaVersion()))
