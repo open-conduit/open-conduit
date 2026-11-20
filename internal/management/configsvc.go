@@ -248,7 +248,10 @@ func (c *ConfigService) includes(previous []byte) config.Includes {
 // counts as expected (only a config file apply since then conflicts), and
 // the candidate is composed again over the latest fragments before it is
 // published, so it never undoes a team's apply.
-func (c *ConfigService) Apply(ctx context.Context, data []byte, hash string, expected uint64) (uint64, string, error) {
+//
+// record, when given, writes the apply's audit record in the transaction
+// that publishes the generation, given its number and hash.
+func (c *ConfigService) Apply(ctx context.Context, data []byte, hash string, expected uint64, record Recorder) (uint64, string, error) {
 	for range fragmentRetries {
 		_, generation := c.Current()
 		snapshot, err := c.Validate(data)
@@ -271,7 +274,7 @@ func (c *ConfigService) Apply(ctx context.Context, data []byte, hash string, exp
 		}
 		err = config.SaveAtomic(c.path, data)
 		if err == nil {
-			err = c.publishLocked(ctx, snapshot, c.generation)
+			err = c.publishLocked(ctx, snapshot, c.generation, record)
 		}
 		if err == nil {
 			c.fileGeneration = c.generation
@@ -306,8 +309,8 @@ func (c *ConfigService) Fragment(name string) (config.Fragment, uint64, error) {
 // ApplyFragment), and if another apply commits meanwhile, composes again
 // against that one. allowed is asked about the include's parent each time,
 // since a config file apply may have moved it; the config file on disk is
-// neither read nor written.
-func (c *ConfigService) ApplyFragment(ctx context.Context, name string, fragment []byte, expectedHash string, allowed func(parent string) bool) (uint64, string, error) {
+// neither read nor written. record is as for Apply.
+func (c *ConfigService) ApplyFragment(ctx context.Context, name string, fragment []byte, expectedHash string, allowed func(parent string) bool, record Recorder) (uint64, string, error) {
 	for range fragmentRetries {
 		current, generation := c.Current()
 		if current == nil {
@@ -341,7 +344,7 @@ func (c *ConfigService) ApplyFragment(ctx context.Context, name string, fragment
 			c.mu.Unlock()
 			return generation, after.Hash, nil
 		}
-		err = c.publishLocked(ctx, snapshot, generation)
+		err = c.publishLocked(ctx, snapshot, generation, record)
 		if err == nil && c.OnApply != nil {
 			c.OnApply(ctx, snapshot, c.generation)
 		}
@@ -358,9 +361,14 @@ func (c *ConfigService) ApplyFragment(ctx context.Context, name string, fragment
 func (c *ConfigService) publish(ctx context.Context, s *config.Snapshot, expected uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.publishLocked(ctx, s, expected)
+	return c.publishLocked(ctx, s, expected, nil)
 }
-func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, expected uint64) error {
+
+// Recorder writes an apply's audit record in the transaction that
+// publishes its generation, given the generation's number and hash.
+type Recorder func(tx storage.Tx, generation uint64, hash string) error
+
+func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, expected uint64, record Recorder) error {
 	next := expected + 1
 	err := c.store.Transact(ctx, storage.Guard{Now: c.now()}, func(tx storage.Tx) error {
 		var active activation
@@ -411,7 +419,10 @@ func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, e
 			return err
 		}
 		b, _ := json.Marshal(activation{Generation: next, Hash: s.Hash, ActivatedAt: c.now()})
-		return tx.Put(configNamespace, "active", b)
+		if err = tx.Put(configNamespace, "active", b); err != nil || record == nil {
+			return err
+		}
+		return record(tx, next, s.Hash)
 	})
 	if err != nil {
 		return err

@@ -54,12 +54,16 @@ type Exporter interface {
 // ("secret." prefix) is the host resolving a provider-backed secret
 // reference, by reference and outcome, never value: it may precede any
 // Event (an attempt's start, doctor), so it is anchored by the reference's
-// scheme (secret.scheme) and needs no scope.
+// scheme (secret.scheme) and needs no scope. An audit record ("audit."
+// prefix) is an entry of the durable audit ledger, which may describe a
+// refused request that authenticated no one: it is anchored by its ledger
+// sequence (audit.sequence) and needs no scope.
 func Validate(r Record) error {
 	c := r.Correlation
 	operator := strings.HasPrefix(r.Name, "operator.") && r.Attributes["operator.actor"] != "" ||
 		strings.HasPrefix(r.Name, "auth.") && r.Attributes["auth.issuer"] != "" ||
-		strings.HasPrefix(r.Name, "secret.") && r.Attributes["secret.scheme"] != ""
+		strings.HasPrefix(r.Name, "secret.") && r.Attributes["secret.scheme"] != "" ||
+		strings.HasPrefix(r.Name, "audit.") && r.Attributes["audit.sequence"] != ""
 	anchored := c.EventID != "" || strings.HasPrefix(r.Name, "ingress.") && r.Attributes["ingress.source"] != "" ||
 		strings.HasPrefix(r.Name, "provider.") && r.Attributes["provider.name"] != "" || operator
 	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" && !operator || !anchored || c.TraceID == "" {

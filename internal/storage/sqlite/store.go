@@ -332,6 +332,7 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted_execution ON events(` + eventExecution + `, sequence) WHERE ` + unrouted,
 	`CREATE INDEX IF NOT EXISTS events_unrouted_key ON events(` + eventKeySource + `, ` + eventKeyID + `, sequence) WHERE ` + unrouted,
 	`CREATE INDEX IF NOT EXISTS events_unrouted_type ON events(` + eventType + `, sequence) WHERE ` + unrouted,
+	auditTable,
 }
 
 // executionRefs selects (artifact ID, attempt ID) for every ref the record

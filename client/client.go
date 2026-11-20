@@ -1537,6 +1537,63 @@ type StoredSecret struct {
 	FellBack  bool   `json:"fell_back"`
 }
 
+// AuditPage is one page of the audit ledger: its records in sequence order,
+// and the sequence to ask after for the next page (the last record's, or
+// the after asked with when there are none yet).
+type AuditPage struct {
+	Records   []domain.AuditRecord
+	NextAfter uint64
+}
+
+// Audit reads the audit ledger (admin) exclusively after the sequence
+// after, at most limit records (0 for the most a page holds, 1000). An
+// exporter streams it by asking again after NextAfter, holding the last
+// sequence and hash it has, and checks each page continues the chain with
+// domain.VerifyAuditChain before it ships it, so a gap or a rewritten record
+// is caught where it is read.
+func (c *Client) Audit(ctx context.Context, after uint64, limit int) (AuditPage, error) {
+	q := url.Values{"after": {strconv.FormatUint(after, 10)}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		Records []struct {
+			Sequence string            `json:"sequence"`
+			At       string            `json:"at"`
+			Actor    string            `json:"actor"`
+			Via      string            `json:"via"`
+			Action   string            `json:"action"`
+			Target   string            `json:"target"`
+			Outcome  string            `json:"outcome"`
+			EventID  string            `json:"event_id"`
+			Detail   map[string]string `json:"detail"`
+			Prev     string            `json:"prev"`
+			Hash     string            `json:"hash"`
+		} `json:"records"`
+		NextAfter string `json:"next_after"`
+	}
+	if err := c.Do(ctx, "GET", "audit", q, nil, "", &out); err != nil {
+		return AuditPage{}, err
+	}
+	page := AuditPage{Records: make([]domain.AuditRecord, 0, len(out.Records))}
+	var err error
+	if page.NextAfter, err = strconv.ParseUint(out.NextAfter, 10, 64); err != nil {
+		return AuditPage{}, fmt.Errorf("audit: next_after %q: %w", out.NextAfter, err)
+	}
+	for _, r := range out.Records {
+		seq, err := strconv.ParseUint(r.Sequence, 10, 64)
+		if err != nil {
+			return AuditPage{}, fmt.Errorf("audit: sequence %q: %w", r.Sequence, err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, r.At)
+		if err != nil {
+			return AuditPage{}, fmt.Errorf("audit: record %d time %q: %w", seq, r.At, err)
+		}
+		page.Records = append(page.Records, domain.AuditRecord{Sequence: seq, At: at, Actor: r.Actor, Via: r.Via, Action: r.Action, Target: r.Target, Outcome: r.Outcome, EventID: domain.ID(r.EventID), Detail: r.Detail, Prev: r.Prev, Hash: r.Hash})
+	}
+	return page, nil
+}
+
 // Secrets lists the names in the daemon's secret store (admin).
 func (c *Client) Secrets(ctx context.Context) ([]Secret, error) {
 	var out struct {

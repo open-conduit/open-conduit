@@ -28,6 +28,7 @@ type state struct {
 	Scopes        map[domain.ID]domain.Scope
 	KV            map[string]map[string][]byte
 	Sequence      uint64
+	Audit         []domain.AuditRecord
 }
 type Memory struct {
 	// mu serialises Transact; cmu guards data, the committed state, which a
@@ -808,6 +809,29 @@ func (t *transaction) List(ns, prefix string) ([]storage.Entry, error) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+func (t *transaction) AppendAudit(r domain.AuditRecord) (domain.AuditRecord, error) {
+	var last uint64
+	var prev string
+	if n := len(t.data.Audit); n > 0 {
+		last, prev = t.data.Audit[n-1].Sequence, t.data.Audit[n-1].Hash
+	}
+	sealed, ok := domain.SealAudit(r, last, prev, t.now)
+	if !ok {
+		return domain.AuditRecord{}, storage.ErrInvalid
+	}
+	t.data.Audit = append(t.data.Audit, sealed)
+	return copyOf(sealed), nil
+}
+func (t *transaction) AuditRecords(after uint64, limit int) ([]domain.AuditRecord, error) {
+	out := []domain.AuditRecord{}
+	for _, r := range t.data.Audit {
+		if r.Sequence > after && (limit <= 0 || len(out) < limit) {
+			out = append(out, copyOf(r))
+		}
+	}
 	return out, nil
 }
 

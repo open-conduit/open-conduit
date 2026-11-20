@@ -96,7 +96,10 @@ func (readOnly) FireTimer(domain.ID, domain.Revision, *domain.Timer) error { ret
 func (readOnly) PutWait(domain.Wait, domain.Revision) error                { return ErrReadOnly }
 func (readOnly) PutScope(domain.Scope, domain.Revision) error              { return ErrReadOnly }
 func (readOnly) Put(string, string, []byte) error                          { return ErrReadOnly }
-func (readOnly) Delete(string, string) error                               { return ErrReadOnly }
+func (readOnly) AppendAudit(domain.AuditRecord) (domain.AuditRecord, error) {
+	return domain.AuditRecord{}, ErrReadOnly
+}
+func (readOnly) Delete(string, string) error { return ErrReadOnly }
 
 // Sequences: every accepted Event has a sequence greater than any accepted
 // before it, with gaps allowed. Sequences become visible in sequence order:
@@ -236,6 +239,18 @@ type Tx interface {
 	Put(namespace, key string, value []byte) error
 	Delete(namespace, key string) error
 	List(namespace, prefix string) ([]Entry, error)
+	// AppendAudit adds r to the audit ledger, committing with the rest of
+	// the transaction, and returns it as stored. Storage numbers it one
+	// past the last record (1 for the first), so the ledger has no gaps;
+	// sets At to the Guard's Now, Prev to the last record's Hash ("" for
+	// the first) and Hash to the record's Digest; and ignores a writer's
+	// values for them. An empty Action or Outcome is ErrInvalid. Records
+	// are never changed or removed.
+	AppendAudit(r domain.AuditRecord) (domain.AuditRecord, error)
+	// AuditRecords returns the ledger in sequence order, exclusively
+	// after sequence; zero limit = all. A record is visible only once
+	// every record before it is, so an "after" cursor never skips one.
+	AuditRecords(after uint64, limit int) ([]domain.AuditRecord, error)
 }
 
 // InputTarget is what an Event can be input to: an Event targets it when

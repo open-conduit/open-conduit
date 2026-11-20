@@ -140,6 +140,11 @@ type Options struct {
 	// binary a package manager, an image or a fleet manages, that route
 	// answers updates_off).
 	Releases Releases
+	// Diagnostic receives safe codes for what the server could not do
+	// beside answering a request (audit_unrecorded: an audit record it
+	// could not write after the call it describes was settled). Optional;
+	// it must not block.
+	Diagnostic func(code string)
 }
 
 type Server struct {
@@ -469,11 +474,14 @@ func (s *Server) issuedOperator(ctx context.Context, token string) (principal, b
 	if err != nil || !found {
 		return principal{}, false, err
 	}
+	// A refused credential authenticates no one, but the audit ledger
+	// names it (by its ID, never its token) beside the refusal.
+	refused := principal{tokenID: record.TokenID, name: record.name()}
 	if record.Revoked {
-		return principal{}, true, fail(401, "unauthenticated", "credential revoked")
+		return refused, true, fail(401, "unauthenticated", "credential revoked")
 	}
 	if record.expired(s.o.Now()) {
-		return principal{}, true, fail(401, "unauthenticated", "credential expired")
+		return refused, true, fail(401, "unauthenticated", "credential expired")
 	}
 	return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role(), grants: record.Grants, actFor: record.ActFor}, true, nil
 }
@@ -507,6 +515,14 @@ type call struct {
 	// role, when it doesn't hold the role daemon-wide; nil means every
 	// scope. Lists keep only what it covers (sees, scopes).
 	reach map[domain.ID]bool
+	// rt is the route matched, nil before one is. target and detail are
+	// what the handler noted for the call's audit record (note), and
+	// recorded that it recorded its success in its own transaction
+	// (auditInTx).
+	rt       *route
+	target   string
+	detail   map[string]string
+	recorded bool
 }
 
 var routes = []route{
@@ -566,6 +582,7 @@ var routes = []route{
 	{"POST", []string{"config", "apply"}, targetDaemon, true, true, (*Server).applyConfig},
 	{"GET", []string{"config", "includes", "*"}, targetInclude, false, false, (*Server).getInclude},
 	{"POST", []string{"config", "includes", "*", "apply"}, targetInclude, true, true, (*Server).applyInclude},
+	{"GET", []string{"audit"}, targetDaemon, false, false, (*Server).audit},
 	{"GET", []string{"secrets"}, targetDaemon, false, false, (*Server).listSecrets},
 	{"PUT", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).putSecret},
 	{"DELETE", []string{"secrets", "*"}, targetDaemon, true, false, (*Server).deleteSecret},
@@ -599,6 +616,7 @@ var listFilters = map[string][]string{
 	"waits":       {"scope_id", "work_id", "execution_id", "state"},
 	"artifacts":   {"work_id", "execution_id", "kind"},
 	"runs":        {"scope_id", "work_id", "state", "executor_binding", "executor", "work_kind", "outcome"},
+	"audit":       {"after"},
 }
 
 // APIRoute is one management API route as the HTTP API reference lists it:
@@ -624,18 +642,7 @@ func APIRoutes() []APIRoute {
 	out := make([]APIRoute, 0, len(routes))
 	for i := range routes {
 		rt := &routes[i]
-		parts := make([]string, len(rt.pattern))
-		names := []string{"{id}"}
-		for j, p := range rt.pattern {
-			if p == "*" {
-				if j > 0 && rt.pattern[j-1] == "actions" {
-					names = []string{"{provider}", "{action}"}
-				}
-				p, names = names[0], append(names[1:], "{id}")
-			}
-			parts[j] = p
-		}
-		e := APIRoute{Method: rt.method, Path: "/v1/" + strings.Join(parts, "/"), Role: requiredRole(rt, rt.pattern, nil), Target: targetNames[rt.target]}
+		e := APIRoute{Method: rt.method, Path: routePath(rt), Role: requiredRole(rt, rt.pattern, nil), Target: targetNames[rt.target]}
 		if rt.pattern[0] == "toolbelt" {
 			// Served only to an execution's token, on its own socket.
 			e.Role = "execution"
@@ -657,10 +664,28 @@ func APIRoutes() []APIRoute {
 	return out
 }
 
+// routePath is a route's path under /v1 as the HTTP API reference lists it,
+// {id} and the like for each segment it captures.
+func routePath(rt *route) string {
+	parts := make([]string, len(rt.pattern))
+	names := []string{"{id}"}
+	for j, p := range rt.pattern {
+		if p == "*" {
+			if j > 0 && rt.pattern[j-1] == "actions" {
+				names = []string{"{provider}", "{action}"}
+			}
+			p, names = names[0], append(names[1:], "{id}")
+		}
+		parts[j] = p
+	}
+	return "/v1/" + strings.Join(parts, "/")
+}
+
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
 // applying a submitted include's fragment needs configure; applying the
-// whole config, exporting it (it carries secret reference text),
+// whole config, exporting it (it carries secret reference text), reading
+// the audit ledger,
 // issuing operators' credentials, trusting an issuer or changing its group
 // table, installing a release of the daemon's binary, and every secrets
 // route, listing included, need admin; every other control needs operate. Revoking another
@@ -672,7 +697,7 @@ func APIRoutes() []APIRoute {
 // admin.
 func requiredRole(rt *route, parts []string, query url.Values) string {
 	path := strings.Join(rt.pattern, "/")
-	if path == "config/export" || rt.pattern[0] == "secrets" {
+	if path == "config/export" || path == "audit" || rt.pattern[0] == "secrets" {
 		return RoleAdmin
 	}
 	if path == "doctor" && slices.Contains(query["check_secrets"], "true") {
@@ -724,7 +749,7 @@ func toolbeltPath(parts []string) bool {
 	return false
 }
 
-func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) serve(w http.ResponseWriter, r *http.Request) (err error) {
 	ctx := r.Context()
 	parts, ok := split(r.URL.EscapedPath())
 	if !ok {
@@ -742,7 +767,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	if rc != nil && toolbeltPath(parts) {
 		return fail(404, "not_found", "the management listener serves no toolbelt calls; an execution reaches its toolbelt on its own socket")
 	}
+	// The call as the audit ledger sees it, filled in as it is learned: a
+	// request refused from here on is recorded (auditRefusal).
+	// The route is matched first so a refusal names it, but an
+	// unauthenticated request is refused before it learns whether the
+	// route exists.
+	matched, params, methodSeen := matchRoute(parts, r.Method)
+	c := &call{ctx: ctx, r: r, w: w, rt: matched, params: params}
+	defer func() { s.auditRefusal(c, err) }()
 	who, err := s.authenticate(ctx, r)
+	c.who = who
 	if err != nil {
 		var api *apiError
 		if rc != nil && errors.As(err, &api) && api.status == 401 {
@@ -756,33 +790,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 		return err
-	}
-	var matched *route
-	var params []string
-	methodSeen := false
-	for i := range routes {
-		rt := &routes[i]
-		if len(rt.pattern) != len(parts) {
-			continue
-		}
-		var captured []string
-		match := true
-		for j, p := range rt.pattern {
-			if p == "*" {
-				captured = append(captured, parts[j])
-			} else if p != parts[j] {
-				match = false
-				break
-			}
-		}
-		if !match {
-			continue
-		}
-		methodSeen = true
-		if rt.method == r.Method {
-			matched, params = rt, captured
-			break
-		}
 	}
 	if matched == nil {
 		if methodSeen {
@@ -801,6 +808,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	if who, err = s.actFor(ctx, r, who, matched); err != nil {
 		return err
 	}
+	c.who = who
 	// An operator's role is checked where the route is served, before
 	// anything is read or written: fail closed. One who holds it only at
 	// some scopes is checked against the route's target below, once the
@@ -824,7 +832,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 			ctx = runtime.WithVia(ctx, via)
 		}
 	}
-	c := &call{ctx: ctx, r: r, w: w, who: who, params: params}
+	c.ctx = ctx
 	if matched.mutation {
 		if r.URL.RawQuery != "" {
 			return fail(400, "query_not_allowed", "mutation routes accept no query")
@@ -867,7 +875,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 			return s.idempotent(c, matched)
 		}
 	}
-	status, data, err := matched.handler(s, c)
+	status, data, err := s.handle(c)
 	if err != nil {
 		return err
 	}
@@ -875,6 +883,49 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		writeJSON(w, status, map[string]any{"data": data})
 	}
 	return nil
+}
+
+// handle runs the call's handler and records its success in the audit
+// ledger when nothing else did: a call that changed something storage
+// couldn't join (a secret, a release) is recorded once it returns.
+func (s *Server) handle(c *call) (int, any, error) {
+	status, data, err := c.rt.handler(s, c)
+	if err == nil && audited(c.rt) {
+		if !c.recorded && !eventAudited[strings.Join(c.rt.pattern, "/")] {
+			s.auditAfter(c.ctx, c.auditRecord(domain.AuditOK))
+		}
+		c.recorded = true
+	}
+	return status, data, err
+}
+
+// matchRoute finds the route for parts and method, with the segments it
+// captures; methodSeen reports a route for parts under another method.
+func matchRoute(parts []string, method string) (matched *route, params []string, methodSeen bool) {
+	for i := range routes {
+		rt := &routes[i]
+		if len(rt.pattern) != len(parts) {
+			continue
+		}
+		var captured []string
+		ok := true
+		for j, p := range rt.pattern {
+			if p == "*" {
+				captured = append(captured, parts[j])
+			} else if p != parts[j] {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		methodSeen = true
+		if rt.method == method {
+			return rt, captured, true
+		}
+	}
+	return nil, nil, methodSeen
 }
 
 func validKey(k string) bool {
@@ -944,7 +995,7 @@ func (s *Server) idempotent(c *call, rt *route) error {
 		_, _ = c.w.Write(prior.Body)
 		return nil
 	}
-	status, data, err := rt.handler(s, c)
+	status, data, err := s.handle(c)
 	if err != nil {
 		return err
 	}

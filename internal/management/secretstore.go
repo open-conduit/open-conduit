@@ -146,6 +146,7 @@ func (s *Server) putSecret(c *call) (int, any, error) {
 	}
 	stored, _, _ := strings.Cut(ref, ":")
 	in.Store = stored
+	c.note("store", stored)
 	if stored == config.StoreKeyring {
 		b, _ := json.Marshal(keyringEntry{StoredAt: s.o.Now().UTC(), StoredBy: c.who.actor()})
 		if err = s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {

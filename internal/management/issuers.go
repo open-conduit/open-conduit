@@ -401,7 +401,11 @@ func (s *Server) putIssuer(c *call) (int, any, error) {
 			}
 			b, _ := json.Marshal(r)
 			out = toWireIssuer(r)
-			return tx.Put(authNamespace, "issuer/"+id, b)
+			if err := tx.Put(authNamespace, "issuer/"+id, b); err != nil {
+				return err
+			}
+			c.note("type", in.Type)
+			return s.auditInTx(tx, c)
 		})
 	}()
 	s.observeOperator(c, "operator.issuer_set", id, "", err)
@@ -419,7 +423,10 @@ func (s *Server) deleteIssuer(c *call) (int, any, error) {
 		if _, err := tx.Get(authNamespace, "issuer/"+id); err != nil {
 			return err
 		}
-		return tx.Delete(authNamespace, "issuer/"+id)
+		if err := tx.Delete(authNamespace, "issuer/"+id); err != nil {
+			return err
+		}
+		return s.auditInTx(tx, c)
 	})
 	s.observeOperator(c, "operator.issuer_removed", id, "", err)
 	if err != nil {

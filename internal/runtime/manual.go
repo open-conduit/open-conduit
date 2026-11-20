@@ -91,9 +91,20 @@ func (c *Control) acceptInTx(ctx context.Context, tx storage.Tx, scope domain.ID
 		if parentScope != scope {
 			return domain.AcceptedEvent{}, false, storage.ErrNotFound
 		}
-		return AcceptDerivedInTx(tx, now, c.limits, scope, m.CausationID, e)
+		return audited(tx, scope)(AcceptDerivedInTx(tx, now, c.limits, scope, m.CausationID, e))
 	}
-	return AcceptInTx(tx, scope, e)
+	return audited(tx, scope)(AcceptInTx(tx, scope, e))
+}
+
+// audited records an accepted manual Event in the audit ledger
+// (auditAccepted) before handing the acceptance on.
+func audited(tx storage.Tx, scope domain.ID) func(domain.AcceptedEvent, bool, error) (domain.AcceptedEvent, bool, error) {
+	return func(a domain.AcceptedEvent, added bool, err error) (domain.AcceptedEvent, bool, error) {
+		if err == nil {
+			err = auditAccepted(tx, scope, a, added)
+		}
+		return a, added, err
+	}
 }
 
 // SubmitEvent accepts an operator event; duplicates return the original.

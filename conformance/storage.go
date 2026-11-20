@@ -107,6 +107,7 @@ func StorageCases() []StorageCase {
 		{"sequences_visible_in_order_to_a_waiting_reader", sequenceVisibility},
 		{"kv_prefixes_and_order_are_bytes", kvBytes},
 		{"transient_aborts_commit_nothing_and_retry", transientAborts},
+		{"audit_ledger_numbers_chains_and_pages", auditLedger},
 	}
 }
 

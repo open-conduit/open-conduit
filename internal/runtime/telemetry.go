@@ -118,6 +118,7 @@ type recorder struct {
 	waitOrder  []domain.ID
 	accepted   []acceptedFact
 	routed     []domain.ID
+	audited    []domain.AuditRecord
 	leases     []leaseFact
 
 	attempts     map[string]*AttemptState
@@ -196,6 +197,13 @@ func (r *recorder) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, erro
 		r.accepted = append(r.accepted, acceptedFact{a.Event.ID, added})
 	}
 	return a, added, err
+}
+func (r *recorder) AppendAudit(rec domain.AuditRecord) (domain.AuditRecord, error) {
+	stored, err := r.Tx.AppendAudit(rec)
+	if err == nil {
+		r.audited = append(r.audited, stored)
+	}
+	return stored, err
 }
 func (r *recorder) MarkRouted(eventID, workID domain.ID, disposition string) error {
 	before, err := r.Tx.Event(eventID)
@@ -366,7 +374,25 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 		if a.Event.ExecutionID != "" {
 			attrs["emitted_by_execution"] = "true"
 		}
+		if a.Event.Actor != "" {
+			attrs["event.actor"] = a.Event.Actor
+		}
+		if a.Event.Via != "" {
+			attrs["event.via"] = a.Event.Via
+		}
 		add(observability.Record{Name: name, Correlation: c, Attributes: attrs})
+	}
+	// Each audit record goes out as audit.recorded, with an Event's
+	// correlation when it points at one. The ledger, not this record, is
+	// the complete trail: telemetry may drop.
+	for _, a := range r.audited {
+		c := observability.Correlation{TraceID: a.Hash}
+		if a.EventID != "" {
+			if e, err := r.Tx.Event(a.EventID); err == nil {
+				c = r.eventCorrelation(e)
+			}
+		}
+		add(observability.Record{Name: "audit.recorded", Correlation: c, To: a.Outcome, Attributes: AuditAttributes(a)})
 	}
 	for _, id := range r.routed {
 		a, err := r.Tx.Event(id)
@@ -810,6 +836,21 @@ func (r *recorder) eventCorrelation(a domain.AcceptedEvent) observability.Correl
 		}
 	}
 	return c
+}
+
+// AuditAttributes are an audit record's telemetry attributes: audit.* for
+// each field, and audit.detail.<key> for each fact of its Detail.
+func AuditAttributes(a domain.AuditRecord) map[string]string {
+	attrs := map[string]string{"audit.sequence": strconv.FormatUint(a.Sequence, 10), "audit.action": a.Action, "audit.outcome": a.Outcome, "audit.hash": a.Hash, "record_id": identity("audit.recorded", strconv.FormatUint(a.Sequence, 10), a.Hash)}
+	for k, v := range map[string]string{"audit.actor": a.Actor, "audit.via": a.Via, "audit.target": a.Target, "audit.event_id": string(a.EventID), "audit.prev": a.Prev} {
+		if v != "" {
+			attrs[k] = v
+		}
+	}
+	for k, v := range a.Detail {
+		attrs["audit.detail."+k] = v
+	}
+	return attrs
 }
 
 // workCorrelation anchors a Work change to the Event that caused it in this
