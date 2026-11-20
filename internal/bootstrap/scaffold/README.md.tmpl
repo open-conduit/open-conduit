@@ -18,9 +18,30 @@ The guide to the SDK, the harnesses and certification is [Extension packaging, S
 | --- | --- |
 | `make check` | what CI runs: formatting, vet, the tests, a build and `make lint` |
 | `make package` | the package directory in `dist/{{NAME}}`, as Open Conduit installs it |
+| `make archive` | the release archive for this platform in `dist/`, as `open-conduit extension install` takes it |
 | `make lint` | `open-conduit extension check` on the package |
 | `make certify` | certifies the package with the Open Conduit release `go.mod` requires; `OPEN_CONDUIT_REF=main` builds Open Conduit at that ref instead |
 
 CI (`.github/workflows/ci.yml`) runs `make check`, and certifies the package against Open Conduit's `main` and its latest release.
+
+## Releasing
+
+Push a tag (`git tag v1.0.0 && git push origin v1.0.0`). The release workflow (`.github/workflows/release.yml`) builds an archive for Linux on amd64 and arm64 and for macOS on arm64. It signs each one with Sigstore as that workflow (keyless, through GitHub's OIDC token) and uploads it to the tag's release with its bundle (`.sigstore.json`) beside it.
+
+An operator who trusts you adds your workflow to their `settings.extension_trust`. `open-conduit extension install URL` then checks the bundle beside the archive before it installs anything:
+
+```json
+"extension_trust": {
+  "publishers": [
+    {
+      "subject_regexp": "https://github\\.com/OWNER/REPO/\\.github/workflows/release\\.yml@refs/tags/v.*",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "packages": ["{{NAME}}"]
+    }
+  ]
+}
+```
+
+Replace `OWNER/REPO` with this repository. A release signed by any other workflow, repository or ref is refused.
 
 Install the built package with `open-conduit extension install dist/{{NAME}}`; it takes effect at the next `open-conduit serve`. Upgrade Open Conduit with `go get github.com/open-conduit/open-conduit@VERSION && go mod tidy`.

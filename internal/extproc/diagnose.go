@@ -36,6 +36,9 @@ func Diagnose(name string, err error, paths Paths) Diagnostic {
 		log = paths.Log
 	}
 	switch {
+	case errors.Is(err, ErrProvenance):
+		d.Code, d.Summary = "untrusted_package", "settings.extension_trust does not admit the package"
+		d.Hint = "install a release a trusted publisher signed (open-conduit extension update ARCHIVE), or pin its digest in settings.extension_trust; open-conduit extension list shows who published each package"
 	case errors.Is(err, protocol.ErrIncompatible), errors.Is(err, ErrIncompatiblePackage) && !errors.Is(err, protocol.ErrKVDowngrade):
 		d.Code, d.Summary = "incompatible_protocol", "the package and this host share no protocol version or layout"
 		d.Hint = fmt.Sprintf("this host speaks protocol %v; install a release of the package built for it, or upgrade Open Conduit", protocol.Versions)

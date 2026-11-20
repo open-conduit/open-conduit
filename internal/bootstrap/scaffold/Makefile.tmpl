@@ -16,7 +16,7 @@ OPEN_CONDUIT_REF ?=
 LDFLAGS ?= -s -w $(if $(VERSION),-X main.version=$(VERSION))
 GO_FILES = $$(find . -name '*.go' -not -path './$(BUILD_DIR)/*' -not -path './dist/*')
 
-.PHONY: check fmt fmt-check vet test build package lint certify clean
+.PHONY: check fmt fmt-check vet test build package archive archive-name lint certify clean
 
 check: fmt-check vet test build lint
 
@@ -44,6 +44,17 @@ package:
 	$(PACKAGE_DIR)/$(NAME)-extension package-manifest > $(PACKAGE_DIR)/open-conduit-extension.json
 	$(PACKAGE_DIR)/$(NAME)-extension package-certification > $(PACKAGE_DIR)/certification.json
 	cp -R playbooks $(PACKAGE_DIR)/playbooks
+
+# The release archive for this platform, as open-conduit extension install
+# takes it: a .tar.gz holding the one package directory. The release
+# workflow builds one per platform and signs each.
+ARCHIVE = dist/$(NAME)-$(or $(VERSION),dev)_$(shell $(GO) env GOOS)_$(shell $(GO) env GOARCH).tar.gz
+
+archive: package
+	COPYFILE_DISABLE=1 tar -czf $(ARCHIVE) -C dist $(NAME)
+
+archive-name:
+	@echo $(ARCHIVE)
 
 # Lints the package without starting it: the manifest, compatibility with
 # Open Conduit, the operations the playbooks name, certification.json.

@@ -153,7 +153,7 @@ func frontmatter(title, description string) string {
 func run(t *testing.T, args ...string) string {
 	t.Helper()
 	releaseLayout(t)
-	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Adapters: bootstrap.Adapters, Extensions: bootstrap.ExtensionOps("test", "docs")}
+	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Adapters: bootstrap.Adapters, Extensions: bootstrap.ExtensionOps("test", "docs", nil)}
 	var out, errOut bytes.Buffer
 	cli.RunOperator("test", "docs", args, env, &out, &errOut)
 	return strings.TrimRight(out.String()+errOut.String(), "\n")
@@ -343,6 +343,11 @@ func configReference(t *testing.T) string {
 	packages := s.defs("settings").props()["extensions"]
 	fmt.Fprintf(&b, "\n### settings.extensions\n\n%s\n\nThe grant to each package, under its name.\n", packages["description"])
 	fieldTable(&b, schemaNode(packages).child("additionalProperties"), anchors)
+	trust := s.defs("settings").props()["extension_trust"]
+	fmt.Fprintf(&b, "\n### settings.extension_trust\n\n%s\n", trust["description"])
+	fieldTable(&b, trust, anchors)
+	fmt.Fprintf(&b, "\nEach of `publishers` names exactly one of `subject` or `subject_regexp`.\n")
+	fieldTable(&b, schemaNode(schemaNode(trust).props()["publishers"]).child("items"), anchors)
 	section("connections", "Each entry of `connections`.", s.defs("connection"))
 	section("scopes", "Each entry of `scopes`.", s.defs("scope"))
 	fmt.Fprintf(&b, "\n### limits\n")

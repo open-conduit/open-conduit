@@ -24,10 +24,14 @@ import (
 
 // Identity is who must have signed: the certificate's subject (for a
 // GitHub Actions workflow, its URL at a ref) and the OIDC issuer that
-// vouched for it. Both are matched exactly.
+// vouched for it. Subject and Issuer are matched exactly; SubjectRegexp,
+// in place of Subject, matches the whole subject against a regular
+// expression (cosign's --certificate-identity-regexp), for a publisher
+// whose workflow signs at each release tag.
 type Identity struct {
-	Subject string
-	Issuer  string
+	Subject       string
+	SubjectRegexp string
+	Issuer        string
 }
 
 // GitHubActions is the OIDC issuer of GitHub Actions workflows.
@@ -38,33 +42,49 @@ const GitHubActions = "https://token.actions.githubusercontent.com"
 // transparency log trusted names at a time the certificate was valid. Any
 // failure is an error; nothing is trusted on a partial match.
 func Verify(trusted root.TrustedMaterial, bundleJSON, artifact []byte, id Identity) error {
+	_, err := Signer(trusted, bundleJSON, artifact, id)
+	return err
+}
+
+// Signer is Verify that also returns who signed: the certificate's exact
+// subject and issuer, which id may have matched by regular expression.
+func Signer(trusted root.TrustedMaterial, bundleJSON, artifact []byte, id Identity) (Identity, error) {
 	if trusted == nil {
-		return errors.New("no trusted root to verify against")
+		return Identity{}, errors.New("no trusted root to verify against")
 	}
-	if id.Subject == "" || id.Issuer == "" {
-		return errors.New("no signer identity to verify against")
+	if (id.Subject == "") == (id.SubjectRegexp == "") || id.Issuer == "" {
+		return Identity{}, errors.New("no signer identity to verify against")
 	}
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
-		return fmt.Errorf("reading the signature bundle: %w", err)
+		return Identity{}, fmt.Errorf("reading the signature bundle: %w", err)
 	}
 	return verifyEntity(trusted, &b, artifact, id)
 }
 
-// verifyEntity is Verify on an entity already read.
-func verifyEntity(trusted root.TrustedMaterial, entity verify.SignedEntity, artifact []byte, id Identity) error {
+// verifyEntity is Signer on an entity already read.
+func verifyEntity(trusted root.TrustedMaterial, entity verify.SignedEntity, artifact []byte, id Identity) (Identity, error) {
 	v, err := verify.NewVerifier(trusted, verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1))
 	if err != nil {
-		return fmt.Errorf("setting up signature verification: %w", err)
+		return Identity{}, fmt.Errorf("setting up signature verification: %w", err)
 	}
-	certID, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.Subject, "")
+	sanRegexp := ""
+	if id.SubjectRegexp != "" {
+		sanRegexp = "^(?:" + id.SubjectRegexp + ")$"
+	}
+	certID, err := verify.NewShortCertificateIdentity(id.Issuer, "", id.Subject, sanRegexp)
 	if err != nil {
-		return fmt.Errorf("setting up signature verification: %w", err)
+		return Identity{}, fmt.Errorf("setting up signature verification: %w", err)
 	}
-	if _, err := v.Verify(entity, verify.NewPolicy(verify.WithArtifact(bytes.NewReader(artifact)), verify.WithCertificateIdentity(certID))); err != nil {
-		return fmt.Errorf("the signature doesn't verify: %w", err)
+	res, err := v.Verify(entity, verify.NewPolicy(verify.WithArtifact(bytes.NewReader(artifact)), verify.WithCertificateIdentity(certID)))
+	if err != nil {
+		return Identity{}, fmt.Errorf("the signature doesn't verify: %w", err)
 	}
-	return nil
+	if res.Signature == nil || res.Signature.Certificate == nil || res.Signature.Certificate.SubjectAlternativeName == "" {
+		return Identity{}, errors.New("the signature verified without a certificate identity")
+	}
+	c := res.Signature.Certificate
+	return Identity{Subject: c.SubjectAlternativeName, Issuer: c.Issuer}, nil
 }
 
 // PublicGood is the trusted root of Sigstore's public-good instance (the

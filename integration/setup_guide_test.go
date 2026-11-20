@@ -149,7 +149,7 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	// The setups come from the bundled packages (#477), each its own.
 	releaseLayout(t)
 	names := map[string]bool{}
-	for _, s := range bootstrap.ExtensionOps("test", "abc").Setups("", t.TempDir()) {
+	for _, s := range bootstrap.ExtensionOps("test", "abc", nil).Setups("", t.TempDir()) {
 		if info := s.SetupInfo(); !info.FirstRun {
 			names[info.Type] = true
 		}

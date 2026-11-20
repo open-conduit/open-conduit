@@ -144,7 +144,7 @@ var (
 func helpText(t *testing.T) string {
 	t.Helper()
 	releaseLayout(t)
-	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Extensions: bootstrap.ExtensionOps("test", "docs")}
+	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Extensions: bootstrap.ExtensionOps("test", "docs", nil)}
 	var all bytes.Buffer
 	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"extension", "--help"}} {
 		var out, errOut bytes.Buffer

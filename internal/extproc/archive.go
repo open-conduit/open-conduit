@@ -46,6 +46,10 @@ type Source struct {
 	// SHA256 is the archive's expected hex digest ("" for none). It is
 	// required for a plain http URL and refused for a directory.
 	SHA256 string
+	// Signature is the archive's Sigstore bundle as a path or URL (""
+	// for the archive's location with SignatureSuffix). It is read only
+	// under a provenance policy, and refused for a directory.
+	Signature string
 	// Client fetches URLs (nil: http.DefaultClient).
 	Client *http.Client
 }
@@ -68,7 +72,10 @@ func InstallSource(ctx context.Context, root string, src Source, o InstallOption
 			if want != nil {
 				return InstallResult{}, fmt.Errorf("%w: --sha256 checks an archive, and %s is a directory", ErrArchive, src.Location)
 			}
-			return Install(root, src.Location, o)
+			if src.Signature != "" {
+				return InstallResult{}, fmt.Errorf("%w: --signature checks an archive, and %s is a directory", ErrArchive, src.Location)
+			}
+			return install(ctx, root, src.Location, o)
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(root, stagingDir), 0o755); err != nil {
@@ -83,14 +90,76 @@ func InstallSource(ctx context.Context, root string, src Source, o InstallOption
 		_ = os.Remove(filepath.Join(root, stagingDir))
 	}()
 	file := filepath.Join(tmp, "archive.tar.gz")
-	if err := fetchArchive(ctx, src, want, file); err != nil {
+	sum, err := fetchArchive(ctx, src, want, file)
+	if err != nil {
 		return InstallResult{}, err
+	}
+	o.source, o.archive, o.archiveSum = src.Location, file, hex.EncodeToString(sum)
+	if o.Policy != nil {
+		if o.bundle, o.bundleAt, err = fetchSignature(ctx, src); err != nil {
+			return InstallResult{}, err
+		}
 	}
 	dir, err := unpackArchive(file, filepath.Join(tmp, "unpacked"))
 	if err != nil {
 		return InstallResult{}, err
 	}
-	return Install(root, dir, o)
+	return install(ctx, root, dir, o)
+}
+
+// MaxSignatureSize bounds a signature bundle.
+const MaxSignatureSize = 1 << 20
+
+// fetchSignature reads the archive's signature bundle: src.Signature, which
+// must exist, or the archive's location with SignatureSuffix, which may not
+// (nil, with where it looked).
+func fetchSignature(ctx context.Context, src Source) ([]byte, string, error) {
+	at, required := src.Signature, true
+	if at == "" {
+		at, required = src.Location+SignatureSuffix, false
+	}
+	var body io.ReadCloser
+	if IsURL(at) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, at, nil)
+		if err != nil {
+			return nil, at, err
+		}
+		client := src.Client
+		if client == nil {
+			client = http.DefaultClient
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, at, fmt.Errorf("%w: fetching the signature %s: %w", ErrArchive, at, err)
+		}
+		if resp.StatusCode == http.StatusNotFound && !required {
+			resp.Body.Close()
+			return nil, at, nil
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, at, fmt.Errorf("%w: fetching the signature %s: %s", ErrArchive, at, resp.Status)
+		}
+		body = resp.Body
+	} else {
+		f, err := os.Open(at)
+		if errors.Is(err, os.ErrNotExist) && !required {
+			return nil, at, nil
+		}
+		if err != nil {
+			return nil, at, fmt.Errorf("%w: the signature: %w", ErrArchive, err)
+		}
+		body = f
+	}
+	defer body.Close()
+	b, err := io.ReadAll(io.LimitReader(body, MaxSignatureSize+1))
+	if err != nil {
+		return nil, at, fmt.Errorf("%w: reading the signature %s: %w", ErrArchive, at, err)
+	}
+	if len(b) > MaxSignatureSize {
+		return nil, at, fmt.Errorf("%w: the signature %s is larger than %d bytes", ErrArchive, at, MaxSignatureSize)
+	}
+	return b, at, nil
 }
 
 func parseDigest(s string) ([]byte, error) {
@@ -106,16 +175,17 @@ func parseDigest(s string) ([]byte, error) {
 }
 
 // fetchArchive copies the archive to dst, checking its digest when want is
-// set. A plain http URL without a digest is refused before any request.
-func fetchArchive(ctx context.Context, src Source, want []byte, dst string) error {
+// set, and returns its digest. A plain http URL without a digest is refused
+// before any request.
+func fetchArchive(ctx context.Context, src Source, want []byte, dst string) ([]byte, error) {
 	var body io.ReadCloser
 	if IsURL(src.Location) {
 		if strings.HasPrefix(strings.ToLower(src.Location), "http:") && want == nil {
-			return fmt.Errorf("%w: %s is plain http; pass --sha256 or use https", ErrArchive, src.Location)
+			return nil, fmt.Errorf("%w: %s is plain http; pass --sha256 or use https", ErrArchive, src.Location)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.Location, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		client := src.Client
 		if client == nil {
@@ -123,37 +193,38 @@ func fetchArchive(ctx context.Context, src Source, want []byte, dst string) erro
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%w: fetching %s: %w", ErrArchive, src.Location, err)
+			return nil, fmt.Errorf("%w: fetching %s: %w", ErrArchive, src.Location, err)
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return fmt.Errorf("%w: fetching %s: %s", ErrArchive, src.Location, resp.Status)
+			return nil, fmt.Errorf("%w: fetching %s: %s", ErrArchive, src.Location, resp.Status)
 		}
 		body = resp.Body
 	} else {
 		f, err := os.Open(src.Location)
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrArchive, err)
+			return nil, fmt.Errorf("%w: %w", ErrArchive, err)
 		}
 		body = f
 	}
 	defer body.Close()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(body, MaxArchiveSize+1)); err != nil {
 		out.Close()
-		return fmt.Errorf("%w: reading %s: %w", ErrArchive, src.Location, err)
+		return nil, fmt.Errorf("%w: reading %s: %w", ErrArchive, src.Location, err)
 	}
 	if err := out.Close(); err != nil {
-		return err
+		return nil, err
 	}
-	if got := h.Sum(nil); want != nil && !bytes.Equal(got, want) {
-		return fmt.Errorf("%w: %s has sha256 %x, expected %x", ErrArchive, src.Location, got, want)
+	got := h.Sum(nil)
+	if want != nil && !bytes.Equal(got, want) {
+		return nil, fmt.Errorf("%w: %s has sha256 %x, expected %x", ErrArchive, src.Location, got, want)
 	}
-	return nil
+	return got, nil
 }
 
 // unpackArchive unpacks a .tar.gz holding one package directory into dst

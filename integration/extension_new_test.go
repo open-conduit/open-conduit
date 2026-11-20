@@ -1,6 +1,8 @@
 package integration_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +40,7 @@ func TestExtensionNew(t *testing.T) {
 	if !strings.Contains(out, "Created the acme package in "+dir) {
 		t.Fatalf("extension new: %s", out)
 	}
-	for _, f := range []string{"go.mod", "go.sum", "main.go", "main_test.go", "e2e_test.go", "Makefile", ".github/workflows/ci.yml", ".gitignore", "playbooks/acme.md", "README.md"} {
+	for _, f := range []string{"go.mod", "go.sum", "main.go", "main_test.go", "e2e_test.go", "Makefile", ".github/workflows/ci.yml", ".github/workflows/release.yml", ".gitignore", "playbooks/acme.md", "README.md"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
@@ -57,9 +59,39 @@ func TestExtensionNew(t *testing.T) {
 		t.Fatalf("make check:\n%s", out)
 	}
 
+	// The release archive installs, and under settings.extension_trust only
+	// once its digest is pinned: unsigned, no publisher admits it.
+	out = run(dir, "make", "archive", "VERSION=1.2.3")
+	archive := filepath.Join(dir, strings.TrimSpace(run(dir, "make", "-s", "archive-name", "VERSION=1.2.3")))
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatalf("make archive: %v\n%s", err, out)
+	}
+	sum := sha256.Sum256(data)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeTrust := func(trust string) {
+		t.Helper()
+		if err := os.WriteFile(configPath, []byte(`{"version":1,"settings":{"extension_trust":`+trust+`},"connections":[],"scopes":[]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTrust(`{"publishers":[{"subject_regexp":"https://github\\.com/acme/acme/.+","issuer":"https://token.actions.githubusercontent.com"}]}`)
+	cmd := exec.Command(daemonBinary(t), "extension", "install", archive, "--config", configPath)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "untrusted_package") || !strings.Contains(string(out), "no signature bundle") {
+		t.Fatalf("an unsigned archive: %v\n%s", err, out)
+	}
+	writeTrust(`{"pinned":{"acme":["sha256:` + hex.EncodeToString(sum[:]) + `"]}}`)
+	if out := run(dir, daemonBinary(t), "extension", "install", archive, "--config", configPath); !strings.Contains(out, "Installed acme 1.2.3") || !strings.Contains(out, "publisher: pinned digest") {
+		t.Fatalf("a pinned archive: %s", out)
+	}
+	if out := run(dir, daemonBinary(t), "extension", "list", "--config", configPath); !strings.Contains(out, "publisher: pinned digest") || strings.Contains(out, "refused") {
+		t.Fatalf("extension list: %s", out)
+	}
+
 	// A second run into the same directory is refused rather than
 	// overwriting it.
-	cmd := exec.Command(daemonBinary(t), "extension", "new", "acme", "--dir", dir, "--replace", root)
+	cmd = exec.Command(daemonBinary(t), "extension", "new", "acme", "--dir", dir, "--replace", root)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "already exists and is not empty") {
 		t.Fatalf("a non-empty directory: %v\n%s", err, out)

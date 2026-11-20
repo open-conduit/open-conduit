@@ -27,6 +27,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 | `causal_max_depth` | integer |  | `32` | How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `causal_per_minute` | integer |  | `128` | How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `concurrency` | integer |  | `4` | Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
+| `extension_trust` | object |  |  | Which installed extension packages may run: those a listed publisher signed, or whose digest is pinned. Present, even empty, it is enforced at install and at every start, and a package it doesn't admit is refused; without it every package is admitted. Bundled packages are the release's and are not subject to it. extension install and update read it from the config file; serve reads the committed generation's at each start (the file's on a first start), so a change reaches the daemon once applied with open-conduit config apply and serve restarts. |
 | `extensions` | object |  |  | Grants to installed or bundled extension packages, by package name. A name no package has is a warning, not an error. Takes effect at a package's next start after the generation holding it is applied with open-conduit config apply: a serve restart, or the package's restart after a crash; a running package keeps the environment it started with. |
 | `job_concurrency` | integer |  | `4` | Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `kept_executions` | integer |  | `20` | Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
@@ -57,6 +58,24 @@ The grant to each package, under its name.
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `pass_env` | array of string |  |  | Variables of the daemon's environment added to this package's own process environment (SSH_AUTH_SOCK, DOCKER_HOST). They reach no other package. Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names. |
+
+### settings.extension_trust
+
+Which installed extension packages may run: those a listed publisher signed, or whose digest is pinned. Present, even empty, it is enforced at install and at every start, and a package it doesn't admit is refused; without it every package is admitted. Bundled packages are the release's and are not subject to it. extension install and update read it from the config file; serve reads the committed generation's at each start (the file's on a first start), so a change reaches the daemon once applied with open-conduit config apply and serve restarts.
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `pinned` | object |  |  | Digests admitted for each package by name, whoever published it: the package tree's (open-conduit extension list and inspect show it) or its release archive's SHA-256. |
+| `publishers` | array of object |  |  | Trusted publishers, each a Sigstore identity: install verifies the signature bundle published beside a package's release archive against them. |
+
+Each of `publishers` names exactly one of `subject` or `subject_regexp`.
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `issuer` | string | yes |  | The OIDC issuer that vouched for the identity: https://token.actions.githubusercontent.com for GitHub Actions. |
+| `packages` | array of string |  |  | The only packages this publisher is trusted for; every package when unset. |
+| `subject` | string |  |  | The signing certificate's identity, matched exactly: for a GitHub Actions workflow, its URL at a ref (https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main). |
+| `subject_regexp` | string |  |  | In place of subject, a regular expression the whole identity must match, for a workflow that signs at each release tag. |
 
 ## connections
 

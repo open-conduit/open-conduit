@@ -141,7 +141,18 @@ func UseBundledRoot(root string) (restore func()) {
 // newer package an older host cannot run is reported, never swapped
 // silently for the bundled release. exclude leaves out the installed copy
 // of one name (removal's check), which brings the bundled one back.
+//
+// Installed packages are also checked against the config file's
+// provenance policy (settings.extension_trust, trust.go): one it refuses
+// is reported and left out, still shadowing the bundled one.
 func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
+	return discoverUnder(configPath, exclude, filePolicy(configPath), nil)
+}
+
+// discoverUnder is discoverPackages under a given policy; warn, when set,
+// receives what an absent policy leaves admitted (a package changed on
+// disk since install).
+func discoverUnder(configPath, exclude string, policy packagePolicy, warn func(name, msg string)) ([]extproc.Found, []error) {
 	var found []extproc.Found
 	var errs []error
 	shadow := map[string]bool{}
@@ -150,9 +161,14 @@ func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
 		all, e := extproc.Discover(root)
 		errs = append(errs, e...)
 		for _, f := range all {
-			if f.Manifest.Name != exclude {
-				found = append(found, f)
+			if f.Manifest.Name == exclude {
+				continue
 			}
+			if err := policy.admit(f, warn); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			found = append(found, f)
 		}
 		if entries, err := os.ReadDir(root); err == nil {
 			for _, e := range entries {
@@ -522,10 +538,15 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		x.sources = map[string]bool{}
 	}
 	d.publishRunning()
-	found, errs := discoverPackages(d.o.ConfigPath, "")
+	found, errs := discoverUnder(d.o.ConfigPath, "", d.startPolicy(ctx), func(name, msg string) {
+		d.log.Warn("installed extension changed since install", "extension", name, "problem", msg)
+	})
 	for _, err := range errs {
 		name, _, _ := strings.Cut(err.Error(), ":")
 		x.failed = append(x.failed, extproc.Diagnose(name, err, extproc.Paths{}))
+		if errors.Is(err, extproc.ErrProvenance) {
+			d.log.Error("installed extension refused: untrusted provenance", "extension", name, "error", err)
+		}
 	}
 	if len(found) == 0 {
 		return
