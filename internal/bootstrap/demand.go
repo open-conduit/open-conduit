@@ -215,15 +215,6 @@ func (d *daemon) startPackages(ctx context.Context, names []string) {
 	d.publishRunning()
 }
 
-// stopPackages stops the named running packages, all at once: they leave
-// the running packages first, so nothing composes them while they go, and
-// the ingress sources they declared are unregistered (what the store holds
-// for them stays, for the next start). Executor jobs a package detached
-// keep running. It is called with change held.
-func (d *daemon) stopPackages(names []string) {
-	d.finishStopping(d.detachPackages(names))
-}
-
 // detachPackages takes the named packages out of the running set, so
 // nothing composes them from now on (a generation built next leaves them
 // out), and unregisters their ingress sources. Their processes keep

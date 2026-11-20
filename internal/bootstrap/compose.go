@@ -252,7 +252,7 @@ func (d *daemon) configurePackages(ctx context.Context) {
 // source's namespace is the operator's to choose (a schedule entry's
 // `namespace`); the ingress refuses one another source holds. A source
 // registered earlier keeps its registration until restart or until its
-// package stops (stopPackages), which unregisters it.
+// package stops (detachPackages), which unregisters it.
 func (d *daemon) registerSources(x *installed, sources []ingressSource) {
 	if d.ingress == nil {
 		return
