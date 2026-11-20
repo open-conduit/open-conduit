@@ -261,12 +261,17 @@ func (o InstallOptions) admit(ctx context.Context, name string, r Record) (Recor
 	switch {
 	case len(pubs) == 0:
 		return r, fmt.Errorf("%w: settings.extension_trust trusts no publisher for %s and pins no digest of it (sha256:%s, archive sha256:%s)", ErrProvenance, name, r.Tree, orNone(r.Archive))
-	case o.archive == "":
+	case o.archive == "" || o.signature == nil:
 		return r, fmt.Errorf("%w: %s is a directory, which carries no signature, and settings.extension_trust pins no digest of it (sha256:%s); install its signed release archive or pin the digest", ErrProvenance, name, r.Tree)
-	case o.bundle == nil:
-		return r, fmt.Errorf("%w: no signature bundle was found for %s (looked for %s); pass --signature, or pin its digest (archive sha256:%s)", ErrProvenance, r.Source, o.bundleAt, r.Archive)
 	case o.Verify == nil:
 		return r, fmt.Errorf("%w: this build of open-conduit cannot verify signatures", ErrProvenance)
+	}
+	bundle, at, err := o.signature(ctx)
+	if err != nil {
+		return r, err
+	}
+	if bundle == nil {
+		return r, fmt.Errorf("%w: no signature bundle was found for %s (looked for %s); pass --signature, or pin its digest (archive sha256:%s)", ErrProvenance, r.Source, at, r.Archive)
 	}
 	artifact, err := os.ReadFile(o.archive)
 	if err != nil {
@@ -274,7 +279,7 @@ func (o InstallOptions) admit(ctx context.Context, name string, r Record) (Recor
 	}
 	var errs []string
 	for _, pub := range pubs {
-		got, err := o.Verify(ctx, o.bundle, artifact, pub.Signer)
+		got, err := o.Verify(ctx, bundle, artifact, pub.Signer)
 		if err == nil {
 			r.Signer = &got
 			return r, nil

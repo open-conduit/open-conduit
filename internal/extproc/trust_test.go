@@ -325,3 +325,61 @@ func TestTreeDigest(t *testing.T) {
 		seen[d] = true
 	}
 }
+
+// A pin admits a package without the signature's host: the bundle is
+// fetched only when a publisher must verify it, so a host that answers a
+// missing bundle with 403 (S3, GCS, proxies) or fails outright never stops
+// a pinned install. A URL's query stays on the end of the bundle's URL.
+func TestSignatureFetchedOnlyWhenNeeded(t *testing.T) {
+	_, data := archiveFile(t, "acme", nil)
+	sum := sha256.Sum256(data)
+	bundle := fakeBundle(t, acmeRelease, data)
+	var signatureRequests int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/acme.tar.gz":
+			_, _ = w.Write(data)
+		case r.URL.Path == "/acme.tar.gz"+SignatureSuffix && r.URL.RawQuery == "sig=1":
+			signatureRequests++
+			_, _ = w.Write(bundle)
+		default:
+			signatureRequests++
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+	pin := map[string][]string{"acme": {hex.EncodeToString(sum[:])}}
+	for name, policy := range map[string]*Policy{
+		"pinned, with a publisher": {Publishers: []Publisher{{Signer: acmeAny}}, Pinned: pin},
+		"pins only":                {Pinned: pin},
+	} {
+		root := filepath.Join(t.TempDir(), Dir)
+		signatureRequests = 0
+		res, err := InstallSource(context.Background(), root, Source{Location: srv.URL + "/acme.tar.gz", Client: srv.Client()}, InstallOptions{Policy: policy, Verify: fakeVerify})
+		if err != nil || !res.Record.Pinned || signatureRequests != 0 {
+			t.Fatalf("%s: %+v %v, %d signature request(s)", name, res.Record, err, signatureRequests)
+		}
+	}
+	// Negative control: unpinned, the 403 is the install's answer.
+	o := InstallOptions{Policy: trusting(Publisher{Signer: acmeAny}), Verify: fakeVerify}
+	if _, err := InstallSource(context.Background(), filepath.Join(t.TempDir(), Dir), Source{Location: srv.URL + "/acme.tar.gz", Client: srv.Client()}, o); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("unpinned behind a 403: %v", err)
+	}
+	// The bundle beside a URL with a query keeps the query.
+	res, err := InstallSource(context.Background(), filepath.Join(t.TempDir(), Dir), Source{Location: srv.URL + "/acme.tar.gz?sig=1", Client: srv.Client()}, o)
+	if err != nil || res.Record.Signer == nil {
+		t.Fatalf("a URL with a query: %+v %v", res.Record, err)
+	}
+}
+
+func TestBesideArchive(t *testing.T) {
+	for in, want := range map[string]string{
+		"/tmp/acme.tar.gz":                      "/tmp/acme.tar.gz" + SignatureSuffix,
+		"https://h/r/acme.tar.gz":               "https://h/r/acme.tar.gz" + SignatureSuffix,
+		"https://h/r/acme.tar.gz?X-Sig=a%2Fb&x": "https://h/r/acme.tar.gz" + SignatureSuffix + "?X-Sig=a%2Fb&x",
+	} {
+		if got := besideArchive(in); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+}

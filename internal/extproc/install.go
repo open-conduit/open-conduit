@@ -118,11 +118,12 @@ type InstallOptions struct {
 	Verify SignatureCheck
 
 	// Set by InstallSource for an archive: where it came from, the
-	// archive file and its digest, and the signature bundle found beside
-	// it (nil for none) and where it was looked for.
+	// archive file and its digest, and how to fetch its signature bundle
+	// (nil for none, with where it looked). The bundle is fetched only
+	// once the policy needs it, so a pinned package never depends on the
+	// signature's host.
 	source, archive, archiveSum string
-	bundle                      []byte
-	bundleAt                    string
+	signature                   func(context.Context) ([]byte, string, error)
 }
 
 // InstallResult describes a completed install or update.

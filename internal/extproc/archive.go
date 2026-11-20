@@ -95,16 +95,26 @@ func InstallSource(ctx context.Context, root string, src Source, o InstallOption
 		return InstallResult{}, err
 	}
 	o.source, o.archive, o.archiveSum = src.Location, file, hex.EncodeToString(sum)
-	if o.Policy != nil {
-		if o.bundle, o.bundleAt, err = fetchSignature(ctx, src); err != nil {
-			return InstallResult{}, err
-		}
-	}
+	o.signature = func(ctx context.Context) ([]byte, string, error) { return fetchSignature(ctx, src) }
 	dir, err := unpackArchive(file, filepath.Join(tmp, "unpacked"))
 	if err != nil {
 		return InstallResult{}, err
 	}
 	return install(ctx, root, dir, o)
+}
+
+// besideArchive is where an archive's bundle is published by default: its
+// path with SignatureSuffix, keeping a URL's query (a presigned URL's
+// signature, say) where it was.
+func besideArchive(location string) string {
+	if IsURL(location) {
+		if u, err := url.Parse(location); err == nil {
+			u.Path += SignatureSuffix
+			u.RawPath = ""
+			return u.String()
+		}
+	}
+	return location + SignatureSuffix
 }
 
 // MaxSignatureSize bounds a signature bundle.
@@ -116,7 +126,7 @@ const MaxSignatureSize = 1 << 20
 func fetchSignature(ctx context.Context, src Source) ([]byte, string, error) {
 	at, required := src.Signature, true
 	if at == "" {
-		at, required = src.Location+SignatureSuffix, false
+		at, required = besideArchive(src.Location), false
 	}
 	var body io.ReadCloser
 	if IsURL(at) {
