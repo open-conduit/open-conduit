@@ -22,8 +22,9 @@ import (
 // the binary there, not on the host, so this one only names it; any other
 // binding is looked for on the host. It reads only the configuration and the machine, so doctor
 // runs it without a daemon too.
+// claude-code-auth (authCheck) runs only when doctor resolves secrets.
 func (x *Extension) Checks() []inproc.Check {
-	return []inproc.Check{{Offline: true, Run: x.diagnose}}
+	return []inproc.Check{{Offline: true, Run: x.diagnose}, {Deep: true, Run: x.authCheck}}
 }
 
 // usageRead reads the subscription usage windows of the login in a Claude

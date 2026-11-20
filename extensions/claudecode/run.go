@@ -570,20 +570,9 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	if n := cfg.AutoCompactTokens; n != nil && *n > 0 && !(slices.Contains(cfg.PassEnv, autoCompactVar) && vars[autoCompactVar] != "") {
 		vars[autoCompactVar] = strconv.FormatInt(*n, 10)
 	}
-	for name, value := range cfg.Env {
-		vars[name] = value
+	if err := cfg.bindingVars(vars, r.Context.Secrets); err != nil {
+		return nil, err
 	}
-	for secret, value := range r.Context.Secrets {
-		if cfg.providerSecret(secret) {
-			continue
-		}
-		name := cfg.secretVariable(secret)
-		if reserved(name) || strings.ContainsRune(value, 0) {
-			return nil, invalidConfig{extension.Invalid("/secret_env", "reserved_env", "a selected secret maps to a reserved OS_* variable; map it to another name in secret_env")}
-		}
-		vars[name] = value
-	}
-	cfg.applyProvider(vars, r.Context.Secrets)
 	vars["OS_SCOPE_ID"] = string(r.Work.ScopeID)
 	vars["OS_WORK_ID"] = string(r.Work.ID)
 	vars["OS_EXECUTION_ID"] = string(r.Execution.ID)
@@ -594,6 +583,28 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// bindingVars sets the binding's own layers in vars, over the earlier ones:
+// its env, then its selected secrets under their variables, then its
+// provider. They are what decides the credential claude runs on, so
+// doctor's credential probe reads them the same way (authCheck).
+func (c Config) bindingVars(vars, secrets map[string]string) error {
+	for name, value := range c.Env {
+		vars[name] = value
+	}
+	for secret, value := range secrets {
+		if c.providerSecret(secret) {
+			continue
+		}
+		name := c.secretVariable(secret)
+		if reserved(name) || strings.ContainsRune(value, 0) {
+			return invalidConfig{extension.Invalid("/secret_env", "reserved_env", "a selected secret maps to a reserved OS_* variable; map it to another name in secret_env")}
+		}
+		vars[name] = value
+	}
+	c.applyProvider(vars, secrets)
+	return nil
 }
 
 // baseline admits only safe process variables plus claude's own config

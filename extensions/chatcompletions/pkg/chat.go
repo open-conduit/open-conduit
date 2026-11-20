@@ -50,7 +50,8 @@ func Manifest() protocol.Manifest {
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
 			Controls:     protocol.Controls{Stop: true, Forget: true},
-			Playbook:     true, Fields: chatcompletions.BindingFields()}}}}
+			Playbook:     true, Fields: chatcompletions.BindingFields()}},
+			Checks: []protocol.CheckDecl{{Name: chatcompletions.AuthCheckName, Deep: true}}}}
 }
 
 // executor creates the executor on first use, once the state directory
@@ -158,7 +159,16 @@ func Build(stateDir func() string) *sdk.Extension {
 			}
 			return chatcompletions.ValidateConfig(p.Config, p.SecretNames)
 		},
-		Executors: map[string]extension.Executor{Name: x}}
+		Executors: map[string]extension.Executor{Name: x},
+		// chat-completions-auth runs only when doctor checks secrets
+		// (Deep), with the key each binding's turns would send.
+		CheckRuns: map[string]func(context.Context, *sdk.Host, protocol.CheckRunParams) (protocol.CheckRunResult, error){
+			chatcompletions.AuthCheckName: func(ctx context.Context, h *sdk.Host, p protocol.CheckRunParams) (protocol.CheckRunResult, error) {
+				return chatcompletions.CheckAuth(ctx, p.Config, chatcompletions.AuthOptions{Secrets: func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error) {
+					return h.BindingSecrets(ctx, scope, binding, names...)
+				}}), nil
+			},
+		}}
 }
 
 var _ interface {

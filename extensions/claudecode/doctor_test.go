@@ -33,8 +33,8 @@ func TestCheck(t *testing.T) {
 		return "2.1.0 (Claude Code)", nil
 	})
 	checks := x.Checks()
-	if len(checks) != 1 || !checks[0].Offline || checks[0].Deep {
-		t.Fatalf("checks %+v, want one offline check", checks)
+	if len(checks) != 2 || !checks[0].Offline || checks[0].Deep || !checks[1].Deep || checks[1].Offline {
+		t.Fatalf("checks %+v, want an offline check and a deep one", checks)
 	}
 	binding := func(name, executor string, cfg map[string]any) protocol.CheckBinding {
 		raw, _ := json.Marshal(cfg)

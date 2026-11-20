@@ -49,7 +49,8 @@ func Manifest() protocol.Manifest {
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Container: c.Container},
 			Controls:     protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true},
-			ResourceMode: true, Playbook: true, VersionProbe: true, Fields: codex.BindingFields()}}}}
+			ResourceMode: true, Playbook: true, VersionProbe: true, Fields: codex.BindingFields()}},
+			Checks: []protocol.CheckDecl{{Name: codex.AuthCheckName, Deep: true}}}}
 }
 
 // executor creates the codex executor on first use, once the state
@@ -181,7 +182,16 @@ func Build(stateDir func() string) *sdk.Extension {
 			}
 			return codex.ValidateConfig(p.Config, p.SecretNames)
 		},
-		Executors: map[string]extension.Executor{Name: x}}
+		Executors: map[string]extension.Executor{Name: x},
+		// codex-auth runs only when doctor checks secrets (Deep), with the
+		// secrets each binding's runs would be given.
+		CheckRuns: map[string]func(context.Context, *sdk.Host, protocol.CheckRunParams) (protocol.CheckRunResult, error){
+			codex.AuthCheckName: func(ctx context.Context, h *sdk.Host, p protocol.CheckRunParams) (protocol.CheckRunResult, error) {
+				return codex.CheckAuth(ctx, p.Config, codex.AuthOptions{Secrets: func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error) {
+					return h.BindingSecrets(ctx, scope, binding, names...)
+				}}), nil
+			},
+		}}
 }
 
 var _ interface {

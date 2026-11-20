@@ -28,7 +28,7 @@ func base() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Claude Code",
 		Summary: "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.",
 		Command: protocol.HostRunCommand(Name),
-		Provides: protocol.Provides{Checks: []protocol.CheckDecl{{Name: "claude-code", Offline: true}},
+		Provides: protocol.Provides{Checks: []protocol.CheckDecl{{Name: "claude-code", Offline: true}, {Name: claudecode.AuthCheckName, Deep: true}},
 			Families: []protocol.Family{{Type: claudecode.TypeTaskEnded, Loss: "A task an agent started has ended, as its wrapper recorded or the sweep found; nothing upstream re-derives it."}},
 			Schemas:  []protocol.SchemaDecl{{Name: claudecode.Name + ".task", Versions: []int{1}}, {Name: claudecode.Name + ".tool", Versions: []int{1}}},
 			Operations: []protocol.OperationDecl{
