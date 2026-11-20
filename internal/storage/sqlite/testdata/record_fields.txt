@@ -1,4 +1,4 @@
-format 7
+format 8
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -71,6 +71,7 @@ Scope.Bindings.Requires struct
 Scope.Bindings.Requires.Container bool
 Scope.Bindings.Requires.Inject bool
 Scope.Bindings.Requires.Interrupt bool
+Scope.Bindings.Requires.NoProcess bool
 Scope.Bindings.Requires.Resume bool
 Scope.Bindings.Requires.Sandbox bool
 Scope.Bindings.Requires.Toolbelt string
