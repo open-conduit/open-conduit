@@ -168,7 +168,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		return storage.ErrInvalid
 	}
 	expired := retention.Expired
-	return publish(ctx, destination, func(stage string) (err error) {
+	_, err := publish(ctx, destination, func(stage string) (err error) {
 		ctx, release, err := retention.hold(ctx, db)
 		if err != nil {
 			return err
@@ -250,6 +250,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		}
 		return writeDurable(filepath.Join(stage, "manifest.json"), append(data, '\n'))
 	})
+	return err
 }
 
 // Backends finds a storage backend by the name a bundle records
@@ -262,16 +263,28 @@ type Backends func(name string) (storage.Backend, error)
 // all. nil records nothing.
 type Record func(dir, backend string) error
 
+// ArtifactTarget is the artifact store a restore imports into: Backend
+// opened at Location, or, when Location is empty, at the restored
+// directory's artifacts (the file store's default place).
+type ArtifactTarget struct {
+	Backend  storage.ArtifactBackend
+	Location string
+}
+
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The bundle's backend restores its snapshot to conduit.db in
 // that directory and fences old lease authority, and its artifacts are
-// imported into the store files opens at the directory's artifacts. Each
+// imported into the store target opens. That store must hold nothing yet,
+// as the directory must not exist, so a restore never mixes a bundle's
+// content into a live store; when a restore into a location outside the
+// directory fails before the directory is published, what it imported
+// there is deleted again. Each
 // is checked against its reference's digest, or, for a reference recorded
 // before references carried one, the digest the manifest vouches for. No
 // daemon may own destination; an existing path is rejected, never
 // overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, files storage.ArtifactBackend, record Record) error {
-	if now.IsZero() || files == nil {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, target ArtifactTarget, record Record) (err error) {
+	if now.IsZero() || target.Backend == nil {
 		return storage.ErrInvalid
 	}
 	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
@@ -297,12 +310,38 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 		return err
 	}
 	defer input.Close()
-	return publish(ctx, destination, func(stage string) error {
-		output, err := files.Open(ctx, filepath.Join(stage, "artifacts"))
-		if err != nil {
+	// A store outside the directory is opened and checked here, and emptied
+	// again when the restore fails before the directory is published; one
+	// inside it goes with the staged directory. Once the directory is
+	// published its storage.json names the store, so the content stays even
+	// if a later step (syncing the parent) fails.
+	var external storage.ArtifactStore
+	var imported []domain.ArtifactRef
+	var published bool
+	if target.Location != "" {
+		if external, err = openEmpty(ctx, target.Backend, target.Location); err != nil {
 			return err
 		}
-		defer output.Close()
+		defer external.Close()
+		defer func() {
+			if err == nil || published {
+				return
+			}
+			for _, ref := range imported {
+				_ = external.Delete(context.WithoutCancel(ctx), ref)
+			}
+		}()
+	}
+	published, err = publish(ctx, destination, func(stage string) error {
+		output := external
+		if output == nil {
+			staged, err := openEmpty(ctx, target.Backend, filepath.Join(stage, "artifacts"))
+			if err != nil {
+				return err
+			}
+			defer staged.Close()
+			output = staged
+		}
 		seen := map[string]bool{}
 		for _, item := range m.Artifacts {
 			if seen[item.Ref.ID] {
@@ -323,6 +362,9 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			h := sha256.New()
 			err = output.Import(ctx, item.Ref, io.TeeReader(r, h))
 			closeErr := r.Close()
+			if err == nil {
+				imported = append(imported, item.Ref)
+			}
 			if errors.Is(err, storage.ErrCorrupt) {
 				return fmt.Errorf("backup: artifact digest mismatch: %w", err)
 			}
@@ -384,6 +426,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			return nil
 		})
 	})
+	return err
 }
 
 func (m manifest) backend() string {
@@ -422,36 +465,36 @@ func readManifest(path string) (manifest, error) {
 	return m, nil
 }
 
-func publish(ctx context.Context, destination string, create func(string) error) error {
-	destination, err := filepath.Abs(destination)
+func publish(ctx context.Context, destination string, create func(string) error) (published bool, err error) {
+	destination, err = filepath.Abs(destination)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {
-			return err
+			return false, err
 		}
-		return fmt.Errorf("backup: destination already exists")
+		return false, fmt.Errorf("backup: destination already exists")
 	}
 	parent := filepath.Dir(destination)
 	stage, err := os.MkdirTemp(parent, ".conduit-snapshot-")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer os.RemoveAll(stage)
 	if err := create(stage); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if err := syncDirectory(stage); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(stage, destination); err != nil {
-		return err
+		return false, err
 	}
-	return syncDirectory(parent)
+	return true, syncParent(parent)
 }
 
 func sortedRefs(refs map[string]domain.ArtifactRef) []domain.ArtifactRef {
@@ -507,6 +550,11 @@ func writeDurable(path string, data []byte) error {
 	}
 	return closeErr
 }
+
+// syncParent syncs the directory a bundle or state directory was published
+// into; a test seam for a failure after the rename.
+var syncParent = syncDirectory
+
 func syncDirectory(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -536,4 +584,22 @@ func Inspect(bundle string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
+}
+
+// openEmpty opens the store a restore imports into and refuses one that
+// already holds content.
+func openEmpty(ctx context.Context, b storage.ArtifactBackend, location string) (storage.ArtifactStore, error) {
+	s, err := b.Open(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	held, err := s.List(ctx, "", 1)
+	if err == nil && len(held) > 0 {
+		err = fmt.Errorf("backup: the artifact store at %s already holds content: restore into an empty one", location)
+	}
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }

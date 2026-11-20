@@ -235,7 +235,7 @@ auth recover               (daemon stopped) revoke every operator credential and
 ### `open-conduit backup`
 
 ```text
-backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)
+backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC]   (daemon stopped; restore writes a new state directory, its artifacts into an empty store)
 ```
 
 ### `open-conduit state`

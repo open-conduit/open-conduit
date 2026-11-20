@@ -32,7 +32,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -141,7 +140,7 @@ type daemon struct {
 	now           func() time.Time
 	owner         string
 	coord         storage.Store
-	artifacts     *artifacts.Store
+	artifacts     storage.ArtifactStore
 	backups       backupState
 	configs       *management.ConfigService
 	resolver      *config.Resolver
@@ -431,11 +430,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.coord, err = runtime.Instrument(coord, runtime.TelemetryOptions{Observer: d.pipeline, Diagnostic: func(code string) { d.report("telemetry", "", code) }}); err != nil {
 		return err
 	}
-	if err = os.MkdirAll(filepath.Join(o.StateDir, "artifacts"), 0o700); err != nil {
-		return err
-	}
-	if d.artifacts, err = artifacts.Open(filepath.Join(o.StateDir, "artifacts")); err != nil {
-		return err
+	// The store is the state directory's chosen artifact backend; an
+	// unknown one stops the daemon rather than open an empty store.
+	if _, d.artifacts, err = openArtifacts(context.Background(), o.StateDir); err != nil {
+		return fmt.Errorf("artifacts: %w", err)
 	}
 	defer d.artifacts.Close()
 	if err = d.startBackups(backend.name, store); err != nil {

@@ -59,7 +59,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 		return cli.BackupInfo{}, err
 	}
 	defer store.Close()
-	files, err := artifacts.Open(filepath.Join(stateDir, "artifacts"))
+	_, files, err := openArtifacts(ctx, stateDir)
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
@@ -108,7 +108,9 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, artifacts.Backend, recordChoice); err != nil {
+	// Verification restores into the file store in its own temporary
+	// directory, never into a store the operator uses.
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, backup.ArtifactTarget{Backend: artifacts.Backend}, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)
@@ -136,7 +138,11 @@ func scopeIDs(ctx context.Context, store storage.Store) ([]string, error) {
 // RestoreState publishes a new state directory from a bundle (never over an
 // existing one), fences every backed-up lease and writes a fresh operator
 // credential, revoking the bundle's.
-func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupInfo, error) {
+func RestoreState(ctx context.Context, bundle, destination string, o cli.RestoreOptions) (cli.BackupInfo, error) {
+	target, choice, err := restoreTarget(o)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
 	info, err := bundleInfo(bundle)
 	if err != nil {
 		return info, err
@@ -144,7 +150,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, artifacts.Backend, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -233,7 +239,7 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		return r, nil
 	}
 	add("database", "ok", "schema_1", fmt.Sprintf("schema %d, integrity and foreign keys pass", store.SchemaVersion()))
-	files, ferr := artifacts.Open(filepath.Join(stateDir, "artifacts"))
+	art, files, ferr := openArtifacts(ctx, stateDir)
 	scopes := map[string]*cli.ScopeState{}
 	scope := func(id domain.ID) *cli.ScopeState {
 		s := scopes[string(id)]
@@ -315,12 +321,12 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	}
 	switch {
 	case ferr != nil:
-		add("artifacts", "fail", "artifacts_unavailable", "the artifact directory could not be opened")
+		add("artifacts", "fail", "artifacts_unavailable", fmt.Sprintf("the %s artifact store could not be opened: %v", art.name, ferr))
 	case missing > 0:
-		add("artifacts", "warn", "artifacts_missing", fmt.Sprintf("%d of %d referenced artifacts are missing; a backup refuses missing content until they are restored", missing, refs))
+		add("artifacts", "warn", "artifacts_missing", fmt.Sprintf("%s store: %d of %d referenced artifacts are missing; a backup refuses missing content until they are restored", art.name, missing, refs))
 		files.Close()
 	default:
-		add("artifacts", "ok", "complete", fmt.Sprintf("%d referenced artifacts present", refs))
+		add("artifacts", "ok", "complete", fmt.Sprintf("%s store: %d referenced artifacts present", art.name, refs))
 		files.Close()
 	}
 	add("timers", "info", "durable", fmt.Sprintf("%d durable timers (schedule slots, waits' timeouts, retries) resume on start", timerCount))

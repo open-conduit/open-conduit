@@ -54,13 +54,23 @@ type StateReport struct {
 	Scopes   []ScopeState `json:"scopes,omitempty"`
 }
 
+// RestoreOptions are `backup restore`'s choices for the restored
+// directory. Without ArtifactBackend its artifacts go to the file store in
+// the directory; with one they are imported into that registered artifact
+// backend at ArtifactLocation (which must be empty) and the directory's
+// storage.json records it.
+type RestoreOptions struct {
+	ArtifactBackend  string
+	ArtifactLocation string
+}
+
 // StateOps are the offline state-directory operations. Each takes the
 // state directory's exclusive daemon lock, so it refuses to run while a
 // daemon owns the directory.
 type StateOps struct {
 	Backup          func(ctx context.Context, stateDir, destination, build string) (BackupInfo, error)
 	Verify          func(ctx context.Context, bundle string) (BackupInfo, error)
-	Restore         func(ctx context.Context, bundle, destination string) (BackupInfo, error)
+	Restore         func(ctx context.Context, bundle, destination string, o RestoreOptions) (BackupInfo, error)
 	Check           func(ctx context.Context, stateDir string) (StateReport, error)
 	RecoverOperator func(ctx context.Context, stateDir, tokenPath string) error
 }
@@ -75,9 +85,9 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR")
+		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR [--artifacts NAME --artifacts-location LOC]")
 	}
-	f := newFlags("backup", "to")
+	f := newFlags("backup", "to", "artifacts", "artifacts-location")
 	pos, err := f.parse(args[1:])
 	if err != nil || len(pos) != 1 {
 		return usageError(o.errOut, "expected one path")
@@ -93,7 +103,7 @@ func (o *operator) backup(args []string) int {
 		if f.get("to") == "" {
 			return usageError(o.errOut, "backup restore needs --to DIR (an absent directory; restore never replaces a state directory)")
 		}
-		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to"))))
+		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location")}))
 	}
 	return usageError(o.errOut, "expected backup create|verify|restore")
 }

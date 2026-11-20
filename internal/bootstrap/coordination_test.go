@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -164,4 +167,164 @@ func (fakeBackend) Inspect(context.Context, string) (storage.Inspection, error) 
 }
 func (fakeBackend) Restore(context.Context, string, string, time.Time) error {
 	return storage.ErrInvalid
+}
+
+// Without an artifact choice a state directory's artifacts are the file
+// store at <state>/artifacts.
+func TestArtifactsDefaultToTheFileStore(t *testing.T) {
+	dir := t.TempDir()
+	writeChoice(t, dir, `{"backend": "sqlite"}`)
+	a, err := artifactsOf(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.name != artifacts.BackendName || a.location != filepath.Join(dir, "artifacts") {
+		t.Fatalf("default artifacts: %+v", a)
+	}
+}
+
+// storage.json's artifacts selects a registered artifact backend and hands
+// it the location as written.
+func TestStorageChoiceSelectsTheArtifactBackend(t *testing.T) {
+	dir := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "kept-here")
+	writeChoice(t, dir, `{"backend": "sqlite", "artifacts": {"backend": "files", "location": "`+elsewhere+`"}}`)
+	a, store, err := openArtifacts(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if a.location != elsewhere {
+		t.Fatalf("chosen artifacts: %+v", a)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "objects")); err != nil {
+		t.Fatalf("backend did not open the chosen location: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "artifacts")); !os.IsNotExist(err) {
+		t.Fatalf("default location used anyway: %v", err)
+	}
+}
+
+// An artifact choice this binary can't honour stops the daemon and every
+// offline command that opens the store, rather than falling back to the
+// file store, which would start an empty store beside the real one. state
+// check reports it.
+func TestArtifactChoiceRefusesWhatItCannotHonour(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown_backend":   `{"backend": "sqlite", "artifacts": {"backend": "s3", "location": "s3://bucket/prefix"}}`,
+		"no_backend":        `{"backend": "sqlite", "artifacts": {"location": "/x"}}`,
+		"unknown_field":     `{"backend": "sqlite", "artifacts": {"backend": "files", "bucket": "x"}}`,
+		"relative_location": `{"backend": "sqlite", "artifacts": {"backend": "files", "location": "artifacts"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			db, err := sqlite.Open(ctx, filepath.Join(dir, "conduit.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			if err := os.Chmod(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeChoice(t, dir, body)
+			if _, _, err := openArtifacts(ctx, dir); err == nil {
+				t.Fatal("opened an artifact store it cannot honour")
+			}
+			if _, err := BackupState(ctx, dir, filepath.Join(t.TempDir(), "bundle"), "test"); err == nil {
+				t.Fatal("backup ran without the chosen artifact store")
+			}
+			r, err := CheckState(ctx, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A malformed storage.json fails the first check that reads it
+			// (the lock's); a choice this binary can't open fails the
+			// artifacts.
+			failed := false
+			for _, c := range r.Checks {
+				failed = failed || c.Status == "fail" && (c.Name == "artifacts" || strings.Contains(c.Message, storageFile))
+			}
+			if !failed || r.OK {
+				t.Fatalf("state check did not refuse the choice: %+v", r.Checks)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "artifacts")); !os.IsNotExist(err) {
+				t.Fatal("fell back to the default artifact store")
+			}
+		})
+	}
+	dir := t.TempDir()
+	writeChoice(t, dir, `{"backend": "sqlite", "artifacts": {"backend": "s3"}}`)
+	if _, err := artifactsOf(dir); err == nil || !strings.Contains(err.Error(), "files") {
+		t.Fatalf("unknown artifact backend error should list the built-in ones: %v", err)
+	}
+}
+
+// state check names the artifact backend it checked.
+func TestStateCheckReportsTheArtifactBackend(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(dir, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeChoice(t, dir, `{"backend": "sqlite", "artifacts": {"backend": "files", "location": "`+filepath.Join(t.TempDir(), "kept")+`"}}`)
+	r, err := CheckState(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.Checks {
+		if c.Name == "artifacts" {
+			if c.Status != "ok" || !strings.HasPrefix(c.Message, "files store:") {
+				t.Fatalf("artifacts check: %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no artifacts check: %+v", r.Checks)
+}
+
+// A restore into a chosen artifact store records it in the restored
+// directory, beside the coordination backend even when that is the
+// default; the default store records nothing.
+func TestRestoredDirectoryRecordsItsArtifactBackend(t *testing.T) {
+	target, choice, err := restoreTarget(cli.RestoreOptions{})
+	if err != nil || choice != nil || target.Location != "" || target.Backend != artifacts.Backend {
+		t.Fatalf("default restore target: %+v %+v %v", target, choice, err)
+	}
+	for name, o := range map[string]cli.RestoreOptions{
+		"unknown_backend":     {ArtifactBackend: "s3", ArtifactLocation: "s3://b/p"},
+		"location_no_backend": {ArtifactLocation: "/x"},
+		"backend_no_location": {ArtifactBackend: "bootstrap-art"},
+	} {
+		if name == "backend_no_location" {
+			if _, err := storage.LookupArtifactBackend("bootstrap-art"); err != nil {
+				storage.RegisterArtifactBackend("bootstrap-art", artifacts.Backend)
+			}
+		}
+		if _, _, err := restoreTarget(o); err == nil {
+			t.Fatalf("%s: restore target accepted", name)
+		}
+	}
+	elsewhere := filepath.Join(t.TempDir(), "kept")
+	target, choice, err = restoreTarget(cli.RestoreOptions{ArtifactBackend: "files", ArtifactLocation: elsewhere})
+	if err != nil || target.Location != elsewhere {
+		t.Fatalf("chosen restore target: %+v %v", target, err)
+	}
+	dir := t.TempDir()
+	if err := recordChoiceWith(choice)(dir, "sqlite"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := artifactsOf(dir)
+	if abs, _ := filepath.Abs(dir); err != nil || a.location != elsewhere {
+		t.Fatalf("recorded artifact choice: %+v, %v (state %s)", a, err, abs)
+	}
+	c, err := coordinationOf(dir)
+	if err != nil || c.name != "sqlite" {
+		t.Fatalf("recorded coordination: %+v, %v", c, err)
+	}
 }

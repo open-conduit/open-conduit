@@ -23,6 +23,12 @@ open-conduit service start
 open-conduit backup restore ~/backups/open-conduit-2026-10-26 --to ~/.local/state/open-conduit-restored
 ```
 
+The artifacts go to the restored directory's own `artifacts/`. To put them in another artifact store the binary is built with, name it and an empty location, and the restored directory's `storage.json` records it:
+
+```sh
+open-conduit backup restore BUNDLE --to DIR --artifacts files --artifacts-location /srv/open-conduit/artifacts
+```
+
 ## Move to a new host
 
 Move the state with the config: copy the config file (and whatever its secret references need, such as keyring entries or environment variables), then carry the state across as a backup bundle.
