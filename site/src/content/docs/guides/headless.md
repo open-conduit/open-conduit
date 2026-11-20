@@ -14,7 +14,7 @@ Each release publishes an image of the daemon, `ghcr.io/open-conduit/open-condui
 | Contents | `open-conduit`, `os` and the bundled extension packages from the release archive, in `/opt/open-conduit`, plus git, an SSH client, Node 24 (for TypeScript packages) and a pinned Claude Code (`claude --version` shows which). |
 | User | `conduit`, uid and gid `10001`, never root |
 | Volume | `/home/conduit`, the user's home. It holds the state (`~/.local/state/open-conduit`), the config directory (`~/.config/open-conduit`, with any packages you install) and Claude Code's own config directory (`~/.claude`, where its sessions are kept). |
-| Entry point | `open-conduit serve --no-updates` with whatever flags you pass. A first argument that isn't a flag runs that command instead, as in `docker run … ghcr.io/open-conduit/open-conduit doctor`. |
+| Entry point | `open-conduit serve --no-updates` with whatever flags you pass. A first argument that isn't a flag runs that command instead, with the mounted config installed first, as in `docker run … ghcr.io/open-conduit/open-conduit config check`. |
 
 `--no-updates` turns off the web view's update page and anything else that would install a release from inside the container. To upgrade, roll out the next image tag. The daemon in the old container stops, and the new one adopts its state.
 
@@ -44,7 +44,7 @@ docker exec open-conduit open-conduit doctor
 
 ## Config and secrets
 
-The daemon reads its config and `secrets.json` only from regular, owner-only (`0600`) files that its own user owns. A Kubernetes ConfigMap or Secret mount, a Docker config or a bind mount from the host usually isn't one. So mount them in `/etc/open-conduit` instead (or the directory `OPEN_CONDUIT_CONFIG_SOURCE` names). At every start, the entry point copies `/etc/open-conduit/config.json` and `/etc/open-conduit/secrets.json`, when they are there, over the daemon's own files with the right mode. The mount is the source of truth. A change made inside the container, with `config set` or `secret set`, lasts only until the next start, so make changes in the mounted file.
+The daemon reads its config and `secrets.json` only from regular, owner-only (`0600`) files that its own user owns. A Kubernetes ConfigMap or Secret mount, a Docker config or a bind mount from the host usually isn't one. So mount them in `/etc/open-conduit` instead (or the directory `OPEN_CONDUIT_CONFIG_SOURCE` names). At every start, the entry point copies `/etc/open-conduit/config.json` and `/etc/open-conduit/secrets.json`, when they are there, over the daemon's own files with the right mode. The mount is the source of truth. A change made inside the container, with `config set` or `secret set`, lasts only until the next start, so make changes in the mounted file. When you take a file out of the mount, the entry point removes the copy it installed at the next start, so a secret you removed doesn't stay behind on the volume. A file the entry point didn't install is left alone.
 
 A changed mount takes effect when the container restarts (`kubectl rollout restart statefulset/open-conduit`, say).
 

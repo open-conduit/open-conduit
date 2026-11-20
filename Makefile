@@ -119,18 +119,21 @@ gateway-image:
 		done; \
 		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
 
-# The daemon's image (image/Dockerfile) for this machine's Docker, as
-# open-conduit:dev, from the Linux archive `make release-snapshot` wrote for
-# Docker's architecture. Then it checks the image: the daemon and os report
-# the snapshot's version, claude, git and the bundled packages are there, it
-# runs as the conduit user (uid 10001), and the entry point installs a
-# mounted config owner-only. A release builds and pushes both architectures
-# (scripts/publish-image.sh).
+# The daemon's image (image/Dockerfile), from the Linux archives `make
+# release-snapshot` wrote (which runs this after it, so CI and the release
+# build the image before anything is tagged). It builds both platforms as a
+# release does, without keeping them, then loads Docker's own as
+# open-conduit:dev and checks it: the daemon and os report the snapshot's
+# version, claude, git and the bundled packages are there, it runs as the
+# conduit user (uid 10001), and the entry point installs a mounted config
+# owner-only and removes it once it is no longer mounted. A release pushes
+# both platforms (scripts/publish-image.sh).
 image:
 	@scripts/require-tool.sh docker 'image needs Docker (OrbStack or Docker Desktop on macOS)'
 	@set -eu; archive=$$(ls $(RELEASE_DIR)/open-conduit_*_linux_amd64.tar.gz 2>/dev/null | head -n 1); \
 		test -n "$$archive" || { echo 'image: no release archive in $(RELEASE_DIR); run make release-snapshot first' >&2; exit 1; }; \
 		version=$$(basename $$archive _linux_amd64.tar.gz); version=$${version#open-conduit_}; \
+		scripts/publish-image.sh --check $$version; \
 		scripts/publish-image.sh --load $$version; \
 		docker run --rm open-conduit:dev --version | grep -q "^open-conduit $$version "; \
 		docker run --rm --entrypoint /opt/open-conduit/os open-conduit:dev --version | grep -q "^os $$version "; \
@@ -138,10 +141,19 @@ image:
 		docker run --rm --entrypoint claude open-conduit:dev --version >/dev/null; \
 		docker run --rm --entrypoint git open-conduit:dev --version >/dev/null; \
 		docker run --rm open-conduit:dev extension list | grep -q '^  claude-code .*(bundled with open-conduit)'; \
-		printf '{}\n' > dist/image/config.json; chmod 0644 dist/image/config.json; \
-		docker run --rm -v "$$PWD/dist/image/config.json:/etc/open-conduit/config.json:ro" --entrypoint sh open-conduit:dev -c \
-			'open-conduit-entrypoint --dry-run >/dev/null 2>&1 || true; test "$$(stat -c %a:%u .config/open-conduit/config.json)" = 600:10001'; \
-		echo "image open-conduit:dev: open-conduit and os $$version, claude, git, uid 10001, mounted config installed 0600"
+		mkdir -p dist/image/mount; printf '{}\n' > dist/image/mount/config.json; printf '{"k": "v"}\n' > dist/image/mount/secrets.json; \
+		chmod 0755 dist/image/mount; chmod 0644 dist/image/mount/*.json; \
+		docker run --rm -v "$$PWD/dist/image/mount:/mnt/oc:ro" --entrypoint sh open-conduit:dev -c \
+			'set -e; d=.config/open-conduit; mkdir -p /tmp/now; export OPEN_CONDUIT_CONFIG_SOURCE=/tmp/now; \
+			cp /mnt/oc/config.json /mnt/oc/secrets.json /tmp/now/; \
+			open-conduit-entrypoint version >/dev/null 2>&1; \
+			test "$$(stat -c %a:%u $$d/config.json)" = 600:10001; test "$$(stat -c %a:%u $$d/secrets.json)" = 600:10001; \
+			rm /tmp/now/secrets.json; open-conduit-entrypoint version >/dev/null 2>&1; \
+			test -f $$d/config.json; test ! -e $$d/secrets.json; test ! -e $$d/secrets.json.from-mount; \
+			rm /tmp/now/config.json; printf "{}\n" > $$d/secrets.json; chmod 0600 $$d/secrets.json; \
+			open-conduit-entrypoint version >/dev/null 2>&1; \
+			test ! -e $$d/config.json; test -f $$d/secrets.json'; \
+		echo "image open-conduit:dev: both platforms build; open-conduit and os $$version, claude, git, uid 10001, mounted config installed 0600 and removed once unmounted"
 
 check: check-static test
 
@@ -270,8 +282,9 @@ certify: require-node build packages ts-packages
 # every platform's archive, the checksums and the Homebrew cask into
 # dist/release (.goreleaser.yaml). Then this host's archive is extracted and
 # smoke-tested, its binaries must report the snapshot version, and the cask
-# must link only open-conduit and state no license. CI runs it on pull
-# requests; the release workflow runs it before publishing.
+# must link only open-conduit and state no license, and the daemon's image
+# is built from the Linux archives and checked (`make image`). CI runs it on
+# pull requests; the release workflow runs it before publishing.
 GORELEASER ?= goreleaser
 RELEASE_DIR = dist/release
 release-snapshot:
@@ -297,3 +310,4 @@ release-snapshot:
 		! grep -qi 'license' $$cask; \
 		echo "snapshot $$version: 4 archives, checksums verified, setup $(BUNDLED_PACKAGES) bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke
+	$(MAKE) --no-print-directory image
