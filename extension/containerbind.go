@@ -302,9 +302,17 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 			return SandboxPlan{}, fmt.Errorf("%w: %s", ErrContainerRunning, st.Ref.ID)
 		}
 	}
+	// What another execution of the Work left (an attempt whose recovery
+	// failed, before its retry) comes back to the workspace before this
+	// one runs there; while any of it can't be collected, nothing launches.
+	if err := c.collectWork(ctx); err != nil {
+		return SandboxPlan{}, err
+	}
+	// What a stopped container wrote comes back before it goes; one that
+	// can't be collected is kept, and nothing launches beside it.
 	for _, st := range listed {
-		if err := b.Provider.Remove(ctx, st.Ref); err != nil {
-			return SandboxPlan{}, fmt.Errorf("%w: could not remove the stopped container %s: %v", ErrSandboxUnavailable, st.Ref.ID, err)
+		if err := RemoveContainer(ctx, b.Provider, st.Ref); err != nil {
+			return SandboxPlan{}, fmt.Errorf("%w: could not remove the stopped container %s: %w", ErrSandboxUnavailable, st.Ref.ID, err)
 		}
 	}
 	merged := needs.Merge(g.Resource)
@@ -369,6 +377,7 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	labels := map[string]string{
 		ContainerLabelHost:      b.Host,
 		ContainerLabelExecution: string(b.Owner.ExecutionID),
+		ContainerLabelWork:      string(b.Owner.WorkID),
 		ContainerLabelSegment:   segment,
 		ContainerLabelDigest:    plan.Digest,
 	}
@@ -408,6 +417,36 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		out.Dir = g.Run
 	}
 	return out, nil
+}
+
+// collectWork collects every stopped container of the Work's other
+// executions (ContainerLabelWork) that this host made, when the provider
+// collects: they write to the Work's workspace, which this launch's
+// execution shares, so what they wrote must be back before it runs, and
+// never arrive over what it writes. A collected container changes
+// nothing, so this costs a listing once each is back; its removal stays
+// with the removal paths. One that can't be collected refuses the launch,
+// so a retry waits behind it.
+func (c *BoundContainer) collectWork(ctx context.Context) error {
+	b := c.b
+	if !Collects(b.Provider) || b.Owner.WorkID == "" {
+		return nil
+	}
+	listed, err := b.Provider.List(ctx, ResourceOwner{})
+	if err != nil {
+		return fmt.Errorf("%w: could not list the Work's containers: %v", ErrSandboxUnavailable, err)
+	}
+	hosts := ContainerHosts{Host: b.Host, Former: b.FormerHosts}
+	for _, st := range listed {
+		l := st.Ref.Labels
+		if st.Running || !hosts.Owns(l[ContainerLabelHost]) || l[ContainerLabelWork] != string(b.Owner.WorkID) || l[ContainerLabelExecution] == string(b.Owner.ExecutionID) {
+			continue
+		}
+		if err := CollectContainer(ctx, b.Provider, st.Ref); err != nil {
+			return fmt.Errorf("%w: another run of the Work left %s uncollected: %w", ErrSandboxUnavailable, st.Ref.ID, err)
+		}
+	}
+	return nil
 }
 
 // AttachWorkspace is where an attach to the Work's session goes under
@@ -590,6 +629,13 @@ func (c *BoundContainer) Adopt(ctx context.Context, alive bool) (ContainerExit, 
 		// before a retry.
 		return ContainerExit{}, fmt.Errorf("%w: the container runs without its wrapper", ErrNotAdoptable)
 	}
+	// The run's output comes back before its exit stands for the
+	// segment's: one that can't be collected is not adopted, so the
+	// attempt is never settled as if the run had ended cleanly with its
+	// work left behind, and the container stays to be collected again.
+	if err := CollectContainer(ctx, b.Provider, st.Ref); err != nil {
+		return ContainerExit{}, errors.Join(ErrNotAdoptable, err)
+	}
 	return ContainerExit{Exited: true, ExitCode: st.ExitCode, Interrupted: c.interrupted(*pin)}, nil
 }
 
@@ -711,9 +757,10 @@ func StopContainer(ctx context.Context, p ContainerProvider, pin *ContainerPin, 
 	return nil
 }
 
-// RemoveContainers removes every container of owner. The host calls it
-// once the execution is confirmed stopped and before its workspace may be
-// released; an error keeps the workspace.
+// RemoveContainers removes every container of owner, each collected first
+// (RemoveContainer). The host calls it once the execution is confirmed
+// stopped and before its workspace may be released; an error keeps the
+// workspace, and a container that can't be collected stays.
 func RemoveContainers(ctx context.Context, p ContainerProvider, owner ResourceOwner) error {
 	listed, err := p.List(ctx, owner)
 	if err != nil {
@@ -725,7 +772,7 @@ func RemoveContainers(ctx context.Context, p ContainerProvider, owner ResourceOw
 			errs = append(errs, fmt.Errorf("%w: %s", ErrContainerRunning, st.Ref.ID))
 			continue
 		}
-		errs = append(errs, p.Remove(ctx, st.Ref))
+		errs = append(errs, RemoveContainer(ctx, p, st.Ref))
 	}
 	return errors.Join(errs...)
 }
@@ -816,12 +863,18 @@ func (h ContainerHosts) former(label string) bool {
 	return false
 }
 
+// reconcileStopGrace is how long reconcile gives a running container of an
+// execution that is over before it is killed, when its provider collects.
+const reconcileStopGrace = 10 * time.Second
+
 // ReconcileHostContainers is ReconcileContainersKeeping over every label
 // the daemon owns. Under its own label, an execution keep leaves out is
 // gone. Under a former label only an execution keep reports is the
 // daemon's: another installation once shared that label (a state
 // directory at the same path), so an execution it doesn't know is left
-// alone. It returns how many entries it removed.
+// alone. Each container is collected before it is removed
+// (RemoveContainer); one that can't be collected stays, and is an error.
+// It returns how many entries it removed.
 func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts ContainerHosts, keep func([]domain.ID) (map[domain.ID]ContainerKeep, error)) (int, error) {
 	listed, err := p.List(ctx, ResourceOwner{})
 	if err != nil {
@@ -858,7 +911,15 @@ func ReconcileHostContainers(ctx context.Context, p ContainerProvider, hosts Con
 		case former && !known, k == ContainerKeepAll, k == ContainerKeepAttach && attach, st.Running && attach:
 			continue
 		}
-		if err := p.Remove(ctx, st.Ref); err != nil {
+		// A running one is stopped before it is collected, so what it
+		// wrote comes back as it would from a stop.
+		if Collects(p) && st.Running {
+			if err := p.Stop(ctx, st.Ref, reconcileStopGrace); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if err := RemoveContainer(ctx, p, st.Ref); err != nil {
 			errs = append(errs, err)
 			continue
 		}

@@ -144,7 +144,7 @@ Doctor's `ssh` check connects to each remote with its pinned key. It checks that
 
 ## Stopping and restarts
 
-Stopping a run from the terminal UI, an interrupt and a run's deadline reach the run on the remote. If the SSH connection drops while a run is going, Open Conduit stops the run on the remote, copies back what it changed and fails the run. A daemon restart doesn't end a run whose helper is still going. A run that ended while nothing was watching is reported with its exit status. What it changed stays on the remote until the Work's next run replaces it.
+Stopping a run from the terminal UI, an interrupt and a run's deadline reach the run on the remote. If the SSH connection drops while a run is going, Open Conduit stops the run on the remote, copies back what it changed and fails the run. A daemon restart doesn't end a run whose helper is still going. If the restart took the helper with it, Open Conduit copies back what the run changed once the run has ended, before it reports the run's exit status or removes the run from the remote. A run still going when the daemon returns is stopped, and what it changed comes back before it is removed. If the remote can't be reached to copy the changes back, the run stays on the remote, `open-conduit doctor` says so, and Open Conduit tries again until it can.
 
 ## What it doesn't cover
 

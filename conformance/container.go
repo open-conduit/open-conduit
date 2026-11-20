@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -212,6 +213,138 @@ func CheckContainerPlacer(f PlacerFixture) error {
 	defer func() { _ = p.Remove(ctx, created.Ref) }()
 	if created.Daemon != at.Daemon {
 		return fmt.Errorf("created on %q, not at the placement's %q", created.Daemon, at.Daemon)
+	}
+	return nil
+}
+
+// CollectorFixture is a container provider that collects
+// (extension.ContainerCollector) to check, with a launch that, once
+// started, writes Content to File in its write grant and exits with Code,
+// and the means to start a created container and lose its wrapper while
+// the run still runs.
+type CollectorFixture struct {
+	Provider interface {
+		extension.ContainerProvider
+		extension.ContainerCollector
+	}
+	// Host is the ContainerLabelHost value the provider lists for.
+	Host string
+	// Policy, Needs and Launch are a launch the provider can plan;
+	// Policy.Paths names its run and records directories.
+	Policy extension.ContainerPolicy
+	Needs  extension.SandboxNeeds
+	Launch extension.SandboxLaunch
+	Code   int
+	// File is a host path in the launch's write grant, and Content what
+	// the run writes there.
+	File, Content string
+	// Orphan starts a created container's argv as its wrapper, then kills
+	// the wrapper while the run still runs (as a daemon's machine
+	// restarting takes it), and returns once the run has gone on to its
+	// exit without it.
+	Orphan func(extension.ContainerCreated) error
+}
+
+// CheckContainerCollector checks that a run whose wrapper died still
+// brings its work back to the host (#725): with the wrapper killed
+// mid-run and the container left to exit, the run's file is on the host
+// once Adopt returns the container's exit, and once the host removes a
+// container it never adopted. Collecting again changes nothing, so a
+// change the host made since stays, and a removed container collects as
+// nothing.
+func CheckContainerCollector(f CollectorFixture) error {
+	ctx := context.Background()
+	orphaned := func(execution string) (extension.ResourceOwner, extension.ContainerPin, error) {
+		owner := extension.ResourceOwner{ScopeID: "conformance-scope", WorkID: "conformance-work", ExecutionID: domain.ID(execution)}
+		if err := os.Remove(f.File); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return owner, extension.ContainerPin{}, err
+		}
+		plan, err := f.Provider.Plan(ctx, owner, f.Policy, f.Needs, f.Launch)
+		if err != nil {
+			return owner, extension.ContainerPin{}, fmt.Errorf("plan: %v", err)
+		}
+		plan.Digest = extension.ContainerDigest(plan.Image, plan.Data)
+		before := time.Now()
+		created, err := f.Provider.Create(ctx, plan, map[string]string{
+			extension.ContainerLabelHost:      f.Host,
+			extension.ContainerLabelExecution: execution,
+			extension.ContainerLabelSegment:   "1",
+			extension.ContainerLabelDigest:    plan.Digest,
+		})
+		if err != nil {
+			return owner, extension.ContainerPin{}, fmt.Errorf("create: %v", err)
+		}
+		pin := extension.ContainerPin{Digest: plan.Digest, Image: plan.Image, Daemon: created.Daemon, ID: created.Ref.ID, Run: f.Policy.Paths.Run, At: before}
+		if err := f.Orphan(created); err != nil {
+			return owner, pin, fmt.Errorf("start the run and kill its wrapper: %v", err)
+		}
+		st, err := f.Provider.Inspect(ctx, extension.ContainerRef{ID: pin.ID})
+		switch {
+		case err != nil:
+			return owner, pin, fmt.Errorf("inspect the orphaned run: %v", err)
+		case st.Gone || st.Running || st.StartedAt.IsZero():
+			return owner, pin, fmt.Errorf("the orphaned run must have run and exited, there to collect: %+v", st)
+		case st.ExitCode != f.Code:
+			return owner, pin, fmt.Errorf("the orphaned run exited %d, not %d", st.ExitCode, f.Code)
+		}
+		return owner, pin, nil
+	}
+	has := func(when string) error {
+		raw, err := os.ReadFile(f.File)
+		if err != nil || string(raw) != f.Content {
+			return fmt.Errorf("%s, the run's file is %q (%v), want %q: its work was not collected", when, raw, err, f.Content)
+		}
+		return nil
+	}
+
+	// Adopted: the exit stands for the segment's only once its work is
+	// back.
+	owner, pin, err := orphaned("conformance-collect-adopt")
+	if err != nil {
+		return err
+	}
+	bound := extension.BindContainer(extension.ContainerBinding{Provider: f.Provider, Owner: owner, Config: f.Policy.Config, Host: f.Host, Records: f.Policy.Paths.Records, Pinned: &pin})
+	exit, err := bound.Adopt(ctx, false)
+	if err != nil || !exit.Exited || exit.ExitCode != f.Code {
+		return fmt.Errorf("adopt the exited run: %+v %v, want its exit %d", exit, err, f.Code)
+	}
+	if err := has("once Adopt returned its exit"); err != nil {
+		return err
+	}
+	// A second collect changes nothing: what the host did since stays.
+	const host = "changed on the host since"
+	if err := os.WriteFile(f.File, []byte(host), 0o644); err != nil {
+		return err
+	}
+	if err := f.Provider.Collect(ctx, extension.ContainerRef{ID: pin.ID}); err != nil {
+		return fmt.Errorf("collect a collected run again: %v", err)
+	}
+	if raw, _ := os.ReadFile(f.File); string(raw) != host {
+		return fmt.Errorf("collecting again undid the host's change: the file is %q", raw)
+	}
+	if err := extension.RemoveContainers(ctx, f.Provider, owner); err != nil {
+		return fmt.Errorf("remove the adopted run: %v", err)
+	}
+	if raw, _ := os.ReadFile(f.File); string(raw) != host {
+		return fmt.Errorf("removing a collected run undid the host's change: the file is %q", raw)
+	}
+
+	// Removed without being adopted: its work comes back first.
+	owner, pin, err = orphaned("conformance-collect-remove")
+	if err != nil {
+		return err
+	}
+	if err := extension.RemoveContainers(ctx, f.Provider, owner); err != nil {
+		return fmt.Errorf("remove the exited run: %v", err)
+	}
+	if err := has("once the host removed it"); err != nil {
+		return err
+	}
+	if st, err := f.Provider.Inspect(ctx, extension.ContainerRef{ID: pin.ID}); err != nil || !st.Gone {
+		return fmt.Errorf("the removed run is %+v, %v, want gone", st, err)
+	}
+	if err := f.Provider.Collect(ctx, extension.ContainerRef{ID: pin.ID}); err != nil {
+		return fmt.Errorf("collect a removed run: %v, want nothing to collect", err)
 	}
 	return nil
 }

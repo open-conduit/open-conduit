@@ -85,6 +85,7 @@ var useCases = map[string][]string{
 	"container_provider.remove":   {"docker", "ssh"},
 	"container_provider.forward":  {"docker"},
 	"container_provider.place":    {"ssh"},
+	"container_provider.collect":  {"ssh"},
 	"container_provider.site_run": {"ssh"},
 	"site.run":                    {"git"},
 	"tunnel.run":                  {"ngrok", "cloudflared"},
@@ -346,7 +347,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
 	m.Provides.Extensions[0].Sandbox = protocol.EntrySandboxOptional
-	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true, Place: true}}
+	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true, Place: true, Collect: true}}
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
 	m.Provides.Verifiers = []protocol.VerifierDecl{{Type: "chat-idp"}}
 	m.Provides.SecretSchemes = []protocol.SecretSchemeDecl{{Scheme: "chat-vault"}}

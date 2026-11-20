@@ -116,6 +116,7 @@ var Methods = []Method{
 	{Name: "container_provider.remove", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Remove"}},
 	{Name: "container_provider.forward", Direction: HostToExtension, Provides: "containers.forward", Contract: []string{"extension.ContainerForwarder.Forward"}},
 	{Name: "container_provider.place", Direction: HostToExtension, Provides: "containers.place", Contract: []string{"extension.ContainerPlacer.Place", "extension.Placement"}},
+	{Name: "container_provider.collect", Direction: HostToExtension, Provides: "containers.collect", Contract: []string{"extension.ContainerCollector.Collect"}},
 	{Name: "container_provider.site_run", Direction: HostToExtension, Provides: "containers.place", Contract: []string{"extension.ContainerPlacer.SiteRun", "extension.SiteCommand", "extension.SiteResult"}},
 	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfigSchema"}},
 	{Name: "tunnel.url", Direction: ExtensionToHost, Provides: "tunnels", Contract: []string{"host:extension.TunnelProvider.Run publish"}},

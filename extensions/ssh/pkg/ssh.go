@@ -1,7 +1,7 @@
 // Package sshext serves the ssh container provider (extensions/ssh) as a
 // package over protocol version 1, through protocol/sdk (#477): the host
-// plans, creates, signals, stops, inspects, lists and removes a binding's
-// runs on a remote through container_provider.*, and checks a binding's
+// plans, creates, signals, stops, inspects, lists, collects and removes a
+// binding's runs on a remote through container_provider.*, and checks a binding's
 // container config through validate. Nothing in the daemon knows about
 // ssh: a binding names container provider "ssh" once this package is
 // installed (or bundled beside the binary). open-conduit serves it as
@@ -46,7 +46,7 @@ func Manifest() protocol.Manifest {
 		Summary: "Runs a container binding's launches on another machine over SSH, pinned by its host key, with the launch's granted paths copied there and back.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{
-			Containers: []protocol.ContainerDecl{{Type: ssh.Type, Place: true}},
+			Containers: []protocol.ContainerDecl{{Type: ssh.Type, Place: true, Collect: true}},
 			Checks:     []protocol.CheckDecl{{Name: Name}},
 		}}
 }
@@ -160,6 +160,16 @@ func (x *provider) Remove(ctx context.Context, ref extension.ContainerRef) error
 	return p.Remove(ctx, ref)
 }
 
+// Collect copies back what an exited run changed when its helper didn't
+// (extension.ContainerCollector).
+func (x *provider) Collect(ctx context.Context, ref extension.ContainerRef) error {
+	p, err := x.get(ctx)
+	if err != nil {
+		return err
+	}
+	return p.Collect(ctx, ref)
+}
+
 // Place and SiteRun place a launch on the binding's remote and run a
 // command there (extension.ContainerPlacer), so a workspace can be made
 // on the remote.
@@ -180,8 +190,9 @@ func (x *provider) SiteRun(ctx context.Context, placement string, cmd extension.
 }
 
 var (
-	_ extension.ContainerProvider = (*provider)(nil)
-	_ extension.ContainerPlacer   = (*provider)(nil)
+	_ extension.ContainerProvider  = (*provider)(nil)
+	_ extension.ContainerPlacer    = (*provider)(nil)
+	_ extension.ContainerCollector = (*provider)(nil)
 )
 
 // Build returns the served extension.

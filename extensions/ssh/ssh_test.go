@@ -7,10 +7,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -360,6 +363,92 @@ func TestConformance(t *testing.T) {
 		Start: func(c extension.ContainerCreated) int {
 			code, _ := f.helper(c.Argv, nil)
 			return code
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCollectConformance (#725): a run whose helper is killed mid-run (a
+// daemon restart that takes it) and which then exits brings its work back
+// through Collect, before Adopt returns its exit and before the host
+// removes it.
+func TestCollectConformance(t *testing.T) {
+	f := newFakeRemote(t)
+	ctx := context.Background()
+	// The run says when its command has started (past the stub's exec
+	// chain, which a fake setsid lengthens) and waits for its release.
+	started, release := filepath.Join(f.root, "started"), filepath.Join(f.root, "release")
+	err := conformance.CheckContainerCollector(conformance.CollectorFixture{
+		Provider: f.p,
+		Host:     "host-a",
+		Policy:   extension.ContainerPolicy{Config: f.config, Paths: extension.SandboxPaths{Workspace: f.ws, Run: f.run, Records: f.records}},
+		Needs:    extension.SandboxNeeds{Write: []string{f.ws}},
+		Launch: extension.SandboxLaunch{Argv: []string{"/bin/sh", "-c", `: > "$STARTED"; while [ ! -e "$RELEASE" ]; do sleep 0.01; done; printf %s "the run's work" > out.txt; exit 5`},
+			Dir: f.ws, RunDir: f.run, Env: []string{"PATH=/usr/bin:/bin", "STARTED=" + started, "RELEASE=" + release}},
+		Code:    5,
+		File:    filepath.Join(f.ws, "out.txt"),
+		Content: "the run's work",
+		Orphan: func(c extension.ContainerCreated) error {
+			_ = os.Remove(release)
+			_ = os.Remove(started)
+			_, id, err := f.p.splitRef(c.Ref.ID)
+			if err != nil {
+				return err
+			}
+			var run Run
+			raw, err := os.ReadFile(RunFile(f.records, id))
+			if err == nil {
+				err = json.Unmarshal(raw, &run)
+			}
+			if err != nil {
+				return err
+			}
+			// What the helper starts, in a group of its own, which then
+			// dies with the run still going.
+			argv := append(append([]string{}, run.SSH...), "-T", run.Host, command(run.Root, scriptRun, id, strconv.FormatInt(time.Now().UnixNano(), 10)))
+			cmd := exec.Command(argv[0], argv[1:]...)
+			cmd.Env = f.p.cliEnv()
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				st, err := f.p.Inspect(ctx, c.Ref)
+				if err != nil {
+					return err
+				}
+				if _, err := os.Stat(started); err == nil && st.Running {
+					break
+				}
+				if time.Now().After(deadline) {
+					return errors.New("the run never started")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
+			if _, err := os.Stat(filepath.Join(f.ws, "out.txt")); err == nil {
+				return errors.New("the run's file is on the host while it runs")
+			}
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				return err
+			}
+			// The run goes on without its helper to its exit.
+			for deadline := time.Now().Add(30 * time.Second); ; {
+				st, err := f.p.Inspect(ctx, c.Ref)
+				if err != nil {
+					return err
+				}
+				if !st.Running {
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return errors.New("the orphaned run never exited")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
 		},
 	})
 	if err != nil {

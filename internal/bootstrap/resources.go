@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -246,8 +247,25 @@ func (d *daemon) ownerStatus(ctx context.Context, c *components, o extension.Res
 	return st, nil
 }
 
-// resourceCheck reports leases needing attention for doctor.
-func (d *daemon) resourceCheck(context.Context) runtime.Check {
+// resourceCheck reports leases needing attention for doctor, and the
+// containers the last container reconcile couldn't remove: one whose
+// output couldn't be collected stays, with the workspace it would come
+// back to, until a later pass collects it.
+func (d *daemon) resourceCheck(ctx context.Context) runtime.Check {
+	check := d.resourceLeaseCheck(ctx)
+	if err := d.containers.reconcileFailed(); err != nil {
+		check.Status, check.Code = runtime.CheckWarn, "container_reconcile_failed"
+		if errors.Is(err, extension.ErrContainerUncollected) {
+			check.Code = "container_uncollected"
+		}
+		for _, line := range strings.Split(err.Error(), "\n") {
+			check.Items = append(check.Items, "container "+line)
+		}
+	}
+	return check
+}
+
+func (d *daemon) resourceLeaseCheck(context.Context) runtime.Check {
 	r := &d.resources
 	r.mu.Lock()
 	defer r.mu.Unlock()

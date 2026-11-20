@@ -278,6 +278,19 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.ContainerForward{Address: addr}, nil
+	case "container_provider.collect":
+		var p protocol.ContainerProviderRefParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type].(extension.ContainerCollector)
+		if !ok {
+			return nil, notFound(method)
+		}
+		if err := prov.Collect(ctx, p.Ref.Extension()); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
 	case "container_provider.place":
 		var p protocol.ContainerProviderPlaceParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
