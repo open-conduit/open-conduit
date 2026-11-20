@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -109,13 +110,19 @@ func TestSandboxProtectsTheConfigsSiblings(t *testing.T) {
 				}
 				reached := func() []string {
 					var r []string
-					for _, k := range []string{"cfg_read_secrets", "cfg_read_last_good", "cfg_write_secrets", "cfg_write_last_good", "cfg_plant_package", "cfg_plant_file", "cfg_write_package"} {
+					probes := []string{"cfg_read_secrets", "cfg_read_last_good"}
+					// On Linux a denied write lands in a throwaway tmpfs or on
+					// a /dev/null bind and looks like it succeeded from inside,
+					// so only macOS's answer is a verdict; the host's files
+					// decide on both.
+					if runtime.GOOS == "darwin" {
+						probes = append(probes, "cfg_write_secrets", "cfg_write_last_good", "cfg_plant_package", "cfg_plant_file", "cfg_write_package")
+					}
+					for _, k := range probes {
 						if got[k] != "DENIED" {
 							r = append(r, k)
 						}
 					}
-					// On Linux a denied write can land in a throwaway tmpfs,
-					// so the host's files say whether one got out.
 					for _, p := range []string{filepath.Join(c.extensions, "planted"), filepath.Join(c.extensions, "planted.json")} {
 						if _, err := os.Lstat(p); err == nil {
 							r = append(r, p+" on the host")
