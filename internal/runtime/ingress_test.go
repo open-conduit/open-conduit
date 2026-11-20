@@ -1011,3 +1011,56 @@ func TestIngressUnregisterResumesOnRegister(t *testing.T) {
 		t.Fatalf("re-registered source lost its checkpoint: %+v", status)
 	}
 }
+
+// deadlineStore records whether each transaction ran under a deadline.
+type deadlineStore struct {
+	storage.Store
+	deadlines []bool
+}
+
+func (s *deadlineStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	_, ok := ctx.Deadline()
+	s.deadlines = append(s.deadlines, ok)
+	return s.Store.Transact(ctx, g, fn)
+}
+
+// deadlineIngress records whether its push ran under a deadline.
+type deadlineIngress struct {
+	*fixtureIngress
+	deadline bool
+}
+
+func (d *deadlineIngress) Push(ctx context.Context, src extension.Source, del extension.Delivery) (extension.PushResult, error) {
+	_, d.deadline = ctx.Deadline()
+	return d.fixtureIngress.Push(ctx, src, del)
+}
+
+// The page timeout bounds the adapter's push, not the acceptance after it:
+// a large delivery the provider has answered is accepted under the
+// caller's context, so a slow store write is never cut off by the
+// provider's budget and answered as a failure the sender would retry.
+func TestIngressPageTimeoutBoundsOnlyThePush(t *testing.T) {
+	clock := &ingressClock{at: ingressTime}
+	db, _ := openIngress(t, filepath.Join(t.TempDir(), "conduit.db"), clock)
+	store := &deadlineStore{Store: db}
+	r, err := runtime.NewIngress(store, clock.Now, runtime.IngressOptions{PageTimeout: 30 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := extension.Source{Namespace: "fixture/account-a", ScopeID: "scope_a"}
+	f := &deadlineIngress{fixtureIngress: newFixtureIngress()}
+	if err := r.Register(context.Background(), "source_a", source, f, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	f.pushed = extension.PushResult{Observations: []extension.Observation{fixtureObservation(source, "item", "v1")}}
+	store.deadlines = nil
+	if _, err := r.Push(context.Background(), "source_a", extension.Delivery{ID: "push_v1", ReceivedAt: ingressTime}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.deadline {
+		t.Fatal("the push ran without the page timeout")
+	}
+	if len(store.deadlines) != 1 || store.deadlines[0] {
+		t.Fatalf("acceptance ran under the page timeout: %v", store.deadlines)
+	}
+}

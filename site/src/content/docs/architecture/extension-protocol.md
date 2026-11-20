@@ -195,7 +195,7 @@ Either side cancels an in-flight request with the `$/cancel {id}` notification. 
 - `executor.interrupt` and `executor.stop` are the controls that act on a process.
 - a cancelled `operation.call` may already have made its external write. A retry carries the same `request_id` (`CallRequestID`), and the handler uses it to avoid making the write twice ([below](#operation-handlers-and-request-ids)); adapters keep their reconcile markers.
 
-The host cancels everything in flight when it stops. Ingress pages run under the runtime's page timeout, and in-transaction methods under their own deadline (below).
+The host cancels everything in flight when it stops. An ingress page's provider call (a push or a reconcile page) runs under the runtime's page timeout, and its acceptance under the caller's context; in-transaction methods run under their own deadline (below).
 
 ## Flow control
 
