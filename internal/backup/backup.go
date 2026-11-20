@@ -1,11 +1,15 @@
 // Package backup composes a coordination backend's consistent snapshot with
-// pinned artifacts. It works over the storage lifecycle contract
-// (storage.Backend, storage.Database), never a particular backend.
-// Backups contain private runtime state and must remain owner-only.
+// the artifacts it references, held from retention while they are copied.
+// It works over the storage lifecycle and artifact contracts
+// (storage.Backend, storage.Database, storage.ArtifactStore), never a
+// particular backend; a bundle's own artifacts are a file store, as part
+// of the bundle format. Backups contain private runtime state and must
+// remain owner-only.
 package backup
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -54,6 +58,79 @@ func (e Expired) of(tx storage.Tx, id domain.ID) (bool, error) {
 	return e(tx, id)
 }
 
+// Retention is what Create needs of the runtime's retention ledger, which
+// the runtime owns: Expired, and a retention hold (runtime.HoldRetention)
+// that keeps retention from deleting content while Create copies it. Hold
+// commits or renews the hold id until until; Release removes it.
+type Retention struct {
+	Expired Expired
+	Hold    func(tx storage.Tx, id string, until time.Time) error
+	Release func(tx storage.Tx, id string) error
+	// HoldFor is how long each commit or renewal of the hold lasts; zero
+	// is DefaultHoldFor. Create renews it every third of that while it
+	// copies, so it lapses that long after a crashed backup.
+	HoldFor time.Duration
+}
+
+// DefaultHoldFor is how long a backup's retention hold lasts unless
+// renewed.
+const DefaultHoldFor = 15 * time.Minute
+
+// hold commits a new retention hold, renews it until the returned stop is
+// called, then releases it. ctx is cancelled with the renewal's error when
+// one fails, since the hold may then lapse under the copy.
+func (r Retention) hold(ctx context.Context, db storage.Database) (context.Context, func(), error) {
+	if r.Hold == nil || r.Release == nil {
+		return nil, nil, storage.ErrInvalid
+	}
+	period := r.HoldFor
+	if period <= 0 {
+		period = DefaultHoldFor
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return nil, nil, err
+	}
+	id := "backup/" + hex.EncodeToString(b[:])
+	put := func(ctx context.Context) error {
+		now := time.Now().UTC()
+		return db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error { return r.Hold(tx, id, now.Add(period)) })
+	}
+	if err := put(ctx); err != nil {
+		return nil, nil, err
+	}
+	held, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		tick := time.NewTicker(period / 3)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-held.Done():
+				return
+			case <-tick.C:
+				if err := put(held); err != nil {
+					cancel(fmt.Errorf("backup: renewing the retention hold: %w", err))
+					return
+				}
+			}
+		}
+	}()
+	stop := func() {
+		close(done)
+		<-renewed
+		cancel(nil)
+		// A hold that isn't released lapses at its expiry, which only
+		// delays retention, so a failure here doesn't fail the backup.
+		_ = db.Transact(context.WithoutCancel(ctx), storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error { return r.Release(tx, id) })
+	}
+	return held, stop, nil
+}
+
 // DefaultBackend is the backend a manifest that names none was made with.
 const DefaultBackend = "sqlite"
 
@@ -62,20 +139,30 @@ const DefaultBackend = "sqlite"
 const snapshotName = "conduit.db"
 
 // Create publishes a complete immutable bundle at a previously absent path.
-// Pinning precedes the database snapshot so retention cannot remove captured refs.
+// A retention hold commits before the database snapshot and lasts until the
+// copy is done, so retention cannot remove captured refs (Retention).
 // References of Executions whose retention expired are recorded as omitted
 // rather than copied, since their content may already be gone. backend is
 // the name db's Backend is registered under; Restore looks it up again.
-func Create(ctx context.Context, destination string, backend string, db storage.Database, files *artifacts.Store, build string, expired Expired) error {
-	if backend == "" {
+// Content a reference names that is missing anyway fails the backup, which
+// then publishes nothing.
+func Create(ctx context.Context, destination string, backend string, db storage.Database, files storage.ArtifactStore, build string, retention Retention) error {
+	if backend == "" || files == nil {
 		return storage.ErrInvalid
 	}
-	return publish(ctx, destination, func(stage string) error {
-		pin, err := files.Pin()
+	expired := retention.Expired
+	return publish(ctx, destination, func(stage string) (err error) {
+		ctx, release, err := retention.hold(ctx, db)
 		if err != nil {
 			return err
 		}
-		defer pin.Close()
+		defer func() {
+			// A failed renewal cancels the copy; say why, not just that.
+			if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
+				err = cause
+			}
+			release()
+		}()
 		database := filepath.Join(stage, snapshotName)
 		var refs map[string]domain.ArtifactRef
 		var live map[string]bool
@@ -118,7 +205,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 				m.Omitted = append(m.Omitted, ref)
 				continue
 			}
-			r, err := pin.Open(ctx, ref)
+			r, err := files.Open(ctx, ref)
 			if err != nil {
 				return err
 			}
@@ -160,10 +247,14 @@ type Record func(dir, backend string) error
 
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The bundle's backend restores its snapshot to conduit.db in
-// that directory and fences old lease authority. No daemon may own
-// destination; an existing path is rejected, never overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, record Record) error {
-	if now.IsZero() {
+// that directory and fences old lease authority, and its artifacts are
+// imported into the store files opens at the directory's artifacts. Each
+// is checked against its reference's digest, or, for a reference recorded
+// before references carried one, the digest the manifest vouches for. No
+// daemon may own destination; an existing path is rejected, never
+// overwritten.
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, files storage.ArtifactBackend, record Record) error {
+	if now.IsZero() || files == nil {
 		return storage.ErrInvalid
 	}
 	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
@@ -189,13 +280,8 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 		return err
 	}
 	defer input.Close()
-	pin, err := input.Pin()
-	if err != nil {
-		return err
-	}
-	defer pin.Close()
 	return publish(ctx, destination, func(stage string) error {
-		output, err := artifacts.Open(filepath.Join(stage, "artifacts"))
+		output, err := files.Open(ctx, filepath.Join(stage, "artifacts"))
 		if err != nil {
 			return err
 		}
@@ -207,24 +293,29 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			}
 			seen[item.Ref.ID] = true
 			// A ref recorded with a digest must name the bytes the
-			// manifest vouches for; Import then checks them against it.
+			// manifest vouches for, and is the check: reading and Import
+			// both verify the bytes against it. One from before digests
+			// is checked against the manifest's.
 			if item.Ref.SHA256 != "" && item.Ref.SHA256 != item.SHA256 {
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
-			r, err := pin.Open(ctx, item.Ref)
+			r, err := input.Open(ctx, item.Ref)
 			if err != nil {
 				return err
 			}
 			h := sha256.New()
 			err = output.Import(ctx, item.Ref, io.TeeReader(r, h))
 			closeErr := r.Close()
+			if errors.Is(err, storage.ErrCorrupt) {
+				return fmt.Errorf("backup: artifact digest mismatch: %w", err)
+			}
 			if err != nil {
 				return err
 			}
 			if closeErr != nil {
 				return closeErr
 			}
-			if hex.EncodeToString(h.Sum(nil)) != item.SHA256 {
+			if item.Ref.SHA256 == "" && hex.EncodeToString(h.Sum(nil)) != item.SHA256 {
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
 		}

@@ -71,10 +71,10 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err != nil {
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err == nil {
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
 		t.Fatal("overwrote existing backup")
 	}
 	// Later coordination state is deliberately outside the captured snapshot.
@@ -84,7 +84,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// What the caller records goes into the staged directory: a failure
 	// publishes nothing, and success publishes it with the state.
 	refused := filepath.Join(root, "refused")
-	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, func(string, string) error { return errors.New("record failed") }); err == nil {
+	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, artifacts.Backend, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore published despite a failed record")
 	}
 	if _, err := os.Lstat(refused); !os.IsNotExist(err) {
@@ -97,7 +97,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(dir, "recorded"), []byte(backend), 0o600)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, record); err != nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, record); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "recorded")); err != nil {
@@ -143,7 +143,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, nil); err == nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -183,7 +183,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, nil); err == nil {
+			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, artifacts.Backend, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -198,7 +198,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := filepath.Join(root, "missing-content-backup")
-	if err := Create(ctx, failed, sqlite.Name, db, files, "test-build", nil); err == nil {
+	if err := Create(ctx, failed, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
 		t.Fatal("accepted backup missing referenced content")
 	}
 	if _, err := os.Lstat(failed); !errors.Is(err, os.ErrNotExist) {
@@ -276,7 +276,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", nil); err != nil {
+	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
 		t.Fatal(err)
 	}
 	objects := filepath.Join(bundle, "artifacts", "objects")
@@ -288,7 +288,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 	}
 	before := treeOf(t, bundle)
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, nil); err != nil {
+	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, artifacts.Backend, nil); err != nil {
 		t.Fatal(err)
 	}
 	after := treeOf(t, bundle)
@@ -321,5 +321,206 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "artifacts", "objects", ref.ID[:2], ref.ID)); err != nil {
 		t.Fatalf("the restored store is not in the fan-out layout: %v", err)
+	}
+}
+
+// holdNamespace is where kvRetention keeps its holds.
+const holdNamespace = "test.hold"
+
+// kvRetention is a Retention whose hold is a KV key with its expiry, as
+// the runtime's is.
+func kvRetention() Retention {
+	return Retention{
+		Hold: func(tx storage.Tx, id string, until time.Time) error {
+			return tx.Put(holdNamespace, id, []byte(until.Format(time.RFC3339Nano)))
+		},
+		Release: func(tx storage.Tx, id string) error { return tx.Delete(holdNamespace, id) },
+	}
+}
+
+// liveHolds lists the holds kvRetention has committed and not released.
+func liveHolds(ctx context.Context, db storage.Database) ([]storage.Entry, error) {
+	var rows []storage.Entry
+	err := db.View(ctx, func(tx storage.Tx) (e error) {
+		rows, e = tx.List(holdNamespace, "")
+		return e
+	})
+	return rows, err
+}
+
+// heldReads is an artifact store that records, at each read, whether a
+// retention hold was committed then.
+type heldReads struct {
+	storage.ArtifactStore
+	db    storage.Database
+	reads []int
+}
+
+func (h *heldReads) Open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
+	rows, err := liveHolds(ctx, h.db)
+	if err != nil {
+		return nil, err
+	}
+	h.reads = append(h.reads, len(rows))
+	return h.ArtifactStore.Open(ctx, ref)
+}
+
+// A backup commits its retention hold before the snapshot, keeps it while
+// it copies and releases it once done, published or not. A backup without
+// a hold, or whose hold can't be committed, publishes nothing.
+func TestBackupHoldsRetentionWhileItCopies(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(root, "live.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	live, err := artifacts.Open(filepath.Join(root, "live-artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	var refs []domain.ArtifactRef
+	for _, text := range []string{"first", "second"} {
+		w, err := live.Create(ctx, "text/plain")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = io.WriteString(w, text); err != nil {
+			t.Fatal(err)
+		}
+		ref, err := w.Commit(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, ref)
+	}
+	if err = db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "scope", Name: "scope"}, 0); err != nil {
+			return err
+		}
+		if err := tx.PutWork(domain.Work{ID: "work", Kind: "fixture.work", State: domain.WorkReady, ScopeID: "scope"}, 0); err != nil {
+			return err
+		}
+		event := domain.Event{ID: "trigger", Type: "fixture.start", Source: "fixture", DeliveryID: "trigger", OccurredAt: now, ReceivedAt: now}
+		if _, _, err := tx.AcceptEvent(event); err != nil {
+			return err
+		}
+		return tx.PutExecution(domain.Execution{ID: "run", WorkID: "work", ExecutorBinding: "shell", State: domain.ExecutionPending, Attempt: 1, TriggerID: "trigger", Artifacts: refs}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files := &heldReads{ArtifactStore: live, db: db}
+	retention := kvRetention()
+	var heldAtSnapshot int
+	hold := retention.Hold
+	retention.Hold = func(tx storage.Tx, id string, until time.Time) error {
+		if !strings.HasPrefix(id, "backup/") || !until.After(time.Now()) {
+			t.Errorf("hold %q until %v", id, until)
+		}
+		return hold(tx, id, until)
+	}
+	retention.Expired = func(tx storage.Tx, _ domain.ID) (bool, error) {
+		// Read in the snapshot: the hold committed before it.
+		rows, err := tx.List(holdNamespace, "")
+		heldAtSnapshot = len(rows)
+		return false, err
+	}
+	if err = Create(ctx, filepath.Join(root, "held"), sqlite.Name, db, files, "test-build", retention); err != nil {
+		t.Fatal(err)
+	}
+	if heldAtSnapshot != 1 || len(files.reads) != 2 || files.reads[0] != 1 || files.reads[1] != 1 {
+		t.Fatalf("hold at the snapshot %d, at each read %v; want 1 throughout", heldAtSnapshot, files.reads)
+	}
+	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
+		t.Fatalf("hold left after the backup: %v %v", rows, err)
+	}
+
+	// A copy that fails releases its hold too, and publishes nothing.
+	if err = live.Delete(ctx, refs[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err = Create(ctx, filepath.Join(root, "missing"), sqlite.Name, db, live, "test-build", kvRetention()); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("backup of missing content: %v", err)
+	}
+	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
+		t.Fatalf("hold left after a failed backup: %v %v", rows, err)
+	}
+
+	refused := kvRetention()
+	refused.Hold = func(storage.Tx, string, time.Time) error { return storage.ErrConflict }
+	for name, r := range map[string]Retention{"no-hold": {}, "refused": refused} {
+		if err = Create(ctx, filepath.Join(root, name), sqlite.Name, db, live, "test-build", r); err == nil {
+			t.Fatalf("%s: backup published without a hold", name)
+		}
+		if _, err = os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s: published: %v", name, err)
+		}
+	}
+}
+
+// stalledReads is an artifact store whose reads wait until the backup is
+// cancelled.
+type stalledReads struct{ storage.ArtifactStore }
+
+func (stalledReads) Open(ctx context.Context, _ storage.ArtifactRef) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A backup renews its hold while it copies, and one whose renewal fails
+// stops copying, since the hold could lapse under it, and says why.
+func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	root := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(root, "live.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	live, err := artifacts.Open(filepath.Join(root, "live-artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	ref := domain.ArtifactRef{ID: strings.Repeat("a", 64), Size: 1, MediaType: "text/plain"}
+	if err = db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "scope", Name: "scope"}, 0); err != nil {
+			return err
+		}
+		if err := tx.PutWork(domain.Work{ID: "work", Kind: "fixture.work", State: domain.WorkReady, ScopeID: "scope"}, 0); err != nil {
+			return err
+		}
+		event := domain.Event{ID: "trigger", Type: "fixture.start", Source: "fixture", DeliveryID: "trigger", OccurredAt: now, ReceivedAt: now}
+		if _, _, err := tx.AcceptEvent(event); err != nil {
+			return err
+		}
+		return tx.PutExecution(domain.Execution{ID: "run", WorkID: "work", ExecutorBinding: "shell", State: domain.ExecutionPending, Attempt: 1, TriggerID: "trigger", Artifacts: []domain.ArtifactRef{ref}}, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retention := kvRetention()
+	hold := retention.Hold
+	// Each commit or renewal names a new expiry, however often its
+	// transaction runs.
+	puts := map[time.Time]bool{}
+	renewal := errors.New("renewal refused")
+	retention.Hold = func(tx storage.Tx, id string, until time.Time) error {
+		puts[until] = true
+		if len(puts) > 2 {
+			return renewal
+		}
+		return hold(tx, id, until)
+	}
+	retention.HoldFor = 3 * time.Millisecond
+	err = Create(ctx, filepath.Join(root, "stalled"), sqlite.Name, db, stalledReads{live}, "test-build", retention)
+	if !errors.Is(err, renewal) || len(puts) != 3 {
+		t.Fatalf("backup with a failed renewal after %d holds: %v", len(puts), err)
+	}
+	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
+		t.Fatalf("hold left after a failed renewal: %v %v", rows, err)
 	}
 }
