@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
@@ -683,5 +685,32 @@ func TestSignatureSettings(t *testing.T) {
 	}
 	if _, err := webhook.ParseSettings(json.RawMessage(hook(`{"secret":"sender","header":"X-Sig","algorithm":"hmac-sha1","signed":"{header:X-Id}.{timestamp}.{body}","timestamp":"header:X-Ts"}`)), []string{"hook", "sender"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A delivery the host didn't accept is answered 503, naming the host's
+// protocol code when the host authored the failure, so the sender's log
+// says why; an unauthored failure's own text never reaches the sender.
+func TestNotAcceptedNamesTheHostsCode(t *testing.T) {
+	settings, err := webhook.ParseSettings(webhook.FixtureConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{protocol.Errorf(protocol.CodeOverloaded, "too many requests in flight"), "not accepted: overloaded\n"},
+		{errors.New("store: token=abc"), "not accepted\n"},
+	} {
+		push := func(context.Context, extension.Delivery) (webhook.Receipt, error) { return webhook.Receipt{}, tc.err }
+		h := webhook.WebhookHandler(webhook.FixtureSource, settings, func(context.Context, string) (string, error) { return "s", nil }, push, func() time.Time { return sdktest.Start })
+		req := httptest.NewRequest(http.MethodPost, "/deploys/"+webhook.Token("s", webhook.FixtureSource, "deploys", 0), strings.NewReader(`{"service":"checkout"}`))
+		req.Header = http.Header{"Content-Type": {"application/json"}, "X-Delivery-Id": {"d-1"}}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusServiceUnavailable || w.Body.String() != tc.want {
+			t.Fatalf("%v: %d %q, want 503 %q", tc.err, w.Code, w.Body.String(), tc.want)
+		}
 	}
 }

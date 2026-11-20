@@ -78,9 +78,14 @@ func TestWebhookDeliveriesThroughRuntime(t *testing.T) {
 }
 
 // receipt is the webhook handler's push: the real ingress, with whether it
-// added each Event.
+// added each Event. A delivery it refuses is logged with why, which the
+// handler's 503 doesn't carry for an unauthored error.
 func (e *incidentEnv) receipt(ctx context.Context, d extension.Delivery) (webhook.Receipt, error) {
-	return webhook.ReceiptOf(e.ingress.Deliver(ctx, e.source, d))
+	r, err := webhook.ReceiptOf(e.ingress.Deliver(ctx, e.source, d))
+	if err != nil {
+		e.t.Logf("delivery %s (%d bytes) not accepted: %v", d.ID, len(d.Body), err)
+	}
+	return r, err
 }
 
 // TestWebhookFanOutThroughRuntime: a hook that fans out to triage and audit

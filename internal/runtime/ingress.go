@@ -245,14 +245,19 @@ func (i *Ingress) Push(ctx context.Context, name string, delivery extension.Deli
 // Deliver is Push that also reports, for each accepted Event, whether this
 // delivery added it: false for one already accepted (the same source and
 // delivery ID), such as a sender's retry.
+//
+// The page timeout bounds the adapter's call, as it bounds a reconcile
+// page's, not the acceptance that follows: once the provider has answered,
+// the delivery is accepted under the caller's context, so a slow store
+// write of a large page is never cut off by the provider's budget.
 func (i *Ingress) Deliver(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 	r, err := i.registration(name)
 	if err != nil {
 		return nil, nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, i.options.PageTimeout)
-	defer cancel()
-	result, err := r.adapter.Push(ctx, r.source, delivery)
+	callCtx, cancel := context.WithTimeout(ctx, i.options.PageTimeout)
+	result, err := r.adapter.Push(callCtx, r.source, delivery)
+	cancel()
 	if err != nil {
 		return nil, nil, ErrIngressProvider
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // TypeDelivery is the Event family of an accepted POST.
@@ -349,7 +350,8 @@ func ReceiptOf(accepted []domain.AcceptedEvent, added []bool, err error) (Receip
 // MaxEncoded), 401 for a hook with a signature check whose sender's
 // signature (or signed timestamp) doesn't verify, 400 for a delivery without the hook's delivery key or with a
 // key over 256 bytes, and 503 when the secret is unavailable or the
-// delivery wasn't accepted.
+// delivery wasn't accepted (its body names the host's protocol code, such
+// as "not accepted: overloaded", when the host authored the failure).
 //
 // secret resolves the entry's secrets by name: the webhook secret, and the
 // secret of a hook's signature check.
@@ -440,7 +442,7 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context, s
 		raw, _ := json.Marshal(env)
 		receipt, err := push(r.Context(), extension.Delivery{ID: id, ReceivedAt: received, ContentType: ContentType, Body: raw})
 		if err != nil {
-			http.Error(w, "not accepted", http.StatusServiceUnavailable)
+			http.Error(w, notAccepted(err), http.StatusServiceUnavailable)
 			return
 		}
 		out, _ := json.Marshal(receipt)
@@ -448,4 +450,15 @@ func WebhookHandler(namespace string, s Settings, secret func(context.Context, s
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write(append(out, '\n'))
 	})
+}
+
+// notAccepted is the 503 body for a delivery push didn't accept. It names
+// the failure's protocol code when the host authored it, which is
+// secret-free by contract, so the sender's delivery log says why; an
+// unauthored failure's own text stays in the host's log.
+func notAccepted(err error) string {
+	if code := protocol.ErrorCode(err); code != "" {
+		return "not accepted: " + code
+	}
+	return "not accepted"
 }
