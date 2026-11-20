@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -474,7 +476,7 @@ func (stalledReads) Open(ctx context.Context, _ storage.ArtifactRef) (io.ReadClo
 // stops copying, since the hold could lapse under it, and says why.
 func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UTC()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	root := t.TempDir()
 	db, err := sqlite.Open(ctx, filepath.Join(root, "live.db"))
 	if err != nil {
@@ -502,23 +504,42 @@ func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The hold runs on the test's clock and renews when the test says.
+	var mu sync.Mutex
+	clock := now
+	renewals, held := make(chan time.Time), make(chan struct{}, 8)
 	retention := kvRetention()
+	retention.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	retention.Renewals = renewals
 	hold := retention.Hold
-	// Each commit or renewal names a new expiry, however often its
-	// transaction runs.
-	puts := map[time.Time]bool{}
+	var untils []time.Time
 	renewal := errors.New("renewal refused")
 	retention.Hold = func(tx storage.Tx, id string, until time.Time) error {
-		puts[until] = true
-		if len(puts) > 2 {
+		// A transaction may run more than once; count each expiry once.
+		if len(untils) == 0 || !untils[len(untils)-1].Equal(until) {
+			untils = append(untils, until)
+		}
+		held <- struct{}{}
+		if len(untils) > 2 {
 			return renewal
 		}
 		return hold(tx, id, until)
 	}
-	retention.HoldFor = 3 * time.Millisecond
+	go func() {
+		// Each renewal after the last hold was put, on a later clock.
+		for range 2 {
+			<-held
+			mu.Lock()
+			clock = clock.Add(5 * time.Minute)
+			tick := clock
+			mu.Unlock()
+			renewals <- tick
+		}
+	}()
 	err = Create(ctx, filepath.Join(root, "stalled"), sqlite.Name, db, stalledReads{live}, "test-build", retention)
-	if !errors.Is(err, renewal) || len(puts) != 3 {
-		t.Fatalf("backup with a failed renewal after %d holds: %v", len(puts), err)
+	want := []time.Time{now.Add(DefaultHoldFor), now.Add(5*time.Minute + DefaultHoldFor), now.Add(10*time.Minute + DefaultHoldFor)}
+	if !errors.Is(err, renewal) || !slices.Equal(untils, want) {
+		t.Fatalf("backup with a failed renewal: holds until %v, want %v: %v", untils, want, err)
 	}
 	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
 		t.Fatalf("hold left after a failed renewal: %v %v", rows, err)

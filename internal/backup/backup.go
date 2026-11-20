@@ -70,6 +70,19 @@ type Retention struct {
 	// is DefaultHoldFor. Create renews it every third of that while it
 	// copies, so it lapses that long after a crashed backup.
 	HoldFor time.Duration
+	// Now is the clock the hold's expiry is set on, which must be the one
+	// retention checks it against (the scheduler's); nil is time.Now.
+	Now func() time.Time
+	// Renewals, when set, is when to renew the hold, in place of a ticker
+	// every third of HoldFor: a test drives it.
+	Renewals <-chan time.Time
+}
+
+func (r Retention) now() time.Time {
+	if r.Now != nil {
+		return r.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // DefaultHoldFor is how long a backup's retention hold lasts unless
@@ -93,7 +106,7 @@ func (r Retention) hold(ctx context.Context, db storage.Database) (context.Conte
 	}
 	id := "backup/" + hex.EncodeToString(b[:])
 	put := func(ctx context.Context) error {
-		now := time.Now().UTC()
+		now := r.now()
 		return db.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error { return r.Hold(tx, id, now.Add(period)) })
 	}
 	if err := put(ctx); err != nil {
@@ -104,15 +117,19 @@ func (r Retention) hold(ctx context.Context, db storage.Database) (context.Conte
 	renewed := make(chan struct{})
 	go func() {
 		defer close(renewed)
-		tick := time.NewTicker(period / 3)
-		defer tick.Stop()
+		renewals := r.Renewals
+		if renewals == nil {
+			tick := time.NewTicker(period / 3)
+			defer tick.Stop()
+			renewals = tick.C
+		}
 		for {
 			select {
 			case <-done:
 				return
 			case <-held.Done():
 				return
-			case <-tick.C:
+			case <-renewals:
 				if err := put(held); err != nil {
 					cancel(fmt.Errorf("backup: renewing the retention hold: %w", err))
 					return
@@ -126,7 +143,7 @@ func (r Retention) hold(ctx context.Context, db storage.Database) (context.Conte
 		cancel(nil)
 		// A hold that isn't released lapses at its expiry, which only
 		// delays retention, so a failure here doesn't fail the backup.
-		_ = db.Transact(context.WithoutCancel(ctx), storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error { return r.Release(tx, id) })
+		_ = db.Transact(context.WithoutCancel(ctx), storage.Guard{Now: r.now()}, func(tx storage.Tx) error { return r.Release(tx, id) })
 	}
 	return held, stop, nil
 }
@@ -198,7 +215,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 			return err
 		}
 		defer output.Close()
-		m := manifest{Version: 1, Schema: db.SchemaVersion(), Build: build, CreatedAt: time.Now().UTC()}
+		m := manifest{Version: 1, Schema: db.SchemaVersion(), Build: build, CreatedAt: retention.now()}
 		// Sorting makes manifests reproducible apart from their creation time.
 		for _, ref := range sortedRefs(refs) {
 			if !live[ref.ID] {

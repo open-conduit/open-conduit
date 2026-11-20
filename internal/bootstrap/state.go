@@ -67,7 +67,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, c.name, store, files, build, retention); err != nil {
+	if err := backup.Create(ctx, destination, c.name, store, files, build, retention(time.Now)); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
@@ -82,8 +82,10 @@ func retentionExpired(tx storage.Tx, id domain.ID) (bool, error) {
 
 // retention is the runtime's retention ledger as a backup uses it: what has
 // expired, and the hold that keeps the sweep from deleting content while
-// the backup copies it.
-var retention = backup.Retention{Expired: retentionExpired, Hold: runtime.HoldRetention, Release: runtime.ReleaseRetention}
+// the backup copies it, its expiry set on now, the clock the sweep reads.
+func retention(now func() time.Time) backup.Retention {
+	return backup.Retention{Expired: retentionExpired, Hold: runtime.HoldRetention, Release: runtime.ReleaseRetention, Now: now}
+}
 
 func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	info, err := backup.Inspect(bundle)

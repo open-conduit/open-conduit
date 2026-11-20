@@ -134,7 +134,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
-	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retention); err != nil {
+	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))

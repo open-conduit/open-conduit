@@ -337,7 +337,6 @@ func (t *storeTx) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
 	return f, nil
 }
 
-// LiveExecutions filters ListExecutions: the host serves no narrower read.
 // ReferencedArtifacts answers from the attempts the extension can see.
 func (t *storeTx) ReferencedArtifacts(ids []string) ([]string, error) {
 	if err := storage.ValidReferenceQuery(ids); err != nil {
@@ -350,6 +349,7 @@ func (t *storeTx) ReferencedArtifacts(ids []string) ([]string, error) {
 	return storage.ReferencedIn(xs, ids)
 }
 
+// LiveExecutions filters ListExecutions: the host serves no narrower read.
 func (t *storeTx) LiveExecutions() ([]domain.Execution, error) {
 	xs, err := t.ListExecutions("")
 	if err != nil {
