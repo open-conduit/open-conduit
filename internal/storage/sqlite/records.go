@@ -49,6 +49,106 @@ func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.Accepted
 	}
 	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND "+unrouted+" ORDER BY sequence LIMIT ?", after, limit)
 }
+func (t *transaction) UnroutedInput(target storage.InputTarget, after, before uint64) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	var attempts []string
+	if target.Work != "" {
+		var err error
+		if attempts, err = t.strings("SELECT id FROM executions WHERE work_id=? ORDER BY id", string(target.Work)); err != nil {
+			return nil, err
+		}
+	}
+	query, args := unroutedInput(target, attempts, after, before)
+	if query == "" {
+		return []domain.AcceptedEvent{}, nil
+	}
+	return list[domain.AcceptedEvent](t, query, args...)
+}
+
+// unroutedInput is UnroutedInput's query: a union of index searches, one
+// for the events naming the Work, one for those naming its attempts and one
+// per key, so each reads only its own entries of the unrouted backlog. The
+// attempts are given as values: SQLite searches an expression index only
+// for values, never for another table's column. Empty when nothing can
+// match.
+func unroutedInput(target storage.InputTarget, attempts []string, after, before uint64) (string, []any) {
+	if after > 1<<63-1 {
+		return "", nil
+	}
+	if before == 0 || before > 1<<63-1 {
+		before = 1<<63 - 1
+	}
+	if before <= after+1 {
+		return "", nil
+	}
+	bound := " AND " + unrouted + " AND sequence>? AND sequence<?"
+	var arms []string
+	var args []any
+	if target.Work != "" {
+		arms = append(arms, "SELECT sequence FROM events WHERE "+eventWork+"=?"+bound)
+		args = append(args, string(target.Work), after, before)
+	}
+	for chunk := range slices.Chunk(attempts, 500) {
+		arms = append(arms, "SELECT sequence FROM events WHERE "+eventExecution+" IN ("+strings.Repeat("?,", len(chunk)-1)+"?)"+bound)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		args = append(args, after, before)
+	}
+	seen := map[domain.CorrelationKey]bool{}
+	for _, k := range target.Keys {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		arms = append(arms, "SELECT sequence FROM events WHERE "+eventKeySource+"=? AND "+eventKeyID+"=?"+bound)
+		args = append(args, k.Source, k.ExternalID, after, before)
+	}
+	if len(arms) == 0 {
+		return "", nil
+	}
+	return "SELECT record FROM events WHERE sequence IN (" + strings.Join(arms, " UNION ") + ") ORDER BY sequence", args
+}
+func (t *transaction) UnroutedOfType(types []string) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	query, args := unroutedOfType(types)
+	if query == "" {
+		return []domain.AcceptedEvent{}, nil
+	}
+	return list[domain.AcceptedEvent](t, query, args...)
+}
+func unroutedOfType(types []string) (string, []any) {
+	types = slices.Compact(slices.Sorted(slices.Values(types)))
+	if len(types) == 0 {
+		return "", nil
+	}
+	marks := make([]string, 0, len(types))
+	args := make([]any, 0, len(types))
+	for _, ty := range types {
+		marks = append(marks, "?")
+		args = append(args, ty)
+	}
+	return "SELECT record FROM events WHERE " + eventType + " IN (" + strings.Join(marks, ",") + ") AND " + unrouted + " ORDER BY sequence", args
+}
+
+// earlierInput is whether an unrouted event before sequence is input for
+// work, as MarkRouted judges it: one naming work, or one naming no Work
+// whose key work owns (keys). It reads the indexes alone, decoding no
+// record.
+func earlierInput(work domain.ID, keys []domain.CorrelationKey, sequence uint64) (string, []any) {
+	query := "SELECT EXISTS(SELECT 1 FROM events WHERE " + eventWork + "=? AND " + unrouted + " AND sequence<?)"
+	args := []any{string(work), sequence}
+	for _, k := range keys {
+		query += " OR EXISTS(SELECT 1 FROM events WHERE " + eventKeySource + "=? AND " + eventKeyID + "=? AND " + unrouted + " AND sequence<? AND " + eventWork + "='')"
+		args = append(args, k.Source, k.ExternalID, sequence)
+	}
+	return query, args
+}
+
 func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	if !t.live {
 		return nil, storage.ErrInvalid
@@ -174,22 +274,30 @@ func (t *transaction) MarkRouted(id, work domain.ID, disposition string) error {
 			return err
 		}
 		// Only an earlier unrouted input for this Work blocks the mark.
-		earlier, err := list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence<? AND "+unrouted+" ORDER BY sequence", a.Sequence)
+		rows, err := t.query("SELECT source, external_id FROM correlations WHERE work_id=? ORDER BY source, external_id", string(work))
 		if err != nil {
-			return err
+			return mapError(err)
 		}
-		for _, other := range earlier {
-			target := other.Event.WorkID == work
-			if other.Event.WorkID == "" && other.Event.CorrelationKey != nil {
-				w, e := t.WorkByCorrelation(*other.Event.CorrelationKey)
-				if e != nil && !errors.Is(e, storage.ErrNotFound) {
-					return e
-				}
-				target = e == nil && w.ID == work
+		var keys []domain.CorrelationKey
+		for rows.Next() {
+			var k domain.CorrelationKey
+			if err = rows.Scan(&k.Source, &k.ExternalID); err != nil {
+				rows.Close()
+				return err
 			}
-			if target && !other.Routed {
-				return storage.ErrConflict
-			}
+			keys = append(keys, k)
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return mapError(err)
+		}
+		query, args := earlierInput(work, keys, a.Sequence)
+		var blocked bool
+		if err = t.queryRow(query, args...).Scan(&blocked); err != nil {
+			return mapError(err)
+		}
+		if blocked {
+			return storage.ErrConflict
 		}
 	}
 	a.Routed = true

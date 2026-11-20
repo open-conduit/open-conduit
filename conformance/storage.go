@@ -99,6 +99,7 @@ func StorageCases() []StorageCase {
 		{"live_reads_follow_state", liveReads},
 		{"work_events_follow_naming_and_routing", workEvents},
 		{"event_scope_recorded_once_and_indexed", scopeEvents},
+		{"unrouted_input_follows_work_attempts_and_keys", unroutedInput},
 		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", finishedArtifacts},
@@ -1635,6 +1636,127 @@ func workEvents(s storage.Store) error {
 			}
 			if got != q.want {
 				return fmt.Errorf("work events %s %q, want %q", q.label, got, q.want)
+			}
+		}
+		return nil
+	})
+}
+
+// unroutedInput: UnroutedInput returns exactly the unrouted Events that
+// could be input to a Work, those naming it or one of its attempts or
+// carrying one of the keys asked for, in acceptance order between the
+// bounds; and UnroutedOfType exactly the unrouted Events of the types asked
+// for. Routing makes the first read for every Event it routes, so a backend
+// answers it from the Work's own input, not the backlog (#705).
+func unroutedInput(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	thread := domain.CorrelationKey{Source: "test", ExternalID: "thread"}
+	otherKey := domain.CorrelationKey{Source: "test", ExternalID: "other"}
+	seq := map[domain.ID]uint64{}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "other", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{otherKey}}, 0); err != nil {
+			return err
+		}
+		if err := tx.PutExecution(domain.Execution{ID: "other-execution", WorkID: "other", ExecutorBinding: "shell", Attempt: 1, State: domain.ExecutionPending, TriggerID: "trigger"}, 0); err != nil {
+			return err
+		}
+		retry := func(id domain.ID) domain.Event {
+			e := event(id, c.Now())
+			e.Type = "test.retry.v1"
+			return e
+		}
+		with := func(id domain.ID, f func(*domain.Event)) domain.Event {
+			e := event(id, c.Now())
+			f(&e)
+			return e
+		}
+		for _, e := range []domain.Event{
+			with("routed", func(e *domain.Event) { e.WorkID = "work" }),
+			retry("retry-routed"),
+		} {
+			if _, _, err := tx.AcceptEvent(e); err != nil {
+				return err
+			}
+		}
+		if err := tx.MarkRouted("routed", "work", "queue"); err != nil {
+			return err
+		}
+		if err := tx.MarkRouted("retry-routed", "", "ignored"); err != nil {
+			return err
+		}
+		for _, e := range []domain.Event{
+			with("by-work", func(e *domain.Event) { e.WorkID = "work" }),
+			with("by-key", func(e *domain.Event) { e.CorrelationKey = &thread }),
+			with("by-attempt", func(e *domain.Event) { e.ExecutionID = "execution" }),
+			with("elsewhere", func(e *domain.Event) { e.WorkID = "other" }),
+			with("other-key", func(e *domain.Event) { e.CorrelationKey = &otherKey }),
+			with("other-attempt", func(e *domain.Event) { e.ExecutionID = "other-execution" }),
+			event("unrelated", c.Now()),
+			retry("retry"),
+			with("later-key", func(e *domain.Event) { e.CorrelationKey = &thread }),
+		} {
+			a, _, err := tx.AcceptEvent(e)
+			if err != nil {
+				return err
+			}
+			seq[e.ID] = a.Sequence
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		joined := func(got []domain.AcceptedEvent) string {
+			var parts []string
+			for _, a := range got {
+				parts = append(parts, string(a.Event.ID))
+			}
+			return strings.Join(parts, " ")
+		}
+		work := storage.InputTarget{Work: "work", Keys: []domain.CorrelationKey{thread}}
+		for _, q := range []struct {
+			target        storage.InputTarget
+			after, before uint64
+			want, label   string
+		}{
+			{work, 0, 0, "by-work by-key by-attempt later-key", "of a Work"},
+			{work, 0, seq["by-attempt"], "by-work by-key", "before its attempt's"},
+			{work, seq["by-work"], seq["later-key"], "by-key by-attempt", "between two"},
+			{work, seq["later-key"], 0, "", "after the last"},
+			{work, seq["by-key"], seq["by-key"] + 1, "", "between adjacent sequences"},
+			{storage.InputTarget{Work: "work"}, 0, 0, "by-work by-attempt", "of a Work without its keys"},
+			{storage.InputTarget{Keys: []domain.CorrelationKey{thread}}, 0, 0, "by-key later-key", "of a key alone"},
+			{storage.InputTarget{Keys: []domain.CorrelationKey{thread, thread}}, 0, 0, "by-key later-key", "of a key named twice"},
+			{storage.InputTarget{Work: "unstored", Keys: []domain.CorrelationKey{otherKey}}, 0, 0, "other-key", "of Work not stored yet"},
+			{storage.InputTarget{Work: "other", Keys: []domain.CorrelationKey{otherKey, thread}}, 0, 0, "by-key elsewhere other-key other-attempt later-key", "of another Work with a key attached"},
+			{storage.InputTarget{Work: "missing"}, 0, 0, "", "of a missing Work"},
+			{storage.InputTarget{}, 0, 0, "", "of nothing"},
+		} {
+			got, err := tx.UnroutedInput(q.target, q.after, q.before)
+			if err != nil {
+				return err
+			}
+			if joined(got) != q.want {
+				return fmt.Errorf("unrouted input %s %q, want %q", q.label, joined(got), q.want)
+			}
+		}
+		for _, q := range []struct {
+			types       []string
+			want, label string
+		}{
+			{[]string{"test.retry.v1"}, "retry", "of one type"},
+			{[]string{"test.retry.v1", "test.retry.v1", "test.missing.v1"}, "retry", "of a type named twice and a missing one"},
+			{nil, "", "of no type"},
+		} {
+			got, err := tx.UnroutedOfType(q.types)
+			if err != nil {
+				return err
+			}
+			if joined(got) != q.want {
+				return fmt.Errorf("unrouted of type %s %q, want %q", q.label, joined(got), q.want)
 			}
 		}
 		return nil

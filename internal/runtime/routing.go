@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -290,7 +291,6 @@ type routeSnapshot struct {
 	scope  domain.Scope
 	scopes []domain.Scope
 	work   *domain.Work
-	events []domain.AcceptedEvent
 	routes []domain.Route
 	// addressed is the binding an operator Event naming this Work is input
 	// on when no route takes it (addressedBindingInTx), or "".
@@ -311,11 +311,17 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
-	if s.addressed, err = addressedBindingInTx(tx, s.event.Event, s.work); err != nil {
-		return
-	}
-	s.events, err = tx.UnroutedEvents(0, 0)
+	s.addressed, err = addressedBindingInTx(tx, s.event.Event, s.work)
 	return
+}
+
+// unroutedInputTo is the unrouted Events accepted after sequence after and
+// before sequence before (zero for no bound) that could be input to w: those
+// naming it or one of its attempts, or carrying one of its keys. Storage
+// reads them from its index, so the cost follows w's own input, not the
+// unrouted backlog (#705).
+func unroutedInputTo(tx storage.Tx, w domain.Work, after, before uint64) ([]domain.AcceptedEvent, error) {
+	return tx.UnroutedInput(storage.InputTarget{Work: w.ID, Keys: w.CorrelationKeys}, after, before)
 }
 
 // addressedEvent reports whether e is input for the Work it names without
@@ -776,20 +782,11 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 			var prior domain.ID
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				prior = ""
-				for _, a := range s.events {
-					if a.Sequence >= s.event.Sequence {
-						break
-					}
-					if a.Routed {
-						continue
-					}
-					target, e := potentiallyTargets(tx, a.Event, *s.work)
-					if e != nil {
-						return e
-					}
-					if !target {
-						continue
-					}
+				earlier, e := unroutedInputTo(tx, *s.work, 0, s.event.Sequence)
+				if e != nil {
+					return e
+				}
+				for _, a := range earlier {
 					w, e := routeOwner(tx, a.Event)
 					if e != nil && !errors.Is(e, storage.ErrNotFound) {
 						return e
@@ -872,12 +869,24 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		// below and is routed on its own first.
 		if projected != nil && !projected.State.Terminal() && projected.State != domain.WorkWaiting {
 			planned := map[domain.ID]bool{}
+			// earlier is the input the projected Work's keys reach so far,
+			// read again whenever an attachment adds keys, so input the new
+			// keys bring in later in the log joins in acceptance order.
+			var earlier []domain.AcceptedEvent
+			read := func() error {
+				return r.transact(ctx, nil, func(tx storage.Tx) error {
+					var e error
+					earlier, e = unroutedInputTo(tx, *projected, 0, s.event.Sequence)
+					return e
+				})
+			}
 			for {
 				changed := false
-				for _, a := range s.events {
-					if a.Sequence >= s.event.Sequence {
-						break
-					}
+				if err := read(); err != nil {
+					return err
+				}
+				for i := 0; i < len(earlier); i++ {
+					a := earlier[i]
 					if a.Routed || planned[a.Event.ID] || !eventTargets(a.Event, *projected) {
 						continue
 					}
@@ -922,8 +931,18 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 					planned[a.Event.ID] = true
 					changed = true
 					if bp.selected != nil {
+						keys := len(projected.CorrelationKeys)
 						appendKeys(projected, bp.decision.AttachKeys)
 						setDisplay(projected, bp.decision.Display)
+						if len(projected.CorrelationKeys) > keys {
+							// Carry on after a with the input the new
+							// keys reach as well.
+							if err := read(); err != nil {
+								return err
+							}
+							i, _ = slices.BinarySearchFunc(earlier, a.Sequence+1, func(x domain.AcceptedEvent, seq uint64) int { return cmp.Compare(x.Sequence, seq) })
+							i--
+						}
 					}
 				}
 				if !changed {
@@ -950,20 +969,11 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 				for _, planned := range plans {
 					included[planned.event.Event.ID] = true
 				}
-				for _, a := range fresh.events {
-					if a.Sequence >= s.event.Sequence {
-						break
-					}
-					if a.Routed {
-						continue
-					}
-					target, e := potentiallyTargets(tx, a.Event, *projected)
-					if e != nil {
-						return e
-					}
-					if !target {
-						continue
-					}
+				earlier, e := unroutedInputTo(tx, *projected, 0, s.event.Sequence)
+				if e != nil {
+					return e
+				}
+				for _, a := range earlier {
 					w, e := routeOwner(tx, a.Event)
 					// Unowned newly attached keys are validated after PutWork.
 					if e != nil && !errors.Is(e, storage.ErrNotFound) {

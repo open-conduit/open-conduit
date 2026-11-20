@@ -15,6 +15,8 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
   make bench-history
   ```
 
+- **Draining a backlog of unrouted Events.** [`backlog_drain_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/backlog_drain_test.go) times the routing pass over 1,000 and 10,000 unrouted Events, the state an outage leaves ([results](#backlog-drain)). Rerun it with `make bench-backlog`.
+
 - **The in-transaction extension calls, against a budget.** [`extension_budget_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/extension_budget_test.go) times `work_kind.trigger`, `recurrence.next`, `dependency.filter` and `emit.commit`, the four calls the host makes to an extension process while it holds its coordination transaction, round trip through `extproc.Remote` to the notes example ([results](#in-transaction-extension-calls)). It is a gate, not just a number: `make check` runs it on its own after the integration shards, prints each round's numbers, and fails when a call's median or 95th percentile is over budget in three rounds running. Print the numbers without `-race` with:
 
   ```sh
@@ -35,7 +37,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
 - **Volume in correctness tests, untimed.** [`TestSlackPushReconcileOverlapOneWork`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) pushes and reconciles 300 replies in one thread (150 under `-race`) and checks they become 301 distinct Events on one Work, each queued once. It shows correctness at that volume, not speed.
 - **Informal observations.** Two code comments record timings that nobody measured systematically: the [Makefile](https://github.com/open-conduit/open-conduit/blob/main/Makefile) says the integration package takes about 8 minutes on hosted runners under `-race`, and [`slack_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) says the race-instrumented SQLite driver is about 30× slower per transaction.
 
-The history benchmarks are the only Go benchmark functions in the repository. There is no load test. CI runs `make check` (split over parallel jobs), `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)). Apart from the in-transaction call budget, which `make check` enforces, all of them check correctness, and no CI job records a performance number.
+The history and backlog-drain benchmarks are the only Go benchmark functions in the repository. There is no load test. CI runs `make check` (split over parallel jobs), `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)). Apart from the in-transaction call budget, which `make check` enforces, all of them check correctness, and no CI job records a performance number.
 
 ## Event-ingress throughput
 
@@ -51,7 +53,7 @@ The history benchmarks are the only Go benchmark functions in the repository. Th
 
 - Each push (one delivery, or one batch) commits in its own `BEGIN IMMEDIATE` transaction, and a webhook is answered only after that commit, so push throughput is bounded by serial SQLite commits at `synchronous=FULL` (see [SQLite contention](#sqlite-contention)).
 - Acceptance, including derived acceptance, deduplicates through the `UNIQUE(source, delivery_id)` index ([`records.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/records.go)). Routing, `MarkRouted` and the routing pass read only unrouted Events, through a partial index on the unrouted backlog (`events_unrouted` in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). Steps that need the latest sequence read it from the primary key.
-- Event rows are never deleted. Retention removes artifact content and executor-private state, and keeps coordination history ([retention](../observability-history/#retention)). Retained history no longer changes the cost of routing an Event. Routing one Event still reads the whole unrouted backlog, so draining a backlog grows with the backlog's square.
+- Event rows are never deleted. Retention removes artifact content and executor-private state, and keeps coordination history ([retention](../observability-history/#retention)). Retained history no longer changes the cost of routing an Event. Routing one Event reads only its Work's own unrouted input (`UnroutedInput`, through partial indexes on the backlog), so a backlog drains in time linear in its size ([backlog drain](#backlog-drain)).
 
 ### Measurements
 
@@ -125,12 +127,27 @@ Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-c
 ### What the design implies
 
 - A backlog of N due timers needs at least N/100 passes. Passes run back to back while nudges arrive, and otherwise one per poll interval, so at the default 1 s interval that is roughly N/100 seconds at best.
-- A backlog of N unrouted Events is drained in the first pass, but each route reads the whole unrouted backlog, so the drain costs about N² record reads. Retained routed history adds nothing.
+- A backlog of N unrouted Events is drained in the first pass. Each route reads its Work's own earlier input from storage's indexes, not the backlog, so the drain costs time linear in N (#705). Retained routed history adds nothing. Nothing new is routed until the pass has drained the backlog.
 - No drill restarts the daemon with a large backlog. The [kill drills](../daemon-core-gate/#kill-drills) each use a handful of Work.
 
 ### Measurements
 
-Not measured.
+#### Backlog drain
+
+[`backlog_drain_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/backlog_drain_test.go) seeds real SQLite with N unrouted Events of about 1 KiB over N/10 interleaved threads, and times the routing pass that drains them: each thread's first Event opens its Work and the rest queue behind it. `TestBacklogDrainReadsEachWorksOwnInput` checks that no route reads more than 40 Event records from a backlog of 1,000, and that a store answering the read by scanning the backlog fails that bound. Before is the code as of #776, where each route read and decoded the whole backlog at least twice. After adds `UnroutedInput` and `UnroutedOfType` (#705). One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, without `-race`, 1 iteration before and 3 after:
+
+| Events | Before | After | After, per Event |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 7.0 s | 1.16 s | 1.16 ms |
+| 10,000 | 709 s | 13.8 s | 1.38 ms |
+
+Before, 10,000 Events took about 12 minutes, and 71 ms per Event on the daemon's only connection. Now each Event costs about the same at either size. Rerun it with (`OC_BACKLOG_SIZES=1000,50000` picks sizes):
+
+```sh
+make bench-backlog
+```
+
+The timers, expired leases and peak RSS of a whole recovery are still not measured.
 
 ### To measure
 

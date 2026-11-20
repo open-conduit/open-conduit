@@ -115,6 +115,16 @@ type Tx interface {
 	// UnroutedEvents is Events restricted to events not yet marked routed.
 	// Its cost follows the unrouted backlog, not retained history.
 	UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// UnroutedInput is UnroutedEvents restricted to the Events that could
+	// be input to one Work (InputTarget), accepted after sequence after and
+	// before sequence before (zero for no bound), in acceptance order. It is
+	// the read routing makes for each Event: its cost follows that Work's
+	// own unrouted input, not the unrouted backlog.
+	UnroutedInput(target InputTarget, after, before uint64) ([]domain.AcceptedEvent, error)
+	// UnroutedOfType is UnroutedEvents restricted to Events of the given
+	// types, in acceptance order: the timer-driven Events the scheduler
+	// acts on itself. Its cost follows those Events, not the backlog.
+	UnroutedOfType(types []string) ([]domain.AcceptedEvent, error)
 	// WorkEvents is Events restricted to one Work's events: those naming it
 	// (Event.WorkID) and those routed to it (RoutedWorkID). Like
 	// UnroutedEvents, its cost follows the Work's own events, not retained
@@ -227,6 +237,17 @@ type Tx interface {
 	Delete(namespace, key string) error
 	List(namespace, prefix string) ([]Entry, error)
 }
+
+// InputTarget is what an Event can be input to: an Event targets it when
+// it names Work (Event.WorkID), names one of Work's recorded attempts
+// (Event.ExecutionID), or carries one of Keys (Event.CorrelationKey).
+// Keys are given rather than read from Work, so a caller can ask for the
+// input of Work it has not stored yet, or with keys it is about to attach.
+type InputTarget struct {
+	Work domain.ID
+	Keys []domain.CorrelationKey
+}
+
 type Entry struct {
 	Key   string
 	Value []byte

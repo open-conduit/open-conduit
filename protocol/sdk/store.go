@@ -469,6 +469,47 @@ func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEven
 	return out, nil
 }
 
+// UnroutedInput is answered from UnroutedEvents, as that is from Events.
+func (t *storeTx) UnroutedInput(target storage.InputTarget, after, before uint64) ([]domain.AcceptedEvent, error) {
+	all, err := t.UnroutedEvents(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if before != 0 && a.Sequence >= before {
+			break
+		}
+		match := target.Work != "" && a.Event.WorkID == target.Work || a.Event.CorrelationKey != nil && slices.Contains(target.Keys, *a.Event.CorrelationKey)
+		if !match && target.Work != "" && a.Event.ExecutionID != "" {
+			x, err := t.Execution(a.Event.ExecutionID)
+			if err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return nil, err
+			}
+			match = err == nil && x.WorkID == target.Work
+		}
+		if match {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// UnroutedOfType is answered from UnroutedEvents, as that is from Events.
+func (t *storeTx) UnroutedOfType(types []string) ([]domain.AcceptedEvent, error) {
+	all, err := t.UnroutedEvents(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if slices.Contains(types, a.Event.Type) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // WorkEvents reads one Work's events through state.work_events, which the
 // host serves from its index: the cost follows the Work's own events, not
 // the retained log.

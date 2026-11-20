@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,8 +51,14 @@ func (t pendingTx) Event(id domain.ID) (domain.AcceptedEvent, error) {
 	return a, nil
 }
 
-func (t pendingTx) UnroutedEvents(uint64, int) ([]domain.AcceptedEvent, error) {
-	return t.s.unrouted, nil
+func (t pendingTx) UnroutedInput(target storage.InputTarget, _, _ uint64) ([]domain.AcceptedEvent, error) {
+	var out []domain.AcceptedEvent
+	for _, a := range t.s.unrouted {
+		if a.Event.WorkID == target.Work || a.Event.CorrelationKey != nil && slices.Contains(target.Keys, *a.Event.CorrelationKey) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 func (t pendingTx) Get(ns, key string) ([]byte, error) {

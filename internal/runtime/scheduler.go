@@ -1989,21 +1989,12 @@ func (s *Scheduler) complete(ctx context.Context, ref domain.LeaseRef, result ex
 			result.Outcome.Kind = domain.OutcomeCompleted
 		}
 		if result.Outcome.Kind == domain.OutcomeCompleted {
-			events, err := tx.UnroutedEvents(0, 0)
+			events, err := unroutedInputTo(tx, w, 0, 0)
 			if err != nil {
 				return err
 			}
-			for _, a := range events {
-				if a.Routed {
-					continue
-				}
-				target, e := potentiallyTargets(tx, a.Event, w)
-				if e != nil {
-					return e
-				}
-				if target {
-					return storage.ErrConflict
-				}
+			if len(events) > 0 {
+				return storage.ErrConflict
 			}
 		}
 		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {

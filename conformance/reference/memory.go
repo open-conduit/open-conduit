@@ -215,6 +215,43 @@ func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.Accepted
 	}
 	return out, nil
 }
+func (t *transaction) UnroutedInput(target storage.InputTarget, after, before uint64) ([]domain.AcceptedEvent, error) {
+	all, _ := t.UnroutedEvents(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, v := range all {
+		if before != 0 && v.Sequence >= before {
+			break
+		}
+		if t.inputFor(v.Event, target) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// inputFor is whether e targets target: names its Work or one of the
+// Work's attempts, or carries one of its keys.
+func (t *transaction) inputFor(e domain.Event, target storage.InputTarget) bool {
+	if target.Work != "" && e.WorkID == target.Work {
+		return true
+	}
+	if target.Work != "" && e.ExecutionID != "" {
+		if x, ok := t.data.Executions[e.ExecutionID]; ok && x.WorkID == target.Work {
+			return true
+		}
+	}
+	return e.CorrelationKey != nil && slices.Contains(target.Keys, *e.CorrelationKey)
+}
+func (t *transaction) UnroutedOfType(types []string) ([]domain.AcceptedEvent, error) {
+	all, _ := t.UnroutedEvents(0, 0)
+	out := []domain.AcceptedEvent{}
+	for _, v := range all {
+		if slices.Contains(types, v.Event.Type) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
 func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	all, _ := t.Events(after, 0)
 	out := []domain.AcceptedEvent{}
