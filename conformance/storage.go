@@ -102,6 +102,9 @@ func StorageCases() []StorageCase {
 		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", finishedArtifacts},
+		{"sequences_visible_in_order_to_a_waiting_reader", sequenceVisibility},
+		{"kv_prefixes_and_order_are_bytes", kvBytes},
+		{"transient_aborts_commit_nothing_and_retry", transientAborts},
 	}
 }
 

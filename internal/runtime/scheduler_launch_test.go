@@ -395,3 +395,94 @@ func TestProductionSchedulerHoldEndsOnLostLease(t *testing.T) {
 		t.Fatalf("cause %v, want the lease lost", context.Cause(ctx))
 	}
 }
+
+// abortingRenewals fails the next renewals with err, committing nothing, as
+// a backend under contention aborts a transaction.
+type abortingRenewals struct {
+	storage.Store
+	mu    sync.Mutex
+	fails int
+	err   error
+}
+
+func (s *abortingRenewals) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(abortingRenewalsTx{tx, s}) })
+}
+
+type abortingRenewalsTx struct {
+	storage.Tx
+	s *abortingRenewals
+}
+
+func (t abortingRenewalsTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
+	t.s.mu.Lock()
+	defer t.s.mu.Unlock()
+	if t.s.fails > 0 {
+		t.s.fails--
+		return t.s.err
+	}
+	return t.Tx.Renew(ref, ttl)
+}
+
+// TestProductionSchedulerHoldSurvivesTransientAborts (#694): a renewal
+// the store aborts as transient is reported and renewed on the next tick,
+// so contention never ends a healthy attempt as lease lost. The control: a
+// renewal refused with ErrConflict, a clash over the lease, loses it.
+func TestProductionSchedulerHoldSurvivesTransientAborts(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		lost bool
+	}{{storage.ErrTransient, false}, {storage.ErrConflict, true}} {
+		r := newLaunchRig(t)
+		work := seedSchedulerWork(t, r.f, "transient")
+		store := &abortingRenewals{Store: r.f.Store, err: tc.err}
+		f := r.f
+		f.Store = store
+		s := newTestScheduler(t, f, func() runtime.SchedulerOptions { o := r.o; o.Owner = "host-a"; return o }())
+		a, err := s.Claim(context.Background(), work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.mu.Lock()
+		store.fails = 2
+		store.mu.Unlock()
+		reported := make(chan error, 4)
+		ticks := make(chan time.Time)
+		ctx, lost, stop := s.Hold(context.Background(), a.Lease, ticks, func(err error) { reported <- err })
+		send := func() bool {
+			select {
+			case ticks <- r.f.Clock.Now():
+				return true
+			case <-lost:
+				return false
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%v: the holder never took the tick", tc.err)
+				return false
+			}
+		}
+		// Two aborted renewals, then one that commits; the holder takes
+		// a tick only once the renewal before it is done, so the fourth
+		// is taken only by a holder still holding. One that lost the
+		// lease takes no more.
+		held := true
+		for i := 0; i < 4 && held; i++ {
+			held = send()
+		}
+		stop()
+		if tc.lost {
+			if held || !errors.Is(context.Cause(ctx), storage.ErrLeaseLost) {
+				t.Fatalf("control: a conflicting renewal kept the lease (cause %v)", context.Cause(ctx))
+			}
+			continue
+		}
+		if !held {
+			t.Fatalf("a transient abort lost the lease (cause %v)", context.Cause(ctx))
+		}
+		if n := len(reported); n != 2 {
+			t.Fatalf("reported %d aborted renewals, want 2", n)
+		}
+		if err := <-reported; !errors.Is(err, storage.ErrTransient) {
+			t.Fatalf("reported %v, want the transient abort", err)
+		}
+	}
+}

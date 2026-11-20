@@ -385,6 +385,11 @@ func (s *Store) rewrite(ctx context.Context, r struct{ key, statement string }) 
 	return err
 }
 
+// SerialWriters reports that a Store admits one writer at a time: every
+// Transact begins with BEGIN IMMEDIATE on its one write connection, which
+// the shared storage suite asks (conformance.WriterAdmission).
+func (s *Store) SerialWriters() bool { return true }
+
 // Transact runs fn in one write transaction. SQLite never sees the caller's
 // context: an interrupted statement can leave the transaction open on a
 // connection the pool then discards, and SQLite keeps that connection's write
@@ -570,7 +575,11 @@ func mapError(err error) error {
 		case 19:
 			return fmt.Errorf("%w: database constraint", storage.ErrConflict)
 		case 5, 6:
-			return fmt.Errorf("%w: database busy", storage.ErrConflict)
+			// Busy or locked: another connection held the lock past the
+			// busy timeout. The transaction committed nothing (a COMMIT
+			// that fails busy leaves it open, and it is rolled back), so
+			// it is a transient abort, not a clash over records.
+			return fmt.Errorf("%w: database busy", storage.ErrTransient)
 		}
 	}
 	return err

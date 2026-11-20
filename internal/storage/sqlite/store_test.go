@@ -507,3 +507,8 @@ func TestLiveReadsUseIndexes(t *testing.T) {
 		t.Errorf("full scan plan uses the partial index: %s", got)
 	}
 }
+
+// Both wrappers still admit one writer at a time: BEGIN IMMEDIATE
+// serialises writers across independently opened handles.
+func (reopening) SerialWriters() bool    { return true }
+func (*alternating) SerialWriters() bool { return true }

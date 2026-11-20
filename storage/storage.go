@@ -18,6 +18,16 @@ var (
 	ErrClaimed   = errors.New("execution or work already claimed")
 	// ErrReadOnly refuses a write in a View.
 	ErrReadOnly = errors.New("write in a read-only view")
+	// ErrTransient aborts a transaction for a reason that says nothing
+	// about the records it touched: a serialization conflict with another
+	// transaction, a lock it could not take in time. Nothing it did was
+	// committed, so running the whole transaction again, callback and all,
+	// rereads the state and may succeed (Retry does). It is never an
+	// ErrConflict: that is a revision or identity clash, which rerunning
+	// the same logic over the same records cannot cure. A backend that
+	// cannot tell whether a commit took effect (the connection dropped
+	// during COMMIT) must not report ErrTransient.
+	ErrTransient = errors.New("transient abort, nothing committed: retry the transaction")
 )
 
 // Guard.Now is supplied by the trusted runtime clock, never by an executor.
@@ -31,11 +41,15 @@ type Store interface {
 	// Transact is serializable, all-or-nothing, and acknowledges only after commit.
 	// It invokes fn once, never retries user callbacks, and rolls back on error,
 	// panic or context cancellation before commit. Tx must not escape the callback.
+	// A backend whose transactions can abort under contention returns
+	// ErrTransient (on any call or from Transact itself) and commits
+	// nothing; Retry is the one policy that reruns such a transaction.
 	Transact(context.Context, Guard, func(Tx) error) error
 }
 
 // Viewer is a Store that can also read outside its transactions. View
-// invokes fn once over a consistent snapshot of committed state. It is
+// invokes fn once over a consistent snapshot of committed state, and may
+// fail with ErrTransient as Transact may. It is
 // read-only: every write fails with ErrReadOnly and nothing fn does is kept.
 // Views run alongside each other and alongside Transact, so a read never
 // waits for another read, or for a write to commit, and never sees a write
@@ -84,6 +98,15 @@ func (readOnly) PutScope(domain.Scope, domain.Revision) error              { ret
 func (readOnly) Put(string, string, []byte) error                          { return ErrReadOnly }
 func (readOnly) Delete(string, string) error                               { return ErrReadOnly }
 
+// Sequences: every accepted Event has a sequence greater than any accepted
+// before it, with gaps allowed. Sequences become visible in sequence order:
+// a reader that sees sequence n, through any of the event reads or
+// LatestSequence, already sees every Event with a sequence below n that
+// will ever commit. So an exclusive "after" cursor, or a Wait's
+// AfterSequence boundary, never skips an Event that commits later. A
+// backend that allocates sequences before commit (an identity column
+// under concurrent writers) must hold readers back to the highest sequence
+// below which every allocation has committed or rolled back.
 type Tx interface {
 	AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error)
 	Event(domain.ID) (domain.AcceptedEvent, error)
@@ -103,7 +126,9 @@ type Tx interface {
 	// unrecorded few. Like WorkEvents, its cost follows the scopes' own
 	// events, not retained history.
 	ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
-	// LatestSequence is the last accepted sequence, zero before any event.
+	// LatestSequence is the last accepted sequence visible to this
+	// transaction, zero before any event. Every Event at or below it is
+	// visible too (see Sequences above).
 	LatestSequence() (uint64, error)
 	// EventByDelivery finds an event by its delivery identity.
 	EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error)
@@ -184,7 +209,10 @@ type Tx interface {
 	ListScopes() ([]domain.Scope, error)
 	Scope(domain.ID) (domain.Scope, error)
 	PutScope(domain.Scope, domain.Revision) error
-	// Namespace is mandatory; prefix scans return keys in lexical order.
+	// Namespace is mandatory. Keys are compared as bytes: List returns the
+	// keys that begin with prefix byte for byte (no character in prefix is
+	// a wildcard, so "%" and "_" match only themselves), in byte order,
+	// never a collation's.
 	Get(namespace, key string) ([]byte, error)
 	Put(namespace, key string, value []byte) error
 	Delete(namespace, key string) error
