@@ -19,6 +19,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -343,7 +344,7 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 		if len(paths) != 1 || paths[0] != "/notes/"+string(extensionScope) {
 			t.Fatalf("webhook paths %v", paths)
 		}
-		h := r.Webhook(paths[0], 0)
+		h := r.Webhook(paths[0], nil)
 		body, _ := json.Marshal(map[string]any{"note": notes.Note{ID: "c", Rev: "r1", Text: "pushed", At: extensionNoteTime}})
 		for _, c := range []struct {
 			token string
@@ -357,6 +358,32 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 			if w.Code != c.want {
 				t.Fatalf("token %q: status %d, want %d (%s)", c.token, w.Code, c.want, w.Body)
 			}
+		}
+		// The example declares no webhook_max_bytes, so the host reads at
+		// most protocol.DefaultWebhookBodyBytes: a 2 MiB body, and the
+		// 5 MiB delivery the GitHub package takes
+		// (TestDaemonGitHubLargeDelivery), are refused before they reach
+		// the package.
+		if got := r.WebhookBodyLimit(); got != protocol.DefaultWebhookBodyBytes {
+			t.Fatalf("default limit %d", got)
+		}
+		gh := githubtest.New("octo/widgets", "tok")
+		defer gh.Close()
+		large := paddedDelivery(t, gh.IssuesHook("opened", gh.OpenIssue("Large", "", githubtest.User{Login: "alice", Type: "User"})), 5<<20)
+		var refusals []int64
+		limited := r.Webhook(paths[0], func(limit, _ int64) { refusals = append(refusals, limit) })
+		for _, big := range [][]byte{bytes.Repeat([]byte("x"), 2<<20), large} {
+			req := httptest.NewRequest(http.MethodPost, paths[0], bytes.NewReader(big))
+			req.Header.Set("X-Notes-Token", notes.WebhookToken)
+			req.Header.Set("X-Notes-Delivery", "hook-big")
+			w := httptest.NewRecorder()
+			limited.ServeHTTP(w, req)
+			if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "at most 1048576 bytes") {
+				t.Fatalf("%d-byte body: status %d (%s)", len(big), w.Code, w.Body)
+			}
+		}
+		if len(refusals) != 2 || refusals[0] != protocol.DefaultWebhookBodyBytes {
+			t.Fatalf("refusals %v", refusals)
 		}
 		mu.Lock()
 		defer mu.Unlock()

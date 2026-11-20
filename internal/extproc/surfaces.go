@@ -368,14 +368,32 @@ const maxBindingReason = 300
 // extension verifies it and pushes through ingress.deliver before it
 // answers, so a 2xx means durable acceptance. A failed call is 503, so the
 // service retries (reconcile is the backstop).
-func (r *Remote) Webhook(path string, maxBody int64) http.Handler {
-	if maxBody <= 0 {
-		maxBody = 1 << 20
-	}
+//
+// The host reads at most the body limit the manifest declares
+// (WebhookBodyLimit). A larger request is answered 413 with the limit,
+// logged, and passed to refused when it is non-nil, without reaching the
+// extension.
+func (r *Remote) Webhook(path string, refused func(limit, length int64)) http.Handler {
+	limit := r.WebhookBodyLimit()
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		body, err := io.ReadAll(io.LimitReader(req.Body, maxBody+1))
-		if err != nil || int64(len(body)) > maxBody {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		tooLarge := func(length int64) {
+			r.p.o.Log.Warn("webhook body over the extension's limit", "extension", r.m.Name, "path", path, "limit", limit, "length", length)
+			if refused != nil {
+				refused(limit, length)
+			}
+			http.Error(w, fmt.Sprintf("request body too large: the %s extension accepts at most %d bytes", r.m.Name, limit), http.StatusRequestEntityTooLarge)
+		}
+		if req.ContentLength > limit {
+			tooLarge(req.ContentLength)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(req.Body, limit+1))
+		if int64(len(body)) > limit {
+			tooLarge(-1)
+			return
+		}
+		if err != nil {
+			http.Error(w, "request body unreadable", http.StatusBadRequest)
 			return
 		}
 		var out protocol.WebhookHandleResult
@@ -395,6 +413,17 @@ func (r *Remote) Webhook(path string, maxBody int64) http.Handler {
 		w.WriteHeader(out.Status)
 		_, _ = io.Copy(w, bytes.NewReader(out.Body))
 	})
+}
+
+// WebhookBodyLimit is the largest webhook request body the host reads for
+// the extension: its manifest's webhook_max_bytes, or
+// protocol.DefaultWebhookBodyBytes when it declares none. Validation keeps
+// a declared limit within protocol.MaxWebhookBodyBytes.
+func (r *Remote) WebhookBodyLimit() int64 {
+	if n := r.m.Provides.WebhookMaxBytes; n > 0 {
+		return min(n, protocol.MaxWebhookBodyBytes)
+	}
+	return protocol.DefaultWebhookBodyBytes
 }
 
 // Provider returns the resource provider adapter of a declared type.

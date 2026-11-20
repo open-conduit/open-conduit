@@ -39,6 +39,17 @@ func (m Manifest) RunsOnHost() bool { return len(m.Command) > 0 && m.Command[0] 
 // MaxTitle is the longest display name a manifest may give (Title).
 const MaxTitle = 64
 
+// Webhook body limits (Provides.WebhookMaxBytes): the host reads at most
+// DefaultWebhookBodyBytes of a webhook request for a package that declares
+// no limit, and no package may declare more than MaxWebhookBodyBytes. The
+// body crosses webhook.handle, and usually ingress.deliver after it, as
+// base64 in one framed message, so the bound is what fits MaxMessageBytes
+// once encoded, less 2 MiB for the headers and the envelope.
+const (
+	DefaultWebhookBodyBytes = 1 << 20
+	MaxWebhookBodyBytes     = MaxMessageBytes/4*3 - 2<<20
+)
+
 // Manifest declares what an extension process provides, before it runs. The
 // host reads it at discovery, validates it offline (config validation does
 // not need the process), and checks at the handshake that the process
@@ -243,6 +254,12 @@ type Provides struct {
 	// Webhooks marks an extension that receives webhook.handle for the
 	// paths its configure result registers under /<name>/.
 	Webhooks bool `json:"webhooks,omitempty"`
+	// WebhookMaxBytes is the largest webhook request body, in bytes, the
+	// extension accepts: the host reads no more before webhook.handle and
+	// answers a larger request 413. Zero is DefaultWebhookBodyBytes; it
+	// needs webhooks and is at most MaxWebhookBodyBytes, the host's own
+	// bound, so a package can't ask for an unbounded read.
+	WebhookMaxBytes int64 `json:"webhook_max_bytes,omitempty"`
 	// Exporters marks a telemetry exporter (telemetry.export).
 	Exporters bool `json:"exporters,omitempty"`
 	// Checks are doctor checks; Deep checks run only with secrets.
@@ -1049,6 +1066,14 @@ func (m Manifest) Validate() error {
 	}
 	if p.Webhooks && !ingress {
 		fail("webhooks require an ingress extension type")
+	}
+	switch {
+	case p.WebhookMaxBytes < 0:
+		fail("webhook_max_bytes must not be negative")
+	case p.WebhookMaxBytes > MaxWebhookBodyBytes:
+		fail("webhook_max_bytes %d is over the host's bound of %d bytes", p.WebhookMaxBytes, int64(MaxWebhookBodyBytes))
+	case p.WebhookMaxBytes > 0 && !p.Webhooks:
+		fail("webhook_max_bytes requires webhooks")
 	}
 	for _, r := range p.Routes {
 		ident("route handler", r.Handler)
