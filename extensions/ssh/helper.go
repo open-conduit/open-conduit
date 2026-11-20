@@ -144,7 +144,7 @@ func RunHelper(args []string, o HelperOptions) int {
 	if st.StartedAt.IsZero() {
 		return fail("the run did not start")
 	}
-	if err := h.copyBack(ctx); err != nil {
+	if err := h.collect(ctx); err != nil {
 		return fail("could not copy the run's changes back: %v", err)
 	}
 	if lost {
@@ -157,12 +157,28 @@ type helper struct {
 	run     Run
 	records string
 	o       HelperOptions
+	// env is ssh's environment; nil inherits this process's.
+	env []string
+}
+
+// collect copies the run's changes back once: a run already collected,
+// by its helper or by the provider's Collect, is left alone, so a change
+// the host made since is never undone.
+func (h *helper) collect(ctx context.Context) error {
+	if collected(h.records, h.run.ID) {
+		return nil
+	}
+	if err := h.copyBack(ctx); err != nil {
+		return err
+	}
+	return markCollected(h.records, h.run.ID)
 }
 
 // remote runs a script on the run's remote.
 func (h *helper) remote(ctx context.Context, stdin io.Reader, script string, args ...string) ([]byte, error) {
 	argv := append(append([]string{}, h.run.SSH...), "-T", h.run.Host, command(h.run.Root, script, args...))
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = h.env
 	if stdin == nil {
 		stdin = bytes.NewReader(nil)
 	}
@@ -227,6 +243,7 @@ func (h *helper) copyBack(ctx context.Context) error {
 	}
 	argv := append(append([]string{}, h.run.SSH...), "-T", h.run.Host, command(h.run.Root, scriptDownload, append([]string{h.run.ID}, h.run.Write...)...))
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = h.env
 	// What the remote has and the host didn't copy comes back whatever its
 	// times: a renamed file keeps its old mtime.
 	listed := ParseList(listing)

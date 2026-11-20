@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,100 @@ func TestCheckContainerProvider(t *testing.T) {
 	} {
 		m := &memContainers{containers: map[string]extension.ContainerState{}}
 		if err := CheckContainerProvider(fixture(broken(m), m)); err == nil {
+			t.Errorf("%s: the suite passed a provider that breaks the contract", name)
+		}
+	}
+}
+
+// memCollector is memContainers whose runs write somewhere other than the
+// host: what an orphaned run wrote waits in remote until Collect brings it
+// back to file, once. A base for the collect controls.
+type memCollector struct {
+	*memContainers
+	file, content string
+	remote        map[string]string
+	collected     map[string]bool
+}
+
+func newMemCollector(file string) *memCollector {
+	return &memCollector{memContainers: &memContainers{containers: map[string]extension.ContainerState{}}, file: file, content: "the run's work",
+		remote: map[string]string{}, collected: map[string]bool{}}
+}
+
+// orphan starts the run and loses its wrapper: the run writes on the
+// remote and exits, and nothing brings its work back.
+func (m *memCollector) orphan(c extension.ContainerCreated) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.containers[c.Ref.ID]
+	st.StartedAt, st.ExitCode = time.Now(), 5
+	m.containers[c.Ref.ID] = st
+	m.remote[c.Ref.ID] = m.content
+	return nil
+}
+
+func (m *memCollector) Collect(_ context.Context, ref extension.ContainerRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if st, ok := m.containers[ref.ID]; ok && st.Running {
+		return errors.New("still running")
+	}
+	work, ok := m.remote[ref.ID]
+	if !ok || m.collected[ref.ID] {
+		return nil
+	}
+	m.collected[ref.ID] = true
+	return os.WriteFile(m.file, []byte(work), 0o644)
+}
+
+// noopCollect declares collect and brings nothing back.
+type noopCollect struct{ *memCollector }
+
+func (noopCollect) Collect(context.Context, extension.ContainerRef) error { return nil }
+
+// collectsEveryTime brings the run's work back on every collect, over
+// whatever the host did since.
+type collectsEveryTime struct{ *memCollector }
+
+func (c collectsEveryTime) Collect(ctx context.Context, ref extension.ContainerRef) error {
+	c.mu.Lock()
+	delete(c.collected, ref.ID)
+	c.mu.Unlock()
+	return c.memCollector.Collect(ctx, ref)
+}
+
+func TestCheckContainerCollector(t *testing.T) {
+	fixture := func(p interface {
+		extension.ContainerProvider
+		extension.ContainerCollector
+	}, m *memCollector) CollectorFixture {
+		return CollectorFixture{Provider: p, Host: "h", Code: 5, File: m.file, Content: m.content, Orphan: m.orphan,
+			Policy: extension.ContainerPolicy{Paths: extension.SandboxPaths{Run: t.TempDir(), Records: t.TempDir()}}}
+	}
+	m := newMemCollector(filepath.Join(t.TempDir(), "out.txt"))
+	if err := CheckContainerCollector(fixture(m, m)); err != nil {
+		t.Fatalf("a provider that keeps the contract fails: %v", err)
+	}
+	// Negative controls: each breaks one rule and must fail.
+	for name, broken := range map[string]func(*memCollector) interface {
+		extension.ContainerProvider
+		extension.ContainerCollector
+	}{
+		"collect is a no-op": func(m *memCollector) interface {
+			extension.ContainerProvider
+			extension.ContainerCollector
+		} {
+			return noopCollect{m}
+		},
+		"collecting again undoes the host's change": func(m *memCollector) interface {
+			extension.ContainerProvider
+			extension.ContainerCollector
+		} {
+			return collectsEveryTime{m}
+		},
+	} {
+		m := newMemCollector(filepath.Join(t.TempDir(), "out.txt"))
+		if err := CheckContainerCollector(fixture(broken(m), m)); err == nil {
 			t.Errorf("%s: the suite passed a provider that breaks the contract", name)
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,17 @@ type containerState struct {
 	reconciling atomic.Bool
 	// hosts are this installation's container labels (containerHosts).
 	hosts atomic.Pointer[extension.ContainerHosts]
+	// failed is what the last reconcile pass couldn't do (a container it
+	// couldn't collect among it), for doctor; nil when it did it all.
+	mu     sync.Mutex
+	failed error
+}
+
+// reconcileFailed is what the last container reconcile pass couldn't do.
+func (c *containerState) reconcileFailed() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failed
 }
 
 // openContainers loads this installation's container labels, making its
@@ -467,9 +479,18 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 	}
-	errs = append(errs, d.sweepHomes(ctx))
-	if err := errors.Join(errs...); err != nil && ctx.Err() == nil {
-		d.report("containers", "", "reconcile_failed", err.Error())
+	containersErr := errors.Join(errs...)
+	if ctx.Err() == nil {
+		d.containers.mu.Lock()
+		d.containers.failed = containersErr
+		d.containers.mu.Unlock()
+	}
+	if err := errors.Join(containersErr, d.sweepHomes(ctx)); err != nil && ctx.Err() == nil {
+		code := "reconcile_failed"
+		if errors.Is(err, extension.ErrContainerUncollected) {
+			code = "container_uncollected"
+		}
+		d.report("containers", "", code, err.Error())
 		return
 	}
 	d.clear("containers", "")
@@ -644,7 +665,7 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 	if p == nil {
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
 	}
-	return p.Remove(ctx, extension.ContainerRef{ID: pin.ID})
+	return extension.RemoveContainer(ctx, p, extension.ContainerRef{ID: pin.ID})
 }
 
 // forwardAddress checks an address a provider names for an execution's

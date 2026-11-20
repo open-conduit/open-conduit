@@ -100,7 +100,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Executors` | `executors` (`pool: "jobs"` for an executor whose runs count against `settings.job_concurrency`) | `executor.*` |
 | `Providers` | `resources` | `provider.*` |
 | `Sandboxes` | `sandboxes` | `sandbox_provider.*` |
-| `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`, `place` for an `extension.ContainerPlacer`) | `container_provider.*` |
+| `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`, `place` for an `extension.ContainerPlacer`, `collect` for an `extension.ContainerCollector`) | `container_provider.*` |
 | `Tunnels` | `tunnels` | `tunnel.run`, `tunnel.url` (E→H), `validate` kind `tunnel` (`Validate`) |
 | `Verifiers` | `verifiers` | `credential.verify`, `validate` kind `verifier` (`Validate`) |
 | `Secrets` | `secret_schemes` | `secret.serve` |

@@ -520,11 +520,14 @@ func (p *remoteSandbox) Adopt(ctx context.Context, plan extension.SandboxPlan, p
 // container, and keeps stop, reconcile and removal, so the package only
 // plans, creates and reports containers. One declared with forward is an
 // extension.ContainerForwarder, and one declared with place an
-// extension.ContainerPlacer.
+// extension.ContainerPlacer. Every one is an extension.ContainerCollector,
+// whose Collect calls container_provider.collect only when the type is
+// declared with collect, and is nil otherwise, as for a provider that
+// doesn't collect.
 func (r *Remote) Container(typ string) (extension.ContainerProvider, bool) {
 	for _, d := range r.m.Provides.Containers {
 		if d.Type == typ {
-			p := &remoteContainer{r: r, typ: typ}
+			p := &remoteContainer{r: r, typ: typ, collect: d.Collect}
 			switch {
 			case d.Forward && d.Place:
 				return forwardingPlacingContainer{forwardingContainer{p}, placingContainer{p}}, true
@@ -612,8 +615,9 @@ func (v *remoteSecrets) Serve(ctx context.Context, req extension.SecretRequest) 
 }
 
 type remoteContainer struct {
-	r   *Remote
-	typ string
+	r       *Remote
+	typ     string
+	collect bool
 }
 
 type remoteTunnel struct {
@@ -725,6 +729,15 @@ func (p *remoteContainer) List(ctx context.Context, owner extension.ResourceOwne
 		states = append(states, st.Extension())
 	}
 	return states, nil
+}
+
+// Collect is nil for a type not declared with collect: its output came
+// back with its wrapper, or never leaves the host.
+func (p *remoteContainer) Collect(ctx context.Context, ref extension.ContainerRef) error {
+	if !p.collect {
+		return nil
+	}
+	return p.r.p.Call(ctx, "container_provider.collect", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref)}, nil)
 }
 
 func (p *remoteContainer) Remove(ctx context.Context, ref extension.ContainerRef) error {

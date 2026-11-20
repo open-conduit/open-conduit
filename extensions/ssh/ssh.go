@@ -383,6 +383,29 @@ type Run struct {
 // RunFile is a run's record in the execution's records.
 func RunFile(records, id string) string { return filepath.Join(records, "ssh-run-"+id+".json") }
 
+// collectedFile marks a run whose changes were copied back, by its helper
+// or by Collect, in the execution's records.
+func collectedFile(records, id string) string {
+	return filepath.Join(records, "ssh-run-"+id+".collected")
+}
+
+func collected(records, id string) bool {
+	_, err := os.Lstat(collectedFile(records, id))
+	return err == nil
+}
+
+func markCollected(records, id string) error {
+	return writeFresh(collectedFile(records, id), nil)
+}
+
+// runsPointer is where the provider keeps, in its own directory, the
+// records directory of each run it created, so Collect, which has only
+// the run's reference, finds the host's record of what the run may bring
+// back. The remote's own record is never trusted for that.
+func (p *Provider) runsPointer(id string) string {
+	return filepath.Join(p.o.Dir, "runs", id)
+}
+
 var idPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
@@ -450,6 +473,14 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	raw, _ = json.Marshal(run)
 	if err := writeFresh(RunFile(d.Records, id), raw); err != nil {
 		return extension.ContainerCreated{}, err
+	}
+	if p.o.Dir != "" {
+		if err := os.MkdirAll(filepath.Dir(p.runsPointer(id)), 0o700); err != nil {
+			return extension.ContainerCreated{}, err
+		}
+		if err := writeFresh(p.runsPointer(id), []byte(d.Records)); err != nil {
+			return extension.ContainerCreated{}, err
+		}
 	}
 	created = true
 	return extension.ContainerCreated{
@@ -553,8 +584,63 @@ func (p *Provider) Remove(ctx context.Context, ref extension.ContainerRef) error
 	if st.Gone {
 		return nil
 	}
-	_, err = p.ssh(ctx, s, nil, scriptRemove, append([]string{id}, st.Mounts...)...)
-	return err
+	if _, err = p.ssh(ctx, s, nil, scriptRemove, append([]string{id}, st.Mounts...)...); err != nil {
+		return err
+	}
+	if p.o.Dir != "" {
+		_ = os.Remove(p.runsPointer(id))
+	}
+	return nil
+}
+
+// Collect copies back what an exited run changed in its write grants when
+// its helper didn't (extension.ContainerCollector): the helper died with
+// the daemon that ran it, or failed to copy them. It is the helper's copy
+// back, from the host's record of the run, so the same write grants and
+// exclusions hold, and it happens once: a run collected already, by its
+// helper or here, is left alone. A run with nothing to bring back (gone,
+// never started, or one this provider keeps no record of, made before it
+// kept them) is nil; one still running is an error.
+func (p *Provider) Collect(ctx context.Context, ref extension.ContainerRef) error {
+	_, id, err := p.splitRef(ref.ID)
+	if err != nil {
+		return err
+	}
+	if p.o.Dir == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(p.runsPointer(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	records := string(raw)
+	if !filepath.IsAbs(records) || collected(records, id) {
+		return nil
+	}
+	var run Run
+	raw, err = os.ReadFile(RunFile(records, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		err = json.Unmarshal(raw, &run)
+	}
+	if err != nil || run.ID != id || run.Ref != ref.ID {
+		return fmt.Errorf("the host's record of run %s is unreadable", ref.ID)
+	}
+	st, err := p.Inspect(ctx, ref)
+	switch {
+	case err != nil:
+		return err
+	case st.Running:
+		return fmt.Errorf("run %s is still running", ref.ID)
+	case st.Gone, st.StartedAt.IsZero():
+		return markCollected(records, id)
+	}
+	h := &helper{run: run, records: records, o: HelperOptions{Now: p.o.Now}, env: p.cliEnv()}
+	return h.collect(ctx)
 }
 
 // tenths is a grace in tenths of a second, rounded up.

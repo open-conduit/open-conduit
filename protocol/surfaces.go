@@ -1255,7 +1255,7 @@ type ContainerProviderCreateParams struct {
 }
 
 // ContainerProviderRefParams names one container: signal (Signal), stop
-// (GraceMillis), inspect and remove.
+// (GraceMillis), inspect, remove and collect.
 type ContainerProviderRefParams struct {
 	Type        string       `json:"type"`
 	Ref         ContainerRef `json:"ref"`

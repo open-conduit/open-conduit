@@ -21,10 +21,10 @@ import (
 //
 // An executor sees a ContainerBroker with two calls: Launch, which creates
 // the container (not started) and returns the argv its wrapper runs to
-// start and attach to it, and Adopt, in Recover. Stopping, reconciling and
-// removing containers are the host's (StopContainer, ReconcileContainers,
-// RemoveContainers): executors never see them, and there is no Signal call
-// for executors.
+// start and attach to it, and Adopt, in Recover. Stopping, reconciling,
+// collecting and removing containers are the host's (StopContainer,
+// ReconcileContainers, CollectContainer, RemoveContainers): executors never
+// see them, and there is no Signal call for executors.
 
 // The labels every container the host creates carries.
 const (
@@ -150,6 +150,53 @@ type ContainerForwarder interface {
 	Forward(ctx context.Context, config domain.Payload) (string, error)
 }
 
+// ContainerCollector is an optional ContainerProvider capability: a
+// provider whose containers write somewhere other than the host's own
+// paths (another machine) brings back what an exited container wrote, as
+// the container's wrapper does when the run ends. The host collects an
+// exited container before Adopt returns its exit and before it removes it
+// (a launch removing what an earlier one left, RemoveContainers,
+// reconcile, an attach's detach), so a run whose wrapper died, with the
+// daemon that ran it, still brings its work back.
+//
+// Collect brings back only what the run was granted to write, with what a
+// normal end leaves out left out (a read-only need such as .git/config,
+// what the host protects). Collecting a container already collected, by
+// its wrapper or by Collect, changes nothing, so a change the host made
+// since is never undone; one with nothing to collect (gone, never
+// started, something the provider made beside a container) is nil. A
+// running container is an error. Any error keeps the container: it is
+// neither adopted nor removed, and the host collects it again next time.
+type ContainerCollector interface {
+	Collect(ctx context.Context, ref ContainerRef) error
+}
+
+// ErrContainerUncollected means an exited container's output could not be
+// collected (ContainerCollector), so the host keeps the container.
+var ErrContainerUncollected = errors.New("container output not collected")
+
+// CollectContainer collects ref's output when p is a ContainerCollector,
+// and is nil for any other provider. Its error is ErrContainerUncollected.
+func CollectContainer(ctx context.Context, p ContainerProvider, ref ContainerRef) error {
+	c, ok := p.(ContainerCollector)
+	if !ok {
+		return nil
+	}
+	if err := c.Collect(ctx, ref); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrContainerUncollected, ref.ID, err)
+	}
+	return nil
+}
+
+// RemoveContainer is how the host removes a container: collected first
+// (CollectContainer), and kept when that fails.
+func RemoveContainer(ctx context.Context, p ContainerProvider, ref ContainerRef) error {
+	if err := CollectContainer(ctx, p, ref); err != nil {
+		return err
+	}
+	return p.Remove(ctx, ref)
+}
+
 // ContainerExit is what Adopt found when a recovered segment's wrapper was
 // dead and its container had exited: the container's exit code, and
 // whether it was stopped by a TERM the host didn't send.
@@ -170,7 +217,8 @@ type ContainerBroker interface {
 	// Adopt proves a recovered segment's container is the one pinned. With
 	// its wrapper alive (alive), the segment is adopted as it runs. With
 	// the wrapper dead, an exited container's exit is returned as the
-	// segment's result. Anything else is ErrNotAdoptable.
+	// segment's result, once its output is collected (ContainerCollector).
+	// Anything else, a collect that fails among it, is ErrNotAdoptable.
 	Adopt(ctx context.Context, alive bool) (ContainerExit, error)
 }
 

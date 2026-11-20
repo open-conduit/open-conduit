@@ -822,6 +822,12 @@ type ContainerDecl struct {
 	// execution, and runs a resource provider's commands at the placement
 	// through container_provider.site_run.
 	Place bool `json:"place,omitempty"`
+	// Collect marks a provider that brings back what an exited container
+	// wrote when its wrapper didn't (extension.ContainerCollector): the
+	// host calls container_provider.collect before it adopts an exited
+	// container's exit and before it removes one, and keeps a container
+	// whose collect fails.
+	Collect bool `json:"collect,omitempty"`
 }
 
 // TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).
@@ -1389,6 +1395,7 @@ func (m Manifest) Enabled() []string {
 	for _, c := range p.Containers {
 		set("containers.forward", c.Forward)
 		set("containers.place", c.Place)
+		set("containers.collect", c.Collect)
 	}
 	set("tunnels", len(p.Tunnels) > 0)
 	set("verifiers", len(p.Verifiers) > 0)
