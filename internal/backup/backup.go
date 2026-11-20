@@ -168,7 +168,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		return storage.ErrInvalid
 	}
 	expired := retention.Expired
-	return publish(ctx, destination, func(stage string) (err error) {
+	_, err := publish(ctx, destination, func(stage string) (err error) {
 		ctx, release, err := retention.hold(ctx, db)
 		if err != nil {
 			return err
@@ -250,6 +250,7 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		}
 		return writeDurable(filepath.Join(stage, "manifest.json"), append(data, '\n'))
 	})
+	return err
 }
 
 // Backends finds a storage backend by the name a bundle records
@@ -276,7 +277,8 @@ type ArtifactTarget struct {
 // imported into the store target opens. That store must hold nothing yet,
 // as the directory must not exist, so a restore never mixes a bundle's
 // content into a live store; when a restore into a location outside the
-// directory fails, what it imported there is deleted again. Each
+// directory fails before the directory is published, what it imported
+// there is deleted again. Each
 // is checked against its reference's digest, or, for a reference recorded
 // before references carried one, the digest the manifest vouches for. No
 // daemon may own destination; an existing path is rejected, never
@@ -309,17 +311,20 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 	}
 	defer input.Close()
 	// A store outside the directory is opened and checked here, and emptied
-	// again when the restore fails at any step up to publishing; one inside
-	// it goes with the staged directory.
+	// again when the restore fails before the directory is published; one
+	// inside it goes with the staged directory. Once the directory is
+	// published its storage.json names the store, so the content stays even
+	// if a later step (syncing the parent) fails.
 	var external storage.ArtifactStore
 	var imported []domain.ArtifactRef
+	var published bool
 	if target.Location != "" {
 		if external, err = openEmpty(ctx, target.Backend, target.Location); err != nil {
 			return err
 		}
 		defer external.Close()
 		defer func() {
-			if err == nil {
+			if err == nil || published {
 				return
 			}
 			for _, ref := range imported {
@@ -327,7 +332,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			}
 		}()
 	}
-	return publish(ctx, destination, func(stage string) error {
+	published, err = publish(ctx, destination, func(stage string) error {
 		output := external
 		if output == nil {
 			staged, err := openEmpty(ctx, target.Backend, filepath.Join(stage, "artifacts"))
@@ -421,6 +426,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time, exp
 			return nil
 		})
 	})
+	return err
 }
 
 func (m manifest) backend() string {
@@ -459,36 +465,36 @@ func readManifest(path string) (manifest, error) {
 	return m, nil
 }
 
-func publish(ctx context.Context, destination string, create func(string) error) error {
-	destination, err := filepath.Abs(destination)
+func publish(ctx context.Context, destination string, create func(string) error) (published bool, err error) {
+	destination, err = filepath.Abs(destination)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {
-			return err
+			return false, err
 		}
-		return fmt.Errorf("backup: destination already exists")
+		return false, fmt.Errorf("backup: destination already exists")
 	}
 	parent := filepath.Dir(destination)
 	stage, err := os.MkdirTemp(parent, ".conduit-snapshot-")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer os.RemoveAll(stage)
 	if err := create(stage); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if err := syncDirectory(stage); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(stage, destination); err != nil {
-		return err
+		return false, err
 	}
-	return syncDirectory(parent)
+	return true, syncParent(parent)
 }
 
 func sortedRefs(refs map[string]domain.ArtifactRef) []domain.ArtifactRef {
@@ -544,6 +550,11 @@ func writeDurable(path string, data []byte) error {
 	}
 	return closeErr
 }
+
+// syncParent syncs the directory a bundle or state directory was published
+// into; a test seam for a failure after the rename.
+var syncParent = syncDirectory
+
 func syncDirectory(path string) error {
 	f, err := os.Open(path)
 	if err != nil {

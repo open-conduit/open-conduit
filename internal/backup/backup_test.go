@@ -132,6 +132,21 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "restored-again")); !os.IsNotExist(err) {
 		t.Fatalf("a refused restore published a directory: %v", err)
 	}
+	// A failure after the directory is published (syncing its parent) leaves
+	// the content in the store the published storage.json names.
+	afterRename := filepath.Join(root, "chosen-after-rename")
+	syncParent = func(string) error { return errors.New("parent sync failed") }
+	err = Restore(ctx, bundle, filepath.Join(root, "restored-after-rename"), now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend, Location: afterRename}, nil)
+	syncParent = syncDirectory
+	if err == nil {
+		t.Fatal("restore hid a failed parent sync")
+	}
+	if _, err := os.Stat(filepath.Join(root, "restored-after-rename")); err != nil {
+		t.Fatalf("directory not published before the parent sync: %v", err)
+	}
+	if held := listAll(t, afterRename); len(held) != 1 || held[0].Ref != ref {
+		t.Fatalf("a failure after publishing emptied the chosen store: %+v", held)
+	}
 	restored, err := sqlite.Open(ctx, filepath.Join(destination, "conduit.db"))
 	if err != nil {
 		t.Fatal(err)
