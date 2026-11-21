@@ -26,6 +26,12 @@ type ServeRequest struct {
 	BackupInterval time.Duration
 	BackupDir      string
 	BackupsKept    int
+	// UpgradeBundlesKept and UpgradeBundlesMaxAge bound the bundles taken
+	// before a start raises the stored format (3, and no age limit, by
+	// default). NoUpgradeBundle starts without taking one, deliberately.
+	UpgradeBundlesKept   int
+	UpgradeBundlesMaxAge time.Duration
+	NoUpgradeBundle      bool
 	// WebhookAddr enables the webhook listener; TunnelKind (a tunnel type
 	// a package declares) with its opaque TunnelConfig, or PublicURL,
 	// expose it. Empty values fall back to the config's settings.webhooks.
@@ -154,13 +160,16 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	restoreAcceptUnsigned := fs.fs.Bool("restore-accept-unsigned", false, "")
 	backups := fs.fs.Duration("backup-interval", 24*time.Hour, "")
 	kept := fs.fs.Int("backups-kept", 7, "")
+	upgradeKept := fs.fs.Int("upgrade-bundles-kept", 3, "")
+	upgradeAge := fs.fs.Duration("upgrade-bundles-max-age", 0, "")
+	noUpgradeBundle := fs.fs.Bool("no-upgrade-bundle", false, "")
 	for _, a := range args {
 		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
 		if msg, ok := retiredTunnelFlags[name]; ok && strings.HasPrefix(a, "-") {
 			return ServeRequest{}, usageError(o.errOut, "--"+name+" is retired: "+msg)
 		}
 	}
-	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 || *call <= 0 || *backups < 0 || *kept < 1 {
+	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 || *call <= 0 || *backups < 0 || *kept < 1 || *upgradeKept < 1 || *upgradeAge < 0 {
 		return ServeRequest{}, usageError(o.errOut, "invalid serve flags")
 	}
 	kind, rawConfig := fs.get("tunnel"), fs.get("tunnel-config")
@@ -191,6 +200,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	if r.BackupInterval == 0 {
 		r.BackupInterval = -1
 	}
+	r.UpgradeBundlesKept, r.UpgradeBundlesMaxAge, r.NoUpgradeBundle = *upgradeKept, *upgradeAge, *noUpgradeBundle
 	// --web-addr or --web-host alone also turn the view on.
 	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
 	r.WebSubjectHeader, r.WebTokenFile = fs.get("web-subject-header"), o.abs(fs.get("web-token-file"))

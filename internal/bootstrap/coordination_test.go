@@ -165,6 +165,9 @@ func (fakeBackend) Open(context.Context, string) (storage.Database, error) {
 func (fakeBackend) Inspect(context.Context, string) (storage.Inspection, error) {
 	return nil, storage.ErrInvalid
 }
+func (fakeBackend) OpenPrior(context.Context, string) (storage.Prior, error) {
+	return nil, storage.ErrInvalid
+}
 func (fakeBackend) Restore(context.Context, string, string, time.Time) error {
 	return storage.ErrInvalid
 }

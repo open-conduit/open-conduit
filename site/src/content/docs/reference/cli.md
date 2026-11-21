@@ -75,6 +75,9 @@ adapters [TYPE] [--json]   the registered integrations and the fields each takes
 serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]
       [--backup-interval 24h] [--backups-kept 7] [--backup-dir DIR]
                            (scheduled online backups into <data-dir>/backups; --backup-interval 0 turns them off)
+      [--upgrade-bundles-kept 3] [--upgrade-bundles-max-age 0] [--no-upgrade-bundle]
+                           (a first start on a newer record format takes a verified pre-upgrade-<time> bundle in the
+                           backup directory and won't start without one; --no-upgrade-bundle skips it for this run)
       [--restore BUNDLE [--restore-artifacts NAME --restore-artifacts-location LOC] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
                            (restore BUNDLE in place before serving, as backup restore --in-place does, once:
                            a start that finds the directory restored from it already serves it as it is)

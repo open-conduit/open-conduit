@@ -184,21 +184,38 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // checkRecordFormat refuses a database whose records a newer binary wrote. A
 // database without the entry predates it and holds format 1.
 func checkRecordFormat(ctx context.Context, db *sql.DB) error {
-	var stored uint32 = 1
-	var value string
-	switch err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='record_format'").Scan(&value); {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
+	stored, err := storedRecordFormat(ctx, db)
+	if err != nil {
 		return err
-	default:
-		if _, err = fmt.Sscan(value, &stored); err != nil {
-			return fmt.Errorf("sqlite: invalid record format %q", value)
-		}
 	}
 	if stored > recordFormat {
 		return fmt.Errorf("%w (format %d; this binary writes %d) and would lose the fields it doesn't know: run the newer binary, or restore the bundle taken before the upgrade with open-conduit backup restore", ErrRecordsNewer, stored, recordFormat)
 	}
 	return nil
+}
+
+// storedRecordFormat is the format the database holds: 1 without the entry.
+func storedRecordFormat(ctx context.Context, db *sql.DB) (uint32, error) {
+	var stored uint32 = 1
+	var value string
+	switch err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='record_format'").Scan(&value); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, err
+	default:
+		if _, err = fmt.Sscan(value, &stored); err != nil {
+			return 0, fmt.Errorf("sqlite: invalid record format %q", value)
+		}
+	}
+	return stored, nil
+}
+
+// SimulateRecordFormat makes this process a binary that writes format, until
+// the returned function is called. It exists for tests in other packages.
+func SimulateRecordFormat(format uint32) (restore func()) {
+	saved := recordFormat
+	recordFormat = format
+	return func() { recordFormat = saved }
 }
 
 // enableWAL switches the database to WAL, waiting out competing connections.

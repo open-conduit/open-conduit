@@ -19,9 +19,12 @@ import (
 
 func lifecycleHarness(b storage.Backend) conformance.LifecycleHarness {
 	return conformance.LifecycleHarness{
-		Backend:     b,
-		Location:    func(t *testing.T, dir string) string { return filepath.Join(dir, "conduit.db") },
-		Age:         age,
+		Backend:  b,
+		Location: func(t *testing.T, dir string) string { return filepath.Join(dir, "conduit.db") },
+		Age:      age,
+		Older: func(t *testing.T, path string) {
+			raw(t, path, fmt.Sprintf("UPDATE metadata SET value='%d' WHERE key='record_format'", sqlite.RecordFormat-1))
+		},
 		Fingerprint: fingerprint,
 		Corrupt:     corrupt,
 	}
@@ -149,6 +152,24 @@ func (unfenced) Fence(_ context.Context, now time.Time) error {
 
 type unchecked struct{ storage.Database }
 
+// raising opens the state first, as a daemon without the guard would, so
+// the format is already raised when it is asked what to preserve.
+type raising struct{ storage.Backend }
+
+func (r raising) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	if present, err := r.Backend.Present(ctx, location); err != nil || !present {
+		return nil, err
+	}
+	db, err := r.Backend.Open(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Close(); err != nil {
+		return nil, err
+	}
+	return r.Backend.OpenPrior(ctx, location)
+}
+
 func (unchecked) IntegrityCheck(context.Context) error { return nil }
 
 // existing opens a database file only if it is there, so a control never
@@ -206,6 +227,10 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// Present reports state that isn't there.
 		name: "present_reports_absent_state", failing: "present_reports_state_without_creating_it", want: "absent state reported present",
 		backend: eager{sqlite.Backend},
+	}, {
+		// OpenPrior raises the format before it looks.
+		name: "open_prior_raises_the_format", failing: "open_prior_preserves_older_state_unchanged", want: "did not report a prior",
+		backend: raising{sqlite.Backend},
 	}, {
 		// Fence does nothing.
 		name: "fence_leaves_a_lease_live", failing: "fence_ends_live_lease_authority", want: "still held",

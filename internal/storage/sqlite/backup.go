@@ -16,7 +16,13 @@ import (
 // Backup uses SQLite's online backup API, never a copy of a live database file.
 // It publishes a complete, synced standalone snapshot at a previously absent path.
 // Execution artifact references must be read from this snapshot, not the live DB.
-func (s *Store) Backup(ctx context.Context, destination string) (err error) {
+func (s *Store) Backup(ctx context.Context, destination string) error {
+	return s.backup(ctx, destination, SchemaVersion)
+}
+
+// backup is Backup accepting a snapshot at any schema from oldest up: state
+// an older binary left is preserved at the schema it holds.
+func (s *Store) backup(ctx context.Context, destination string, oldest uint32) (err error) {
 	abs, err := filepath.Abs(destination)
 	if err != nil {
 		return err
@@ -82,13 +88,19 @@ func (s *Store) Backup(ctx context.Context, destination string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = verifySnapshot(ctx, temporary); err != nil {
+	if err = verifySnapshotFrom(ctx, temporary, oldest); err != nil {
 		return err
 	}
 	return publishFile(temporary, abs)
 }
 
 func verifySnapshot(ctx context.Context, path string) error {
+	return verifySnapshotFrom(ctx, path, SchemaVersion)
+}
+
+// verifySnapshotFrom checks a snapshot whose schema is from oldest up to this
+// binary's.
+func verifySnapshotFrom(ctx context.Context, path string, oldest uint32) error {
 	db, err := readonlyDB(path)
 	if err != nil {
 		return err
@@ -101,14 +113,14 @@ func verifySnapshot(ctx context.Context, path string) error {
 	if version > SchemaVersion {
 		return fmt.Errorf("sqlite: snapshot %w (schema %d; this binary supports %d)", storage.ErrSchemaNewer, version, SchemaVersion)
 	}
-	if version != SchemaVersion {
+	if version < oldest {
 		return fmt.Errorf("sqlite: snapshot schema %d unsupported; expected %d", version, SchemaVersion)
 	}
 	var metadata string
 	if err = db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='schema_version'").Scan(&metadata); err != nil {
 		return fmt.Errorf("sqlite: invalid snapshot metadata: %w", err)
 	}
-	if metadata != "1" {
+	if metadata != fmt.Sprint(version) {
 		return fmt.Errorf("sqlite: snapshot schema metadata mismatch")
 	}
 	if err = checkRecordFormat(ctx, db); err != nil {

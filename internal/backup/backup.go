@@ -20,7 +20,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -170,7 +172,6 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 	if backend == "" || files == nil {
 		return storage.ErrInvalid
 	}
-	expired := retention.Expired
 	_, err := publish(ctx, destination, func(stage string) (err error) {
 		ctx, release, err := retention.hold(ctx, db)
 		if err != nil {
@@ -183,84 +184,160 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 			}
 			release()
 		}()
-		database := filepath.Join(stage, snapshotName)
-		var refs map[string]domain.ArtifactRef
-		var live map[string]bool
-		// References are read from the snapshot's own state, not the live
-		// database, so the bundle copies exactly what its snapshot names.
-		err = db.Snapshot(ctx, database, func(tx storage.Tx) error {
-			refs, live = map[string]domain.ArtifactRef{}, map[string]bool{}
-			xs, err := tx.ListExecutions("")
+		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return build, nil })
+	})
+	return err
+}
+
+// CreatePrior publishes a bundle of state an older binary left, at the
+// versions it holds and without writing to it: unlike Create it commits no
+// retention hold, so the caller must hold the state directory's lock, which
+// keeps the retention sweep from running. Its manifest's Build carries the
+// label Inspect reads as PreUpgrade. fromBuild reads, from the snapshot, the
+// build that last ran on the state ("" when it recorded none).
+func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, prior storage.Prior, files storage.ArtifactStore, build string, expired Expired, now time.Time, fromBuild func(storage.Tx) (string, error)) error {
+	if backend == "" || files == nil || prior == nil {
+		return storage.ErrInvalid
+	}
+	stored := prior.Stored()
+	_, err := publish(ctx, destination, func(stage string) error {
+		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, expired, now.UTC(), func(tx storage.Tx) (string, error) {
+			from, err := fromBuild(tx)
 			if err != nil {
-				return err
+				return "", err
 			}
-			for _, x := range xs {
-				gone, err := expired.of(tx, x.ID)
-				if err != nil {
-					return err
-				}
-				for _, ref := range x.AllArtifacts() {
-					if old, ok := refs[ref.ID]; ok && old != ref {
-						return storage.ErrConflict
-					}
-					refs[ref.ID] = ref
-					// A ref shared with an unexpired Execution must be copied.
-					live[ref.ID] = live[ref.ID] || !gone
-				}
-			}
-			return nil
+			return preUpgradeBuild(build, stored, from), nil
 		})
+	})
+	return err
+}
+
+// compose writes a bundle into stage from a snapshot. buildOf names its build
+// from the snapshot's own state.
+func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend string, snapshot func(context.Context, string, func(storage.Tx) error) error, schema uint32, files storage.ArtifactStore, expired Expired, now time.Time, buildOf func(storage.Tx) (string, error)) error {
+	database := filepath.Join(stage, snapshotName)
+	var refs map[string]domain.ArtifactRef
+	var live map[string]bool
+	var build string
+	// References are read from the snapshot's own state, not the live
+	// database, so the bundle copies exactly what its snapshot names.
+	err := snapshot(ctx, database, func(tx storage.Tx) error {
+		refs, live = map[string]domain.ArtifactRef{}, map[string]bool{}
+		var err error
+		if build, err = buildOf(tx); err != nil {
+			return err
+		}
+		xs, err := tx.ListExecutions("")
 		if err != nil {
 			return err
 		}
-		output, err := artifacts.OpenBundle(filepath.Join(stage, "artifacts"))
-		if err != nil {
-			return err
-		}
-		defer output.Close()
-		m := manifest{Version: 1, Schema: db.SchemaVersion(), Build: build, CreatedAt: retention.now()}
-		// Sorting makes manifests reproducible apart from their creation time.
-		for _, ref := range sortedRefs(refs) {
-			if !live[ref.ID] {
-				m.Omitted = append(m.Omitted, ref)
-				continue
-			}
-			r, err := files.Open(ctx, ref)
+		for _, x := range xs {
+			gone, err := expired.of(tx, x.ID)
 			if err != nil {
 				return err
 			}
-			h := sha256.New()
-			err = output.Import(ctx, ref, io.TeeReader(r, h))
-			readCloseErr := r.Close()
-			if err != nil {
-				return err
+			for _, ref := range x.AllArtifacts() {
+				if old, ok := refs[ref.ID]; ok && old != ref {
+					return storage.ErrConflict
+				}
+				refs[ref.ID] = ref
+				// A ref shared with an unexpired Execution must be copied.
+				live[ref.ID] = live[ref.ID] || !gone
 			}
-			if readCloseErr != nil {
-				return readCloseErr
-			}
-			m.Artifacts = append(m.Artifacts, entry{ref, hex.EncodeToString(h.Sum(nil))})
-		}
-		if backend != DefaultBackend {
-			m.Backend = backend
-		}
-		m.DatabaseSHA256, err = digestFile(ctx, database)
-		if err != nil {
-			return err
-		}
-		data, err := json.MarshalIndent(m, "", "  ")
-		if err != nil {
-			return err
-		}
-		data = append(data, '\n')
-		if err := writeDurable(filepath.Join(stage, "manifest.json"), data); err != nil {
-			return err
-		}
-		if key != nil {
-			return writeSignature(stage, data, key)
 		}
 		return nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	output, err := artifacts.OpenBundle(filepath.Join(stage, "artifacts"))
+	if err != nil {
+		return err
+	}
+	defer output.Close()
+	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now}
+	// Sorting makes manifests reproducible apart from their creation time.
+	for _, ref := range sortedRefs(refs) {
+		if !live[ref.ID] {
+			m.Omitted = append(m.Omitted, ref)
+			continue
+		}
+		r, err := files.Open(ctx, ref)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		err = output.Import(ctx, ref, io.TeeReader(r, h))
+		readCloseErr := r.Close()
+		if err != nil {
+			return err
+		}
+		if readCloseErr != nil {
+			return readCloseErr
+		}
+		m.Artifacts = append(m.Artifacts, entry{ref, hex.EncodeToString(h.Sum(nil))})
+	}
+	if backend != DefaultBackend {
+		m.Backend = backend
+	}
+	m.DatabaseSHA256, err = digestFile(ctx, database)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := writeDurable(filepath.Join(stage, "manifest.json"), data); err != nil {
+		return err
+	}
+	if key != nil {
+		return writeSignature(stage, data, key)
+	}
+	return nil
+}
+
+// A pre-upgrade bundle's label lives in the manifest's Build. Released
+// binaries decode manifests strictly and refuse an unknown field, so a new
+// field would stop the older binary restoring the one bundle made for it.
+// In Build it is signed with the manifest, and the older binary's backup
+// verify prints it as it stands.
+var preUpgradeLabel = regexp.MustCompile(`^(.*) pre-upgrade records=([0-9]+) schema=([0-9]+) from=(.*)$`)
+
+// UnknownBuild is the origin of state no build recorded itself on.
+const UnknownBuild = "unknown"
+
+func preUpgradeBuild(build string, stored storage.StoredVersion, from string) string {
+	if from == "" {
+		from = UnknownBuild
+	}
+	return fmt.Sprintf("%s pre-upgrade records=%d schema=%d from=%s", build, stored.Records, stored.Schema, from)
+}
+
+// PreUpgrade is what a bundle taken before an upgrade says it holds.
+type PreUpgrade struct {
+	// Records and Schema are the versions the state was at.
+	Records, Schema uint32
+	// FromBuild is the build that last ran on it (UnknownBuild when none
+	// recorded itself).
+	FromBuild string
+}
+
+func parsePreUpgrade(build string) (string, *PreUpgrade) {
+	g := preUpgradeLabel.FindStringSubmatch(build)
+	if g == nil {
+		return build, nil
+	}
+	records, err := strconv.ParseUint(g[2], 10, 32)
+	if err != nil {
+		return build, nil
+	}
+	schema, err := strconv.ParseUint(g[3], 10, 32)
+	if err != nil {
+		return build, nil
+	}
+	return g[1], &PreUpgrade{Records: uint32(records), Schema: uint32(schema), FromBuild: g[4]}
 }
 
 // Backends finds a storage backend by the name a bundle records
@@ -657,6 +734,9 @@ type Info struct {
 	// coordination state: an in-place restore records it, so a
 	// restore-then-serve entry point restores a bundle once.
 	DatabaseSHA256 string
+	// PreUpgrade is set on a bundle a daemon took before raising the stored
+	// versions; Build is then the build that took it.
+	PreUpgrade *PreUpgrade
 }
 
 // Inspect reads and checks a bundle's manifest. It does not verify the
@@ -666,7 +746,8 @@ func Inspect(bundle string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	return Info{Backend: m.backend(), Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
+	build, preUpgrade := parsePreUpgrade(m.Build)
+	return Info{PreUpgrade: preUpgrade, Backend: m.backend(), Schema: m.Schema, Build: build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
 }
 
 // openEmpty opens the store a restore imports into and refuses one that

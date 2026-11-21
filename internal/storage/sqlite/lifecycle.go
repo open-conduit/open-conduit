@@ -2,9 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -185,10 +187,71 @@ func copyPrivate(src, dst string) error {
 	return errors.Join(err, out.Close())
 }
 
+// OpenPrior reads the stored versions over a query_only connection, which
+// never runs Open's raise of the format, its indexes or its rewrites.
+func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	switch present, err := b.Present(ctx, location); {
+	case err != nil:
+		return nil, err
+	case !present:
+		return nil, nil
+	}
+	lock, err := own(location)
+	if err != nil {
+		return nil, err
+	}
+	u := url.URL{Scheme: "file", Path: location}
+	q := u.Query()
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
+	q.Add("_pragma", "query_only(1)")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	p := &prior{s: &Store{db: db, readers: db, path: location}, lock: lock}
+	var schema uint32
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	// Schema 0 is a database Open will create; a newer one it refuses.
+	if schema == 0 || schema > SchemaVersion {
+		return nil, p.Close()
+	}
+	records, err := storedRecordFormat(ctx, db)
+	if err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	if schema == SchemaVersion && records >= recordFormat {
+		return nil, p.Close()
+	}
+	p.stored = storage.StoredVersion{Schema: schema, Records: records}
+	return p, nil
+}
+
+// prior is a database held as an older binary left it.
+type prior struct {
+	s      *Store
+	lock   *os.File
+	stored storage.StoredVersion
+}
+
+func (p *prior) Stored() storage.StoredVersion { return p.stored }
+func (p *prior) Snapshot(ctx context.Context, path string, read func(storage.Tx) error) error {
+	return p.s.snapshot(ctx, path, read, p.stored.Schema)
+}
+func (p *prior) Close() error { return errors.Join(p.s.db.Close(), p.lock.Close()) }
+
 // Snapshot takes an online backup to path, then reads that copy, so read
 // sees exactly the state the snapshot holds.
 func (s *Store) Snapshot(ctx context.Context, path string, read func(storage.Tx) error) error {
-	if err := s.Backup(ctx, path); err != nil {
+	return s.snapshot(ctx, path, read, SchemaVersion)
+}
+
+func (s *Store) snapshot(ctx context.Context, path string, read func(storage.Tx) error, oldest uint32) error {
+	if err := s.backup(ctx, path, oldest); err != nil {
 		return err
 	}
 	if read == nil {

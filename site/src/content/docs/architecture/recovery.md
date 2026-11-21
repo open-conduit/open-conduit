@@ -42,17 +42,28 @@ open-conduit auth recover                                 # a lost or ambiguous 
   - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
   - After `--to`, worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone. `--in-place` keeps the workspaces where they are, and the git provider reconciles them against the restored database (below).
   - The restored installation keeps its [container host label](../sandboxes/#the-host-label), the ID its containers carry, since it is the same installation: it still recognises the containers its runs left on a shared runtime, and reconciles them. Never run the old installation and the restored one at once against the same container runtime (a remote Docker context, an SSH runner, a cloud account): with one label, each removes the other's live runs as executions it doesn't know. Stop the old daemon for good before starting the restored one; to run both, restore into a fresh installation instead, which means starting without the bundle.
-- **Timing.** The running daemon takes a bundle itself on a schedule (below). Also take one by hand before every binary upgrade and keep it: the scheduled ones rotate, and after an upgrade they hold the newer binary's records.
+- **Timing.** The running daemon takes a bundle itself on a schedule, and another before its first start on a newer record format (both below), so an upgrade needs no manual step.
 
 ## Scheduled backups
 
 While it runs, the daemon publishes a bundle of its own state every `--backup-interval` (default `24h`) into `--backup-dir` (default `<data-dir>/backups`) and keeps the newest `--backups-kept` (default 7). `--backup-interval 0` turns them off. Each is the bundle `backup create` makes, named `conduit-<UTC time>` (`conduit-20261102T090000Z`), so `backup verify` and `backup restore` take it as they are. The database is copied with SQLite's online backup API, which holds the store's connection only while it copies pages. The artifacts are copied after, under a retention hold the backup commits before its snapshot: runs keep reading and writing artifacts, the retention sweep keeps recording expirations but deletes no content until the hold is released, and artifact collection never deletes content an attempt references.
 
 - The first runs at start when the directory has no scheduled bundle, then one interval after the newest; a restart doesn't add one. One already overdue at a start waits for the daemon's first request, or ten minutes from the first start that put it off ([quiescence](../execution-scheduling/#quiescence)).
-- Only `conduit-<time>` directories are counted and pruned. Anything else in the directory, such as a bundle you took before an upgrade, is left alone.
+- Only `conduit-<time>` directories are counted and pruned. Anything else in the directory, such as a `pre-upgrade-<time>` bundle or one you took by hand, is left alone.
 - A failed backup is logged as a `backup` runtime diagnostic and tried again 15 minutes later. A staging directory a crash left (`.conduit-snapshot-*`) is removed at the next start.
 - **Disk use.** Each bundle is a full copy of the database and every artifact a kept run references, so the default seven take about seven times `conduit.db` plus `artifacts/`. The daemon logs each bundle's size when it publishes it (`backup published … bytes=`). Lower `--backups-kept`, or move `--backup-dir`, when that is too much for the disk.
 - The default directory is on the same disk as the state. To survive losing the disk, point `--backup-dir` elsewhere (a flag of `serve` and of `service install`), or ship bundles to a [destination](../backup-bundles/#backup-destinations).
+
+## The bundle taken before an upgrade
+
+Going back a release that changed the stored format needs a bundle from before it: the newer binary raises the stored format when it opens the database, and the older one then refuses it (`records_newer`). So when a daemon finds a database whose record format or schema is older than its own, however the new binary was installed, it first takes a bundle of the database exactly as the older binary left it:
+
+- **It is verified before it counts.** The bundle is composed under a staging name, restored into a private temporary directory, and only then published as `pre-upgrade-<UTC time>` in `--backup-dir`. Nothing has been written to the database by then.
+- **Without one, the daemon doesn't start.** If the bundle can't be taken or verified (a read-only or full backup directory, say), the start fails, says why, and leaves the database at its old format. Fix the directory, or run `open-conduit serve --no-upgrade-bundle` once to go ahead deliberately with no way back. `service install` refuses that flag, since a unit would then skip the bundle on every later upgrade.
+- **Rotation never touches it.** Only `conduit-<time>` bundles rotate. The daemon keeps the newest `--upgrade-bundles-kept` pre-upgrade bundles (default 3) and, with `--upgrade-bundles-max-age` (default no limit), removes those older than that at each start. The newest is always kept. Each is a full copy, so count them in the disk you plan for.
+- **It says what it is.** `backup verify` reports `pre_upgrade` with the `record_format`, `schema` and `from_build` it holds. The label is in the manifest's `Build` text, which an older binary reads and prints as it is, since older binaries refuse a manifest with a field they don't know. `from_build` is `unknown` for a database last run by a build from before this was recorded.
+- **Signing.** It is signed with `settings.backup.signing_key` from the config file when that resolves without packages, as `backup create` is. Otherwise it is published unsigned, the log says so, and a restore with trust keys needs `--accept-unsigned`.
+- **Offline commands don't raise the format first.** `backup create` from the newer binary bundles the database as it stands. `auth recover` refuses until the daemon has started once on this binary, or is run with the older binary.
 
 ## Restoring after a bad release or lost state
 
@@ -63,8 +74,10 @@ open-conduit service stop                          # or stop serve
 ls ~/.local/state/open-conduit/backups              # pick the newest bundle from before the problem
 open-conduit backup verify ~/.local/state/open-conduit/backups/conduit-20261102T090000Z
 open-conduit backup restore ~/.local/state/open-conduit/backups/conduit-20261102T090000Z --in-place
-open-conduit service start                         # with the binary the bundle came from, when going back a release
+open-conduit service start
 ```
+
+To go back a release, install the older binary first and run these commands with it, using the `pre-upgrade-<time>` bundle. A restore opens what it restores, which raises it to the format of the binary doing the restore, so a restore run by the newer binary leaves a database the older one refuses.
 
 `backup restore --in-place` works on the daemon's own state directory (`--data-dir`, or the default) under its lock, so it refuses while the daemon runs. In order, it:
 
@@ -90,7 +103,7 @@ What stays from after the bundle is reported, never deleted by the restore, sinc
 
 Afterwards:
 
-- To go back a release, install the older binary before starting. A bundle a newer binary took may hold records the older one refuses (`records_newer`); pick one from before the upgrade.
+- A scheduled bundle a newer binary took may hold records the older one refuses (`records_newer`); to go back a release, use the `pre-upgrade-<time>` bundle.
 - Clients read the new `operator.token`.
 - Work that happened after the bundle is re-derived from the services when reconcile runs, apart from declared one-shot deliveries. Attempts running at backup time are recovered or retried, never adopted.
 - Keep `before-restore-*/` until the restored instance has run for a while, then delete it. It holds the replaced database, so the state directory needs room for a second copy of it while the restore runs.
@@ -119,7 +132,7 @@ Schema migrations run inside one immediate transaction at open (`internal/storag
 | `coordination state is in use by another owner` (`state check`: `in_use`) | Another daemon or offline command owns the database, possibly through another state directory whose `storage.json` names the same location | Stop that owner first. Two state directories should never name the same database. |
 | `migration rolled back: …` | The upgrade failed part way (disk full, I/O) | Fix the cause and start again: the old schema is intact. If it keeps failing, restore the pre-upgrade bundle and report the defect. |
 
-The upgrade routine is: stop the daemon, run `backup create` and `backup verify`, install the new binary, then start it. Keep the old binary and the bundle until the observation window passes.
+An upgrade needs no backup step: the first start on a newer format [keeps a verified bundle](#the-bundle-taken-before-an-upgrade) or refuses to start. Keep the old binary until the observation window passes.
 
 ## Corrupted-state diagnosis
 
@@ -147,6 +160,8 @@ Recovery order:
 `TestBundleRoundTripAndRefusal` (in `internal/backup`) creates, verifies and restores a bundle (a pre-backup lease fenced off), and refuses an existing destination, a tampered or corrupted bundle and one missing referenced content. `TestShellRetentionReleasesRunDirectories` (in `integration`) backs up and restores after a retention sweep. No composed-daemon drill exercises the offline commands since `TestDaemonMigrationRehearsal` went with the migrator in [#413](https://github.com/open-conduit/open-conduit/pull/413).
 
 `TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
+
+`TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
 
 ## History
 

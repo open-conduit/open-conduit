@@ -69,6 +69,13 @@ type Options struct {
 	BackupInterval time.Duration
 	BackupDir      string
 	BackupsKept    int
+	// UpgradeBundlesKept is how many pre-upgrade bundles are kept in
+	// BackupDir (default 3) and UpgradeBundlesMaxAge how long (zero: no
+	// limit); the newest is always kept. NoUpgradeBundle starts on an older
+	// database without taking one (preupgrade.go).
+	UpgradeBundlesKept   int
+	UpgradeBundlesMaxAge time.Duration
+	NoUpgradeBundle      bool
 	// ArtifactGrace is how old unreferenced artifact content must be before
 	// the retention pass collects it (default 24h).
 	ArtifactGrace time.Duration
@@ -345,7 +352,10 @@ func (o *Options) defaults() error {
 	if o.BackupsKept == 0 {
 		o.BackupsKept = 7
 	}
-	if !filepath.IsAbs(o.BackupDir) || o.BackupsKept < 1 {
+	if o.UpgradeBundlesKept == 0 {
+		o.UpgradeBundlesKept = defaultUpgradeBundlesKept
+	}
+	if !filepath.IsAbs(o.BackupDir) || o.BackupsKept < 1 || o.UpgradeBundlesKept < 1 || o.UpgradeBundlesMaxAge < 0 {
 		return errors.New("backups need an absolute directory and at least one kept")
 	}
 	if o.ArtifactGrace == 0 {
@@ -429,12 +439,18 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}); err != nil {
 		return err
 	}
+	// Opening raises the stored format, after which an older binary refuses
+	// the database: keep a bundle of it as it stands first.
+	if err = d.preserveBeforeUpgrade(ctx); err != nil {
+		return err
+	}
 	// The state directory's storage choice selects the backend.
 	backend, store, err := openState(ctx, o.StateDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	d.recordBuild(ctx, store)
 
 	logFile, err := openLog(o.LifecycleLog)
 	if err != nil {
