@@ -44,6 +44,16 @@ var ErrRecordsNewer = storage.ErrRecordsNewer
 // busyTimeout bounds how long a connection waits for a competing connection's lock.
 const busyTimeout = 5 * time.Second
 
+// The WAL policy, set on every connection rather than left to SQLite's
+// defaults. walAutocheckpoint is the WAL's length in pages at which a commit
+// checkpoints it. walSizeLimit is the size the WAL file is cut back to when it
+// is next reused: a checkpoint alone never shrinks it, so without a limit one
+// large transaction would keep its disk space for the life of the file.
+const (
+	walAutocheckpoint       = 1000
+	walSizeLimit      int64 = 64 << 20
+)
+
 type Store struct {
 	db *sql.DB
 	// readers are View's connections: query_only, so they can never write,
@@ -75,6 +85,12 @@ var (
 // Open initializes an empty database, or validates the version of an existing one.
 // It never resets or downgrades it.
 func Open(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, walSizeLimit)
+}
+
+// open is Open with the WAL size limit given, so a test can reach it with a
+// small write and show what it does against no limit at all.
+func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -115,6 +131,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "synchronous(FULL)")
+	q.Add("_pragma", fmt.Sprintf("wal_autocheckpoint(%d)", walAutocheckpoint))
+	q.Add("_pragma", fmt.Sprintf("journal_size_limit(%d)", walLimit))
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
