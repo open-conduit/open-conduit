@@ -204,8 +204,9 @@ func TestFullPoolPutsAResumeBackToParked(t *testing.T) {
 		if e != nil {
 			return e
 		}
-		if len(inputs) == 0 {
-			t.Fatal("the wake's input was lost")
+		// Only what this claim took: the first segment's trigger was handled.
+		if len(inputs) != 1 || inputs[0].EventID != "pool-resume-wake" {
+			t.Fatalf("pending inputs %+v, want only the wake's", inputs)
 		}
 		return nil
 	})
@@ -223,5 +224,129 @@ func TestFullPoolPutsAResumeBackToParked(t *testing.T) {
 	}
 	if again.Lease.ExecutionID != attempt.Lease.ExecutionID {
 		t.Fatalf("the resume began a new attempt: %s", again.Lease.ExecutionID)
+	}
+}
+
+// TestFullPoolGivesBackABudgetRelease: an operator's release of a budget
+// hold survives a start refused for capacity.
+func TestFullPoolGivesBackABudgetRelease(t *testing.T) {
+	ctx := context.Background()
+	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "pool-budget")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "pool-budget"}
+	full := &atomic.Bool{}
+	e.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		if _, err := r.Context.Container.Launch(ctx, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"x"}}); err != nil {
+			return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: err.Error()}}}, nil
+		}
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+	}
+	o := schedulerDefaultOptions(f, e)
+	o.Budgets = []runtime.Budget{{Unit: "turns", Per: runtime.BudgetPerWork, Max: 1}}
+	o.Container = func(_ context.Context, _ runtime.AttemptState, resources extension.ResourceBroker, _ map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+		b := &fullPool{full: full, pin: pin}
+		return runtime.ContainerBinding{Broker: b, Resources: resources, Settle: func(r extension.Result) extension.Result { return r }, Refusal: b.refused.Load}, nil
+	}
+	s := newTestScheduler(t, f, o)
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timers, err := runtime.NewTimers(f.Store, f.Clock.Now, runtime.TimerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccept(t, f, "pool-budget-2", &key)
+	requireRoute(t, f.Driver, "pool-budget-2")
+	if err = s.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Start(ctx, work); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("over budget: %v", err)
+	}
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) error { var e error; w, e = tx.Work(work); return e })
+	if _, err = control.ReleaseWork(ctx, work, w.Revision, "one more", "pool-budget-release"); err != nil {
+		t.Fatal(err)
+	}
+	full.Store(true)
+	if a, err = s.Start(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(31 * time.Second)
+	if _, err = s.Poll(ctx, timers, 10); err != nil {
+		t.Fatal(err)
+	}
+	full.Store(false)
+	if a, err = s.Start(ctx, work); err != nil {
+		t.Fatalf("the release was lost to the refused start: %v", err)
+	}
+	if err = s.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestFullPoolRefusalSurvivesTheDaemon: a refused launch whose daemon goes
+// before the claim is returned is relaunched, not failed, and spends no
+// retry.
+func TestFullPoolRefusalSurvivesTheDaemon(t *testing.T) {
+	ctx := context.Background()
+	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "pool-restart")
+	full := &atomic.Bool{}
+	full.Store(true)
+	e.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		if _, err := r.Context.Container.Launch(ctx, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"x"}}); err != nil {
+			return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: err.Error()}}}, nil
+		}
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+	}
+	o := schedulerDefaultOptions(f, e)
+	o.Container = func(_ context.Context, _ runtime.AttemptState, resources extension.ResourceBroker, _ map[string]string, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+		b := &fullPool{full: full, pin: pin}
+		return runtime.ContainerBinding{Broker: b, Resources: resources, Settle: func(r extension.Result) extension.Result { return r }, Refusal: b.refused.Load}, nil
+	}
+	s := newTestScheduler(t, f, o)
+	a, err := s.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.InspectAttempt(ctx, a.Lease.ExecutionID)
+	if err != nil || state.NoCapacity == nil {
+		t.Fatalf("the refusal was not recorded: %+v %v", state.NoCapacity, err)
+	}
+	// The daemon goes here: its result never reaches Complete.
+	f.Clock.Advance(2 * time.Minute)
+	full.Store(false)
+	next := newTestScheduler(t, f, o)
+	claimed, err := next.ClaimRecovery(ctx, a.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claimed.Relaunch() {
+		t.Fatal("the refused launch was not relaunched")
+	}
+	launched, err := next.Launch(ctx, claimed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = next.Observe(ctx, launched); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = next.RetryStatus(ctx, work); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("a retry was recorded: %v", err)
 	}
 }

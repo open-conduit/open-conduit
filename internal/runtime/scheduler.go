@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -227,9 +226,6 @@ type Scheduler struct {
 	now     func() time.Time
 	router  *Router
 	options SchedulerOptions
-	// refusals are the launches a container provider refused for capacity
-	// whose failed result is still to arrive, by lease.
-	refusals sync.Map
 }
 
 // Attempt is a claimed attempt. Claim and ClaimRecovery return it before
@@ -282,6 +278,13 @@ type AttemptState struct {
 	InterruptEventID domain.ID `json:",omitempty"`
 	ObservedSequence uint64
 	InputEventIDs    []domain.ID
+	// StartCharge is what the current claim took for its start.
+	StartCharge *StartCharge `json:",omitempty"`
+	// NoCapacity is the provider's refusal of this launch for capacity,
+	// until its claim is returned (holdForCapacity). CapacityRefusals is
+	// how many launches in a row were refused, for the backoff.
+	NoCapacity       *extension.NoCapacityError `json:",omitempty"`
+	CapacityRefusals int                        `json:",omitempty"`
 	// TurnTimeout is the open segment's time limit, pinned when it began:
 	// the binding's timeout_seconds, else the runtime default. Deadline is
 	// the segment's start plus it; recovery keeps both.
@@ -1352,11 +1355,17 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 			gateHeld = true
 			return holdForGateInTx(tx, s.now(), current, gateName, gateHold.Reason)
 		}
+		var budgetPass domain.ID
+		if e = getJSON(tx, budgetPassNamespace, identity(string(id)), &budgetPass); e != nil && !errors.Is(e, storage.ErrNotFound) {
+			return e
+		}
 		if budgetHeld, e = admitBudgetInTx(tx, s.now(), s.options.Budgets, current, parked == ""); e != nil || budgetHeld {
 			// Over budget: commit the hold, then refuse the start. A gate's
 			// pass stays for the start the budget's release lets through.
 			return e
 		}
+		state.StartCharge = &StartCharge{At: s.now(), NewAttempt: parked == "", BudgetPass: budgetPass}
+		state.NoCapacity = nil
 		if gatePassed {
 			if e = tx.Delete(gatePassNamespace, identity(string(id))); e != nil {
 				if errors.Is(e, storage.ErrNotFound) {
@@ -1687,22 +1696,37 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		if e != nil {
 			return e
 		}
-		current.LaunchState = "running"
-		if e = putAttemptState(tx, current); e != nil {
-			return e
+		// A refused launch stays launching or resuming: nothing ran, so
+		// if this daemon goes before the claim is returned it is relaunched.
+		var refused *extension.NoCapacityError
+		if refusal != nil {
+			refused = refusal()
 		}
-		// A launch that got a container ends the Work's run of refusals.
-		if refusal != nil && refusal() == nil && attempt.Request.Context.Container != nil {
-			return tx.Delete(capacityNamespace, identity(string(state.WorkID)))
+		if refused != nil {
+			recordRefusal(&current, refused)
+		} else {
+			current.LaunchState = "running"
+			// A launch that got a container ends the Work's run of refusals.
+			if pin := current.ContainerPin(); pin != nil {
+				current.CapacityRefusals = 0
+			}
 		}
-		return nil
+		return putAttemptState(tx, current)
 	})
 	if err != nil {
 		return attempt, err
 	}
 	if settle != nil {
-		handle = settledHandle{RunHandle: handle, settle: settle, refused: refusal, note: func(r *extension.NoCapacityError) {
-			s.refusals.Store(attempt.Lease, r)
+		lease := attempt.Lease
+		handle = settledHandle{RunHandle: handle, settle: settle, refused: refusal, note: func(ctx context.Context, r *extension.NoCapacityError) error {
+			return s.transact(ctx, &lease, func(tx storage.Tx) error {
+				current, e := attemptState(tx, lease.ExecutionID)
+				if e != nil {
+					return e
+				}
+				recordRefusal(&current, r)
+				return putAttemptState(tx, current)
+			})
 		}}
 	}
 	if served := s.options.Served; served != nil {
@@ -1721,10 +1745,11 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 type settledHandle struct {
 	extension.RunHandle
 	settle func(extension.Result) extension.Result
-	// refused and note carry a capacity refusal to Complete: a failed
-	// result with one means the launch was refused and nothing ran.
+	// refused and note record a capacity refusal the launch met after its
+	// executor call returned, for Complete: a failed result with one means
+	// the launch was refused and nothing ran.
 	refused func() *extension.NoCapacityError
-	note    func(*extension.NoCapacityError)
+	note    func(context.Context, *extension.NoCapacityError) error
 }
 
 func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
@@ -1735,7 +1760,9 @@ func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
 	r = h.settle(r)
 	if h.refused != nil && r.Outcome.Kind == domain.OutcomeFailed {
 		if refusal := h.refused(); refusal != nil {
-			h.note(refusal)
+			if err := h.note(ctx, refusal); err != nil {
+				return r, err
+			}
 		}
 	}
 	return r, nil
@@ -1836,6 +1863,8 @@ func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch
 		attempt.Lease = ref
 		current.Epoch, current.Excluded = ref.Epoch, false
 		if relaunch {
+			// Asked again, the provider answers for now.
+			current.NoCapacity = nil
 			// The launch starts again: a fresh launch records its metadata
 			// anew, a resume keeps the parked metadata it resumes from.
 			if current.LaunchState == "launching" {
@@ -2001,15 +2030,20 @@ func (h resultHint) RetryHint() RetryHint { return h.hint }
 // keeps what that turn wrote up to the stop (RecordStopped, #647), and the
 // refusal is returned.
 func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
-	if held, ok := s.refusals.Load(ref); ok {
-		if result.Outcome.Kind == domain.OutcomeFailed {
-			err := s.holdForCapacity(ctx, ref, held.(*extension.NoCapacityError))
-			if err == nil || !errors.Is(err, storage.ErrConflict) {
-				s.refusals.Delete(ref)
+	if result.Outcome.Kind == domain.OutcomeFailed {
+		var refused *extension.NoCapacityError
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			state, e := attemptState(tx, ref.ExecutionID)
+			if e == nil && state.Epoch == ref.Epoch {
+				refused = state.NoCapacity
 			}
+			return e
+		}); err != nil && !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		s.refusals.Delete(ref)
+		if refused != nil {
+			return s.holdForCapacity(ctx, ref, refused)
+		}
 	}
 	if err := s.complete(ctx, ref, result); err != nil {
 		return s.recordLate(ctx, ref, result, err)

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,19 +20,25 @@ import (
 // the host returns the claim instead of failing the attempt: the inputs go
 // back on the queue, the budget charge is refunded, the retry count is left
 // alone, and the Work is held with a hold of kind "capacity", recorded by a
-// core.capacity.held Event. The poll releases it when the provider's hinted
-// time or the host's backoff comes, with a core.capacity.released Event,
-// and the next pass tries again. An operator's release tries again at once.
+// core.capacity.held Event. A Timer armed with the hold fires at the
+// provider's hinted time or the host's backoff; its core.capacity.due Event
+// ends the hold with a core.capacity.released Event, and the next pass tries
+// again. An operator's release tries again at once, and the Timer then finds
+// the hold gone and does nothing.
 //
 // A refused fresh attempt ends as cancelled, since an Execution can't go
 // back to pending; a refused resume goes back to parked, the same attempt.
+// The refusal is recorded in the attempt state, whose launch stays launching
+// or resuming with nothing pinned: an attempt that loses its daemon before
+// the claim is returned is relaunched (relaunchable), so it spends no retry.
 
 const (
 	// HoldKindCapacity marks a hold placed because a container provider had
 	// no room for the launch.
 	HoldKindCapacity = "capacity"
 
-	capacityNamespace = "core.capacity.state"
+	// typeCapacityDue is the Event a capacity hold's Timer fires.
+	typeCapacityDue = "core.capacity.due"
 
 	capacityBackoffBase = 30 * time.Second
 	capacityBackoffMax  = 5 * time.Minute
@@ -40,20 +48,32 @@ const (
 	capacityHintMax = time.Hour
 
 	maxCapacityReason = 500
+
+	// capacityLaunchState is the LaunchState of a fresh attempt ended by a
+	// refusal.
+	capacityLaunchState = "no_capacity"
 )
 
 // ErrContainerCapacity is a launch refused because the container provider
 // had no room: the claim was returned and the Work is held.
 var ErrContainerCapacity = fmt.Errorf("%w: held for container capacity", ErrNotEligible)
 
-// capacityRecord is a Work's run of refusals: how many in a row, and the
-// hold now waiting for RetryAt, if Held.
-type capacityRecord struct {
-	WorkID   domain.ID `json:"work_id,omitempty"`
-	Refusals int       `json:"refusals"`
-	Held     bool      `json:"held,omitempty"`
-	RetryAt  time.Time `json:"retry_at,omitzero"`
-	EventID  domain.ID `json:"event_id,omitempty"`
+// StartCharge is what a claim took for its start, so a launch refused for
+// capacity can give it back: when it was charged, whether it was a new
+// attempt, and the budget release whose one-turn pass it used, if any. A
+// start gate's pass needs no giving back: a gate only asks about a Work's
+// first attempt, which the refused attempt was.
+type StartCharge struct {
+	At         time.Time
+	NewAttempt bool      `json:",omitempty"`
+	BudgetPass domain.ID `json:",omitempty"`
+}
+
+// capacityDue is the data of a core.capacity.due Event: the hold it ends.
+type capacityDue struct {
+	HeldEventID domain.ID `json:"held_event_id"`
+	Execution   domain.ID `json:"execution"`
+	Refusals    int       `json:"refusals"`
 }
 
 // CapacityNotice is the data of a core.capacity.* Event.
@@ -79,7 +99,7 @@ func capacityDelay(now time.Time, hint *time.Time, n int) time.Duration {
 
 func capacityEventInTx(tx storage.Tx, now time.Time, w domain.Work, typ string, n CapacityNotice) (domain.ID, error) {
 	data, _ := json.Marshal(n)
-	delivery := strings.TrimPrefix(typ, "core.capacity.") + "/" + identity(string(w.ID), now.UTC().Format(time.RFC3339Nano))
+	delivery := strings.TrimPrefix(typ, "core.capacity.") + "/" + identity(string(w.ID), now.UTC().Format(time.RFC3339Nano), string(n.Execution), strconv.Itoa(n.Refusals))
 	e := domain.Event{ID: domain.ID("capacity-" + delivery), Type: typ, Source: "core.capacity", DeliveryID: delivery, WorkID: w.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.capacity.v1", Data: data}}
 	accepted, _, err := AcceptInTx(tx, w.ScopeID, e)
 	if err != nil {
@@ -88,9 +108,11 @@ func capacityEventInTx(tx storage.Tx, now time.Time, w domain.Work, typ string, 
 	return accepted.Event.ID, tx.MarkRouted(accepted.Event.ID, "", "control")
 }
 
-// requeueInputsInTx puts the inputs execution consumed back on the Work's
-// queue: it never saw them.
-func requeueInputsInTx(tx storage.Tx, work, execution domain.ID) ([]QueuedInput, error) {
+// requeueInputsInTx puts the inputs this claim took (claimed, the attempt's
+// InputEventIDs) back on the Work's queue: the launch never saw them. What
+// the execution consumed in earlier segments it has handled, and stays
+// consumed.
+func requeueInputsInTx(tx storage.Tx, work, execution domain.ID, claimed []domain.ID) ([]QueuedInput, error) {
 	rows, err := tx.List(consumedNamespace, identity(string(work))+"/")
 	if err != nil {
 		return nil, err
@@ -108,6 +130,9 @@ func requeueInputsInTx(tx storage.Tx, work, execution domain.ID) ([]QueuedInput,
 		if err = getJSON(tx, consumedNamespace, row.Key, &consumed); err != nil {
 			return nil, err
 		}
+		if !slices.Contains(claimed, consumed.Input.EventID) {
+			continue
+		}
 		if err = putJSON(tx, queueNamespace, queueKey(work, consumed.Input.Sequence), consumed.Input); err != nil {
 			return nil, err
 		}
@@ -119,16 +144,24 @@ func requeueInputsInTx(tx storage.Tx, work, execution domain.ID) ([]QueuedInput,
 	return inputs, nil
 }
 
-// refundBudgetInTx takes back what a start charged at at: one turn, and one
-// attempt for a new attempt, from the ledgers of that moment, never below
-// zero.
-func refundBudgetInTx(tx storage.Tx, at time.Time, budgets []Budget, w domain.Work, newAttempt bool) error {
+// refundBudgetInTx gives back what a start took: one turn, one attempt for
+// a new attempt, from the ledgers of the moment it was charged, never below
+// zero, and the budget release's pass it used.
+func refundBudgetInTx(tx storage.Tx, charge *StartCharge, budgets []Budget, w domain.Work) error {
+	if charge == nil {
+		return nil
+	}
+	if charge.BudgetPass != "" {
+		if err := putJSON(tx, budgetPassNamespace, identity(string(w.ID)), charge.BudgetPass); err != nil {
+			return err
+		}
+	}
 	seen := map[string]bool{}
 	for _, b := range budgets {
 		if !b.applies(w.ScopeID) {
 			continue
 		}
-		key := b.ledgerKey(w.ID, w.ScopeID, at)
+		key := b.ledgerKey(w.ID, w.ScopeID, charge.At)
 		if seen[key] {
 			continue
 		}
@@ -142,7 +175,7 @@ func refundBudgetInTx(tx storage.Tx, at time.Time, budgets []Budget, w domain.Wo
 			after[unit] = v
 		}
 		after["turns"] = max(after["turns"]-1, 0)
-		if newAttempt {
+		if charge.NewAttempt {
 			after["attempts"] = max(after["attempts"]-1, 0)
 		}
 		if err = putJSON(tx, budgetLedgerNamespace, key, after); err != nil {
@@ -172,20 +205,22 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
 			return err
 		}
-		inputs, err := requeueInputsInTx(tx, w.ID, x.ID)
+		inputs, err := requeueInputsInTx(tx, w.ID, x.ID, state.InputEventIDs)
 		if err != nil {
 			return err
 		}
-		claimedAt := now
 		n := len(state.Segments)
-		if n > 0 && state.Segments[n-1].EndedAt == nil {
-			claimedAt = state.Segments[n-1].StartedAt
-		}
 		// An attempt that has parked before was resuming.
 		resumed := state.WaitID != ""
-		if err = refundBudgetInTx(tx, claimedAt, s.options.Budgets, w, !resumed); err != nil {
+		if err = refundBudgetInTx(tx, state.StartCharge, s.options.Budgets, w); err != nil {
 			return err
 		}
+		refusals, err := priorRefusalsInTx(tx, x, state)
+		if err != nil {
+			return err
+		}
+		refusals++
+		state.StartCharge, state.NoCapacity, state.CapacityRefusals = nil, nil, refusals
 		state.Excluded, state.Deadline = true, time.Time{}
 		if resumed {
 			// Back to parked, with its wake ready again: the segment never ran.
@@ -213,7 +248,7 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		} else {
 			state.endSegment(now, false)
 			x.State, x.Outcome = domain.ExecutionCancelled, nil
-			state.LaunchState = "no_capacity"
+			state.LaunchState = capacityLaunchState
 		}
 		if err = tx.PutExecution(x, x.Revision); err != nil {
 			return err
@@ -225,21 +260,14 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if err = tx.PutWork(w, w.Revision); err != nil {
 			return err
 		}
-		var record capacityRecord
-		if err = getJSON(tx, capacityNamespace, identity(string(w.ID)), &record); err != nil && !errors.Is(err, storage.ErrNotFound) {
-			return err
-		}
-		record.WorkID = w.ID
-		record.Refusals++
 		// A hold someone else placed meanwhile stands: it says when the
 		// Work may start.
 		if _, held, e := HoldInTx(tx, w.ID); e != nil {
 			return e
 		} else if held {
-			record.Held = false
-			return putJSON(tx, capacityNamespace, identity(string(w.ID)), record)
+			return nil
 		}
-		retryAt := now.Add(capacityDelay(now, refusal.RetryAt, record.Refusals)).UTC()
+		retryAt := now.Add(capacityDelay(now, refusal.RetryAt, refusals)).UTC()
 		detail := strings.ToValidUTF8(refusal.Reason, "")
 		if len(detail) > maxCapacityReason {
 			detail = strings.ToValidUTF8(detail[:maxCapacityReason], "")
@@ -248,15 +276,14 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if detail != "" {
 			reason = "Waiting for container capacity: " + detail + ". Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
 		}
-		event, err := capacityEventInTx(tx, now, w, domain.EventCapacityHeld, CapacityNotice{Reason: reason, Execution: x.ID, Refusals: record.Refusals, RetryAt: &retryAt})
+		event, err := capacityEventInTx(tx, now, w, domain.EventCapacityHeld, CapacityNotice{Reason: reason, Execution: x.ID, Refusals: refusals, RetryAt: &retryAt})
 		if err != nil {
 			return err
 		}
 		if err = putJSON(tx, holdNamespace, identity(string(w.ID)), Hold{EventID: event, Reason: reason, At: now.UTC(), Kind: HoldKindCapacity}); err != nil {
 			return err
 		}
-		record.Held, record.RetryAt, record.EventID = true, retryAt, event
-		if err = putJSON(tx, capacityNamespace, identity(string(w.ID)), record); err != nil {
+		if err = armCapacityTimerInTx(tx, w, x.ID, event, refusals, retryAt); err != nil {
 			return err
 		}
 		// Advance the revision, as an operator hold does, so views see it.
@@ -268,130 +295,106 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 	})
 }
 
-// releaseCapacity releases every capacity hold whose time has come. Work
-// that finished, or whose hold has been released or replaced, only has its
-// record settled.
-func (s *Scheduler) releaseCapacity(ctx context.Context) error {
-	var due, stale []string
-	err := s.transact(ctx, nil, func(tx storage.Tx) error {
-		due, stale = nil, nil
-		rows, e := tx.List(capacityNamespace, "")
-		if e != nil {
-			return e
-		}
-		now := s.now()
-		for _, row := range rows {
-			var record capacityRecord
-			if e = getJSON(tx, capacityNamespace, row.Key, &record); e != nil {
-				return e
-			}
-			if record.Held {
-				if !now.Before(record.RetryAt) {
-					due = append(due, row.Key)
-				}
-				continue
-			}
-			// A run of refusals whose Work has finished is over.
-			if finished, e := capacityWorkFinishedInTx(tx, row.Key); e != nil {
-				return e
-			} else if finished {
-				stale = append(stale, row.Key)
-			}
-		}
-		return nil
-	})
+// priorRefusalsInTx is the Work's run of refusals before this one: the
+// attempt's own for a resume, the attempt before's when that one was refused
+// too. A launch that gets a container ends the run.
+func priorRefusalsInTx(tx storage.Tx, x domain.Execution, state AttemptState) (int, error) {
+	if state.WaitID != "" {
+		return state.CapacityRefusals, nil
+	}
+	xs, err := tx.ListExecutions(x.WorkID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if len(stale) > 0 {
-		if err = s.transact(ctx, nil, func(tx storage.Tx) error {
-			for _, key := range stale {
-				if e := tx.Delete(capacityNamespace, key); e != nil {
-					return e
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
+	for _, other := range xs {
+		if other.Attempt+1 != x.Attempt {
+			continue
 		}
-	}
-	for _, key := range due {
-		if err = s.transact(ctx, nil, func(tx storage.Tx) error { return s.releaseCapacityInTx(tx, key) }); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// capacityWorkFinishedInTx reports whether the Work a record is for has
-// finished. Records are keyed by the Work's identity hash, so the Work is
-// named by the record's last held Event.
-func capacityWorkFinishedInTx(tx storage.Tx, key string) (bool, error) {
-	var ref capacityWorkRef
-	if err := getJSON(tx, capacityNamespace, key, &ref); err != nil {
-		return false, err
-	}
-	if ref.WorkID == "" {
-		return false, nil
-	}
-	w, err := tx.Work(ref.WorkID)
-	if errors.Is(err, storage.ErrNotFound) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return w.State.Terminal(), nil
-}
-
-// capacityWorkRef reads only the Work a capacityRecord names.
-type capacityWorkRef struct {
-	WorkID domain.ID `json:"work_id,omitempty"`
-}
-
-func (s *Scheduler) releaseCapacityInTx(tx storage.Tx, key string) error {
-	var record capacityRecord
-	if err := getJSON(tx, capacityNamespace, key, &record); err != nil {
+		prior, err := attemptState(tx, other.ID)
 		if errors.Is(err, storage.ErrNotFound) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if prior.LaunchState == capacityLaunchState {
+			return prior.CapacityRefusals, nil
+		}
+	}
+	return 0, nil
+}
+
+// armCapacityTimerInTx arms the Timer that ends the hold event recorded,
+// replacing one left by a hold an operator released early.
+func armCapacityTimerInTx(tx storage.Tx, w domain.Work, execution, event domain.ID, refusals int, at time.Time) error {
+	id := domain.ID("capacity/" + string(w.ID))
+	if old, err := tx.Timer(id); err == nil {
+		if err = tx.DeleteTimer(old.ID, old.Revision); err != nil {
+			return err
+		}
+		if err = tx.Delete(timerNamespace, timerKey(old.ID)); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	data, err := json.Marshal(capacityDue{HeldEventID: event, Execution: execution, Refusals: refusals})
+	if err != nil {
+		return err
+	}
+	due := identity(string(event))
+	return tx.PutTimer(domain.Timer{ID: id, FireAt: at, Event: domain.Event{ID: domain.ID("capacity-due/" + due), Type: typeCapacityDue, Source: "core.capacity", DeliveryID: "due/" + due, OccurredAt: at, ReceivedAt: at, CausationID: event, WorkID: w.ID, Data: domain.Payload{Schema: "core.capacity.due.v1", Data: data}}}, 0)
+}
+
+// ProcessCapacityDue consumes a capacity hold's fired Timer Event. It ends
+// the hold the Event names; a hold since released or replaced, or Work
+// since finished, is left as it is.
+func (s *Scheduler) ProcessCapacityDue(ctx context.Context, eventID domain.ID) error {
+	return s.transact(ctx, nil, func(tx storage.Tx) error {
+		a, err := tx.Event(eventID)
+		if err != nil {
+			return err
+		}
+		if a.Event.Type != typeCapacityDue || a.Event.WorkID == "" {
+			return storage.ErrInvalid
+		}
+		if a.Routed {
 			return nil
 		}
-		return err
+		var due capacityDue
+		if err = json.Unmarshal(a.Event.Data.Data, &due); err != nil {
+			return storage.ErrInvalid
+		}
+		w, err := tx.Work(a.Event.WorkID)
+		if err != nil {
+			return err
+		}
+		h, held, err := HoldInTx(tx, w.ID)
+		if err != nil {
+			return err
+		}
+		if w.State.Terminal() || !held || h.Kind != HoldKindCapacity || h.EventID != due.HeldEventID {
+			return tx.MarkRouted(eventID, w.ID, "stale_capacity")
+		}
+		if err = tx.Delete(holdNamespace, identity(string(w.ID))); err != nil {
+			return err
+		}
+		if _, err = capacityEventInTx(tx, s.now(), w, domain.EventCapacityReleased, CapacityNotice{Reason: "Trying for container capacity again.", Execution: due.Execution, Refusals: due.Refusals}); err != nil {
+			return err
+		}
+		if err = tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		return tx.MarkRouted(eventID, w.ID, "capacity")
+	})
+}
+
+// recordRefusal keeps a launch's refusal in its attempt state, with the
+// launch still launching or resuming, so it survives this daemon.
+func recordRefusal(state *AttemptState, r *extension.NoCapacityError) {
+	state.NoCapacity = r
+	state.LaunchState = "launching"
+	if state.WaitID != "" {
+		state.LaunchState = "resuming"
 	}
-	now := s.now()
-	if !record.Held || now.Before(record.RetryAt) {
-		return nil
-	}
-	var hold Hold
-	err := getJSON(tx, holdNamespace, key, &hold)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		return err
-	}
-	if err == nil && hold.Kind == HoldKindCapacity && hold.EventID == record.EventID {
-		var notice CapacityNotice
-		a, e := tx.Event(record.EventID)
-		if e != nil {
-			return e
-		}
-		if e = json.Unmarshal(a.Event.Data.Data, &notice); e != nil {
-			return e
-		}
-		w, e := tx.Work(a.Event.WorkID)
-		if e != nil {
-			return e
-		}
-		if e = tx.Delete(holdNamespace, key); e != nil {
-			return e
-		}
-		if w.State.Terminal() {
-			return tx.Delete(capacityNamespace, key)
-		}
-		if _, e = capacityEventInTx(tx, now, w, domain.EventCapacityReleased, CapacityNotice{Reason: "Trying for container capacity again.", Execution: notice.Execution, Refusals: record.Refusals}); e != nil {
-			return e
-		}
-		if e = tx.PutWork(w, w.Revision); e != nil {
-			return e
-		}
-	}
-	record.Held, record.RetryAt, record.EventID = false, time.Time{}, ""
-	return putJSON(tx, capacityNamespace, key, record)
 }
