@@ -40,6 +40,13 @@ const Name = "otlp"
 // Version is this package build's own version.
 const Version = "0.1.0"
 
+// metricsPath is OTLP/HTTP's path for metrics.
+const metricsPath = "/v1/metrics"
+
+// errEndpointRefused is an export refused before anything was sent or any
+// secret read, because its endpoint fails checkEndpoint.
+var errEndpointRefused = errors.New("endpoint refused")
+
 // Settings is an otlp entry's config.
 type Settings struct {
 	// Endpoint is the collector's OTLP/HTTP base URL, such as
@@ -52,7 +59,8 @@ type Settings struct {
 	// one of the entry's secrets (secret_names), such as
 	// {"Authorization": "otlp-token"} for a secret holding "Bearer …".
 	Headers map[string]string `json:"headers,omitempty"`
-	// Insecure allows a plain http:// endpoint other than a loopback one.
+	// Insecure allows a plain http:// endpoint other than a loopback one,
+	// whether from Endpoint or the environment.
 	Insecure bool `json:"insecure,omitempty"`
 }
 
@@ -68,12 +76,8 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 		}
 	}
 	if s.Endpoint != "" {
-		u, err := url.Parse(s.Endpoint)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
-			return s, errors.New("endpoint is an http or https URL with a host and no credentials, such as https://collector:4318")
-		}
-		if u.Scheme == "http" && !s.Insecure && !loopback(u.Hostname()) {
-			return s, errors.New("endpoint is plain http to another host: use https, or set insecure")
+		if _, err := checkEndpoint(s.Endpoint, s.Insecure); err != nil {
+			return s, err
 		}
 	}
 	for header, secret := range s.Headers {
@@ -85,6 +89,58 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// checkEndpoint is the one rule every endpoint passes, wherever it came
+// from: an http or https URL with a host and no credentials, and plain http
+// only to loopback or with insecure.
+func checkEndpoint(raw string, insecure bool) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return nil, errors.New("endpoint is an http or https URL with a host and no credentials, such as https://collector:4318")
+	}
+	if u.Scheme == "http" && !insecure && !loopback(u.Hostname()) {
+		return nil, errors.New("endpoint is plain http to another host: use https, or set insecure")
+	}
+	return u, nil
+}
+
+// resolveEndpoint is the URL an entry exports to. The package resolves the
+// standard variables itself, rather than leaving them to the OTLP exporter,
+// so that an endpoint from the environment passes checkEndpoint too. As the
+// OpenTelemetry specification has it, the metrics variable is the whole URL
+// and the general one is a base that /v1/metrics is added to.
+func resolveEndpoint(s Settings) (*url.URL, error) {
+	if s.Endpoint != "" {
+		u, err := checkEndpoint(s.Endpoint, s.Insecure)
+		if err != nil {
+			return nil, err
+		}
+		if u.Path == "" || u.Path == "/" {
+			u.Path = metricsPath
+		}
+		return u, nil
+	}
+	if e := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")); e != "" {
+		u, err := checkEndpoint(e, s.Insecure)
+		if err != nil {
+			return nil, err
+		}
+		if u.Path == "" {
+			u.Path = "/"
+		}
+		return u, nil
+	}
+	base := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if base == "" {
+		base = "http://localhost:4318"
+	}
+	u, err := checkEndpoint(base, s.Insecure)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + metricsPath
+	return u, nil
 }
 
 func loopback(host string) bool {
@@ -148,7 +204,7 @@ func Build(o Options) *sdk.Extension {
 	ext.Manifest.Provides.Extensions = []protocol.ExtensionDecl{{Type: Name, Fields: []protocol.FieldDecl{
 		{Name: "endpoint", Help: "the collector's OTLP/HTTP base URL, such as https://collector:4318 (/v1/metrics is added when it has no path); empty takes OTEL_EXPORTER_OTLP_METRICS_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT from the package's pass_env, else http://localhost:4318"},
 		{Name: "headers", Help: `{"Authorization": "otlp-token"}: headers sent with each export, each value the name of one of the entry's secret_names`},
-		{Name: "insecure", Help: "allow a plain http:// endpoint other than a loopback one", Default: "false"},
+		{Name: "insecure", Help: "allow a plain http:// endpoint other than a loopback one, whether from endpoint or the environment", Default: "false"},
 	}}}
 	ext.Metrics = st
 	ext.Check(Name, st.check)
@@ -251,6 +307,10 @@ func (d *dest) export(ctx context.Context, st *state, h *sdk.Host, rm *metricdat
 	defer d.mu.Unlock()
 	err := d.exportLocked(ctx, st, h, rm)
 	d.last, d.metrics, d.err = st.o.Now(), n, ""
+	if errors.Is(err, errEndpointRefused) {
+		d.err = "endpoint refused (plain http to another host needs insecure, and it must be an http or https URL with no credentials)"
+		return errors.New("otlp: export to " + d.label + " refused")
+	}
 	if err != nil {
 		// The collector's error text can carry a URL or a response body; the
 		// check shows only that it failed.
@@ -261,6 +321,10 @@ func (d *dest) export(ctx context.Context, st *state, h *sdk.Host, rm *metricdat
 }
 
 func (d *dest) exportLocked(ctx context.Context, st *state, h *sdk.Host, rm *metricdata.ResourceMetrics) error {
+	endpoint, err := resolveEndpoint(d.settings)
+	if err != nil {
+		return errEndpointRefused
+	}
 	headers := map[string]string{}
 	if len(d.settings.Headers) > 0 {
 		names := make([]string, 0, len(d.settings.Headers))
@@ -284,16 +348,9 @@ func (d *dest) exportLocked(ctx context.Context, st *state, h *sdk.Host, rm *met
 		if d.exporter != nil {
 			_ = d.exporter.Shutdown(ctx)
 		}
-		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithHeaders(headers)}
-		if e := d.settings.Endpoint; e != "" {
-			u, _ := url.Parse(e)
-			if u.Path == "" || u.Path == "/" {
-				u.Path = "/v1/metrics"
-			}
-			opts = append(opts, otlpmetrichttp.WithEndpointURL(u.String()))
-			if u.Scheme == "http" {
-				opts = append(opts, otlpmetrichttp.WithInsecure())
-			}
+		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithHeaders(headers), otlpmetrichttp.WithEndpointURL(endpoint.String())}
+		if endpoint.Scheme == "http" {
+			opts = append(opts, otlpmetrichttp.WithInsecure())
 		}
 		x, err := otlpmetrichttp.New(ctx, opts...)
 		if err != nil {

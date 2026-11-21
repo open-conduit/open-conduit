@@ -193,3 +193,83 @@ func TestManifestAsksForMetricsPermission(t *testing.T) {
 		t.Fatal("the package does not declare telemetry.metrics")
 	}
 }
+
+func TestEnvironmentEndpointPassesThePlainHTTPRule(t *testing.T) {
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "http://collector.example.invalid:4318")
+			st := configured(t, "", map[string]string{"otlp-token": "Bearer abc"})
+			inner, resolved := st.o.Secrets, 0
+			st.o.Secrets = func(ctx context.Context, h *sdk.Host, scope domain.ID, names ...string) (map[string]string, error) {
+				resolved++
+				return inner(ctx, h, scope, names...)
+			}
+			err := st.ExportMetrics(context.Background(), sample())
+			if err == nil || !strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "collector.example") {
+				t.Fatalf("err = %v", err)
+			}
+			if resolved != 0 {
+				t.Fatal("read the header secret for a refused endpoint")
+			}
+			for _, d := range st.dests {
+				if d.exporter != nil {
+					t.Fatal("made an exporter for a refused endpoint")
+				}
+			}
+			if _, err := st.check(context.Background(), nil, false); err == nil || !strings.Contains(err.Error(), "endpoint refused") {
+				t.Fatalf("check = %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveEndpoint(t *testing.T) {
+	for name, tc := range map[string]struct {
+		base, metrics string
+		settings      Settings
+		want          string
+	}{
+		"default":              {want: "http://localhost:4318/v1/metrics"},
+		"configured":           {settings: Settings{Endpoint: "https://c:4318"}, base: "http://other:1", want: "https://c:4318/v1/metrics"},
+		"configured path":      {settings: Settings{Endpoint: "https://c/custom"}, want: "https://c/custom"},
+		"base":                 {base: "https://c:4318", want: "https://c:4318/v1/metrics"},
+		"base with path":       {base: "https://c/otlp/", want: "https://c/otlp/v1/metrics"},
+		"metrics as given":     {base: "https://other", metrics: "https://c/custom", want: "https://c/custom"},
+		"metrics no path":      {metrics: "https://c:4318", want: "https://c:4318/"},
+		"loopback":             {base: "http://127.0.0.1:4318", want: "http://127.0.0.1:4318/v1/metrics"},
+		"remote with insecure": {base: "http://c:4318", settings: Settings{Insecure: true}, want: "http://c:4318/v1/metrics"},
+		"remote http":          {base: "http://c:4318"},
+		"metrics remote http":  {base: "https://c", metrics: "http://c:4318"},
+		"credentials":          {base: "https://u:p@c:4318"},
+		"not a URL":            {base: "collector:4318"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.base)
+			t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", tc.metrics)
+			u, err := resolveEndpoint(tc.settings)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("accepted %s", u)
+				}
+				return
+			}
+			if err != nil || u.String() != tc.want {
+				t.Fatalf("got %v, %v; want %s", u, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvironmentEndpointExports(t *testing.T) {
+	c := &collector{}
+	srv := httptest.NewServer(c)
+	defer srv.Close()
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", srv.URL+"/base")
+	st := configured(t, "", map[string]string{"otlp-token": "Bearer abc"})
+	if err := st.ExportMetrics(context.Background(), sample()); err != nil {
+		t.Fatal(err)
+	}
+	if c.path != "/base/v1/metrics" || c.auth != "Bearer abc" {
+		t.Fatalf("path %q auth %q", c.path, c.auth)
+	}
+}

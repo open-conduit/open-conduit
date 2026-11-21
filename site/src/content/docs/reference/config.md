@@ -599,7 +599,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `endpoint` |  | the collector's OTLP/HTTP base URL, such as https://collector:4318 (/v1/metrics is added when it has no path); empty takes OTEL_EXPORTER_OTLP_METRICS_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT from the package's pass_env, else http://localhost:4318 |
 | `headers` |  | {"Authorization": "otlp-token"}: headers sent with each export, each value the name of one of the entry's secret_names |
-| `insecure` | `false` | allow a plain http:// endpoint other than a loopback one |
+| `insecure` | `false` | allow a plain http:// endpoint other than a loopback one, whether from endpoint or the environment |
 
 ### PostHog (`posthog`)
 
