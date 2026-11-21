@@ -258,7 +258,7 @@ type loadWebhooks struct {
 	slack  *slacktest.Server
 }
 
-func newLoadWebhooks(t *testing.T, settings map[string]any) (*loadWebhooks, string) {
+func newLoadWebhooks(t *testing.T, settings map[string]any, extra ...any) (*loadWebhooks, string) {
 	t.Helper()
 	gh := githubtest.New("octo/widgets", "tok")
 	t.Cleanup(gh.Close)
@@ -280,7 +280,7 @@ func newLoadWebhooks(t *testing.T, settings map[string]any) (*loadWebhooks, stri
 	x["secret_names"] = []string{"signing"}
 	xc := x["config"].(map[string]any)
 	xc["receiver"], xc["signing_secret"] = "http", "signing"
-	cfg["scopes"] = []any{eng, support}
+	cfg["scopes"] = append([]any{eng, support}, extra...)
 	cfg["connections"] = append(cfg["connections"].([]any), slackCfg["connections"].([]any)...)
 	merged := map[string]any{"reconcile_seconds": 3600}
 	for k, v := range settings {
@@ -670,26 +670,29 @@ done
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"%s","num_turns":1,"total_cost_usd":0,"structured_output":{"state":"done","summary":"turn","handoff":"note"},"modelUsage":{"claude-x":{"inputTokens":1,"outputTokens":1,"cacheReadInputTokens":0,"cacheCreationInputTokens":0}}}\n' "$session"
 `
 
-// soakConfig is the default capacity (4 agent turns, 4 jobs): an agents
-// scope on the fake claude and a jobs scope whose shell runs for a moment.
-func soakConfig(root, binary string) []byte {
+// soakScopes are the scopes that keep the default capacity (4 agent turns, 4
+// jobs) full: agents on the fake claude and jobs whose shell runs a moment.
+func soakScopes(root, binary string) []any {
 	ops := []string{"read_context", "declare_outcome", "wait"}
 	scope := func(id string, binding map[string]any) map[string]any {
 		return map[string]any{"id": id, "name": id, "authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
 			"bindings": []any{binding}, "routes": []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": map[string]any{}}}, "secret_refs": map[string]any{}}
 	}
-	b, _ := json.Marshal(map[string]any{"version": 1, "settings": map[string]any{}, "connections": []any{}, "scopes": []any{
+	return []any{
 		scope("agents", map[string]any{"name": "run", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp"}, "operations": ops, "secret_names": []any{},
 			"config": map[string]any{"binary": binary, "env": map[string]string{"FAKE_TURN_SECONDS": "5", "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}),
 		scope("jobs", map[string]any{"name": "run", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": ops, "secret_names": []any{},
 			"config": map[string]any{"command": `sleep 1; ` + loadDone}}),
-	}})
-	return b
+	}
 }
 
 // soakDepth is the unfinished Work each soak scope keeps: its four slots
 // and two waiting, so no slot idles and no backlog builds.
 const soakDepth = 6
+
+// soakDelivery is how often the soak sends a signed webhook delivery. Each
+// runs a short job, so this stays well inside what the job slots drain.
+const soakDelivery = 2 * time.Second
 
 // TestLoadSoak is scenario 5: full default capacity with new Work topped up
 // for OC_SOAK_DURATION, sampling every OC_SOAK_INTERVAL.
@@ -697,19 +700,37 @@ func TestLoadSoak(t *testing.T) {
 	report := newLoadReport(t, "Soak")
 	duration := loadDuration(t, "OC_SOAK_DURATION", 10*time.Minute)
 	interval := loadDuration(t, "OC_SOAK_INTERVAL", 10*time.Second)
-	d, stats := newLoadDrill(t, nil)
-	binary := filepath.Join(d.root, "claude")
+	fakes := t.TempDir()
+	binary := filepath.Join(fakes, "claude")
 	if err := os.WriteFile(binary, []byte(loadClaude), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(d.config, soakConfig(d.root, binary), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	d.start("")
+	w, stats := newLoadWebhooks(t, map[string]any{}, soakScopes(fakes, binary)...)
+	d := w.d
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 	var wg sync.WaitGroup
-	wg.Add(1)
+	var acked, refused atomic.Int64
+	wg.Add(2)
+	go func() { // Signed GitHub and Slack deliveries, alternating.
+		defer wg.Done()
+		tick := time.NewTicker(soakDelivery)
+		defer tick.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			w.slack.SetClock(time.Now())
+			_, send := w.delivery("soak", i)
+			if code, err := send(); err == nil && code >= 200 && code < 300 {
+				acked.Add(1)
+			} else if ctx.Err() == nil {
+				refused.Add(1)
+			}
+		}
+	}()
 	go func() { // Closed loop: each scope keeps a few more Work than slots.
 		defer wg.Done()
 		tick := time.NewTicker(500 * time.Millisecond)
@@ -742,7 +763,8 @@ func TestLoadSoak(t *testing.T) {
 		samples = append(samples, sampleDaemon(d, stats))
 		// A soak that never fills its slots hasn't measured full capacity.
 		peakAgents = max(peakAgents, runningIn(d, "agents"))
-		peakJobs = max(peakJobs, runningIn(d, "jobs"))
+		// Webhook Work runs in the job pool too.
+		peakJobs = max(peakJobs, runningIn(d, "jobs")+runningIn(d, "eng")+runningIn(d, "support"))
 		select {
 		case <-ctx.Done():
 			running = false
@@ -753,7 +775,10 @@ func TestLoadSoak(t *testing.T) {
 	if peakAgents < 4 || peakJobs < 4 {
 		t.Fatalf("the soak never reached full capacity: at most %d agent turns and %d jobs running", peakAgents, peakJobs)
 	}
-	report.note("%s at the default capacity (peak %d agent turns and %d jobs running), %d samples %s apart. CPU is the daemon's share of one core over the run.", duration, peakAgents, peakJobs, len(samples), interval)
+	if acked.Load() == 0 {
+		t.Fatalf("the soak carried no webhook traffic: %d deliveries refused", refused.Load())
+	}
+	report.note("%s at the default capacity (peak %d agent turns and %d jobs running), with %d signed webhook deliveries acknowledged and %d refused, %d samples %s apart. CPU is the daemon's share of one core over the run.", duration, peakAgents, peakJobs, acked.Load(), refused.Load(), len(samples), interval)
 	report.table([]string{"Series", "Start", "Peak", "End", "Slope per hour"}, soakRows(samples))
 	report.note("Pass and phases (doctor): %s. Write transactions: %s.", doctorLines(t, d, "loop"), doctorLines(t, d, "transactions"))
 	stopDaemon(d)
