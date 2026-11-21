@@ -19,7 +19,7 @@ The remote is a [container provider](../sandboxes/#containers), `ssh`, so it wor
 | Network | with `"network": "gateway"`, only `network.allow`, through the gateway; with `"host"`, whatever the remote's own firewall allows |
 | Machine | pinned by its host key: a different key refuses every run |
 
-**Open Conduit can't firewall the remote or limit its resources.** To enforce `network.allow`, block the remote's outbound traffic and set `"network": "gateway"`: the run then gets out only through a gateway on this host, over its SSH connection, and a remote that can still connect out directly is refused. The remote needs `nc` for that check. With `"network": "host"` the list is advisory. `open-conduit doctor` says which each binding has. Use a machine whose size is the limit.
+**Open Conduit can't firewall the remote or limit its resources.** To enforce `network.allow`, block the remote's outbound traffic and set `"network": "gateway"`: the run then gets out only through a gateway on this host, over its SSH connection, and a remote that can still connect out directly is refused. The remote needs an `nc` with `-z` for that check, and `-6` if it has IPv6 (OpenBSD netcat or ncat). With `"network": "host"` the list is advisory. `open-conduit doctor` says which each binding has. Use a machine whose size is the limit.
 
 ## Set up the remote
 

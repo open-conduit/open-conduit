@@ -117,11 +117,32 @@ for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" -print0 || ex
 [ -f "$d/stamp" ] || { echo "no upload stamp" >&2; exit 3; }
 cd "$R/" || exit 3
 { for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" \( -type d -o -newer "$d/stamp" -o -cnewer "$d/stamp" \) -print0 || exit 3; done; cat; } | COPYFILE_DISABLE=1 tar --null --no-recursion -T - -cf -`
-	// scriptEgress <host:port>...: "reaches <host:port>" for each address
-	// the remote connects to directly, or "unchecked" when it has no nc
-	// to try with. A run behind the gateway needs every one refused.
-	scriptEgress = `command -v nc >/dev/null 2>&1 || { echo unchecked; exit 0; }
-for a in "$@"; do nc -z -w 3 "${a%:*}" "${a##*:}" </dev/null >/dev/null 2>&1 && echo "reaches $a"; done; exit 0`
+	// scriptEgress <host:port or [v6]:port>...: "reaches <address>" for
+	// each address the remote connects to directly, tried together so
+	// dropped packets cost one timeout. It proves its nc first: a variant
+	// that can't do the check also exits non-zero, which would read as
+	// refused. So nc must reach the remote's own sshd (the control), and on
+	// a remote with a global IPv6 address it must support -6. Otherwise it
+	// prints "unchecked <why>" and tries nothing.
+	scriptEgress = `command -v nc >/dev/null 2>&1 || { echo "unchecked no-nc"; exit 0; }
+try() { nc -z -w 3 "$@" </dev/null >/dev/null 2>&1; }
+c=${SSH_CONNECTION:-}; cport=${c##* }; b=${c% *}; cip=${b##* }
+case $cport in ''|*[!0-9]*) echo "unchecked control"; exit 0;; esac
+try 127.0.0.1 "$cport" || try "$cip" "$cport" || { echo "unchecked control"; exit 0; }
+has6() {
+  if [ -d "$R/proc/net" ]; then grep -Eq '^[0-9a-f]{32} [0-9a-f]+ [0-9a-f]+ 00 ' "$R/proc/net/if_inet6" 2>/dev/null
+  elif command -v ifconfig >/dev/null 2>&1; then ifconfig -a 2>/dev/null | grep -Eq 'inet6 +(addr: *)?[23]'
+  else return 0; fi
+}
+six=; if nc -h 2>&1 | grep -Eq '(^|[[:space:]])-6'; then six=1; fi
+if [ -z "$six" ] && has6; then echo "unchecked ipv6"; exit 0; fi
+for a in "$@"; do
+  case $a in
+    \[*) [ -n "$six" ] || continue; h=${a#\[}; h=${h%%]*}; { try -6 "$h" "${a##*:}" && echo "reaches $a"; } & ;;
+    *) { try "${a%:*}" "${a##*:}" && echo "reaches $a"; } & ;;
+  esac
+done
+wait; exit 0`
 	// scriptHealth: what a run needs of the remote, one line each.
 	scriptHealth = `for c in sh setsid ps tar find env; do command -v "$c" >/dev/null 2>&1 || echo "missing $c"; done
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; command -v os >/dev/null 2>&1 || echo "no-os"

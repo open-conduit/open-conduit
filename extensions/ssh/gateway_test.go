@@ -37,7 +37,59 @@ func behindGateway(t *testing.T) *fakeRemote {
 	}
 	f.p.o.EgressProbe = []string{l.Addr().String()}
 	l.Close()
+	// The remote's sshd, which the probe's control must reach, and a
+	// /proc showing no IPv6 unless a test writes one.
+	sshd, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sshd.Close() })
+	_, port, _ := net.SplitHostPort(sshd.Addr().String())
+	write(t, filepath.Join(filepath.Dir(filepath.Dir(f.p.o.SSH)), "ssh_connection"), "192.0.2.1 50000 127.0.0.1 "+port, 0o600)
+	if err := os.MkdirAll(filepath.Join(f.root, "proc", "net"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	return f
+}
+
+// fakeNC puts a stand-in nc first on the remote's PATH.
+func (f *fakeRemote) fakeNC(script string) {
+	write(f.t, filepath.Join(filepath.Dir(f.p.o.SSH), "nc"), "#!/bin/sh\n"+script+"\n", 0o700)
+}
+
+// TestEgressProbeFailsClosed: the probe passes only when its nc is proved
+// able to answer for every address family the remote has.
+func TestEgressProbeFailsClosed(t *testing.T) {
+	const global = "20010db8000000000000000000000001 02 40 00 00 eth0\n"
+	const v6 = "[2001:db8::1]:443"
+	for _, c := range []struct {
+		name, nc, inet6 string
+		probe           []string
+		code, detail    string
+	}{
+		{name: "an nc that can't run the check", nc: "exit 1", code: "remote_egress_unchecked", detail: "own sshd"},
+		{name: "no -6 on a dual-stack remote", nc: `[ "$1" = -h ] && exit 1; exit 0`, inet6: global, probe: []string{"192.0.2.9:443"}, code: "remote_egress_unchecked", detail: "IPv6"},
+		{name: "an open IPv6 way out", nc: `[ "$1" = -h ] && { echo "  -6 Use IPv6"; exit 0; }
+for a; do [ "$a" = 2001:db8::1 ] && exit 0; [ "$a" = "[2001:db8::1]" ] && exit 0; done
+case " $* " in *" 127.0.0.1 "*) exit 0;; esac; exit 1`, inet6: global, probe: []string{v6}, code: "remote_egress_open", detail: v6},
+		{name: "no -6 and no IPv6", nc: `[ "$1" = -h ] && exit 1
+case " $* " in *" 127.0.0.1 "*) exit 0;; esac; exit 1`, probe: []string{"192.0.2.9:443", v6}, code: "ok"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := behindGateway(t)
+			f.fakeNC(c.nc)
+			if c.inet6 != "" {
+				write(t, filepath.Join(f.root, "proc", "net", "if_inet6"), c.inet6, 0o600)
+			}
+			if c.probe != nil {
+				f.p.o.EgressProbe = c.probe
+			}
+			h := f.p.Health(context.Background(), f.settings, "", false)
+			if h.Code != c.code || !strings.Contains(h.Detail, c.detail) {
+				t.Fatalf("health %+v, want %s with %q", h, c.code, c.detail)
+			}
+		})
+	}
 }
 
 // TestLaunchThroughGateway: a run on a remote reaches an allowed host

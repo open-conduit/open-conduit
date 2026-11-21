@@ -93,7 +93,15 @@ func (p *Provider) checkEgress(ctx context.Context, s Settings, h *Health) {
 		fact, rest, _ := strings.Cut(line, " ")
 		switch fact {
 		case "unchecked":
-			h.Status, h.Code, h.Detail = "fail", "remote_egress_unchecked", fmt.Sprintf(`%s has no nc to check it can't connect out: install it, or set "network": "host"`, s.Endpoint())
+			why := map[string]string{
+				"no-nc":   "has no nc to check it can't connect out",
+				"control": "has an nc that can't reach its own sshd, so a refused connection proves nothing",
+				"ipv6":    "has a global IPv6 address and an nc without -6, so its IPv6 way out can't be checked",
+			}[rest]
+			if why == "" {
+				why = "can't check its way out"
+			}
+			h.Status, h.Code, h.Detail = "fail", "remote_egress_unchecked", fmt.Sprintf(`%s %s: install OpenBSD netcat or ncat, or set "network": "host"`, s.Endpoint(), why)
 			return
 		case "reaches":
 			open = append(open, rest)

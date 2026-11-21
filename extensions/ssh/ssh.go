@@ -90,9 +90,13 @@ type Options struct {
 	Now         func() time.Time
 }
 
-// DefaultEgressProbe are well-known public addresses: a remote that
-// connects to one has a way out other than its gateway.
-var DefaultEgressProbe = []string{"1.1.1.1:443", "8.8.8.8:443"}
+// DefaultEgressProbe are well-known public addresses, over both address
+// families and the two commonest ports: a remote that connects to one has
+// a way out other than its gateway.
+var DefaultEgressProbe = []string{
+	"1.1.1.1:443", "1.1.1.1:80", "8.8.8.8:443", "8.8.8.8:80",
+	"[2606:4700:4700::1111]:443", "[2606:4700:4700::1111]:80", "[2001:4860:4860::8888]:443", "[2001:4860:4860::8888]:80",
+}
 
 // Provider implements extension.ContainerProvider.
 type Provider struct {
