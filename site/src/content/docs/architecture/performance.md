@@ -46,7 +46,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
   | `make load-contention` | The TUI's refresh, a list loop and webhook pushes together, then the SQLite benchmarks | `OC_LOAD_DURATION` |
   | `make load-recovery` | A SIGKILL inside a route's transaction with attempts running, then an outage's backlog: time to first start, to drained and to every timer fired, and peak RSS | `OC_RECOVERY_EVENTS`, `_WORK`, `_TIMERS`, `_RUNNING` |
   | `make load-idle` | Start-up on retained history, idle CPU, memory across processes and disk by part | `OC_LOAD_HISTORY`, `OC_LOAD_DURATION` |
-  | `make load-soak` | Full default capacity: RSS, processes, goroutines, open files, CPU and the database, WAL and artifact sizes, with peak and slope | `OC_SOAK_DURATION`, `OC_SOAK_INTERVAL` |
+  | `make load-soak` | Full default capacity with signed webhook traffic: RSS, processes, goroutines, open files, CPU and the database, WAL and artifact sizes, with peak and slope | `OC_SOAK_DURATION`, `OC_SOAK_INTERVAL` |
 
   Run it on a quiet host: the figures describe the machine as much as the daemon, and a busy one measures its other work. `execution.queued` and `execution.started` are recorded by the same claim, so that step reads 0. The recovery drill crashes the daemon with the `faultinject` build and writes the outage's unrouted Events and due timers into the dead daemon's store. The harness doesn't time `collectArtifacts`, `backup.Create` or Slack's `activeThreads` on their own, and doesn't sample wake-ups, which macOS shows only to root.
 
