@@ -36,7 +36,8 @@ import (
 // through the symlink placed on a shell execution's PATH, and as the
 // environment-recording package (envPackageMain) through its command's
 // symlink. Under -race it shortens the race runtime's exit for every process
-// the tests start. After the run it removes every directory keptDir made.
+// the tests start. It reclaims what dead runs left in the temp directory, and
+// after the run removes what this one kept.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "os" {
 		cwd, _ := os.Getwd()
@@ -45,6 +46,11 @@ func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == envPackageCommand {
 		os.Exit(envPackageMain())
 	}
+	if base := os.Getenv(tempDirHolderEnv); base != "" {
+		os.Exit(tempDirHolderMain(base))
+	}
+	// What an earlier run left because it timed out or was killed (#841).
+	reclaimDirs(tempBase)
 	if raceEnabled {
 		// Every race-built process these tests start (daemons, packages,
 		// certification sessions) would otherwise sleep a second at exit
@@ -69,12 +75,10 @@ var (
 // SIGKILL never build one, which would outlive them (#445).
 func builtToolbelt() string {
 	toolbeltOnce.Do(func() {
-		dir, err := keptDir("oc-osbin-")
-		if err != nil {
-			return
-		}
-		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os")
-		if build.Run() == nil {
+		dir, err := sharedBuild("osbin", nil, func(dir string) error {
+			return exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os").Run()
+		})
+		if err == nil {
 			toolbeltBuilt = filepath.Join(dir, "os")
 		}
 	})

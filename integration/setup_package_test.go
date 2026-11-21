@@ -36,17 +36,21 @@ func setupPackage(t *testing.T) string {
 
 func buildSetupPackage() (string, error) {
 	setupOnce.Do(func() {
-		out, err := keptDir("oc-setup-package-")
+		dir, err := sharedBuild("setup-package", nil, func(dir string) error {
+			// In a directory of its own: the script replaces its output
+			// directory, and dir is held by a lock on that very directory.
+			cmd := exec.Command("sh", "scripts/bundle-packages.sh", filepath.Join(dir, "bundle"))
+			cmd.Dir = ".."
+			if o, err := cmd.CombinedOutput(); err != nil {
+				return &bundleError{err: err, out: string(o)}
+			}
+			return nil
+		})
 		if err != nil {
 			setupErr = err
 			return
 		}
-		cmd := exec.Command("sh", "scripts/bundle-packages.sh", out)
-		cmd.Dir = ".."
-		if o, err := cmd.CombinedOutput(); err != nil {
-			setupErr = &bundleError{err: err, out: string(o)}
-			return
-		}
+		out := filepath.Join(dir, "bundle")
 		matches, _ := filepath.Glob(filepath.Join(out, "*", "extensions", "setup"))
 		if len(matches) != 1 {
 			setupErr = &bundleError{out: "no extensions/setup in " + out}
