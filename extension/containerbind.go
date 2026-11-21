@@ -493,7 +493,7 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		_ = b.Provider.Remove(ctx, created.Ref)
 		return SandboxPlan{}, fmt.Errorf("%w: the container was created on %s, not at its placement %s", ErrSandboxUnavailable, created.Daemon, placement.Daemon)
 	}
-	pin := ContainerPin{Digest: plan.Digest, Summary: plan.Summary, Image: plan.Image, Daemon: created.Daemon, ID: created.Ref.ID, Run: g.Run, At: b.Now()}
+	pin := ContainerPin{Digest: plan.Digest, Summary: plan.Summary, Image: plan.Image, Daemon: created.Daemon, ID: created.Ref.ID, Run: g.Run, At: b.Now(), CPUs: cfg.Limits.CPUs, Memory: cfg.Limits.Memory}
 	if atSite {
 		pin.Workspace, pin.Site = g.Workspace, res.Site
 	}

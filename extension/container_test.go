@@ -184,6 +184,16 @@ func TestContainerLaunchCreatesAndPins(t *testing.T) {
 	if pin.ID != "c1" || pin.Image != testImage || pin.Daemon != "daemon-1" || pin.Digest != p.Digest || pin.Run != h.run || !pin.At.Equal(h.now) {
 		t.Errorf("pin %+v, want the container, image, daemon and plan", pin)
 	}
+	if pin.CPUs != 0 || pin.Memory != "" {
+		t.Errorf("pin %+v records limits the binding did not set", pin)
+	}
+	sized := newContainerHost(t)
+	if _, err := sized.bind(newFakeContainers(), containerConfig(testImage, `,"limits":{"cpus":4,"memory":"8g"}`), nil).Launch(context.Background(), sized.needs(), sized.launch()); err != nil {
+		t.Fatal(err)
+	}
+	if got := sized.pins[0]; got.CPUs != 4 || got.Memory != "8g" {
+		t.Errorf("pin %+v, want the planned cpus and memory", got)
+	}
 	l := f.created[0]
 	if l[extension.ContainerLabelHost] != "host-a" || l[extension.ContainerLabelExecution] != "x" || l[extension.ContainerLabelSegment] != "1" || l[extension.ContainerLabelDigest] != p.Digest {
 		t.Errorf("labels %v", l)

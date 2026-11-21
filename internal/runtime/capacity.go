@@ -246,6 +246,9 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 				state.WakeEventID = ""
 			}
 		} else {
+			if n > 0 && state.Segments[n-1].EndedAt == nil {
+				state.Segments[n-1].Unmetered = true
+			}
 			state.endSegment(now, false)
 			x.State, x.Outcome = domain.ExecutionCancelled, nil
 			state.LaunchState = capacityLaunchState

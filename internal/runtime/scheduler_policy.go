@@ -160,6 +160,9 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 	if err = tx.PutExecution(x, x.Revision); err != nil {
 		return err
 	}
+	if err = stageFinishedInTx(tx, x.ID); err != nil {
+		return err
+	}
 	failureSequence, err := tx.LatestSequence()
 	if err != nil {
 		return err

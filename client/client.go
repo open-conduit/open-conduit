@@ -1939,6 +1939,10 @@ type RunContainer struct {
 	Image   string `json:"image"`
 	Daemon  string `json:"daemon"`
 	ID      string `json:"id"`
+	// CPUs and Memory are the limits planned for the container, absent
+	// when its binding set none.
+	CPUs   float64 `json:"cpus,omitempty"`
+	Memory string  `json:"memory,omitempty"`
 }
 
 // RunAttach is an operator's attach container and when it was pinned.
