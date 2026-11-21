@@ -86,4 +86,36 @@ func TestExtensionNewTS(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "no node on PATH") {
 		t.Fatalf("a portable build with no node: %v\n%s", err, out)
 	}
+
+	// The same package passes on the SDK as npm serves it: the tarball the
+	// release publishes, unpacked under node_modules, where Node won't strip
+	// types, so the package must run on the compiled dist.
+	tarball := strings.TrimSpace(run(root, env, "node", "scripts/pack-sdk.mjs", "1.2.3", t.TempDir()))
+	modules := filepath.Join(dir, "node_modules")
+	if err := os.Remove(modules); err != nil {
+		t.Fatal(err)
+	}
+	sdk := filepath.Join(modules, "@open-conduit", "sdk")
+	if err := os.MkdirAll(sdk, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	weather := filepath.Join(root, "protocol", "examples", "weather", "node_modules")
+	entries, err := os.ReadDir(weather)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() == "@open-conduit" || e.Name() == ".package-lock.json" {
+			continue
+		}
+		if err := os.Symlink(filepath.Join(weather, e.Name()), filepath.Join(modules, e.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(dir, env, "tar", "-xzf", tarball, "-C", sdk, "--strip-components=1")
+	if _, err := os.Stat(filepath.Join(sdk, "src")); !os.IsNotExist(err) {
+		t.Fatalf("the published SDK ships its TypeScript source: %v", err)
+	}
+	run(dir, env, "make", "check")
+	run(dir, env, "make", "lint", "certify", "OPEN_CONDUIT="+daemonBinary(t))
 }
