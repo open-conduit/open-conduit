@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -303,10 +304,10 @@ type AdmissionNotice struct {
 
 // admissionEventInTx accepts a core.admission.* control Event addressed to
 // Work, so its history records the hold or the release.
-func admissionEventInTx(tx storage.Tx, now time.Time, w domain.Work, kind string, n AdmissionNotice) (domain.ID, error) {
+func admissionEventInTx(tx storage.Tx, now time.Time, w domain.Work, typ string, n AdmissionNotice) (domain.ID, error) {
 	data, _ := json.Marshal(n)
-	delivery := kind + "/" + identity(string(w.ID), now.UTC().Format(time.RFC3339Nano))
-	e := domain.Event{ID: domain.ID("admission-" + delivery), Type: "core.admission." + kind, Source: "core.admission", DeliveryID: delivery, WorkID: w.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.admission.v1", Data: data}}
+	delivery := strings.TrimPrefix(typ, "core.admission.") + "/" + identity(string(w.ID), now.UTC().Format(time.RFC3339Nano))
+	e := domain.Event{ID: domain.ID("admission-" + delivery), Type: typ, Source: "core.admission", DeliveryID: delivery, WorkID: w.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.admission.v1", Data: data}}
 	accepted, _, err := AcceptInTx(tx, w.ScopeID, e)
 	if err != nil {
 		return "", err
@@ -317,7 +318,7 @@ func admissionEventInTx(tx storage.Tx, now time.Time, w domain.Work, kind string
 // holdForAdmissionInTx holds Work beyond the admission limit of scope.
 func holdForAdmissionInTx(tx storage.Tx, now time.Time, w domain.Work, scope domain.ID, limit, open int) error {
 	reason := fmt.Sprintf("Waiting for a place: scope %s has %d open Work at its admission limit of %d. The oldest held Work starts as open Work finishes; release the hold to admit it now.", scope, open, limit)
-	event, err := admissionEventInTx(tx, now, w, "held", AdmissionNotice{Reason: reason, ScopeID: scope, Limit: limit, Open: open})
+	event, err := admissionEventInTx(tx, now, w, domain.EventAdmissionHeld, AdmissionNotice{Reason: reason, ScopeID: scope, Limit: limit, Open: open})
 	if err != nil {
 		return err
 	}
@@ -330,7 +331,7 @@ func holdForAdmissionInTx(tx storage.Tx, now time.Time, w domain.Work, scope dom
 
 // releaseAdmissionInTx admits held Work now that its scope has a place.
 func releaseAdmissionInTx(tx storage.Tx, now time.Time, w domain.Work) error {
-	event, err := admissionEventInTx(tx, now, w, "released", AdmissionNotice{Reason: "A place opened in its scope"})
+	event, err := admissionEventInTx(tx, now, w, domain.EventAdmissionReleased, AdmissionNotice{Reason: "A place opened in its scope"})
 	if err != nil {
 		return err
 	}
