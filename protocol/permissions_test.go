@@ -14,7 +14,7 @@ import (
 func TestPermissionsGateMethods(t *testing.T) {
 	m := load(t, "ingress-support.json")
 	m.Provides.ConfigCandidate = true
-	gated := map[string]string{"telemetry.sink": protocol.PermissionTelemetrySink, "telemetry.capture": protocol.PermissionTelemetryCapture, "probe.list": protocol.PermissionProbes, "probe.run": protocol.PermissionProbes,
+	gated := map[string]string{"telemetry.sink": protocol.PermissionTelemetrySink, "telemetry.metrics": protocol.PermissionTelemetryMetrics, "telemetry.capture": protocol.PermissionTelemetryCapture, "probe.list": protocol.PermissionProbes, "probe.run": protocol.PermissionProbes,
 		"config.base": protocol.PermissionConfigRead, "config.edit": protocol.PermissionConfigRead, "config.validate": protocol.PermissionConfigRead, "config.trace": protocol.PermissionConfigRead, "config.candidate": protocol.PermissionConfigRead}
 	for method, perm := range gated {
 		if got, _ := protocol.Lookup(method); got.Permission != perm {

@@ -96,6 +96,9 @@ const (
 	// writes to its telemetry events log (telemetry.sink), from every
 	// scope: it sees the whole machine's activity.
 	PermissionTelemetrySink = "telemetry.sink"
+	// PermissionTelemetryMetrics receives each collection of the host's
+	// meter (telemetry.metrics), whose numbers cover every scope.
+	PermissionTelemetryMetrics = "telemetry.metrics"
 	// PermissionTelemetryCapture writes named telemetry events to the
 	// host's telemetry events log, which every sink receives
 	// (telemetry.capture).
@@ -138,6 +141,7 @@ type PermissionInfo struct {
 // they are shown.
 var KnownPermissions = []PermissionInfo{
 	{PermissionTelemetrySink, "receives every telemetry event the host records, from every scope"},
+	{PermissionTelemetryMetrics, "receives the host's operational metrics, which cover every scope"},
 	{PermissionTelemetryCapture, "records telemetry events, which every telemetry sink receives"},
 	{PermissionProbes, "runs the read-only setup probes of the host, its extensions and executors"},
 	{PermissionConfigRead, "reads the whole configuration, references redacted, and proposes edits it never applies"},

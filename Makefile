@@ -218,7 +218,7 @@ protocol-prototype:
 # extension-run NAME`, #428), so it builds no executable of its own. The
 # examples, written as a third party would, ship their own binaries.
 PACKAGES_DIR ?= dist/packages
-RUNNABLE_PACKAGES = aws slack github shell claude-code sentry pagerduty codex chat-completions mcp posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared oidc webhook
+RUNNABLE_PACKAGES = aws slack github shell claude-code sentry pagerduty codex chat-completions mcp posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared oidc otlp webhook
 # BUNDLED_PACKAGES are the runnable packages the release archive carries
 # (Bundled in cmd/open-conduit/extension_run.go); release-snapshot checks each.
 BUNDLED_PACKAGES = $(filter-out sentry pagerduty,$(RUNNABLE_PACKAGES))
@@ -280,7 +280,7 @@ ts-packages: require-node
 # packages), then the negative controls, which must each fail their
 # criterion.
 certify: require-node build packages ts-packages ts-scaffold-check
-	@set -eu; for name in aws slack github shell claude-code sentry pagerduty codex chat-completions mcp posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared oidc webhook notes runner setup weather; do \
+	@set -eu; for name in aws slack github shell claude-code sentry pagerduty codex chat-completions mcp posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared oidc otlp webhook notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration

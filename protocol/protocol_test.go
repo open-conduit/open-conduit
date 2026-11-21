@@ -24,7 +24,7 @@ var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
 	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true, "oidc": true, "aws": true,
-	"mcp": true,
+	"mcp": true, "otlp": true,
 }
 
 // useCases is the 07-01 inventory: the shipped first-party extensions and
@@ -119,6 +119,7 @@ var useCases = map[string][]string{
 	"secret.resolve":              {"github", "slack", "linear", "jira", "bitbucket", "schedule", "posthog"},
 	"task.run":                    {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"telemetry.export":            {"posthog", "introspection"},
+	"telemetry.metrics":           {"otlp"},
 	"telemetry.sink":              {"posthog"},
 	"telemetry.capture":           {"introspection", "posthog"},
 	"action.list":                 {"slack"},

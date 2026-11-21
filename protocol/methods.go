@@ -159,6 +159,7 @@ var Methods = []Method{
 	// Background tasks, telemetry and operator surfaces.
 	{Name: "task.run", Direction: HostToExtension, Provides: "tasks", Contract: []string{"host:Projector.Converge", "host:Ensure", "host:Executor.Maintain", "host:manageHooks", "host:hostWatch", "host:publishJobRuns"}},
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}},
+	{Name: "telemetry.metrics", Direction: HostToExtension, Permission: PermissionTelemetryMetrics, Contract: []string{"observability.MetricExporter.ExportMetrics"}},
 	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}},
 	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}},
 	{Name: "action.list", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Actions", "extension.ActionOffer"}},

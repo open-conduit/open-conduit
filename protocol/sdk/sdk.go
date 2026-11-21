@@ -144,6 +144,9 @@ type Extension struct {
 	// Exporter receives telemetry batches (manifest exporters) and is shut
 	// down with the extension.
 	Exporter observability.Exporter
+	// Metrics receives each collection of the host's meter (permission
+	// telemetry.metrics).
+	Metrics observability.MetricExporter
 	// Sink receives every named telemetry event the host records, from
 	// every scope (permission telemetry.sink). Write them with
 	// Host.Capture (permission telemetry.capture).
@@ -302,7 +305,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "container_provider.place", "container_provider.site_run", "container_provider.collect", "tunnel.run", "credential.verify", "secret.serve", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "container_provider.place", "container_provider.site_run", "container_provider.collect", "tunnel.run", "credential.verify", "secret.serve", "telemetry.export", "telemetry.metrics", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

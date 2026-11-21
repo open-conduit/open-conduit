@@ -99,10 +99,12 @@ type Options struct {
 	// pass before its host_loop component is stalled and /livez fails
 	// (default DefaultStallAfter).
 	StallAfter time.Duration
-	// MetricReaders collect the daemon's meter: the lifecycle metrics and
-	// the host's own instruments (metrics.go). Without one they are
-	// recorded and collected by nobody.
-	MetricReaders []sdkmetric.Reader
+	// MetricReaders collect the daemon's meter beside the host's own
+	// reader, which sends each collection to the metrics exporter packages
+	// (metricexport.go) every MetricInterval (default
+	// DefaultMetricInterval). Tests read the meter through them.
+	MetricReaders  []sdkmetric.Reader
+	MetricInterval time.Duration
 	// NoTunnel disables the listener and tunnel (reconcile-only).
 	NoTunnel bool
 	// DryRun makes no external writes: GitHub projections, tool writes and
@@ -203,6 +205,9 @@ type daemon struct {
 	passTimes *passTimes
 	// health is whether the daemon is alive and ready (health.go).
 	health healthState
+	// metricExports is how the metrics exporter packages' last exports
+	// went (metricexport.go).
+	metricExports metricExports
 }
 
 // toolbeltBeside finds the directory holding the `os` toolbelt next to the
@@ -349,7 +354,10 @@ func (o *Options) defaults() error {
 	if o.StallAfter == 0 {
 		o.StallAfter = DefaultStallAfter
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 || o.StallAfter <= 0 {
+	if o.MetricInterval == 0 {
+		o.MetricInterval = DefaultMetricInterval
+	}
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 || o.StallAfter <= 0 || o.MetricInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -423,7 +431,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer logFile.Close()
-	readers := make([]sdkmetric.Option, 0, len(o.MetricReaders))
+	// The host's own reader collects for the metrics exporter packages.
+	collector := sdkmetric.NewManualReader()
+	readers := []sdkmetric.Option{sdkmetric.WithReader(collector)}
 	for _, r := range o.MetricReaders {
 		readers = append(readers, sdkmetric.WithReader(r))
 	}
@@ -627,6 +637,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.openMetrics(meter); err != nil {
 		return err
 	}
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.exportMetrics(loopCtx, collector)
+	}()
 	loopErr := d.loop(loopCtx)
 	d.health.phase.Store(management.PhaseStopping)
 
@@ -733,7 +748,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.metricsCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

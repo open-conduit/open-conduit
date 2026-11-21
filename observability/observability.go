@@ -39,6 +39,53 @@ type Exporter interface {
 	Shutdown(context.Context) error
 }
 
+// Metric kinds (Metric.Kind).
+const (
+	MetricSum       = "sum"
+	MetricGauge     = "gauge"
+	MetricHistogram = "histogram"
+)
+
+// Metric is one instrument's data at one collection of the host's meter:
+// the lifecycle metrics and the host's own gauges and histograms. Sums and
+// histograms are cumulative from Start. Point attributes are small fixed
+// sets (a pool, a state, an outcome, an executor binding); they never carry
+// an identifier.
+type Metric struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Unit        string `json:"unit,omitempty"`
+	// Kind is MetricSum, MetricGauge or MetricHistogram; Monotonic marks a
+	// sum that only grows (a counter).
+	Kind      string        `json:"kind"`
+	Monotonic bool          `json:"monotonic,omitempty"`
+	Points    []MetricPoint `json:"points"`
+}
+
+// MetricPoint is one series of a Metric: Value for a sum or gauge, and
+// Count, Sum, Bounds (explicit bucket upper bounds) and Buckets (one more
+// count than Bounds) for a histogram.
+type MetricPoint struct {
+	Attributes map[string]string `json:"attributes,omitempty"`
+	Start      time.Time         `json:"start,omitempty"`
+	Time       time.Time         `json:"time"`
+	Value      float64           `json:"value,omitempty"`
+	Count      uint64            `json:"count,omitempty"`
+	Sum        float64           `json:"sum,omitempty"`
+	Bounds     []float64         `json:"bounds,omitempty"`
+	Buckets    []uint64          `json:"buckets,omitempty"`
+	Min        *float64          `json:"min,omitempty"`
+	Max        *float64          `json:"max,omitempty"`
+}
+
+// MetricExporter receives each collection of the host's meter. The host
+// collects on an interval only while an exporter is running, and bounds
+// each call; a failed or slow export loses that collection, never the
+// next, since sums and histograms are cumulative.
+type MetricExporter interface {
+	ExportMetrics(context.Context, []Metric) error
+}
+
 // Validate requires name, trusted time, scope, causal Event and trace. An
 // ingress scan record ("ingress." prefix) precedes any accepted Event: it is
 // anchored instead by its source namespace attribute (ingress.source) and a

@@ -386,6 +386,15 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, notFound(method)
 		}
 		return struct{}{}, s.ext.Exporter.Export(ctx, protocol.ToRecords(p.Records))
+	case "telemetry.metrics":
+		var p protocol.TelemetryMetricsParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Metrics == nil {
+			return nil, notFound(method)
+		}
+		return struct{}{}, s.ext.Metrics.ExportMetrics(ctx, p.Metrics)
 	case "run.environment":
 		var p protocol.RunEnvironmentParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -64,6 +64,7 @@ The table groups what the first-party code actually does across the host boundar
 | Secrets | `inproc.Host.Secrets` and `resolver.ResolveNames` (lazy, current generation) | GH SL TR BB SC PH | `secret.resolve` (E→H) |
 | Background passes | `Projector.Converge` (GH SL TR), `Ensure` (SC IS), `Executor.Maintain` (CC), `manageHooks`/`EnsureWebhook` (GH TR BB), `hostWatch` (IS), the `runs` task (SC) | GH SL TR BB SC IS CC | manifest `tasks`, `task.run` |
 | Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
+| Metrics export | `observability.MetricExporter.ExportMetrics`, each collection of the host's meter | OTLP | `telemetry.metrics` (permission `telemetry.metrics`) |
 | Telemetry events | `inproc.Host.Capture` writes a named event to the host's telemetry events log; `inproc.Sink` receives every one, from every scope | IS PH | `telemetry.capture` (E→H, permission `telemetry.capture`), `telemetry.sink` (permission `telemetry.sink`) |
 | Setup probes | `inproc.Host.Probes`: the read-only probes the host, extensions and executors offer setup sessions (`claude-code.status`); `extension.SetupProbes`: the probes an extension offers | setup; GH CC | `probe.list`, `probe.run` (E→H, permission `probes`); `probe.serve` (H→E, manifest `probes`) |
 | Config host | `inproc.Host.Config` (`ConfigHost`): the configuration now, behind a handle with a redacted copy; pointer edits that build a candidate the host holds; validation and route traces against a candidate. Never applies | setup | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H, permission `config.read`) |
@@ -261,7 +262,7 @@ A broken pipe or process exit fails every pending request with a transport error
 | `tunnel.run` | The run ends: the host clears the public URL, records the stop and starts the run again after a growing wait, once the package is back. A `tunnel.url` quoting a run the host no longer holds is refused (`conflict`). |
 | `credential.verify` | Fails closed: the request is `401 unauthenticated`. A credential the host verified earlier stays accepted until its expiry, so a restart of the package costs only new sign-ins. |
 | `secret.serve` | Fails closed: the consumer gets no value and its resolution fails `provider_failed` (`provider_unavailable` while the package is down), so the attempt does not start, the package's `secret.resolve` fails, or doctor reports the reference unresolved. Nothing falls back to another store. |
-| `task.run`, `check.run`, `telemetry.export` | Reported, and retried next pass. A dropped telemetry batch is accounted. |
+| `task.run`, `check.run`, `telemetry.export`, `telemetry.metrics` | Reported, and retried next pass. A dropped telemetry batch is accounted, and a lost metrics collection is covered by the next, since its sums and histograms are cumulative. |
 
 ### Operation handlers and request IDs
 
@@ -291,6 +292,7 @@ Some host services reach beyond an extension's own surfaces: they show it other 
 | Permission | Methods | What it allows |
 | --- | --- | --- |
 | `telemetry.sink` | `telemetry.sink` (H→E) | Receives every named telemetry event the host records, from every scope, with the scope as `scope_id`. It sees the whole machine's activity. |
+| `telemetry.metrics` | `telemetry.metrics` (H→E) | Receives each collection of the host's meter, on an interval, while the package runs. The numbers cover every scope and carry no identifiers ([exporting metrics](../observability-history/)). |
 | `telemetry.capture` | `telemetry.capture` (E→H) | Records a named telemetry event for one of its configured scopes, or for the machine (`scope_id` empty). The name is at most 128 bytes, the properties at most 64 KiB and never carry `scope`. Every sink receives it. |
 | `probes` | `probe.list`, `probe.run` (E→H) | Lists and runs the read-only setup probes the host, its extensions and its executors offer, by full name. The host checks the arguments against the probe's declaration and bounds the run to 30 seconds. A probe that fails answers its reason in `error`, cut to 300 bytes. |
 | `config.read` | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H), and `config.candidate` (H→E, with manifest `config_candidate`) | Reads the whole configuration and builds candidates of it, which it validates and traces routes against, and offers them for the operator's review. It never applies one, and never receives reference text: see [the config host](#the-config-host). |

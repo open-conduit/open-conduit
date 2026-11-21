@@ -227,6 +227,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// The OIDC credential verifier: its issuer config cases, and forged
 		// and unsigned tokens refused.
 		{"oidc", "", []string{"verifiers.policy"}},
+		// The OTLP metrics exporter: its own tests cover the export, and no
+		// criterion reaches telemetry.metrics.
+		{"otlp", "", nil},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy", "containers.policy", "tunnels.policy", "verifiers.policy"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {

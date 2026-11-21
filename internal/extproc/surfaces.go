@@ -857,6 +857,23 @@ func (e remoteExporter) Export(ctx context.Context, records []observability.Reco
 }
 func (e remoteExporter) Shutdown(context.Context) error { return nil }
 
+// MetricExporter returns the metrics exporter adapter (permission
+// telemetry.metrics):
+// each collection of the host's meter goes to the package, bounded by the
+// caller's context.
+func (r *Remote) MetricExporter() (observability.MetricExporter, bool) {
+	if !r.m.Allows(protocol.PermissionTelemetryMetrics) {
+		return nil, false
+	}
+	return remoteMetrics{r}, true
+}
+
+type remoteMetrics struct{ r *Remote }
+
+func (e remoteMetrics) ExportMetrics(ctx context.Context, metrics []observability.Metric) error {
+	return e.r.p.Call(ctx, "telemetry.metrics", protocol.TelemetryMetricsParams{Metrics: metrics}, nil)
+}
+
 // Sinks reports whether the package receives the host's telemetry events
 // (permission telemetry.sink).
 func (r *Remote) Sinks() bool { return r.m.Allows(protocol.PermissionTelemetrySink) }
