@@ -23,8 +23,9 @@ test:
 
 # The package directory, laid out as Open Conduit installs it: the
 # executable, its manifest and certification files, and the playbooks.
+# PORTABLE=1 records no path to this machine's Node, for a package you publish.
 package:
-	node scripts/package.mjs $(PACKAGE_DIR)
+	node scripts/package.mjs $(if $(PORTABLE),--portable) $(PACKAGE_DIR)
 
 # Lints the package without starting it: the manifest, compatibility with
 # Open Conduit, the operations the playbooks name, certification.json.

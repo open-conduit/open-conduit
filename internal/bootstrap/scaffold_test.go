@@ -64,7 +64,8 @@ func TestNewPackageRefusesNames(t *testing.T) {
 
 // --lang ts writes a TypeScript package whose package.json depends on the
 // SDK released with this binary, or with --replace on the checkout's
-// sdk/typescript, and whose package script names Node by absolute path.
+// sdk/typescript, and whose package script writes a CommonJS bundle and a
+// launcher. TestExtensionNewTS runs what it writes.
 func TestNewTSPackage(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "acme")
 	res, err := newPackage("v1.4.0", "", cli.NewRequest{Name: "acme", Dir: dir, Lang: "ts"})
@@ -93,8 +94,8 @@ func TestNewTSPackage(t *testing.T) {
 		t.Errorf("@open-conduit/sdk %q", got)
 	}
 	script, _ := os.ReadFile(filepath.Join(dir, "scripts", "package.mjs"))
-	if !strings.Contains(string(script), "`#!${process.execPath}`") || !strings.Contains(string(script), `"type": "commonjs"`) {
-		t.Error("package.mjs no longer names node by absolute path in a CommonJS package")
+	if !strings.Contains(string(script), "process.execPath") || !strings.Contains(string(script), "--portable") || !strings.Contains(string(script), "${bin}.cjs") {
+		t.Error("package.mjs no longer writes a .cjs bundle with a launcher that records node unless --portable")
 	}
 	for path := range map[string]bool{"src/extension.ts": true, "README.md": true} {
 		b, _ := os.ReadFile(filepath.Join(dir, path))
@@ -156,6 +157,20 @@ func TestTSScaffoldMatchesSDK(t *testing.T) {
 		if tmpl.DevDependencies[dep] != sdk.DevDependencies[dep] {
 			t.Errorf("%s: scaffold %q, SDK %q", dep, tmpl.DevDependencies[dep], sdk.DevDependencies[dep])
 		}
+	}
+	// The SDK doesn't use esbuild; the weather example is what pins it.
+	var weather struct {
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	raw, err = os.ReadFile("../../protocol/examples/weather/package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &weather); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tmpl.DevDependencies["esbuild"], weather.DevDependencies["esbuild"]; want == "" || got != want {
+		t.Errorf("esbuild: scaffold %q, weather %q", got, want)
 	}
 	if tmpl.Engines["node"] != sdk.Engines["node"] {
 		t.Errorf("node engine: scaffold %q, SDK %q", tmpl.Engines["node"], sdk.Engines["node"])

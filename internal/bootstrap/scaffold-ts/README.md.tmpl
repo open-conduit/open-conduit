@@ -22,6 +22,6 @@ The guide to the SDK, the test host and certification is [Writing an extension i
 
 CI (`.github/workflows/ci.yml`) runs `make check`, and lints and certifies the package against Open Conduit's `main` and its latest release.
 
-`make package` bundles the extension as CommonJS, gives the package its own `package.json` saying so, and starts the executable with the absolute path of the Node that packaged it. The daemon then runs it with that Node, whatever its own PATH finds. After changing Node (with a version manager, say), run `make package` again before installing.
+`make package` bundles the extension as a CommonJS `.cjs` file and writes a small launcher as the executable. The launcher uses the Node that packaged it while that Node still exists, whatever the daemon's PATH finds, and otherwise the first Node on PATH. To publish a package, build it with `make package PORTABLE=1`: it records no path from your machine and always uses the Node on PATH, so the machine running it needs Node 22.18 or later on the daemon's PATH.
 
 Install the built package with `open-conduit extension install dist/{{NAME}}`; it takes effect at the next `open-conduit serve`.
