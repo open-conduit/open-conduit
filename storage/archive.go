@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -24,11 +27,12 @@ type EventArchive interface {
 	// PutEvents stores whole records durably before it returns. Each must
 	// be routed, with an ID, a sequence and a ReceivedAt, and must not be a
 	// tombstone (Retired), whose payload is already gone: otherwise it is
-	// ErrInvalid and none of the batch is stored. A record already held,
-	// byte for byte, is nil, so a pass that crashed can run again. A
-	// different record under a held ID or sequence is ErrConflict and none
-	// of the batch is stored. Any other failure may leave part of the batch
-	// stored, which running it again completes.
+	// ErrInvalid and none of the batch is stored. A record already held is
+	// nil, so a pass that crashed can run again, under a newer binary too:
+	// records are the same by SameAcceptedEvent, never by how a backend
+	// encodes them. A different record under a held ID or sequence is
+	// ErrConflict and none of the batch is stored. Any other failure may
+	// leave part of the batch stored, which running it again completes.
 	PutEvents(ctx context.Context, events []domain.AcceptedEvent) error
 	// Event reads one whole record, ErrNotFound when it isn't held.
 	Event(ctx context.Context, id domain.ID) (domain.AcceptedEvent, error)
@@ -40,4 +44,29 @@ type EventArchive interface {
 	WorkEvents(ctx context.Context, work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// Close releases the archive. Calls after it are ErrInvalid.
 	Close() error
+}
+
+// SameAcceptedEvent reports whether a and b are the same record: the same
+// instants, whatever their zones, the same payload JSON, whatever its
+// insignificant whitespace, and every other field equal.
+func SameAcceptedEvent(a, b domain.AcceptedEvent) bool {
+	if !a.Event.OccurredAt.Equal(b.Event.OccurredAt) || !a.Event.ReceivedAt.Equal(b.Event.ReceivedAt) || !samePayload(a.Event.Data.Data, b.Event.Data.Data) {
+		return false
+	}
+	for _, r := range []*domain.AcceptedEvent{&a, &b} {
+		r.Event.OccurredAt, r.Event.ReceivedAt, r.Event.Data.Data = r.Event.OccurredAt.UTC().Truncate(0), r.Event.ReceivedAt.UTC().Truncate(0), nil
+	}
+	a.Event.OccurredAt, a.Event.ReceivedAt = b.Event.OccurredAt, b.Event.ReceivedAt
+	return reflect.DeepEqual(a, b)
+}
+
+func samePayload(a, b json.RawMessage) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	var x, y bytes.Buffer
+	if json.Compact(&x, a) != nil || json.Compact(&y, b) != nil {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(x.Bytes(), y.Bytes())
 }

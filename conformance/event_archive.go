@@ -121,6 +121,14 @@ func archiveIdempotent(t *testing.T, h EventArchiveHarness) error {
 	if err = a.PutEvents(archiveCtx, []domain.AcceptedEvent{first, first}); err != nil {
 		return fmt.Errorf("the same record again: %w", err)
 	}
+	// A crashed pass can run again under another binary or live backend,
+	// which reads the same instants back in another zone.
+	moved := first
+	zone := time.FixedZone("elsewhere", 5*60*60)
+	moved.Event.OccurredAt, moved.Event.ReceivedAt = first.Event.OccurredAt.In(zone), first.Event.ReceivedAt.In(zone)
+	if err = a.PutEvents(archiveCtx, []domain.AcceptedEvent{moved}); err != nil {
+		return fmt.Errorf("the same record in another zone: %w", err)
+	}
 	changed := first
 	changed.Event.Data = domain.Payload{Schema: "test.archived.v1", Data: []byte(`{"id":"other"}`)}
 	bystander := archived("bystander", 2, archiveMonth)
