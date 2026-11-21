@@ -352,7 +352,11 @@ func (d *daemon) launchFailed(c *components, a runtime.Attempt, work domain.ID, 
 	}
 	if work != "" {
 		code := errorCode(err)
-		d.report("start", work, code, heldBy(err))
+		cause := heldBy(err)
+		if cause == "" {
+			cause = runtime.FailureCause(err)
+		}
+		d.report("start", work, code, cause)
 		if code == "executor_failed" || code == "invalid_state" {
 			d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
 		}
@@ -515,7 +519,7 @@ func (d *daemon) stopAttempt(ctx context.Context, c *components, id domain.ID, e
 	// The executor's stop reaches its container as a TERM the host sent.
 	d.containerSignalled(ctx, id, "stop")
 	if err = s.Stop(ctx, id, epoch); err != nil {
-		d.report("stop", id, "stop_unverified")
+		d.report("stop", id, "stop_unverified", runtime.ExecutorCause(err))
 		return
 	}
 	// The executor's wrapper is stopped; its container must be too.
@@ -634,6 +638,8 @@ func errorCode(err error) string {
 		return "over_budget"
 	case errors.Is(err, runtime.ErrContainerCapacity):
 		return "container_capacity"
+	case errors.Is(err, runtime.ErrExecutorCapacity):
+		return "executor_capacity"
 	case errors.Is(err, runtime.ErrResourceHeld):
 		return "resource_held"
 	case errors.Is(err, runtime.ErrNotEligible):

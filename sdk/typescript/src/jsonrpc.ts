@@ -29,6 +29,26 @@ import { type Infer, isRecord, matches, t } from "./schema.ts";
 export const MaxMessageBytes = 16 << 20;
 export const MaxChunkBytes = 256 << 10;
 export const MaxInflight = 64;
+/** Capacity reserved for control methods on top of MaxInflight. */
+export const MaxControlInflight = 16;
+
+/** Which capacity an extension serves a host request from. */
+export type Lane = "bounded" | "held" | "control";
+
+const heldMethods = new Set(["executor.wait"]);
+const controlMethods = new Set([
+  "executor.recover",
+  "executor.interrupt",
+  "executor.stop",
+  "executor.forget",
+]);
+
+/** The lane of a host-to-extension method (protocol.LaneOf). */
+export function laneOf(method: string): Lane {
+  if (heldMethods.has(method)) return "held";
+  if (controlMethods.has(method)) return "control";
+  return "bounded";
+}
 export const CancelMethod = "$/cancel";
 
 const codeParse = -32700;
@@ -49,6 +69,8 @@ export type Handler = (
 export interface ConnOptions {
   maxMessage?: number;
   maxInflight?: number;
+  /** Classifies inbound requests; an extension sets it, a host does not. */
+  lane?: (method: string) => Lane;
   /** Receives why a malformed stream closed the connection. */
   onProtocolError?: (reason: string) => void;
 }
@@ -111,6 +133,8 @@ export class Conn {
   readonly #out: Writable;
   readonly #maxMessage: number;
   readonly #maxInflight: number;
+  readonly #lane: (method: string) => Lane;
+  #controlInflight = 0;
   readonly #onProtocolError: ((reason: string) => void) | undefined;
   readonly #pending = new Map<string, Pending>();
   readonly #cancels = new Map<string, AbortController>();
@@ -132,6 +156,7 @@ export class Conn {
     this.#out = output;
     this.#maxMessage = o.maxMessage ?? MaxMessageBytes;
     this.#maxInflight = o.maxInflight ?? MaxInflight;
+    this.#lane = o.lane ?? (() => "bounded");
     this.#onProtocolError = o.onProtocolError;
     this.done = new Promise((resolve) => {
       this.#finish = resolve;
@@ -210,7 +235,8 @@ export class Conn {
     } else if (method !== undefined && method !== "" && isID(id)) {
       // Refuse rather than queue: the reader also carries the responses
       // in-flight handlers wait for, so blocking it would deadlock them.
-      if (this.#inflight >= this.#maxInflight) {
+      const release = this.#admit(method);
+      if (release === undefined) {
         this.#write({
           jsonrpc: "2.0",
           id,
@@ -222,7 +248,7 @@ export class Conn {
         });
         return;
       }
-      void this.#serve(id, method, m.params);
+      void this.#serve(id, method, m.params, release);
     } else if (method !== undefined && method !== "") {
       // Other notifications are served without a reply.
       void this.#handler(method, m.params, new AbortController().signal).catch(
@@ -241,11 +267,28 @@ export class Conn {
     }
   }
 
-  async #serve(id: ID, method: string, params: unknown): Promise<void> {
+  /** Takes the capacity a method is served from, or undefined when full. */
+  #admit(method: string): (() => void) | undefined {
+    const lane = this.#lane(method);
+    if (lane === "held") return () => {};
+    if (lane === "control" && this.#controlInflight < MaxControlInflight) {
+      this.#controlInflight++;
+      return () => void this.#controlInflight--;
+    }
+    if (this.#inflight >= this.#maxInflight) return undefined;
+    this.#inflight++;
+    return () => void this.#inflight--;
+  }
+
+  async #serve(
+    id: ID,
+    method: string,
+    params: unknown,
+    release: () => void,
+  ): Promise<void> {
     const key = JSON.stringify(id);
     const abort = new AbortController();
     this.#cancels.set(key, abort);
-    this.#inflight++;
     let reply: Message;
     try {
       const result = await this.#handler(method, params, abort.signal);
@@ -259,7 +302,7 @@ export class Conn {
         error: encodeError(err, abort.signal.aborted),
       };
     } finally {
-      this.#inflight--;
+      release();
       this.#cancels.delete(key);
     }
     if (this.#closed) return;

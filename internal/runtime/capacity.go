@@ -275,9 +275,13 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if len(detail) > maxCapacityReason {
 			detail = strings.ToValidUTF8(detail[:maxCapacityReason], "")
 		}
-		reason := "Waiting for container capacity. Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
+		noun := "container"
+		if refusal.Executor {
+			noun = "executor"
+		}
+		reason := "Waiting for " + noun + " capacity. Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
 		if detail != "" {
-			reason = "Waiting for container capacity: " + detail + ". Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
+			reason = "Waiting for " + noun + " capacity: " + detail + ". Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
 		}
 		event, err := capacityEventInTx(tx, now, w, domain.EventCapacityHeld, CapacityNotice{Reason: reason, Execution: x.ID, Refusals: refusals, RetryAt: &retryAt})
 		if err != nil {

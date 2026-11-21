@@ -689,6 +689,29 @@ func (p *Process) Call(ctx context.Context, method string, params, out any) erro
 	return conn.Call(ctx, method, params, out)
 }
 
+// overloadWindow bounds how long CallAdmitted asks again of an extension
+// that refuses a call as overloaded.
+const overloadWindow = 10 * time.Second
+
+// CallAdmitted is Call for a method whose refusal should be asked again:
+// overloaded means the request was not served, so repeating it is safe. It
+// backs off for up to overloadWindow, then returns the refusal.
+func (p *Process) CallAdmitted(ctx context.Context, method string, params, out any) error {
+	backoff, deadline := p.o.MinBackoff, time.Now().Add(overloadWindow)
+	for {
+		err := p.Call(ctx, method, params, out)
+		if protocol.ErrorCode(err) != protocol.CodeOverloaded || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		backoff = min(backoff*2, 2*time.Second)
+	}
+}
+
 // CallInTx makes a bounded in-transaction call: a hard deadline of
 // protocol.InTransactionDeadlineMillis and no waiting for a restart. Callbacks
 // from the extension wait until it ends (txGate): they are served if it was

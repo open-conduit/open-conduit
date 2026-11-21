@@ -163,3 +163,66 @@ func TestMalformedStreamsCloseTheConnection(t *testing.T) {
 		})
 	}
 }
+
+// A held request takes no slot and a control request has reserved capacity,
+// so a full extension still starts and stops attempts. Without Lane (the
+// host's side, and the negative control) the same requests are refused.
+func TestLanesKeepAFullExtensionReachable(t *testing.T) {
+	const bound = 2
+	for _, tc := range []struct {
+		name string
+		lane func(string) protocol.Lane
+		want string
+	}{
+		{"extension", protocol.LaneOf, ""},
+		{"no lanes", nil, protocol.CodeOverloaded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			var started sync.WaitGroup
+			started.Add(bound)
+			ext := func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+				if method == "executor.wait" {
+					started.Done()
+					<-release
+				}
+				return "ok", nil
+			}
+			ar, bw := io.Pipe()
+			br, aw := io.Pipe()
+			host := jsonrpc.NewConn(ar, aw, none, jsonrpc.Options{})
+			peer := jsonrpc.NewConn(br, bw, ext, jsonrpc.Options{MaxInflight: bound, Lane: tc.lane})
+			t.Cleanup(func() { _ = host.Close(); _ = peer.Close() })
+			var wg sync.WaitGroup
+			for i := 0; i < bound; i++ {
+				wg.Add(1)
+				go func() { defer wg.Done(); _ = host.Call(context.Background(), "executor.wait", nil, nil) }()
+			}
+			started.Wait()
+			for _, method := range []string{"executor.run", "executor.stop"} {
+				err := host.Call(context.Background(), method, nil, nil)
+				if got := protocol.ErrorCode(err); got != tc.want && (tc.want != "" || err != nil) {
+					t.Fatalf("%s: %v, want code %q", method, err, tc.want)
+				}
+			}
+			close(release)
+			wg.Wait()
+		})
+	}
+}
+
+// Only a host-to-extension method has a lane: an extension naming one to the
+// host gets the ordinary bound.
+func TestLaneOfIsOnlyForHostRequests(t *testing.T) {
+	for method, want := range map[string]protocol.Lane{
+		"executor.wait":  protocol.LaneHeld,
+		"executor.stop":  protocol.LaneControl,
+		"executor.run":   protocol.LaneBounded,
+		"executor.known": protocol.LaneBounded,
+		"no.such.method": protocol.LaneBounded,
+	} {
+		if got := protocol.LaneOf(method); got != want {
+			t.Fatalf("%s: lane %d, want %d", method, got, want)
+		}
+	}
+}

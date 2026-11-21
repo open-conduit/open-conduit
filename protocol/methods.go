@@ -13,10 +13,38 @@ const (
 	Both Direction = "both"
 )
 
+// Lane says which capacity an extension serves a host request from.
+type Lane int
+
+const (
+	// LaneBounded requests share MaxInflight.
+	LaneBounded Lane = iota
+	// LaneHeld requests stay open for the life of something the host already
+	// bounds (executor.wait, one per running attempt), so they take no slot:
+	// the number of running attempts is not capped by the transport.
+	LaneHeld
+	// LaneControl requests prove or change an attempt's state. They have
+	// MaxControlInflight reserved, and use MaxInflight beyond it.
+	LaneControl
+)
+
+// LaneOf is the lane an extension serves a host request in. Only
+// host-to-extension methods have one, so a peer can't claim a lane on the
+// host by naming a method.
+func LaneOf(method string) Lane {
+	m, ok := Lookup(method)
+	if !ok || m.Direction != HostToExtension {
+		return LaneBounded
+	}
+	return m.Lane
+}
+
 // Method is one wire method of protocol version 1.
 type Method struct {
 	Name      string
 	Direction Direction
+	// Lane is the capacity the extension serves the method from.
+	Lane Lane
 	// Notification methods carry no id and get no response.
 	Notification bool
 	// InTransaction methods are called by the host while it holds a
@@ -81,13 +109,13 @@ var Methods = []Method{
 
 	// Executors.
 	{Name: "executor.run", Direction: HostToExtension, Provides: "executors", Contract: []string{"extension.Executor.Run", "extension.RunRequest", "extension.ExecutionContext"}},
-	{Name: "executor.wait", Direction: HostToExtension, Provides: "executors", Contract: []string{"extension.RunHandle.Wait", "extension.Result", "extension.RetryHintProvider"}},
-	{Name: "executor.recover", Direction: HostToExtension, Provides: "executors", Contract: []string{"extension.Executor.Recover"}},
+	{Name: "executor.wait", Direction: HostToExtension, Lane: LaneHeld, Provides: "executors", Contract: []string{"extension.RunHandle.Wait", "extension.Result", "extension.RetryHintProvider"}},
+	{Name: "executor.recover", Direction: HostToExtension, Lane: LaneControl, Provides: "executors", Contract: []string{"extension.Executor.Recover"}},
 	{Name: "executor.resume", Direction: HostToExtension, Provides: "executors.resume", Contract: []string{"extension.ResumeExecutor.Resume"}},
-	{Name: "executor.interrupt", Direction: HostToExtension, Provides: "executors.interrupt", Contract: []string{"extension.InterruptExecutor.Interrupt"}},
+	{Name: "executor.interrupt", Direction: HostToExtension, Lane: LaneControl, Provides: "executors.interrupt", Contract: []string{"extension.InterruptExecutor.Interrupt"}},
 	{Name: "executor.inject", Direction: HostToExtension, Provides: "executors.inject", Contract: []string{"extension.InjectExecutor.Inject"}},
-	{Name: "executor.stop", Direction: HostToExtension, Provides: "executors.stop", Contract: []string{"extension.StopExecutor.Stop"}},
-	{Name: "executor.forget", Direction: HostToExtension, Provides: "executors.forget", Contract: []string{"extension.ForgetExecutor.Forget"}},
+	{Name: "executor.stop", Direction: HostToExtension, Lane: LaneControl, Provides: "executors.stop", Contract: []string{"extension.StopExecutor.Stop"}},
+	{Name: "executor.forget", Direction: HostToExtension, Lane: LaneControl, Provides: "executors.forget", Contract: []string{"extension.ForgetExecutor.Forget"}},
 	{Name: "executor.sweep", Direction: HostToExtension, Provides: "executors.sweep", Contract: []string{"extension.StateSweeper.SweepState", "extension.StateSweepReport", "extension.StateKept"}},
 	{Name: "executor.known", Direction: ExtensionToHost, Provides: "executors.sweep", Contract: []string{"extension.ExecutionKnownFunc", "extension.MaxKnownBatch"}},
 	{Name: "executor.attach", Direction: HostToExtension, Provides: "executors.attach", Contract: []string{"extension.AttachExecutor.Attach"}},

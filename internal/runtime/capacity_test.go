@@ -350,3 +350,38 @@ func TestFullPoolRefusalSurvivesTheDaemon(t *testing.T) {
 		t.Fatalf("a retry was recorded: %v", err)
 	}
 }
+
+// TestExecutorAtCapacityHoldsTheWork: a launch the executor's extension
+// refused ran nothing, so it spends no retry and leaves no held attempt. Any
+// other launch error (the negative control) still counts as a failure.
+func TestExecutorAtCapacityHoldsTheWork(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		want     error
+		failures int
+	}{
+		{"at capacity", &extension.NoCapacityError{Reason: "the extension is at its request limit", Executor: true}, runtime.ErrExecutorCapacity, 0},
+		{"failed", errors.New("boom"), runtime.ErrExecutorCall, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+			work := seedSchedulerWork(t, f, "busy")
+			executor.OnRun = func(context.Context, extension.RunRequest) (extension.RunHandle, error) {
+				return nil, tc.err
+			}
+			s := newTestScheduler(t, f, schedulerDefaultOptions(f, executor))
+			if _, err := s.Start(ctx, work); !errors.Is(err, tc.want) {
+				t.Fatalf("start: %v, want %v", err, tc.want)
+			}
+			st, err := s.RetryStatus(ctx, work)
+			if tc.failures == 0 && errors.Is(err, storage.ErrNotFound) {
+				return
+			}
+			if err != nil || st.FailureCount != tc.failures {
+				t.Fatalf("retry %+v %v, want %d failures", st, err, tc.failures)
+			}
+		})
+	}
+}

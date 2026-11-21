@@ -7,7 +7,9 @@
 // Hardened from the 07-01 prototype:
 //   - the reader never blocks: over MaxInflight concurrently served requests
 //     a request is refused with "overloaded", because the reader also carries
-//     the responses nested callbacks wait for;
+//     the responses nested callbacks wait for. Options.Lane exempts requests
+//     that stay open for a host-bounded lifetime and reserves capacity for
+//     control requests;
 //   - a line longer than protocol.MaxMessageBytes, invalid JSON or a
 //     truncated final line (a partial response before a crash) is a protocol
 //     error that closes the connection, failing every pending call with
@@ -73,6 +75,10 @@ type message struct {
 type Options struct {
 	MaxMessage  int
 	MaxInflight int
+	// Lane, when set, classifies inbound requests (protocol.LaneOf). An
+	// extension sets it; the host leaves it nil, so nothing an extension
+	// sends escapes the bound.
+	Lane func(method string) protocol.Lane
 	// OnProtocolError, when set, receives the reason a malformed stream
 	// closed the connection (for the side's own diagnostic log).
 	OnProtocolError func(error)
@@ -96,6 +102,7 @@ type Conn struct {
 	err     error
 	done    chan struct{}
 	slots   chan struct{}
+	control chan struct{}
 }
 
 // NewConn starts reading r. A read failure, a protocol error or Close ends
@@ -108,7 +115,7 @@ func NewConn(r io.Reader, w io.Writer, h Handler, o Options) *Conn {
 	if o.MaxInflight == 0 {
 		o.MaxInflight = protocol.MaxInflight
 	}
-	c := &Conn{handler: h, opts: o, w: bufio.NewWriter(w), pending: map[string]chan message{}, cancels: map[string]context.CancelFunc{}, done: make(chan struct{}), slots: make(chan struct{}, o.MaxInflight)}
+	c := &Conn{handler: h, opts: o, w: bufio.NewWriter(w), pending: map[string]chan message{}, cancels: map[string]context.CancelFunc{}, done: make(chan struct{}), slots: make(chan struct{}, o.MaxInflight), control: make(chan struct{}, protocol.MaxControlInflight)}
 	if cl, ok := w.(io.Closer); ok {
 		c.closer = cl
 	}
@@ -208,10 +215,9 @@ func (c *Conn) read(r io.Reader) {
 			// Never block the reader: it also delivers the responses that
 			// in-flight handlers wait for (nested callbacks), so blocking
 			// here deadlocks. Over the bound, refuse explicitly instead.
-			select {
-			case c.slots <- struct{}{}:
-				go c.serve(m)
-			default:
+			if release, ok := c.admit(m.Method); ok {
+				go c.serve(m, release)
+			} else {
 				_ = c.write(message{ID: m.ID, Error: &wireError{Code: codeApplication, Message: "too many requests in flight", Data: &errData{Code: protocol.CodeOverloaded}}})
 			}
 		case m.Method != "":
@@ -239,8 +245,33 @@ func (c *Conn) read(r io.Reader) {
 	c.shutdown(protocol.ErrTransport)
 }
 
-func (c *Conn) serve(m message) {
-	defer func() { <-c.slots }()
+// admit takes the capacity method is served from, without blocking, and
+// returns how to give it back.
+func (c *Conn) admit(method string) (release func(), ok bool) {
+	lane := protocol.LaneBounded
+	if c.opts.Lane != nil {
+		lane = c.opts.Lane(method)
+	}
+	switch lane {
+	case protocol.LaneHeld:
+		return func() {}, true
+	case protocol.LaneControl:
+		select {
+		case c.control <- struct{}{}:
+			return func() { <-c.control }, true
+		default:
+		}
+	}
+	select {
+	case c.slots <- struct{}{}:
+		return func() { <-c.slots }, true
+	default:
+		return nil, false
+	}
+}
+
+func (c *Conn) serve(m message, release func()) {
+	defer release()
 	ctx, cancel := context.WithCancel(context.Background())
 	key := string(*m.ID)
 	c.mu.Lock()

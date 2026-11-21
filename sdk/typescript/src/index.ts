@@ -69,5 +69,7 @@ export {
   MaxMessageBytes,
   MaxChunkBytes,
   MaxInflight,
+  MaxControlInflight,
+  laneOf,
 } from "./jsonrpc.ts";
 export * from "./wire.ts";
