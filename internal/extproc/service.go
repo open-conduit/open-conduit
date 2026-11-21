@@ -133,9 +133,10 @@ type Service struct {
 	manifest protocol.Manifest
 	enabled  map[string]bool
 	deps     Deps
-	// inTx reports whether the host is waiting on an in-transaction method
-	// of this extension; any callback then is refused (reentrant_call).
-	inTx func() bool
+	// hold waits out any in-transaction method of this extension the host
+	// is waiting on, and refuses a callback that method may be stuck on
+	// (reentrant_call); see txGate.
+	hold func(context.Context) error
 
 	mu         sync.Mutex
 	runs       map[string]*run
@@ -160,7 +161,7 @@ func NewService(m protocol.Manifest, deps Deps) (*Service, error) {
 	if deps.Scopes == nil {
 		deps.Scopes = func() []domain.ID { return nil }
 	}
-	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, sweeps: map[string]extension.ExecutionKnownFunc{}, sites: map[string]acquireSite{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
+	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, hold: func(context.Context) error { return nil }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, sweeps: map[string]extension.ExecutionKnownFunc{}, sites: map[string]acquireSite{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
 	for _, method := range m.Enabled() {
 		s.enabled[method] = true
 	}
@@ -248,8 +249,8 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 	if !s.enabled[method] {
 		return nil, protocol.Errorf(protocol.CodeUndeclared, "method not enabled by the manifest")
 	}
-	if s.inTx() {
-		return nil, protocol.Errorf(protocol.CodeReentrant, "callback while serving an in-transaction method")
+	if err := s.hold(ctx); err != nil {
+		return nil, err
 	}
 	if s.deps.Store == nil && storeMethods[method] {
 		return nil, protocol.Errorf(protocol.CodeUnsupported, "no coordination store in this host process")

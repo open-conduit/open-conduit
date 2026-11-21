@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -121,7 +120,7 @@ type Process struct {
 	closed  bool
 	config  protocol.ConfigureResult
 	passed  []string
-	intx    atomic.Int32
+	txs     txGate
 	restart int
 	stop    chan struct{}
 	exited  chan struct{}
@@ -160,7 +159,7 @@ func Start(ctx context.Context, o Options) (*Process, error) {
 	for _, m := range o.Found.Manifest.Enabled() {
 		p.enabled[m] = true
 	}
-	o.Service.inTx = func() bool { return p.intx.Load() > 0 }
+	o.Service.hold = p.txs.hold
 	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -691,10 +690,11 @@ func (p *Process) Call(ctx context.Context, method string, params, out any) erro
 }
 
 // CallInTx makes a bounded in-transaction call: a hard deadline of
-// protocol.InTransactionDeadlineMillis, no waiting for a restart, and any
-// callback from the extension refused with reentrant_call while it runs. A
-// timeout or transport failure is returned for the caller to abort its
-// transaction.
+// protocol.InTransactionDeadlineMillis and no waiting for a restart. Callbacks
+// from the extension wait until it ends (txGate): they are served if it was
+// answered, and if it ran out its deadline with one waiting, that callback
+// and this call are refused with reentrant_call. A timeout or transport
+// failure is returned for the caller to abort its transaction.
 func (p *Process) CallInTx(ctx context.Context, method string, params, out any) error {
 	m, ok := protocol.Lookup(method)
 	if !ok || !m.InTransaction || !p.enabled[method] {
@@ -708,9 +708,12 @@ func (p *Process) CallInTx(ctx context.Context, method string, params, out any) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(protocol.InTransactionDeadlineMillis)*time.Millisecond)
 	defer cancel()
-	p.intx.Add(1)
-	defer p.intx.Add(-1)
-	return conn.Call(ctx, method, params, out)
+	round := p.txs.begin()
+	err := conn.Call(ctx, method, params, out)
+	if p.txs.end(round, ctx.Err() != nil) {
+		return errReentrant()
+	}
+	return err
 }
 
 // Kill terminates the process group abruptly (tests and fault drills); the

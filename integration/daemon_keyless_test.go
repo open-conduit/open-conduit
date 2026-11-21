@@ -20,10 +20,10 @@ s="$KL_DIR/$(printf %s "$OS_WORK_ID" | tr -c 'a-zA-Z0-9' _)"
 mkdir -p "$s"
 if [ ! -f "$s/asked" ]; then
   touch "$s/asked"
-  os call human.ask --data '{"question":"Go ahead?","options":["yes","no"]}' --request-id ask > "$s/ask.out"
+  os call human.ask --data '{"question":"Go ahead?","options":["yes","no"]}' --request-id ask > "$s/ask.out" 2> "$s/ask.err"
 elif [ ! -f "$s/gated" ]; then
   touch "$s/gated"
-  os call introspection.reports --data '{"state":"all"}' --request-id gate-1 > "$s/gate.out"
+  os call introspection.reports --data '{"state":"all"}' --request-id gate-1 > "$s/gate.out" 2> "$s/gate.err"
 else
   os call introspection.reports --data '{"state":"all"}' --request-id gate-2 > "$s/ran.out" 2> "$s/ran.err"
   os outcome completed --summary done --schema core.turn.v1 --data '{"status":"done","result":{"ok":true}}' --request-id done > /dev/null 2> "$s/done.err"
