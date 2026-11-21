@@ -253,10 +253,11 @@ state check [--json]       (daemon stopped) diagnose the state directory: permis
 
 ```text
 Usage: open-conduit extension COMMAND [--config PATH]
-  new NAME [--dir DIR] [--module PATH] [--replace DIR] [--json]
+  new NAME [--lang go|ts] [--dir DIR] [--module PATH] [--replace DIR] [--json]
                                 start a package repository in DIR (default ./NAME) whose make check passes first time:
                                 one operation, NAME.hello, its tests, a Makefile, CI, a playbook and a README;
-                                go.mod requires this release of open-conduit (--replace builds against a checkout instead)
+                                it requires this release of open-conduit (Go) or @open-conduit/sdk (--lang ts);
+                                --replace builds against a checkout instead
   list [--json]                 installed packages (in <config dir>/extensions)
   inspect DIR [--json]          check a package directory offline
   check DIR [--json] [--allow NAME,…]

@@ -1,0 +1,25 @@
+// Unit tests: the extension served in-process on the SDK's test host,
+// which answers KV, secrets and state reads from memory. No daemon,
+// network or clock, so they run in milliseconds.
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { OperationError } from "@open-conduit/sdk";
+import { testHost } from "@open-conduit/sdk/testing";
+import { build } from "./extension.ts";
+
+test("{{NAME}}.hello greets whoever it is given", async (t) => {
+  const host = await testHost(build());
+  t.after(() => host.close());
+  const out = await host.operation("{{NAME}}.hello", { name: "Ada" });
+  assert.deepEqual(out.output, { greeting: "Hello, Ada!" });
+});
+
+test("{{NAME}}.hello refuses an empty name", async (t) => {
+  const host = await testHost(build());
+  t.after(() => host.close());
+  await assert.rejects(
+    host.operation("{{NAME}}.hello", { name: " " }),
+    (e: unknown) => e instanceof OperationError && e.code === "bad_request",
+  );
+});

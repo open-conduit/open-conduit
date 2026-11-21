@@ -1,0 +1,5 @@
+// The package's command. Kept apart from extension.ts so tests can build
+// the extension without it taking over stdin and stdout.
+import { build } from "./extension.ts";
+
+void build().main();

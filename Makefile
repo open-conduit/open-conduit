@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-scaffold-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -265,6 +265,13 @@ ts-deps: require-node
 ts-check: require-node
 	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm run --silent format:check && npm run --silent typecheck && npm test --silent); done
 
+# Runs the package `extension new --lang ts` writes, on the weather example's
+# dependencies (installing them and the SDK's first if ts-deps hasn't).
+# certify runs it, as the CI job with both Go and Node.
+ts-scaffold-check: require-node
+	@set -eu; for d in $(TS_DIRS); do (cd $$d && { [ -d node_modules ] || npm ci --no-audit --no-fund; }); done
+	OPEN_CONDUIT_TS_SCAFFOLD_TESTS=1 go test ./integration -run '^TestExtensionNewTS$$' -count=1
+
 ts-packages: require-node
 	cd protocol/examples/weather && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && node scripts/package.mjs $(abspath $(PACKAGES_DIR))/weather
 
@@ -272,7 +279,7 @@ ts-packages: require-node
 # and the examples, the TypeScript one included (reports beside the
 # packages), then the negative controls, which must each fail their
 # criterion.
-certify: require-node build packages ts-packages
+certify: require-node build packages ts-packages ts-scaffold-check
 	@set -eu; for name in aws slack github shell claude-code sentry pagerduty codex chat-completions mcp posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared oidc webhook notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done

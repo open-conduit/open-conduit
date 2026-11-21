@@ -1,0 +1,40 @@
+# make check is what CI runs on every push. make lint and make certify
+# need the open-conduit command (OPEN_CONDUIT, default the one on PATH).
+
+NAME := {{NAME}}
+PACKAGE_DIR ?= dist/$(NAME)
+OPEN_CONDUIT ?= open-conduit
+
+.PHONY: check fmt fmt-check typecheck test package lint certify clean
+
+check: fmt-check typecheck test package
+
+fmt:
+	npm run --silent format
+
+fmt-check:
+	npm run --silent format:check
+
+typecheck:
+	npm run --silent typecheck
+
+test:
+	npm test --silent
+
+# The package directory, laid out as Open Conduit installs it: the
+# executable, its manifest and certification files, and the playbooks.
+# PORTABLE=1 records no path to this machine's Node, for a package you publish.
+package:
+	node scripts/package.mjs $(if $(PORTABLE),--portable) $(PACKAGE_DIR)
+
+# Lints the package without starting it: the manifest, compatibility with
+# Open Conduit, the operations the playbooks name, certification.json.
+lint: package
+	$(OPEN_CONDUIT) extension check $(PACKAGE_DIR)
+
+# Certifies the package against the open-conduit command.
+certify: package
+	$(OPEN_CONDUIT) extension certify $(PACKAGE_DIR) --report $(PACKAGE_DIR).certification.json
+
+clean:
+	rm -rf dist

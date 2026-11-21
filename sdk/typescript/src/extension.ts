@@ -346,6 +346,8 @@ export interface Options {
   permissions?: string[];
   /** The layout version of the extension's own KV namespaces. */
   kvVersion?: number;
+  /** A directory of playbooks, relative to the package's manifest, the host offers agents. */
+  playbooks?: string;
 }
 
 type Kind = "handler" | "wait" | "emit";
@@ -439,7 +441,7 @@ export class Extension {
       command: o.command ?? [`${name}-extension`],
       ...(o.kvVersion ? { kv_version: o.kvVersion } : {}),
       ...(o.permissions?.length ? { permissions: [...o.permissions] } : {}),
-      provides: {},
+      provides: o.playbooks ? { playbooks: o.playbooks } : {},
     };
   }
 

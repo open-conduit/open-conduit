@@ -1,0 +1,70 @@
+// Lays out the installable package in OUT (default dist/{{NAME}}): the
+// manifest, certification.json, the playbooks, the extension bundled with
+// esbuild so the package needs nothing but Node to run, and the executable
+// that starts it, {{NAME}}-extension.
+//
+//   node scripts/package.mjs [--portable] [OUT]
+//
+// Two things make the package run the same wherever the daemon starts it:
+//   - The bundle is a .cjs file, which Node loads as CommonJS whatever
+//     package.json is above it.
+//   - The executable is a small sh launcher. It runs the bundle with the
+//     Node that ran this script while that Node still exists, so the
+//     daemon's PATH doesn't matter on the machine that built the package,
+//     and otherwise with the first Node on PATH, so the package still runs
+//     on another machine. --portable records no path, for a package you
+//     publish: it always uses the Node on PATH.
+import { execFileSync } from "node:child_process";
+import { chmodSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+
+const args = process.argv.slice(2);
+const portable = args[0] === "--portable";
+if (portable) args.shift();
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const out = resolve(args[0] ?? join(root, "dist", "{{NAME}}"));
+const bin = join(out, "{{NAME}}-extension");
+
+rmSync(out, { recursive: true, force: true });
+mkdirSync(out, { recursive: true });
+await build({
+  entryPoints: [join(root, "src", "main.ts")],
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "cjs",
+  conditions: ["development"],
+  outfile: `${bin}.cjs`,
+  logLevel: "warning",
+});
+
+const quoted = `'${process.execPath.replaceAll("'", `'\\''`)}'`;
+const recorded = portable ? "" : `node=${quoted}\n`;
+writeFileSync(
+  bin,
+  `#!/bin/sh
+${recorded}if [ -z "\${node:-}" ] || [ ! -x "$node" ]; then
+  node=$(command -v node) || {
+    echo "{{NAME}}-extension: no node on PATH; install Node 22.18 or later" >&2
+    exit 127
+  }
+fi
+exec "$node" "\${0%/*}/{{NAME}}-extension.cjs" "$@"
+`,
+);
+chmodSync(bin, 0o755);
+writeFileSync(
+  join(out, "open-conduit-extension.json"),
+  execFileSync(bin, ["package-manifest"]),
+);
+writeFileSync(
+  join(out, "certification.json"),
+  execFileSync(bin, ["package-certification"]),
+);
+cpSync(join(root, "playbooks"), join(out, "playbooks"), { recursive: true });
+console.log(
+  `packaged ${out} (${portable ? "portable, Node from PATH" : `node ${process.execPath}`})`,
+);
