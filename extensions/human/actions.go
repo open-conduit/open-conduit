@@ -149,7 +149,12 @@ func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
 		r.SettledAt = settledAt(rec)
 		return r, nil
 	}
-	// Open in its record: what settle would make of it now.
+	// Open in its record: what settle would make of it now, read in
+	// settle's order (the wait, then the answers).
+	gone, err := withdrawn(tx, rec)
+	if err != nil {
+		return r, err
+	}
 	given, _, err := answers(tx, rec, rec.Checked)
 	if err != nil {
 		return r, err
@@ -165,10 +170,6 @@ func request(tx storage.Tx, rec Ask, now time.Time) (extension.Request, error) {
 	if rec.expired(now) {
 		r.State, r.SettledAt = extension.RequestExpired, rec.Deadline
 		return r, nil
-	}
-	gone, err := withdrawn(tx, rec)
-	if err != nil {
-		return r, err
 	}
 	if gone {
 		r.State = extension.RequestWithdrawn

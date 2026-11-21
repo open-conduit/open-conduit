@@ -92,6 +92,17 @@ func settle(tx storage.Tx, id string, now time.Time, res *SyncResult) error {
 	if a.State != StateOpen && a.State != StateAnswered {
 		return nil
 	}
+	// Whether the asker stopped waiting is read before the answers. Over the
+	// protocol these are separate reads of live state, not one snapshot, and
+	// an answer is accepted before it wakes the wait: read the other way
+	// round, an answer landing between them looks like a wait woken without
+	// one, and an approval a person gave is withdrawn.
+	gone := false
+	if a.State == StateOpen {
+		if gone, err = withdrawn(tx, a); err != nil {
+			return err
+		}
+	}
 	given, through, err := answers(tx, a, a.Checked)
 	if err != nil {
 		return err
@@ -110,19 +121,12 @@ func settle(tx storage.Tx, id string, now time.Time, res *SyncResult) error {
 	case a.expired(now):
 		a.State, a.ClosedAt = StateExpired, now
 		res.Expired++
-	default:
-		gone, err := withdrawn(tx, a)
-		if err != nil {
-			return err
-		}
-		switch {
-		case gone:
-			a.State, a.ClosedAt = StateWithdrawn, now
-			res.Withdrawn++
-		case a.escalated(now) && a.EscalatedAt.IsZero():
-			a.Responders, a.EscalatedAt = a.responders(now), now
-			res.Escalated = append(res.Escalated, a)
-		}
+	case gone:
+		a.State, a.ClosedAt = StateWithdrawn, now
+		res.Withdrawn++
+	case a.escalated(now) && a.EscalatedAt.IsZero():
+		a.Responders, a.EscalatedAt = a.responders(now), now
+		res.Escalated = append(res.Escalated, a)
 	}
 	return putAsk(tx, a)
 }
