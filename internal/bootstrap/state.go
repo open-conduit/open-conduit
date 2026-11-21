@@ -186,7 +186,7 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -208,8 +208,63 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		return info, err
 	}
-	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, o.ConfigPath)
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o))
+	info.StartConfig = o.StartConfig
 	return info, err
+}
+
+// restoreConfigPath is the config file whose packages the restored
+// generation is checked against.
+func restoreConfigPath(o cli.RestoreOptions) string {
+	if o.StartConfig != "" {
+		return o.StartConfig
+	}
+	return o.ConfigPath
+}
+
+// withStartConfig publishes the operator's start config into a restore's
+// stage, after the storage choice is recorded and before the directory is
+// published: a config that is refused leaves nothing published, so a daemon
+// can't start on the old machine's generation by accident.
+func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOptions) backup.Record {
+	if o.StartConfig == "" {
+		return record
+	}
+	return func(dir, backend string) error {
+		if record != nil {
+			if err := record(dir, backend); err != nil {
+				return err
+			}
+		}
+		_, store, err := openState(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		data, err := config.ReadFile(o.StartConfig)
+		if err != nil {
+			return fmt.Errorf("reading the start config: %w", err)
+		}
+		var published error
+		diags, _, err := checkAgainstPackages(o.StartConfig, "", data, func(reg config.Registry) (*config.Snapshot, error) {
+			s, err := management.PublishStartConfig(ctx, store, func() time.Time { return time.Now().UTC() }, reg, o.StartConfig)
+			var invalid *config.ValidationError
+			if err != nil && !errors.As(err, &invalid) {
+				published = err // A refusal, not a diagnostic: say it as it is.
+			}
+			return s, err
+		})
+		if published != nil {
+			return fmt.Errorf("the start config can't be published over the bundle's state: %w", published)
+		}
+		if err != nil {
+			return fmt.Errorf("checking the start config: %w", err)
+		}
+		if len(diags) > 0 {
+			return fmt.Errorf("the start config %s doesn't validate here: %s: %s (%s)", o.StartConfig, diags[0].Path, diags[0].Message, diags[0].Code)
+		}
+		return nil
+	}
 }
 
 // restoredConfig reads the committed config generation a restore brought

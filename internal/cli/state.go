@@ -34,6 +34,9 @@ type BackupInfo struct {
 	Scopes           []string `json:"scopes,omitempty"`
 	// TokenFile is the fresh operator credential a restore wrote.
 	TokenFile string `json:"token_file,omitempty"`
+	// StartConfig is the config file a restore published as the active
+	// generation, in place of the one the bundle was taken on.
+	StartConfig string `json:"start_config,omitempty"`
 	// ConfigGeneration is the committed config generation a restore
 	// brought back (0 when the bundle holds none): the daemon starts from
 	// it, and `config export` writes it out as a file.
@@ -139,6 +142,11 @@ type RestoreOptions struct {
 	// its installed packages are the ones the restored generation is
 	// checked against.
 	ConfigPath string
+	// StartConfig is a config file to start on in place of the generation
+	// the bundle was taken on, for a restore onto another machine. It is
+	// published with the restore or the restore publishes nothing, and the
+	// packages it is checked against are those beside it.
+	StartConfig string
 	// Once makes an in-place restore a no-op when the directory was
 	// already restored from this bundle (serve --restore, which runs on
 	// every start).
@@ -203,9 +211,9 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
+		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
 	}
-	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config", "trust-key")
+	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config", "start-config", "trust-key")
 	inPlace := f.fs.Bool("in-place", false, "")
 	unsigned := f.fs.Bool("unsigned", false, "")
 	acceptUnsigned := f.fs.Bool("accept-unsigned", false, "")
@@ -236,6 +244,9 @@ func (o *operator) backup(args []string) int {
 		return o.emit(o.env.State.Verify(cx, o.abs(pos[0]), RestoreOptions{ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}))
 	case "restore":
 		ro := RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
+		if v := f.get("start-config"); v != "" {
+			ro.StartConfig = o.abs(v)
+		}
 		switch {
 		case *inPlace && f.get("to") != "":
 			return usageError(o.errOut, "backup restore takes --to DIR (a new directory) or --in-place (the daemon's own), not both")

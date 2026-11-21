@@ -33,7 +33,7 @@ open-conduit auth recover                                 # a lost or ambiguous 
   - Installed packages, which live beside the config file (`extension install`). A restore reports why the restored generation wouldn't validate against the packages installed here (`config_problems`); install the packages it names before starting.
   - The folders an `includes` entry names. The restored generation needs none of them, but `config export` writes the `includes` entries back, so a later `config apply` of that file reads them.
   - Extensions' private state directories (`extensions/`), which are host-local caches ([extension packaging](../extension-packaging/#writing-an-extension-with-the-sdk)).
-  - The agents' own logins and sessions, executor run directories (`executors/`), workspaces (`resources/git/`) and logs. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
+  - The agents' own logins and sessions (`homes/`), executor run directories (`executors/`), workspaces (`resources/git/`) and logs. [Moving a daemon](#moving-a-daemon-to-another-machine) says which of these to carry. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
 - **Restore.**
   - `--in-place` restores into the daemon's own state directory (`--data-dir`), the one to use to put a bundle back where the daemon runs ([runbook](#restoring-after-a-bad-release-or-lost-state)). `--to DIR` writes a new directory and never replaces an existing one.
   - It fences every backed-up lease, so an old execution credential can never commit.
@@ -78,6 +78,37 @@ open-conduit drain end                               # start attempts again
 The report (`GET /v1/drain`) gives `safe_to_move`, what is still `blocking` it (an attempt in flight, a stop not yet confirmed, an unsettled control or usage), what is `carried` in the state for the next daemon (unrouted Events, unread input, Waits still to judge), and each scope's attempts in flight, parked attempts and active Waits. A parked attempt holds no process, so it doesn't block a move: it resumes on its wake on the new daemon. Beginning and ending a drain are in the audit ledger.
 
 A drain is durable, so a restart on the same host and path stays drained until `drain end`. It ends by itself, with an audit record, when a daemon starts from a different host or state directory, and when its state is restored from a bundle, since either is the move it was for. A move that keeps both the hostname and the path stays drained until you run `drain end`.
+
+## Moving a daemon to another machine
+
+1. **Ask what won't travel.** `open-conduit portability` (admin) lists what is tied to this machine, and exits 1 until nothing is and the daemon is drained:
+   - `secrets`: references that aren't `file:`, by location and scheme, never their text. Keychain entries and `cmd:` programs don't exist elsewhere.
+   - `paths`: absolute paths in the active config generation (a checkout, an executor `dir`, a container's `read` and `write`).
+   - `workspaces`: workspaces holding uncommitted or unpushed work, from each resource provider that implements `Unsaved`. One that doesn't is listed under `unchecked`.
+   - `packages`: packages installed beside the config file, which a bundle doesn't carry.
+   - `directories`: what is in the state directory that a bundle leaves out, and what is lost without it.
+   - `drain`: the [drain report](#draining-a-daemon).
+2. **Drain, and push what's unsaved.** `open-conduit drain`, until it exits 0.
+3. **Write a config for the new machine**, with its paths and with secrets it can resolve.
+4. **Stop the daemon and carry the state**, in one of two ways:
+   - **A bundle:** `backup create`, then on the new machine `backup restore BUNDLE --to DIR --start-config FILE` (or `--in-place`). The config is published as a new generation inside the restore's stage, so one that doesn't validate, or that drops a scope with open Work, publishes nothing and the daemon can't come up on the old machine's paths. Without `--start-config` the restored daemon resumes the bundle's generation, whatever paths it holds.
+   - **The whole directory**, only when the active config's paths are still right on the new machine, since a daemon started on a moved directory ends the drain and starts Work on that generation at once. Change its owner to the new user first, because the daemon refuses a state directory it doesn't own.
+
+   When the paths change and you also want what a bundle leaves out, restore with `--start-config` and copy the directories you want from the table below into the restored directory before the first start.
+5. **Install the packages** the report named, and start the daemon on the new machine. Never run the old one again: the two share a [container host label](../sandboxes/#the-host-label). A state path deep enough to take the socket past 100 bytes needs `--socket`.
+
+Parked Work resumes on its wake and each timer fires once, including one that came due during the move.
+
+What each directory is worth carrying:
+
+| Directory | In a bundle | Without it |
+| --- | --- | --- |
+| `homes/` | No | A containerised agent's session is gone, and its next turn starts from the handoff note |
+| `executors/` | No | Attempts recover or retry. A non-container Claude transcript is outside the state directory anyway (`<CLAUDE_CONFIG_DIR>/projects/<absolute cwd>/`), so its next turn also starts from the note |
+| `resources/` | No | Workspaces are made again from the remote, so unpushed work is lost. Carried, a clone is picked up where it lands and a worktree is [reattached or set aside](../workspaces/#a-workspace-that-moved-with-its-state-directory) |
+| `extensions/` | No | Packages rebuild their caches |
+
+The GitHub, Slack and schedule extensions keep no filesystem path in their KV (dispatch, progress, claim and run records name repositories, channels and Work), so nothing of theirs needs rewriting. Claude's continuity record keeps the last turn's `attach` directory and binary, which are stale after a move until the Work's next turn replaces them.
 
 ## Restoring after a bad release or lost state
 
@@ -176,6 +207,8 @@ Recovery order:
 `TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
 
 `TestDrainStopsNewAttempts` (in `internal/runtime`) refuses a new attempt during a drain, reports the one in flight, lets it launch, and starts Work again once the drain ends. `TestMovedDaemonEndsTheDrain` keeps the drain across a restart at the same origin, with a start at another origin ending it.
+
+`TestDaemonDrainAndMove` (in `integration`) drains a real daemon with a Work parked, moves its state to a new directory tree and starts another on it: a wake during the drain launches nothing until the new daemon runs it, and a timer due across the move fires once. With the drain's guards removed it fails. `TestDaemonRestoreOntoAnotherPath` bundles a drained daemon and restores it under another path with `--start-config` and an empty Claude config directory: the one Work is still listed and its next turn starts from the handoff note. `TestRestoreStartsOnTheGivenConfig` refuses a start config that doesn't validate or drops a scope with open Work, publishing nothing, with a restore without one as its negative control. `TestPortabilityNamesEveryItem` covers a fixture with one of each non-portable item and no secret text in the report. `TestMovedWorkspaceKeepsItsWork` and `TestMovedWorktreeThatCantReattachIsKept` (in `extensions/git`) cover workspaces carried with the directory. No drill runs a containerised agent across a move or crosses operating systems.
 
 `TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
 
