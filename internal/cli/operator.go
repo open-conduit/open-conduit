@@ -57,6 +57,10 @@ type Env struct {
 	// its bindings, the agent CLIs); doctor runs them when no daemon is
 	// reachable. Only the open-conduit entrypoint supplies it.
 	OfflineChecks func(ctx context.Context, configPath string, data []byte) []client.Check
+	// FilesystemCheck reports the state directory's filesystem, so doctor
+	// can say why a daemon refuses to start on it. Only the open-conduit
+	// entrypoint supplies it.
+	FilesystemCheck func(stateDir string) client.Check
 	// Extensions manages installed extension packages and runs the
 	// conformance runner (07-03); only the open-conduit entrypoint
 	// supplies it.

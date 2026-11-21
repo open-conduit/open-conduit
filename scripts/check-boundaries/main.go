@@ -107,6 +107,9 @@ func allowed(owner, dependency string, test bool) bool {
 	if test && !public(owner) && (dependency == "conformance" || public(dependency)) {
 		return true
 	}
+	if under(dependency, localFS) {
+		return stateOwner(owner, test)
+	}
 	switch {
 	case owner == "domain":
 		return false
@@ -226,6 +229,21 @@ func allowed(owner, dependency string, test bool) bool {
 		// New packages require an explicit ownership decision in B01.
 		return false
 	}
+}
+
+// localFS judges whether a path can hold live state (#696). It imports
+// nothing of this module's.
+const localFS = "internal/localfs"
+
+// stateOwner names the packages that open live state, and what composes
+// them: the runtime only from its tests, which run over real SQLite.
+func stateOwner(owner string, test bool) bool {
+	for _, p := range []string{"internal/storage/sqlite", "internal/artifacts", "internal/backup", "internal/management", "internal/certify", runtimeFixtures, "internal/bootstrap", "cmd/open-conduit", "integration"} {
+		if under(owner, p) {
+			return true
+		}
+	}
+	return test && under(owner, "internal/runtime")
 }
 
 func violations(packages []pkg) []string {

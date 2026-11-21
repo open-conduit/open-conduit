@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -57,6 +58,9 @@ func (backend) Present(_ context.Context, location string) (bool, error) {
 
 // own takes the exclusive lock beside the database at location.
 func own(location string) (*os.File, error) {
+	if err := localfs.Require(location, "database"); err != nil {
+		return nil, fmt.Errorf("sqlite: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(location), 0o700); err != nil {
 		return nil, err
 	}
@@ -190,17 +194,14 @@ func (s *Store) Snapshot(ctx context.Context, path string, read func(storage.Tx)
 	if read == nil {
 		return nil
 	}
-	snapshot, err := Open(ctx, path)
+	// Read it immutable: no lock, no WAL and no -shm beside it, so a snapshot
+	// can be taken onto a mount that couldn't hold a live database.
+	db, err := readonlyDB(path)
 	if err != nil {
 		return err
 	}
-	err = snapshot.View(ctx, read)
-	if err == nil {
-		// Fold the WAL Open started back into the file, so the published
-		// snapshot is the whole of it.
-		_, err = snapshot.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
-	}
-	return errors.Join(err, snapshot.Close())
+	err = (&Store{db: db, readers: db, path: path}).View(ctx, read)
+	return errors.Join(err, db.Close())
 }
 
 // Fence clears every Execution lease's owner and expiry in one

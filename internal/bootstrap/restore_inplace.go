@@ -15,6 +15,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -101,6 +102,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		return info, err
 	}
 	lock, err := management.AcquireLock(stateDir)
+	if errors.Is(err, localfs.ErrNotLocal) {
+		return info, err // Stopping a daemon wouldn't help.
+	}
 	if err != nil {
 		return info, fmt.Errorf("%w: stop the daemon first", err)
 	}
