@@ -309,8 +309,22 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	if err != nil {
 		return err
 	}
-	database := filepath.Join(bundle, snapshotName)
-	hash, err := digestFile(ctx, database)
+	// The bundle may be somewhere others can write, so its database is read
+	// once, into a private copy hashed as it is written, and only that copy
+	// is restored: the bytes checked are the bytes restored. Nothing beside
+	// the bundle's database (a planted -wal) comes with it. The directory is
+	// named like a stage, so one a crash leaves is cleared with them.
+	parent, err := filepath.Abs(filepath.Dir(destination))
+	if err != nil {
+		return err
+	}
+	private, err := os.MkdirTemp(parent, ".conduit-snapshot-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(private)
+	database := filepath.Join(private, snapshotName)
+	hash, err := copyDigest(ctx, filepath.Join(bundle, snapshotName), database)
 	if err != nil {
 		return err
 	}
@@ -560,6 +574,46 @@ func digestFile(ctx context.Context, path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// copyDigest copies source to an absent owner-only file and returns the
+// digest of the bytes it wrote.
+func copyDigest(ctx context.Context, source, destination string) (string, error) {
+	in, err := os.Open(source)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+	h := sha256.New()
+	w := io.MultiWriter(out, h)
+	buffer := make([]byte, 64<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, err := in.Read(buffer)
+		if n > 0 {
+			if _, err := w.Write(buffer[:n]); err != nil {
+				return "", err
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func writeDurable(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
