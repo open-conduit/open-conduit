@@ -576,7 +576,10 @@ export type Scan = Infer<typeof Scan>;
 /**
  * One page of a reconcile. complete certifies the scan covered the whole
  * source across its pages; false with no next_cursor is a partial scan,
- * never proof that anything is gone.
+ * never proof that anything is gone. not_before (an RFC 3339 time) says the
+ * provider can't answer this page yet, a rate limit say: such a page has no
+ * observations, is not complete and repeats the scan's cursor as next_cursor,
+ * and the host asks for it again at that time without counting a failure.
  */
 export const Snapshot = t.object(
   {
@@ -585,6 +588,7 @@ export const Snapshot = t.object(
     next_cursor: t.optional(t.string()),
     complete: t.boolean(),
     checkpoint: t.optional(t.string()),
+    not_before: t.optional(t.string()),
   },
   open,
 );

@@ -502,13 +502,15 @@ func parseScanID(id string) (start, horizon time.Time, ok bool) {
 // items and comments: ClosedHorizon before it, or, when the last completed
 // generation (checkpoint) began before that, back to that generation's
 // start, so a stretch of failed scans loses nothing that closed meanwhile.
-// It never reaches back further than maxLookback.
+// It never reaches back further than maxLookback, or two of the entry's own
+// intervals when those are longer, so a slow entry's ordinary pass still
+// covers everything since the one before.
 func (g *Ingress) horizon(start time.Time, checkpoint string) time.Time {
 	h := start.Add(-g.s.ClosedHorizon)
 	if last, _, ok := parseScanID(checkpoint); ok && last.Before(h) {
 		h = last
 	}
-	if floor := start.Add(-maxLookback); h.Before(floor) {
+	if floor := start.Add(-max(maxLookback, 2*g.s.Reconcile)); h.Before(floor) {
 		h = floor
 	}
 	return h

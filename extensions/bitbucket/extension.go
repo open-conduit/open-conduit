@@ -228,7 +228,7 @@ func (x *Extension) toolSources() []Source {
 func (x *Extension) Sources() []inproc.Source {
 	var out []inproc.Source
 	for _, s := range x.list() {
-		out = append(out, inproc.Source{Name: s.name, Source: extension.Source{Namespace: s.src.Settings.Namespace, ScopeID: s.scope}, Ingress: s.ingress})
+		out = append(out, inproc.Source{Name: s.name, Source: extension.Source{Namespace: s.src.Settings.Namespace, ScopeID: s.scope}, Ingress: s.ingress, Interval: s.src.Settings.Reconcile})
 	}
 	return out
 }

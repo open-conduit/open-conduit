@@ -241,6 +241,7 @@ Extension entry `config`:
 | `preview_pattern` | `preview\|deploy` |  |
 | `issue_ref` | `{key}` | Closes {key} for Linear |
 | `closed_horizon_hours` | `168` | how long closed pull requests stay observed |
+| `reconcile_seconds` |  | this entry's reconcile interval, up to closed_horizon_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer |
 | `base_branch` |  |  |
 | `webhook_secret` |  | names a selected scope secret that verifies deliveries |
 | `manage_webhook` |  | create or re-point the repository webhook at the listener's public URL (needs admin) |
@@ -399,6 +400,7 @@ Extension entry `config`:
 | `track_issues` | `true` |  |
 | `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `closed_horizon_hours` | `1` | how long after closing an issue or PR stays observed |
+| `reconcile_seconds` |  | this entry's reconcile interval, 1-31536000 (default settings.reconcile_seconds); longer means a lost webhook delivery stays lost longer |
 | `branch_pattern` | `^agent/issue-(\d+)$` |  |
 | `preview_pattern` | `deploy-preview` |  |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |
@@ -469,6 +471,7 @@ Extension entry `config`:
 | `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `transitions` |  | workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone) |
 | `closed_horizon_hours` | `168` | how long closed issues stay observed |
+| `reconcile_seconds` |  | this entry's reconcile interval, up to closed_horizon_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |
 | `webhook_secret` |  | names a selected scope secret that verifies deliveries |
 | `manage_webhook` |  | create or re-point the service webhook at the listener's public URL (needs admin) |
@@ -509,6 +512,7 @@ Extension entry `config`:
 | `labels` |  | claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone) |
 | `transitions` |  | workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone) |
 | `closed_horizon_hours` | `168` | how long closed issues stay observed |
+| `reconcile_seconds` |  | this entry's reconcile interval, up to closed_horizon_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |
 | `webhook_secret` |  | names a selected scope secret that verifies deliveries |
 | `manage_webhook` |  | create or re-point the service webhook at the listener's public URL (needs admin) |
@@ -684,6 +688,8 @@ Extension entry `config`:
 | `claim_from` | `registration` | registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time |
 | `history_hours` |  |  |
 | `refresh_minutes` |  |  |
+| `reconcile_seconds` |  | this entry's reconcile interval, up to history_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer |
+| `history_page_size` | `200` | messages per history or replies call, 1-200; 15 for a commercially distributed non-Marketplace app |
 | `receiver` | `socket` | how messages and button presses arrive: Socket Mode, the HTTP Request URLs, or neither (reconcile only, and no buttons: a prompt is answered by a reply in its thread) One of socket, http, none. |
 | `signing_secret` |  | names a selected scope secret that verifies the entry's own routes (POST /slack/<scope>/<entry> and its /interactivity); without it, receiver http takes the connection's |
 | `projection` |  | {"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)} |

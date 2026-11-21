@@ -52,6 +52,9 @@ type ClientOptions struct {
 	// with it between its checks that GitHub's git service accepts a
 	// token it has just minted.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Budgets are the rate-limit budgets this client shares with the
+	// extension's others (default its own).
+	Budgets *Budgets
 }
 
 // Client is one GitHub connection. Reads use the sign-in identity; writes use
@@ -94,7 +97,7 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 		o.Sleep = sleep
 	}
 	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now, sleep: o.Sleep}
-	c.tr = newTransport(base.Transport, u.Host, o.Now)
+	c.tr = newTransport(base.Transport, u.Host, o.Now, o.Budgets)
 	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if u.Host == "api.github.com" {
 		c.web, c.host = "https://github.com", "github.com"

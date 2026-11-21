@@ -260,12 +260,15 @@ type ExtensionConfig struct {
 	Tracker   *Tracker `json:"tracker,omitempty"`
 	// TrackIssues=false observes only PRs/comments/reviews/checks (a code repo
 	// whose issues live in a shared tracker).
-	TrackIssues        *bool      `json:"track_issues,omitempty"`
-	Labels             *Labels    `json:"labels,omitempty"`
-	ClosedHorizonHours int        `json:"closed_horizon_hours,omitempty"`
-	BranchPattern      *string    `json:"branch_pattern,omitempty"`
-	PreviewPattern     *string    `json:"preview_pattern,omitempty"`
-	Projection         Projection `json:"projection,omitempty"`
+	TrackIssues        *bool   `json:"track_issues,omitempty"`
+	Labels             *Labels `json:"labels,omitempty"`
+	ClosedHorizonHours int     `json:"closed_horizon_hours,omitempty"`
+	// ReconcileSeconds is how often this entry reconciles (default
+	// settings.reconcile_seconds), 1 to 31536000.
+	ReconcileSeconds int        `json:"reconcile_seconds,omitempty"`
+	BranchPattern    *string    `json:"branch_pattern,omitempty"`
+	PreviewPattern   *string    `json:"preview_pattern,omitempty"`
+	Projection       Projection `json:"projection,omitempty"`
 	// WebhookSecret names a selected scope secret used to verify deliveries.
 	WebhookSecret string `json:"webhook_secret,omitempty"`
 	// ManageWebhook lets the host create or re-point the repository's
@@ -325,15 +328,17 @@ type Settings struct {
 	SharedTracker, TrackIssues bool
 	Labels                     Labels
 	ClosedHorizon              time.Duration
-	Branch, Preview            *regexp.Regexp
-	Projection                 Projection
-	VerifyInterval             time.Duration
-	WebhookSecret              string
-	ManageWebhook              bool
-	BaseBranch                 string
-	NoChecks                   time.Duration
-	TrackPulls                 bool
-	AckIssues                  bool
+	// Reconcile is the entry's own reconcile interval; zero is the host's.
+	Reconcile       time.Duration
+	Branch, Preview *regexp.Regexp
+	Projection      Projection
+	VerifyInterval  time.Duration
+	WebhookSecret   string
+	ManageWebhook   bool
+	BaseBranch      string
+	NoChecks        time.Duration
+	TrackPulls      bool
+	AckIssues       bool
 	// Authors are the admitted author associations (upper case, or
 	// AnyAuthor); Forks admits PRs from forks.
 	Authors []string
@@ -408,6 +413,12 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("github extension: closed_horizon_hours must be 1-8760")
 		}
 		s.ClosedHorizon = time.Duration(c.ClosedHorizonHours) * time.Hour
+	}
+	if c.ReconcileSeconds != 0 {
+		if c.ReconcileSeconds < 1 || c.ReconcileSeconds > 365*24*3600 {
+			return s, errors.New("github extension: reconcile_seconds must be 1-31536000")
+		}
+		s.Reconcile = time.Duration(c.ReconcileSeconds) * time.Second
 	}
 	branch := `^agent/issue-(\d+)$`
 	if c.BranchPattern != nil {
@@ -504,6 +515,9 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 		extension.Setting{Name: "admit_authors", Value: strings.Join(s.Authors, ", ")},
 		extension.Setting{Name: "admit_forks", Value: s.Forks},
 		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})
+	if s.Reconcile > 0 {
+		out = append(out, extension.Setting{Name: "reconcile_seconds", Value: int(s.Reconcile.Seconds())})
+	}
 	if len(s.Workflows) > 0 {
 		out = append(out, extension.Setting{Name: "workflows", Value: strings.Join(s.Workflows, ", ")})
 	}

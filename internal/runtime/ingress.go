@@ -95,6 +95,9 @@ type ingressState struct {
 	// provider_failed; nil otherwise and in state written before it.
 	Failure      *IngressFailure `json:",omitempty"`
 	LastComplete time.Time
+	// PacedSince is when the provider first deferred a page of the current
+	// generation (Snapshot.NotBefore); zero when it hasn't.
+	PacedSince time.Time `json:",omitzero"`
 	// Requests counts operator reconcile requests; GenerationRequests is its
 	// value when the current generation's first page was claimed. A request
 	// that arrives after that claim (a page in flight, or a generation part
@@ -152,6 +155,14 @@ func (i *Ingress) Register(ctx context.Context, name string, source extension.So
 		if err == nil {
 			if state.Source != source {
 				return fmt.Errorf("%w: %w: %s is stored for scope %s as %s", ErrIngressNamespaceOwned, extension.ErrConflict, source.Namespace, state.Source.ScopeID, state.Name)
+			}
+			// A shortened interval takes effect now, not after a wait the
+			// longer one scheduled.
+			if latest := i.now().Add(interval); state.ScanID == "" && state.NextDue.After(latest) {
+				state.NextDue = latest
+				if state.Name == name {
+					return putJSON(tx, sourceNamespace(source), "state", state)
+				}
 			}
 			if state.Name == name {
 				return nil
@@ -315,6 +326,9 @@ type IngressStatus struct {
 	LimitedRecovery bool
 	Interval        time.Duration
 	Failures        uint32
+	// PacedSince is when the provider began deferring the current
+	// generation's pages (a rate limit); zero when it isn't.
+	PacedSince time.Time
 }
 
 func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
@@ -333,7 +347,7 @@ func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
 			if err := getJSON(tx, sourceNamespace(r.source), "state", &state); err != nil {
 				return err
 			}
-			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, Failure: state.Failure, LastComplete: state.LastComplete, Interval: r.interval, Failures: state.Failures}
+			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, Failure: state.Failure, LastComplete: state.LastComplete, Interval: r.interval, Failures: state.Failures, PacedSince: state.PacedSince}
 			for _, family := range r.families {
 				status.Families = append(status.Families, family)
 				if !family.ReDerivable {

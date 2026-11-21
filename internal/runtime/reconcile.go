@@ -95,7 +95,17 @@ type ReconcileResult struct {
 	ScanID, ErrorCode string
 	// Failure is what the provider reported when ErrorCode is provider_failed.
 	Failure *IngressFailure
+	// Deferred is when the provider asked to be asked for this page again
+	// (Snapshot.NotBefore); zero otherwise.
+	Deferred time.Time
 }
+
+// maxDefer bounds how far one deferred page can push a source's next read,
+// and minDefer keeps a provider that defers to the past from spinning.
+const (
+	maxDefer = 24 * time.Hour
+	minDefer = time.Second
+)
 
 func (i *Ingress) Reconcile(ctx context.Context, name string) (ReconcileResult, error) {
 	return i.reconcile(ctx, name, false)
@@ -153,6 +163,45 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 		return result, i.finishFailure(ctx, r, token, result.ErrorCode, nil, err)
 	}
 	result.ScanID = page.ScanID
+	if !page.NotBefore.IsZero() {
+		err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
+			var state ingressState
+			if e := getJSON(tx, ns, "state", &state); e != nil {
+				return e
+			}
+			now := i.now()
+			if state.LeaseToken != token || !now.Before(state.LeaseUntil) {
+				return ErrScanLeaseLost
+			}
+			if state.ScanID == "" {
+				// The generation's first page: later pages must see the
+				// checkpoint this one was given.
+				state.PageCheckpoint = scan.Checkpoint
+			}
+			state.ScanID = page.ScanID
+			state.LeaseToken, state.LeaseUntil = "", time.Time{}
+			state.LastError, state.Failure, state.Failures = "", nil, 0
+			if state.PacedSince.IsZero() {
+				state.PacedSince = now
+			}
+			state.NextDue = page.NotBefore
+			if earliest := now.Add(minDefer); state.NextDue.Before(earliest) {
+				state.NextDue = earliest
+			}
+			if latest := now.Add(maxDefer); state.NextDue.After(latest) {
+				state.NextDue = latest
+			}
+			result.Deferred = state.NextDue
+			return putJSON(tx, ns, "state", state)
+		})
+		if errors.Is(err, ErrScanLeaseLost) {
+			result.ErrorCode = "scan_lease_lost"
+		} else if err != nil {
+			result.ErrorCode = "invalid_snapshot"
+			return result, i.finishFailure(ctx, r, token, result.ErrorCode, nil, err)
+		}
+		return result, err
+	}
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
 		result.Accepted, result.Complete, result.Partial = []domain.AcceptedEvent{}, false, false
 		var state ingressState
@@ -234,6 +283,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 			result.Complete = true
 			state.Checkpoint = page.Checkpoint
 			state.LastComplete = now
+			state.PacedSince = time.Time{}
 			state.NextDue = now.Add(r.interval)
 			if state.Requests != state.GenerationRequests {
 				// An operator request arrived during this generation.
@@ -254,6 +304,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 			state.Cursor = ""
 			state.PageCheckpoint = ""
 			state.SeenCursors = nil
+			state.PacedSince = time.Time{}
 			state.LastError = "partial_snapshot"
 			state.Failure = nil
 			state.NextDue = now.Add(retryDelay(1, r.interval))
@@ -281,6 +332,13 @@ func (i *Ingress) validatePage(state ingressState, page extension.Snapshot) erro
 	}
 	if page.ScanID == "" || state.ScanID != "" && state.ScanID != page.ScanID || page.Complete && page.NextCursor != "" || len(page.Observations) > i.options.MaxPageItems {
 		return extension.ErrInvalid
+	}
+	if !page.NotBefore.IsZero() {
+		// A deferred page answers nothing: it asks for the same page later.
+		if page.Complete || len(page.Observations) > 0 || page.NextCursor != state.Cursor {
+			return extension.ErrInvalid
+		}
+		return nil
 	}
 	if len(state.SeenCursors) >= i.options.MaxScanPages {
 		return scanError("scan_page_limit")
@@ -545,6 +603,7 @@ func (i *Ingress) RestartScan(ctx context.Context, name, expectedScanID string) 
 		state.Cursor = ""
 		state.PageCheckpoint = ""
 		state.SeenCursors = nil
+		state.PacedSince = time.Time{}
 		state.LeaseToken = ""
 		state.LeaseUntil = time.Time{}
 		state.NextDue = now

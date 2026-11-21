@@ -24,6 +24,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "preview_pattern", Default: "preview|deploy"},
 		{Name: "issue_ref", Help: "Closes {key} for Linear", Default: "{key}"},
 		{Name: "closed_horizon_hours", Help: "how long closed pull requests stay observed", Default: "168"},
+		{Name: "reconcile_seconds", Help: "this entry's reconcile interval, up to closed_horizon_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer"},
 		{Name: "base_branch"},
 		{Name: "webhook_secret", Help: "names a selected scope secret that verifies deliveries"},
 		{Name: "manage_webhook", Help: "create or re-point the repository webhook at the listener's public URL (needs admin)"},

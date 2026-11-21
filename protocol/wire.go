@@ -537,13 +537,24 @@ type Snapshot struct {
 	NextCursor   string        `json:"next_cursor,omitempty"`
 	Complete     bool          `json:"complete"`
 	Checkpoint   string        `json:"checkpoint,omitempty"`
+	// NotBefore defers this same page until then (extension.Snapshot).
+	NotBefore *time.Time `json:"not_before,omitempty"`
 }
 
 func FromSnapshot(s extension.Snapshot) Snapshot {
-	return Snapshot{ScanID: s.ScanID, Observations: fromObservations(s.Observations), NextCursor: s.NextCursor, Complete: s.Complete, Checkpoint: s.Checkpoint}
+	out := Snapshot{ScanID: s.ScanID, Observations: fromObservations(s.Observations), NextCursor: s.NextCursor, Complete: s.Complete, Checkpoint: s.Checkpoint}
+	if !s.NotBefore.IsZero() {
+		at := s.NotBefore.UTC()
+		out.NotBefore = &at
+	}
+	return out
 }
 func (s Snapshot) Extension() extension.Snapshot {
-	return extension.Snapshot{ScanID: s.ScanID, Observations: toObservations(s.Observations), NextCursor: s.NextCursor, Complete: s.Complete, Checkpoint: s.Checkpoint}
+	out := extension.Snapshot{ScanID: s.ScanID, Observations: toObservations(s.Observations), NextCursor: s.NextCursor, Complete: s.Complete, Checkpoint: s.Checkpoint}
+	if s.NotBefore != nil {
+		out.NotBefore = *s.NotBefore
+	}
+	return out
 }
 
 // Routing.

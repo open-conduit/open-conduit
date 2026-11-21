@@ -27,6 +27,8 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "claim_from", Help: "registration (threads begun since this daemon first registered the channel), all, or an RFC 3339 time", Default: "registration"},
 		{Name: "history_hours"},
 		{Name: "refresh_minutes"},
+		{Name: "reconcile_seconds", Help: "this entry's reconcile interval, up to history_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer"},
+		{Name: "history_page_size", Help: "messages per history or replies call, 1-200; 15 for a commercially distributed non-Marketplace app", Default: "200"},
 		{Name: "receiver", Default: "socket", Options: []string{"socket", "http", "none"}, Help: "how messages and button presses arrive: Socket Mode, the HTTP Request URLs, or neither (reconcile only, and no buttons: a prompt is answered by a reply in its thread)"},
 		{Name: "signing_secret", Help: "names a selected scope secret that verifies the entry's own routes (POST /slack/<scope>/<entry> and its /interactivity); without it, receiver http takes the connection's"},
 		{Name: "projection", Help: `{"disabled", "dry_run", "format": "markdown" (default, text read as standard markdown) or "mrkdwn" (Slack's own syntax)}`},

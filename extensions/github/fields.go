@@ -28,6 +28,7 @@ func entryFields() []protocol.FieldDecl {
 		{Name: "track_issues", Default: "true"},
 		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone)"},
 		{Name: "closed_horizon_hours", Help: "how long after closing an issue or PR stays observed", Default: "1"},
+		{Name: "reconcile_seconds", Help: "this entry's reconcile interval, 1-31536000 (default settings.reconcile_seconds); longer means a lost webhook delivery stays lost longer"},
 		{Name: "branch_pattern", Default: `^agent/issue-(\d+)$`},
 		{Name: "preview_pattern", Default: "deploy-preview"},
 		{Name: "projection", Help: "disabled, verify_seconds (default 900), dry_run"},
