@@ -1,7 +1,8 @@
-// Command open-conduit-gateway is the program in the Docker provider's
-// gateway image: `serve` is the allowlisting proxy and the toolbelt
-// forward one gateway container runs for a launch, and `probe` is doctor's
-// preflight from inside a container (see extensions/docker/gateway).
+// Command open-conduit-gateway is the program in the egress gateway's
+// image: `serve` is the allowlisting proxy and the toolbelt forward one
+// gateway runs for a launch (its flags are a contract any container
+// provider may run against), and `probe` is the Docker provider's doctor
+// preflight from inside a container (see the gateway package).
 package main
 
 import (
@@ -11,7 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/open-conduit/open-conduit/extensions/docker/gateway"
+	"github.com/open-conduit/open-conduit/gateway"
 )
 
 var version = "dev"

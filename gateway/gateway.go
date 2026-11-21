@@ -1,22 +1,37 @@
-// Package gateway is the program in the Docker provider's gateway image.
-// One gateway container runs beside each launch's container, on the
-// execution's internal network (as "gateway") and on an egress network of
-// its own, and does two things:
+// Package gateway is the egress gateway: what holds a container binding's
+// network.allow for any container provider, so the allowlist means the same
+// whichever provider runs the launch. A provider uses it in one of two ways:
+//
+//   - as a library, in Go: Start serves the gateway in the provider's own
+//     process (the ssh provider's helper, which carries the proxy to the
+//     remote over its SSH connection);
+//   - as the released image, ghcr.io/open-conduit/open-conduit-gateway,
+//     whose `serve` flags (Parse) are a stable contract
+//     (architecture/sandboxes.md): the Docker provider runs one gateway
+//     container beside each launch's, on the execution's internal network
+//     (as "gateway") and on an egress network of its own.
+//
+// The gateway does two things:
 //
 //   - an allowlisting HTTP proxy: CONNECT and absolute-form HTTP requests
 //     reach only the hosts the grant's network.allow lists, and anything
 //     else gets 403. A name is resolved here, and refused if any address
 //     it resolves to is the host's, the gateway's own networks', or
-//     loopback, link-local or private, unless the entry is that literal
-//     address; the proxy dials the addresses it checked;
-//   - the toolbelt forward: it serves a unix socket in a volume the two
-//     containers share and copies each connection to the execution's
-//     toolbelt on the host, either its socket (mounted, on Linux) or a
-//     loopback port the host names in a file (on macOS, where a host socket
-//     can't be reached from the VM).
+//     loopback, link-local, private or shared (CGNAT), unless the entry is
+//     that literal address; the proxy dials the addresses it checked, so a
+//     rebinding DNS answer can't lead anywhere else;
+//   - the toolbelt forward: it serves a unix socket and copies each
+//     connection to the execution's toolbelt on the host, either its
+//     socket or a loopback port the host names in a file (where a host
+//     socket can't be reached, as from Docker's VM on macOS).
 //
-// Probe is doctor's preflight: run on a preflight internal network, it
-// checks what an agent container there can and can't reach.
+// The gateway enforces the allowlist only for a run whose sole way out is
+// the gateway: the provider owns that (an internal network, a firewalled
+// remote) and says so (extension.ContainerEgress).
+//
+// Probe is the Docker provider's doctor preflight: run on a preflight
+// internal network, it checks what an agent container there can and can't
+// reach.
 package gateway
 
 import (
@@ -58,7 +73,8 @@ type Options struct {
 	// Deny are more addresses no name may resolve to. Start adds the
 	// addresses of host.docker.internal and of the gateway's default route.
 	Deny []net.IP
-	// Log gets one line for each refused request (stderr when nil).
+	// Log gets one line for each refused request (stderr when nil), one
+	// write at a time, though requests are served concurrently.
 	Log io.Writer
 }
 
@@ -86,6 +102,7 @@ func Start(o Options) (*Gateway, error) {
 	if o.Log == nil {
 		o.Log = os.Stderr
 	}
+	o.Log = &lockedWriter{w: o.Log}
 	if o.Resolve == nil {
 		o.Resolve = func(ctx context.Context, host string) ([]net.IP, error) {
 			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -128,6 +145,18 @@ func Start(o Options) (*Gateway, error) {
 		go func() { defer g.wg.Done(); g.serveForward(f) }()
 	}
 	return g, nil
+}
+
+// lockedWriter serializes writes from concurrent requests.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // ProxyAddr is the proxy's listening address.
@@ -416,8 +445,13 @@ func (g *Gateway) dialToolbelt() (net.Conn, error) {
 	return d.Dial("tcp", net.JoinHostPort(g.o.ForwardHost, port))
 }
 
-// Parse reads `serve` flags: --listen, --allow (comma-separated, may
-// repeat), --socket, --forward and --forward-host.
+// Parse reads `serve` flags, the image's contract: --listen (the proxy's
+// address, default :3128), --allow (hosts, host:port or *.domain,
+// comma-separated, may repeat), --socket (the forward's unix socket; none
+// when unset), --forward (unix:<socket> or tcp:<port file>, needed with
+// --socket) and --forward-host (the host a tcp forward dials, default
+// host.docker.internal). An unknown flag is an error, so a caller written
+// against a newer contract fails rather than running unconfined.
 func Parse(args []string) (Options, error) {
 	var o Options
 	for i := 0; i < len(args); i++ {

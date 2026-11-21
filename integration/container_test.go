@@ -108,7 +108,7 @@ func buildGateway(dctx, dir string) (string, error) {
 			return "", fmt.Errorf("building %s for linux/%s: %v\n%s", b, arch, err, out)
 		}
 	}
-	dockerfile, _ := filepath.Abs("../extensions/docker/gateway/Dockerfile")
+	dockerfile, _ := filepath.Abs("../gateway/Dockerfile")
 	out, err = exec.Command("docker", "--context", dctx, "build", "-q", "--build-arg", "TARGETARCH="+arch, "-f", dockerfile, build).Output()
 	if err != nil {
 		var stderr []byte

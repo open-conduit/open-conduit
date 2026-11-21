@@ -193,21 +193,27 @@ func allowed(owner, dependency string, test bool) bool {
 		// An extension (an executor is one that declares an executor) lives
 		// in extensions/<name>: its library, its package entry point and
 		// certification fixture. It uses the public contracts, the public
-		// management client and the protocol and SDK a third party would
-		// serve it with, never the protocol's examples, another
-		// implementation or the host. The tracker extensions share the
-		// public-only tracker kit.
+		// management client, the egress gateway and the protocol and SDK a
+		// third party would serve it with, never the protocol's examples,
+		// another implementation or the host. The tracker extensions share
+		// the public-only tracker kit.
 		parts := strings.Split(owner, "/")
 		family := strings.Join(parts[:min(len(parts), 2)], "/")
 		if trackerKitUser(family) && under(dependency, "extensions/tracker") {
 			return true
 		}
-		return public(dependency) || under(dependency, "client") || under(dependency, family) || (under(dependency, "protocol") && !under(dependency, "protocol/examples"))
+		return public(dependency) || under(dependency, "client") || under(dependency, "gateway") || under(dependency, family) || (under(dependency, "protocol") && !under(dependency, "protocol/examples"))
 	case owner == "cmd/os":
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli")
+	case under(owner, "gateway"):
+		// The egress gateway (#728): the allowlisting proxy and toolbelt
+		// forward any container provider puts in front of a run, as a
+		// library or as the released image. Public contracts only, so an
+		// extension can import it without reaching another extension.
+		return public(dependency) || under(dependency, "gateway")
 	case owner == "cmd/open-conduit-gateway":
 		// The gateway image's program: the gateway and public contracts only.
-		return public(dependency) || under(dependency, "extensions/docker/gateway")
+		return public(dependency) || under(dependency, "gateway")
 	case under(owner, "internal/bootstrap"), owner == "cmd/open-conduit", under(owner, "integration"):
 		// Composition and integration tests assemble implementations. Production
 		// code must still never acquire volatile reference doubles; it reaches

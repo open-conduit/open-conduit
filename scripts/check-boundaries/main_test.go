@@ -31,7 +31,12 @@ func TestDependencyClosures(t *testing.T) {
 		{"entrypoint_uses_provenance", []pkg{project("cmd/open-conduit", "internal/provenance", "internal/cli/upgrade"), project("internal/provenance")}, ""},
 		{"cli_cannot_reach_provenance", []pkg{project("internal/cli/upgrade", "internal/provenance")}, "internal/provenance"},
 		{"provenance_cannot_reach_internal", []pkg{project("internal/provenance", "internal/cli")}, "internal/cli"},
-		{"gateway_uses_gateway", []pkg{project("cmd/open-conduit-gateway", "extensions/docker/gateway"), project("extensions/docker/gateway", "extension")}, ""},
+		{"gateway_uses_gateway", []pkg{project("cmd/open-conduit-gateway", "gateway"), project("gateway", "extension")}, ""},
+		// Any container provider may run the egress gateway (#728); the
+		// gateway reaches no extension, and is no side door into one.
+		{"providers_use_gateway", []pkg{project("extensions/ssh", "gateway"), project("extensions/docker", "gateway"), project("gateway", "extension")}, ""},
+		{"gateway_cannot_reach_extensions", []pkg{project("gateway", "extensions/docker")}, "extensions/docker"},
+		{"gateway_cannot_reach_runtime", []pkg{project("gateway", "internal/runtime")}, "internal/runtime"},
 		{"gateway_cannot_compose_runtime", []pkg{project("cmd/open-conduit-gateway", "internal/runtime")}, "internal/runtime"},
 		{"direct_adapter", []pkg{project("internal/runtime", "extensions/github")}, "extensions/github"},
 		{"transitive_adapter", []pkg{project("internal/runtime", "extension"), project("extension", "extensions/github")}, "extensions/github"},

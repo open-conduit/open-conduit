@@ -17,7 +17,7 @@ for arch in amd64 arm64; do
 			-o "dist/gateway/linux-$arch/$binary" "./cmd/$binary"
 	done
 done
-docker buildx build --platform linux/amd64,linux/arm64 -f extensions/docker/gateway/Dockerfile \
+docker buildx build --platform linux/amd64,linux/arm64 -f gateway/Dockerfile \
 	-t "$repo:$version" --push --metadata-file dist/gateway-metadata.json dist/gateway >&2
 digest=$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' dist/gateway-metadata.json | head -n 1)
 test -n "$digest"
