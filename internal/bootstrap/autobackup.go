@@ -36,6 +36,13 @@ type backupState struct {
 	mu      sync.Mutex
 	running bool
 	next    time.Time
+	// shipDue is when a bundle a destination doesn't hold is next tried
+	// again; zero when none is owed.
+	shipDue time.Time
+	// shipped is each destination's latest outcome since the daemon started.
+	shipped map[string]shipResult
+	// targets replaces the configured destinations (tests).
+	targets func() []shipTarget
 }
 
 // scheduledBundles are the scheduled bundles in dir and their times, oldest
@@ -86,6 +93,8 @@ func (d *daemon) startBackups(name string, db storage.Database) error {
 	d.backups.next = d.now()
 	if len(times) > 0 {
 		d.backups.next = times[len(times)-1].Add(d.o.BackupInterval)
+		// A daemon that stopped mid-upload owes its newest bundle.
+		d.backups.shipDue = d.now()
 	}
 	return nil
 }
@@ -102,7 +111,12 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 	}
 	now := d.now()
 	b.mu.Lock()
-	if b.running || now.Before(b.next) {
+	if b.running {
+		b.mu.Unlock()
+		return
+	}
+	due := !now.Before(b.next)
+	if !due && (b.shipDue.IsZero() || now.Before(b.shipDue)) {
 		b.mu.Unlock()
 		return
 	}
@@ -111,6 +125,13 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
+		if !due {
+			d.retryShips(ctx, now)
+			b.mu.Lock()
+			b.running = false
+			b.mu.Unlock()
+			return
+		}
 		err := d.backupNow(ctx, now)
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -139,6 +160,9 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
+	// Before pruning, so the bundle being shipped is still there. A failed
+	// shipment is the destination's diagnostic, and never fails the backup.
+	d.shipBundle(ctx, name, now, false)
 	names, _, err := scheduledBundles(d.o.BackupDir)
 	if err != nil {
 		return err

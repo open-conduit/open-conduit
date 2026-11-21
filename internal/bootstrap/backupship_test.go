@@ -1,0 +1,282 @@
+package bootstrap
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/backup"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
+)
+
+// memoryDestination is a destination in memory, whose answers a test can
+// make wrong, as whoever controls a real one could.
+type memoryDestination struct {
+	mu      sync.Mutex
+	files   map[string][]byte // bundle/path
+	order   []string
+	reads   []string
+	failPut func(path string) error
+	extra   []extension.BackupFile
+}
+
+func newMemoryDestination() *memoryDestination {
+	return &memoryDestination{files: map[string][]byte{}}
+}
+
+func (m *memoryDestination) Put(_ context.Context, _ extension.BackupTarget, bundle string, f extension.BackupFile, r io.Reader) error {
+	if m.failPut != nil {
+		if err := m.failPut(f.Path); err != nil {
+			return err
+		}
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[bundle+"/"+f.Path] = data
+	m.order = append(m.order, f.Path)
+	return nil
+}
+
+func (m *memoryDestination) List(context.Context, extension.BackupTarget) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for k := range m.files {
+		if b, ok := strings.CutSuffix(k, "/"+extension.BackupManifest); ok {
+			out = append(out, b)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func (m *memoryDestination) Files(_ context.Context, _ extension.BackupTarget, bundle string) ([]extension.BackupFile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := slices.Clone(m.extra)
+	for k, v := range m.files {
+		if p, ok := strings.CutPrefix(k, bundle+"/"); ok {
+			out = append(out, extension.BackupFile{Path: p, Size: int64(len(v))})
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryDestination) Read(_ context.Context, _ extension.BackupTarget, bundle, path string, offset int64, length int) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if offset == 0 {
+		m.reads = append(m.reads, path)
+	}
+	data, ok := m.files[bundle+"/"+path]
+	if !ok {
+		return nil, false, errors.New("no such file")
+	}
+	end := min(offset+int64(length), int64(len(data)))
+	return bytes.Clone(data[offset:end]), end == int64(len(data)), nil
+}
+
+func shipTo(d *daemon, m *memoryDestination) {
+	d.reportedAt = map[string]time.Time{}
+	d.backups.targets = func() []shipTarget {
+		return []shipTarget{{cfg: config.BackupDestination{Name: "offsite", Type: "memory"}, d: m}}
+	}
+}
+
+// A published bundle reaches the destination with its manifest last, so a
+// bundle cut short is never one a restore can pick.
+func TestScheduledBundleIsShippedManifestLast(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	d := backupDaemon(t, start)
+	m := newMemoryDestination()
+	shipTo(d, m)
+	if err := d.backupNow(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	name := "conduit-20261102T090000Z"
+	if got, _ := m.List(ctx, extension.BackupTarget{}); !slices.Equal(got, []string{name}) {
+		t.Fatalf("listed %v", got)
+	}
+	if m.order[len(m.order)-1] != extension.BackupManifest {
+		t.Fatalf("put order %v", m.order)
+	}
+	if !d.backups.shipDue.IsZero() || d.reportedCode("backup_destination", "offsite") != "" {
+		t.Fatalf("a good shipment is owed again or reported: %v %q", d.backups.shipDue, d.reportedCode("backup_destination", "offsite"))
+	}
+}
+
+// A failed upload doesn't fail the backup, is reported with how far it got,
+// isn't listed, and is tried again until it lands.
+func TestFailedShipmentIsReportedAndRetried(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	d := backupDaemon(t, start)
+	m := newMemoryDestination()
+	m.failPut = func(p string) error {
+		if p == extension.BackupManifest {
+			return errors.New("bucket refused")
+		}
+		return nil
+	}
+	shipTo(d, m)
+	if err := d.backupNow(ctx, start); err != nil {
+		t.Fatalf("a failed shipment failed the backup: %v", err)
+	}
+	if got := d.reportedCode("backup_destination", "offsite"); got != "ship_failed" {
+		t.Fatalf("diagnostic = %q", got)
+	}
+	if got, _ := m.List(ctx, extension.BackupTarget{}); len(got) != 0 {
+		t.Fatalf("an incomplete bundle is listed: %v", got)
+	}
+	if r := d.backups.shipped["offsite"]; !strings.Contains(r.problem, "of") || !strings.Contains(r.problem, "files stored") {
+		t.Fatalf("the outcome doesn't say how far it got: %+v", r)
+	}
+	if want := start.Add(backupRetry); !d.backups.shipDue.Equal(want) {
+		t.Fatalf("retry at %v, want %v", d.backups.shipDue, want)
+	}
+	m.failPut = nil
+	d.retryShips(ctx, start.Add(backupRetry))
+	if got, _ := m.List(ctx, extension.BackupTarget{}); len(got) != 1 {
+		t.Fatalf("after the retry: %v", got)
+	}
+	if got := d.reportedCode("backup_destination", "offsite"); got != "" || !d.backups.shipDue.IsZero() {
+		t.Fatalf("still reported after landing: %q, due %v", got, d.backups.shipDue)
+	}
+	// A bundle the destination holds isn't uploaded again.
+	puts := len(m.order)
+	d.retryShips(ctx, start.Add(2*backupRetry))
+	if len(m.order) != puts {
+		t.Fatalf("a held bundle was uploaded again: %d puts, was %d", len(m.order), puts)
+	}
+}
+
+// shippedBundle is a signed bundle stored at a destination.
+func shippedBundle(t *testing.T) (*memoryDestination, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	private, public, err := backup.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OC_TEST_BACKUP_KEY", private)
+	source := filepath.Join(t.TempDir(), "signed")
+	if _, err := BackupState(ctx, f.state, source, "test", cli.BackupOptions{ConfigPath: trustConfig(t, "env:OC_TEST_BACKUP_KEY", public)}); err != nil {
+		t.Fatal(err)
+	}
+	m := newMemoryDestination()
+	if _, _, err := putBundle(ctx, shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}, source, "conduit-1"); err != nil {
+		t.Fatal(err)
+	}
+	return m, public, "conduit-1"
+}
+
+func TestFetchAuthenticatesTheBundle(t *testing.T) {
+	ctx := context.Background()
+	m, public, name := shippedBundle(t)
+	_, otherPublic, err := backup.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := func() string { return filepath.Join(t.TempDir(), "fetched") }
+	absent := filepath.Join(t.TempDir(), "absent.json")
+
+	// Without a trust key a fetch is refused outright, though a local
+	// restore with none is allowed.
+	refused := dir()
+	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, name, refused, cli.RestoreOptions{ConfigPath: absent}); !errors.Is(err, backup.ErrNotAuthentic) {
+		t.Fatalf("no trust key: %v", err)
+	}
+	if len(m.reads) != 0 {
+		t.Fatalf("fetched %v with no way to check them", m.reads)
+	}
+
+	// A key that didn't sign it stops the fetch after the manifest and
+	// signature, before the database is read.
+	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, name, refused, cli.RestoreOptions{ConfigPath: absent, TrustKeys: []string{otherPublic}}); !errors.Is(err, backup.ErrNotAuthentic) {
+		t.Fatalf("wrong key: %v", err)
+	}
+	if slices.Contains(m.reads, "conduit.db") {
+		t.Fatalf("read the database of an unauthenticated bundle: %v", m.reads)
+	}
+	if _, err := os.Lstat(refused); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused fetch published: %v", err)
+	}
+
+	// The negative control: the genuine bundle fetches and restores.
+	good := dir()
+	info, err := fetchBundle(ctx, m, extension.BackupTarget{}, name, good, cli.RestoreOptions{ConfigPath: absent, TrustKeys: []string{public}})
+	if err != nil || info.Authenticity != backup.Verified || info.Path != good {
+		t.Fatalf("fetch = %+v, %v", info, err)
+	}
+	if _, err := RestoreState(ctx, good, filepath.Join(t.TempDir(), "restored"), cli.RestoreOptions{ConfigPath: absent, TrustKeys: []string{public}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A swapped database still under the signed manifest is caught, and
+	// nothing is published.
+	key := name + "/conduit.db"
+	genuine := m.files[key]
+	m.files[key] = append(bytes.Clone(genuine[:len(genuine)-1]), genuine[len(genuine)-1]^0xff)
+	swapped := dir()
+	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, name, swapped, cli.RestoreOptions{ConfigPath: absent, TrustKeys: []string{public}}); err == nil {
+		t.Fatal("a swapped database was accepted")
+	}
+	if _, err := os.Lstat(swapped); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a bad bundle published: %v", err)
+	}
+}
+
+// What a destination says about a bundle's files is untrusted.
+func TestFetchRefusesWhatADestinationCantMean(t *testing.T) {
+	ctx := context.Background()
+	for _, path := range []string{"../escape", "artifacts/../../escape", "/etc/passwd", "private/operator.token", "artifacts//x"} {
+		t.Run(path, func(t *testing.T) {
+			m, public, name := shippedBundle(t)
+			m.extra = []extension.BackupFile{{Path: path, Size: 1}}
+			parent := t.TempDir()
+			_, err := fetchBundle(ctx, m, extension.BackupTarget{}, name, filepath.Join(parent, "fetched"), cli.RestoreOptions{TrustKeys: []string{public}})
+			if err == nil || !strings.Contains(err.Error(), "unexpected file") {
+				t.Fatalf("err = %v", err)
+			}
+			if entries, _ := os.ReadDir(parent); len(entries) != 0 {
+				t.Fatalf("left behind: %v", entries)
+			}
+		})
+	}
+}
+
+func TestBackupDestinationSettings(t *testing.T) {
+	doc := func(body string) []byte {
+		return fmt.Appendf(nil, `{"version":1,"settings":{"backup":{"destinations":%s}},"connections":[],"scopes":[{"id":"org","name":"org"}]}`, body)
+	}
+	parsed, err := config.ParseFile(doc(`[{"name":"offsite","type":"aws-s3","config":{"bucket":"b"}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := parsed.Settings.Backup.Destinations
+	var c map[string]string
+	if len(got) != 1 || got[0].Name != "offsite" || got[0].Type != "aws-s3" || json.Unmarshal(got[0].Config, &c) != nil || c["bucket"] != "b" {
+		t.Fatalf("destinations = %+v", got)
+	}
+	if _, err := config.ParseFile(doc(`[{"name":"a","type":"x"},{"name":"a","type":"y"}]`)); err == nil {
+		t.Fatal("a repeated name was accepted")
+	}
+}

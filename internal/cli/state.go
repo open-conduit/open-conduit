@@ -147,6 +147,12 @@ type BackupOptions struct {
 	Unsigned bool
 }
 
+// DestinationBundles are the complete bundles one destination holds.
+type DestinationBundles struct {
+	Destination string   `json:"destination"`
+	Bundles     []string `json:"bundles"`
+}
+
 // KeyPair is a new signing key: the private half went to Path.
 type KeyPair struct {
 	Path      string `json:"path"`
@@ -164,7 +170,12 @@ type StateOps struct {
 	Restore func(ctx context.Context, bundle, destination string, o RestoreOptions) (BackupInfo, error)
 	// RestoreInPlace restores a bundle into stateDir itself, moving the
 	// state it replaces aside.
-	RestoreInPlace  func(ctx context.Context, bundle, stateDir string, o RestoreOptions) (BackupInfo, error)
+	RestoreInPlace func(ctx context.Context, bundle, stateDir string, o RestoreOptions) (BackupInfo, error)
+	// ListDestination names the complete bundles a configured destination
+	// holds, and FetchBundle downloads one into an absent directory,
+	// authenticating it.
+	ListDestination func(ctx context.Context, name string, o RestoreOptions) (DestinationBundles, error)
+	FetchBundle     func(ctx context.Context, name, bundle, destination string, o RestoreOptions) (BackupInfo, error)
 	Check           func(ctx context.Context, stateDir string) (StateReport, error)
 	RecoverOperator func(ctx context.Context, stateDir, tokenPath string) error
 }
@@ -179,20 +190,31 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE]")
+		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
 	}
 	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config", "trust-key")
 	inPlace := f.fs.Bool("in-place", false, "")
 	unsigned := f.fs.Bool("unsigned", false, "")
 	acceptUnsigned := f.fs.Bool("accept-unsigned", false, "")
 	pos, err := f.parse(args[1:])
-	if err != nil || len(pos) != 1 {
+	want := 1
+	if args[0] == "fetch" {
+		want = 3
+	}
+	if err != nil || len(pos) != want {
+		if want == 3 {
+			return usageError(o.errOut, "expected backup fetch DESTINATION BUNDLE DIR")
+		}
 		return usageError(o.errOut, "expected one path")
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
 	trust := splitKeys(f.get("trust-key"))
 	switch args[0] {
+	case "list":
+		return o.emit(o.env.State.ListDestination(cx, pos[0], RestoreOptions{ConfigPath: o.configPath(f.get("config"))}))
+	case "fetch":
+		return o.emit(o.env.State.FetchBundle(cx, pos[0], pos[1], o.abs(pos[2]), RestoreOptions{ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}))
 	case "keygen":
 		return o.emit(o.backupKeygen(o.abs(pos[0])))
 	case "create":
@@ -211,7 +233,7 @@ func (o *operator) backup(args []string) int {
 		}
 		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	}
-	return usageError(o.errOut, "expected backup keygen|create|verify|restore")
+	return usageError(o.errOut, "expected backup keygen|create|verify|restore|list|fetch")
 }
 
 // splitKeys reads a comma-separated --trust-key.

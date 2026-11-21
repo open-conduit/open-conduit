@@ -175,10 +175,26 @@ type TrustedPublisher struct {
 type BackupSettings struct {
 	SigningKey string
 	TrustKeys  []string
+	// Destinations are where each published bundle is shipped.
+	Destinations []BackupDestination
 }
 
+// BackupDestination is one settings.backup.destinations entry: the
+// operator's name for it, a type some package declares (manifest
+// backup_destinations) and that type's config, opaque to the host.
+type BackupDestination struct {
+	Name   string          `json:"name"`
+	Type   string          `json:"type"`
+	Config json.RawMessage `json:"config,omitempty"`
+}
+
+// MaxBackupDestinations bounds settings.backup.destinations.
+const MaxBackupDestinations = 8
+
 // IsZero says whether no backup signing is configured.
-func (b BackupSettings) IsZero() bool { return b.SigningKey == "" && len(b.TrustKeys) == 0 }
+func (b BackupSettings) IsZero() bool {
+	return b.SigningKey == "" && len(b.TrustKeys) == 0 && len(b.Destinations) == 0
+}
 
 // backupTrustKey matches a trust key's text form: ed25519: and the base64 of
 // 32 bytes.
@@ -659,7 +675,7 @@ func (c *checker) settings(n *node) Settings {
 func (c *checker) backupSettings(n *node) BackupSettings {
 	const path = "settings/backup"
 	var b BackupSettings
-	if n == nil || !c.object(n, path, nil, "signing_key", "trust_keys") {
+	if n == nil || !c.object(n, path, nil, "signing_key", "trust_keys", "destinations") {
 		return b
 	}
 	if k := n.field("signing_key"); k != nil {
@@ -681,6 +697,27 @@ func (c *checker) backupSettings(n *node) BackupSettings {
 				}
 				b.TrustKeys = append(b.TrustKeys, v)
 			}
+		}
+	}
+	if r := n.field("destinations"); r != nil && c.typed(r, path+"/destinations", kArray, "array") {
+		if len(r.items) > MaxBackupDestinations {
+			c.fail(path+"/destinations", "invalid_value", fmt.Sprintf("at most %d backup destinations are allowed", MaxBackupDestinations))
+		}
+		seen := map[string]bool{}
+		for i, item := range r.items {
+			p := ptr(path+"/destinations", i)
+			if !c.object(item, p, []string{"name", "type"}, "config") {
+				continue
+			}
+			var d BackupDestination
+			d.Name, _ = c.str(item.field("name"), p+"/name", idPattern)
+			d.Type, _ = c.str(item.field("type"), p+"/type", idPattern)
+			if seen[d.Name] {
+				c.fail(p+"/name", "invalid_value", "backup destination names are unique")
+			}
+			seen[d.Name] = true
+			d.Config = c.opaque(item.field("config"), p+"/config")
+			b.Destinations = append(b.Destinations, d)
 		}
 	}
 	return b
@@ -1337,6 +1374,13 @@ func (d *Document) normalized(redact bool) any {
 		}
 		if len(b.TrustKeys) > 0 {
 			m["trust_keys"] = b.TrustKeys
+		}
+		if len(b.Destinations) > 0 {
+			list := make([]any, 0, len(b.Destinations))
+			for _, d := range b.Destinations {
+				list = append(list, map[string]any{"name": d.Name, "type": d.Type, "config": d.Config})
+			}
+			m["destinations"] = list
 		}
 		settings["backup"] = m
 	}

@@ -91,6 +91,11 @@ var useCases = map[string][]string{
 	"container_provider.site_run": {"ssh"},
 	"site.run":                    {"git"},
 	"tunnel.run":                  {"ngrok", "cloudflared"},
+	"backup_destination.write":    {"aws"},
+	"backup_destination.abort":    {"aws"},
+	"backup_destination.list":     {"aws"},
+	"backup_destination.files":    {"aws"},
+	"backup_destination.read":     {"aws"},
 	"tunnel.url":                  {"ngrok", "cloudflared"},
 	"credential.verify":           {"oidc"},
 	"secret.serve":                {"aws"},
@@ -252,6 +257,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.SandboxBroker":           reflect.TypeFor[extension.SandboxBroker](),
 		"extension.SandboxProvider":         reflect.TypeFor[extension.SandboxProvider](),
 		"extension.TunnelProvider":          reflect.TypeFor[extension.TunnelProvider](),
+		"extension.BackupDestination":       reflect.TypeFor[extension.BackupDestination](),
 		"extension.CredentialVerifier":      reflect.TypeFor[extension.CredentialVerifier](),
 		"extension.SecretProvider":          reflect.TypeFor[extension.SecretProvider](),
 		"extension.ContainerBroker":         reflect.TypeFor[extension.ContainerBroker](),
@@ -358,6 +364,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
 	m.Provides.Verifiers = []protocol.VerifierDecl{{Type: "chat-idp"}}
 	m.Provides.SecretSchemes = []protocol.SecretSchemeDecl{{Scheme: "chat-vault"}}
+	m.Provides.BackupDestinations = []protocol.BackupDestinationDecl{{Type: "chat-bucket"}}
 	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Sites = true, true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {

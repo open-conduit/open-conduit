@@ -14,7 +14,8 @@
 //
 // It also serves the aws-sm secret reference scheme (SecretScheme), so a
 // secret slot can name an AWS Secrets Manager secret the daemon reads with
-// its own identity.
+// its own identity, and the s3 backup destination (S3Destination), so the
+// host can ship backup bundles to a bucket with that same identity.
 //
 // It is an installed package on protocol/sdk alone, so a third party could
 // have written it.
@@ -131,6 +132,13 @@ func Build(o Options) *sdk.Extension {
 		keys = o.Ambient("")
 	}
 	ext.Secrets = map[string]extension.SecretProvider{SecretScheme: &secrets{o: o, keys: keys}}
+	ext.Manifest.Provides.BackupDestinations = []protocol.BackupDestinationDecl{{Type: S3Destination, Fields: []protocol.FieldDecl{
+		{Name: "bucket", Help: "the S3 bucket bundles are stored in; its lifecycle rules, versioning, object lock and encryption stay its own configuration", Required: true},
+		{Name: "region", Help: "the bucket's region, such as eu-west-2", Required: true},
+		{Name: "prefix", Help: "a key prefix to put bundles under"},
+		{Name: "endpoint", Help: "an endpoint to call instead of S3's regional one (a VPC endpoint, an emulator, an S3-compatible store), addressed path-style"},
+	}}}
+	ext.BackupDestinations = map[string]extension.BackupDestination{S3Destination: &s3Store{o: o, keys: keys}}
 	tools{st}.register(ext)
 	ext.Check(Name, st.check)
 	ext.Check(Name+"-roles", st.checkRoles, sdk.Deep())
@@ -141,6 +149,10 @@ func Build(o Options) *sdk.Extension {
 				return extension.Invalid("", "invalid_aws_connection", err.Error())
 			}
 			return checkConnectionSecrets(p.SecretNames)
+		case protocol.ValidateBackupDestination:
+			if _, err := ParseS3Config(p.Config); err != nil {
+				return extension.Invalid("/config", "invalid_s3_destination", err.Error())
+			}
 		case protocol.ValidateExtension:
 			if len(p.SecretNames) > 0 {
 				return extension.Invalid("/secret_names", "aws_takes_no_secrets", "an aws entry takes no secrets; the base key pair goes in its connection's secret_refs")

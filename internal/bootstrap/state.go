@@ -28,7 +28,7 @@ import (
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {
-	return &cli.StateOps{Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
+	return &cli.StateOps{ListDestination: ListDestination, FetchBundle: FetchBundle, Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
 }
 
 // locked opens a stopped instance's state directory under its daemon lock.

@@ -136,3 +136,7 @@ The toolbelt's own records show the call in the Work's run history: as called, a
 - `aws-roles` (deep, `doctor --deep`): the base identity can assume each role, for the shortest session STS issues.
 
 `extensions/aws/awstest` is a fake STS and Secrets Manager that checks each request's signature against the key pairs it knows and answers `GetCallerIdentity` and `AssumeRole` in STS's XML and `GetSecretValue` in Secrets Manager's JSON, so the tests and the certification fixture (`open-conduit extension-run aws certify-fixture`) need no AWS account. The signer is checked against AWS's published Signature Version 4 example.
+
+## Backup destination
+
+The package also provides the `aws-s3` [backup destination](../backup-bundles/#backup-destinations): a `bucket`, `region`, optional key `prefix` and optional `endpoint` (a VPC endpoint, an emulator or an S3-compatible store, addressed path-style). It calls S3 with the daemon's own AWS identity, the one the `aws-sm` scheme uses, never a connection's. A file that fits one 16 MiB part is a single `PUT`, and a larger one a multipart upload, aborted on failure, which S3 shows only once completed. Every request carries its body's SHA-256, which S3 checks. The bucket's lifecycle rules, versioning, object lock and encryption stay its owner's configuration. The identity needs `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:AbortMultipartUpload`.

@@ -243,7 +243,7 @@ auth recover               (daemon stopped) revoke every operator credential and
 ### `open-conduit backup`
 
 ```text
-backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE]   (daemon stopped; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
+backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]   (create, verify and restore need the daemon stopped; list and fetch read a destination in settings.backup.destinations, and fetch needs a trust key or --accept-unsigned; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
 ```
 
 ### `open-conduit state`

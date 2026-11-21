@@ -52,7 +52,7 @@ While it runs, the daemon publishes a bundle of its own state every `--backup-in
 - Only `conduit-<time>` directories are counted and pruned. Anything else in the directory, such as a bundle you took before an upgrade, is left alone.
 - A failed backup is logged as a `backup` runtime diagnostic and tried again 15 minutes later. A staging directory a crash left (`.conduit-snapshot-*`) is removed at the next start.
 - **Disk use.** Each bundle is a full copy of the database and every artifact a kept run references, so the default seven take about seven times `conduit.db` plus `artifacts/`. The daemon logs each bundle's size when it publishes it (`backup published … bytes=`). Lower `--backups-kept`, or move `--backup-dir`, when that is too much for the disk.
-- The default directory is on the same disk as the state. To survive losing the disk, point `--backup-dir` elsewhere (a flag of `serve` and of `service install`).
+- The default directory is on the same disk as the state. To survive losing the disk, point `--backup-dir` elsewhere (a flag of `serve` and of `service install`), or ship bundles to a [destination](../backup-bundles/#backup-destinations).
 
 ## Restoring after a bad release or lost state
 

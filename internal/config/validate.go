@@ -71,6 +71,10 @@ type Registry struct {
 	// (settings.webhooks.tunnel). Its error is a fixed, secret-free
 	// reason, shown in the diagnostic.
 	Tunnels map[string]func(json.RawMessage) error
+	// BackupDestinations are the backup destination types packages declare
+	// (manifest backup_destinations), each with its package's check of a
+	// destination's config.
+	BackupDestinations map[string]func(json.RawMessage) error
 	// SecretSchemes are the secret reference schemes packages declare
 	// (manifest secret_schemes), each with the name of the package that
 	// resolves it. A reference of any other scheme but the built-in forms
@@ -397,6 +401,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 	}
 	v.submittedIncludes()
 	v.tunnel(doc.Settings.Webhooks.Tunnel)
+	v.backupDestinations(doc.Settings.Backup.Destinations)
 	v.secretSchemes()
 	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
 		v.checkPassEnv(ptr("settings/extensions", name)+"/pass_env", doc.Settings.Extensions[name].PassEnv)
@@ -893,6 +898,22 @@ func (v *validator) tunnel(t *Tunnel) {
 	}
 }
 
+// backupDestinations checks settings.backup.destinations against the
+// packages: each type is one a package declares, which checks its config.
+func (v *validator) backupDestinations(list []BackupDestination) {
+	for i, d := range list {
+		p := ptr("settings/backup/destinations", i)
+		check, ok := v.reg.BackupDestinations[d.Type]
+		if !ok {
+			v.fail(p+"/type", "unknown_registration", "no installed or bundled package provides this backup destination type"+registeredNames(v.reg.BackupDestinations, d.Type))
+		} else if check != nil {
+			if err := check(d.Config); err != nil {
+				v.fail(p+"/config", "invalid_config", err.Error())
+			}
+		}
+	}
+}
+
 func (v *validator) sandboxed(p string, b Binding) {
 	if b.Sandbox != nil {
 		check, ok := v.reg.Sandboxes[b.Sandbox.Provider]
@@ -1275,6 +1296,8 @@ func (v *validator) snapshot() *Snapshot {
 		redacted: canonical(v.doc.normalized(true))}
 	s.Settings.RetryDelaysSeconds = slices.Clone(s.Settings.RetryDelaysSeconds)
 	s.Settings.Budgets = slices.Clone(s.Settings.Budgets)
+	s.Settings.Backup.TrustKeys = slices.Clone(s.Settings.Backup.TrustKeys)
+	s.Settings.Backup.Destinations = slices.Clone(s.Settings.Backup.Destinations)
 	s.Settings.Extensions = maps.Clone(s.Settings.Extensions)
 	for _, c := range v.doc.Connections {
 		refs := make(map[string]string, len(c.SecretRefs))

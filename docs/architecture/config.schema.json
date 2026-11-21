@@ -159,6 +159,21 @@
               "type": "array",
               "items": {"type": "string", "pattern": "^ed25519:[A-Za-z0-9+/]{43}=$"},
               "description": "Public keys backup verify and backup restore accept. With any set, a bundle must be signed by one of them unless the operator passes --accept-unsigned for a bundle with no signature."
+            },
+            "destinations": {
+              "type": "array",
+              "maxItems": 8,
+              "description": "Where the daemon ships each scheduled bundle after publishing it. A package provides each type. What a destination keeps, for how long and how it encrypts it are its owner's policy.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "type"],
+                "properties": {
+                  "name": {"type": "string", "description": "Your name for this destination, used by backup list and backup fetch."},
+                  "type": {"type": "string", "description": "A backup destination type a package provides, such as aws-s3."},
+                  "config": {"type": "object", "description": "The type's own config."}
+                }
+              }
             }
           }
         },
