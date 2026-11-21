@@ -199,6 +199,8 @@ type procSample struct {
 	procs, goroutines, fds        int
 	cpu                           time.Duration
 	dbBytes, walBytes, artifactsB int64
+	// openWork is the unfinished Work, where the scenario samples it.
+	openWork int
 }
 
 // sampleDaemon reads the daemon's process, its descendants and its state's
