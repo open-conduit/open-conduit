@@ -111,6 +111,41 @@ type BoundContainer struct {
 	resource *Resource
 	launched *ContainerPin
 	placed   *Placement
+	refused  *NoCapacityError
+}
+
+// noCapacity records a provider's ErrNoCapacity refusal, so the host can
+// return the claim whatever the executor makes of the error, and returns
+// the error to give the executor. A refusal whose reason carries a
+// credential the provider resolved is refused as any other output would
+// be. The caller holds c.mu when locked is true.
+func (c *BoundContainer) noCapacity(err error, locked bool) error {
+	refusal := &NoCapacityError{}
+	var typed *NoCapacityError
+	if errors.As(err, &typed) {
+		*refusal = *typed
+	}
+	if denied := c.withheld("refusal", refusal.Reason); denied != nil {
+		return denied
+	}
+	if !locked {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+	c.refused = refusal
+	return err
+}
+
+// Refusal is the provider's ErrNoCapacity refusal of this attempt's launch,
+// nil when there was none or a later launch of the attempt got a container:
+// a refusal means nothing was started.
+func (c *BoundContainer) Refusal() *NoCapacityError {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.launched != nil {
+		return nil
+	}
+	return c.refused
 }
 
 // BindContainer binds a container provider to one attempt. Hosts call it;
@@ -235,6 +270,9 @@ func (c *BoundContainer) place(ctx context.Context, placer ContainerPlacer, pref
 	}
 	end(err)
 	if err != nil {
+		if errors.Is(err, ErrNoCapacity) {
+			return Placement{}, c.noCapacity(err, true)
+		}
 		if errors.Is(err, ErrSandboxUnavailable) || errors.Is(err, ErrSandboxDenied) {
 			return Placement{}, err
 		}
@@ -403,6 +441,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	}
 	plan, err := b.Provider.Plan(ctx, b.Owner, policy, merged, l)
 	end(err)
+	if errors.Is(err, ErrNoCapacity) {
+		return SandboxPlan{}, c.noCapacity(err, false)
+	}
 	if err != nil {
 		return SandboxPlan{}, err
 	}
@@ -427,6 +468,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	end = phase(b.Phase, "container create")
 	created, err := b.Provider.Create(ctx, plan, labels)
 	end(err)
+	if errors.Is(err, ErrNoCapacity) {
+		return SandboxPlan{}, c.noCapacity(err, false)
+	}
 	if err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: could not create the container: %v", ErrSandboxUnavailable, err)
 	}

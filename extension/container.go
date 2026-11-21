@@ -61,7 +61,32 @@ var (
 	// state: its daemon is unreachable, or is not the daemon the container
 	// was pinned on. Replacement stays blocked until it can.
 	ErrContainerUnconfirmed = errors.New("container state unconfirmed")
+	// ErrNoCapacity means a container provider has nowhere to put the launch
+	// now (its pool is full) and nothing about the launch is wrong. Place,
+	// Plan or Create may refuse with it, or with a NoCapacityError that says
+	// when to ask again, as long as nothing has started. The host returns
+	// the claim and holds the Work: no retry is spent.
+	ErrNoCapacity = errors.New("no container capacity")
 )
+
+// NoCapacityError is ErrNoCapacity with the provider's account of it.
+// Reason is a line for the Work's history, so it carries no credential.
+// RetryAt, when set, is when to ask again; nil leaves that to the host's
+// backoff. It is a hint: the host bounds it.
+type NoCapacityError struct {
+	Reason  string
+	RetryAt *time.Time
+}
+
+func (e *NoCapacityError) Error() string {
+	if e.Reason == "" {
+		return ErrNoCapacity.Error()
+	}
+	return ErrNoCapacity.Error() + ": " + e.Reason
+}
+
+// Is makes a NoCapacityError match ErrNoCapacity.
+func (e *NoCapacityError) Is(target error) bool { return target == ErrNoCapacity }
 
 // ContainerRef identifies a container: the provider's ID and its labels.
 type ContainerRef struct {
@@ -359,10 +384,13 @@ func ParseContainerConfig(raw []byte) (ContainerConfig, error) {
 }
 
 // ContainerReason is the structured failure reason for a Launch error:
-// container_running, sandbox_denied or sandbox_unavailable.
+// container_running, no_capacity, sandbox_denied or sandbox_unavailable.
 func ContainerReason(err error) string {
 	if errors.Is(err, ErrContainerRunning) {
 		return "container_running"
+	}
+	if errors.Is(err, ErrNoCapacity) {
+		return "no_capacity"
 	}
 	return SandboxReason(err)
 }

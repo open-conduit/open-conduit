@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -194,6 +195,10 @@ type ContainerBinding struct {
 	Settle    func(extension.Result) extension.Result
 	// Home is the Work's container home (ExecutionContext.ContainerHome).
 	Home string
+	// Refusal is the provider's ErrNoCapacity refusal of this launch, nil
+	// when there was none or a container was launched after all. The host
+	// asks it rather than trusting what the executor made of the error.
+	Refusal func() *extension.NoCapacityError
 }
 
 // WorkKindPolicy is the lifecycle an extension declares for the Work kind it
@@ -222,6 +227,9 @@ type Scheduler struct {
 	now     func() time.Time
 	router  *Router
 	options SchedulerOptions
+	// refusals are the launches a container provider refused for capacity
+	// whose failed result is still to arrive, by lease.
+	refusals sync.Map
 }
 
 // Attempt is a claimed attempt. Claim and ClaimRecovery return it before
@@ -714,7 +722,7 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 		fallbacks[name] = fallback
 	}
 	o.ControlErrorFallback = fallbacks
-	return &Scheduler{store, now, router, o}, nil
+	return &Scheduler{store: store, now: now, router: router, options: o}, nil
 }
 func (s *Scheduler) transact(ctx context.Context, ref *domain.LeaseRef, fn func(storage.Tx) error) error {
 	return s.store.Transact(ctx, storage.Guard{Now: s.now(), Lease: ref}, fn)
@@ -1567,6 +1575,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		attempt.Request.Context.Sandbox, attempt.Request.Context.Resources = sandbox, resources
 	}
 	var settle func(extension.Result) extension.Result
+	var refusal func() *extension.NoCapacityError
 	if s.options.Container != nil {
 		pin := func(c extension.ContainerPin) error {
 			return trail.phase("container pin", func() error {
@@ -1600,6 +1609,10 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		if c.Broker != nil {
 			attempt.Request.Context.Container, attempt.Request.Context.Resources, settle = c.Broker, c.Resources, c.Settle
 			attempt.Request.Context.ContainerHome = c.Home
+			// A recovery adopts what is running and places nothing.
+			if !recovering {
+				refusal = c.Refusal
+			}
 		}
 	}
 	if s.options.Isolation != nil && attempt.Request.Context.Sandbox == nil && attempt.Request.Context.Container == nil && !executor.Capabilities().NoProcess {
@@ -1652,6 +1665,11 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		}
 		return e
 	})
+	if err != nil && refusal != nil {
+		if r := refusal(); r != nil {
+			return attempt, errors.Join(ErrContainerCapacity, s.holdForCapacity(ctx, attempt.Lease, r))
+		}
+	}
 	if err != nil {
 		failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "executor operation failed"}}
 		commitErr := s.fail(ctx, attempt.Lease, failure, false, err)
@@ -1670,13 +1688,22 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			return e
 		}
 		current.LaunchState = "running"
-		return putAttemptState(tx, current)
+		if e = putAttemptState(tx, current); e != nil {
+			return e
+		}
+		// A launch that got a container ends the Work's run of refusals.
+		if refusal != nil && refusal() == nil && attempt.Request.Context.Container != nil {
+			return tx.Delete(capacityNamespace, identity(string(state.WorkID)))
+		}
+		return nil
 	})
 	if err != nil {
 		return attempt, err
 	}
 	if settle != nil {
-		handle = settledHandle{handle, settle}
+		handle = settledHandle{RunHandle: handle, settle: settle, refused: refusal, note: func(r *extension.NoCapacityError) {
+			s.refusals.Store(attempt.Lease, r)
+		}}
 	}
 	if served := s.options.Served; served != nil {
 		// Outermost, so what the host settles is scrubbed too.
@@ -1694,6 +1721,10 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 type settledHandle struct {
 	extension.RunHandle
 	settle func(extension.Result) extension.Result
+	// refused and note carry a capacity refusal to Complete: a failed
+	// result with one means the launch was refused and nothing ran.
+	refused func() *extension.NoCapacityError
+	note    func(*extension.NoCapacityError)
 }
 
 func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
@@ -1701,7 +1732,13 @@ func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
 	if err != nil {
 		return r, err
 	}
-	return h.settle(r), nil
+	r = h.settle(r)
+	if h.refused != nil && r.Outcome.Kind == domain.OutcomeFailed {
+		if refusal := h.refused(); refusal != nil {
+			h.note(refusal)
+		}
+	}
+	return r, nil
 }
 
 // Recover claims a running attempt whose lease was lost and launches it
@@ -1964,6 +2001,16 @@ func (h resultHint) RetryHint() RetryHint { return h.hint }
 // keeps what that turn wrote up to the stop (RecordStopped, #647), and the
 // refusal is returned.
 func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
+	if held, ok := s.refusals.Load(ref); ok {
+		if result.Outcome.Kind == domain.OutcomeFailed {
+			err := s.holdForCapacity(ctx, ref, held.(*extension.NoCapacityError))
+			if err == nil || !errors.Is(err, storage.ErrConflict) {
+				s.refusals.Delete(ref)
+			}
+			return err
+		}
+		s.refusals.Delete(ref)
+	}
 	if err := s.complete(ctx, ref, result); err != nil {
 		return s.recordLate(ctx, ref, result, err)
 	}

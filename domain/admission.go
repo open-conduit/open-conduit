@@ -11,4 +11,10 @@ const (
 	// EventManualRelease records an operator releasing a Work's hold, which
 	// admits Work held for admission at once.
 	EventManualRelease = "core.manual.release"
+	// EventCapacityHeld records Work held because its container provider
+	// had no room for the launch.
+	EventCapacityHeld = "core.capacity.held"
+	// EventCapacityReleased records a capacity hold ending at its time, so
+	// the Work's launch is tried again.
+	EventCapacityReleased = "core.capacity.released"
 )

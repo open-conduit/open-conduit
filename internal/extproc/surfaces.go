@@ -782,7 +782,7 @@ func (t *remoteTunnel) Run(ctx context.Context, run extension.TunnelRun, publish
 // sandbox_denied stays a denial, and anything else (the package down, an
 // internal error) means the sandbox can't be enforced, so nothing runs.
 func sandboxErr(err error) error {
-	if errors.Is(err, extension.ErrSandboxDenied) || errors.Is(err, extension.ErrSandboxUnavailable) {
+	if errors.Is(err, extension.ErrSandboxDenied) || errors.Is(err, extension.ErrSandboxUnavailable) || errors.Is(err, extension.ErrNoCapacity) {
 		return err
 	}
 	return errors.Join(extension.ErrSandboxUnavailable, err)

@@ -453,6 +453,9 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 	if err != nil {
 		return result, err
 	}
+	if err = s.releaseCapacity(ctx); err != nil {
+		return result, err
+	}
 	if err = s.transact(ctx, nil, indexUnexcluded); err != nil {
 		return result, err
 	}

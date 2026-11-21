@@ -217,6 +217,58 @@ func CheckContainerPlacer(f PlacerFixture) error {
 	return nil
 }
 
+// CapacityFixture is a pool container provider to check: Fill leaves it no
+// room and Free gives it room again.
+type CapacityFixture struct {
+	Provider interface {
+		extension.ContainerProvider
+		extension.ContainerPlacer
+	}
+	Policy     extension.ContainerPolicy
+	Needs      extension.SandboxNeeds
+	Launch     extension.SandboxLaunch
+	Fill, Free func()
+}
+
+// CheckContainerCapacity checks the "not now" a full pool gives (#702):
+// with no room, Place is refused with extension.ErrNoCapacity, not a
+// failure of the launch, and leaves no container; with room again, the
+// same launch places and creates.
+func CheckContainerCapacity(f CapacityFixture) error {
+	ctx := context.Background()
+	p := f.Provider
+	owner := extension.ResourceOwner{ScopeID: "conformance-scope", WorkID: "conformance-work", ExecutionID: "conformance-pool"}
+	config := extension.ContainerPolicy{Config: f.Policy.Config}
+	f.Fill()
+	if _, err := p.Place(ctx, owner, config, ""); !errors.Is(err, extension.ErrNoCapacity) {
+		return fmt.Errorf("place on a full pool: %v, want ErrNoCapacity", err)
+	}
+	states, err := p.List(ctx, owner)
+	if err != nil {
+		return fmt.Errorf("list after a refusal: %v", err)
+	}
+	if len(states) != 0 {
+		return fmt.Errorf("a refused launch left %d containers", len(states))
+	}
+	f.Free()
+	at, err := p.Place(ctx, owner, config, "")
+	if err != nil {
+		return fmt.Errorf("place once there is room: %v", err)
+	}
+	policy := f.Policy
+	policy.Placement = at.ID
+	plan, err := p.Plan(ctx, owner, policy, f.Needs, f.Launch)
+	if err != nil {
+		return fmt.Errorf("plan once there is room: %v", err)
+	}
+	plan.Digest = extension.ContainerDigest(plan.Image, plan.Data)
+	created, err := p.Create(ctx, plan, map[string]string{extension.ContainerLabelExecution: string(owner.ExecutionID), extension.ContainerLabelSegment: "1", extension.ContainerLabelDigest: plan.Digest})
+	if err != nil {
+		return fmt.Errorf("create once there is room: %v", err)
+	}
+	return p.Remove(ctx, created.Ref)
+}
+
 // CollectorFixture is a container provider that collects
 // (extension.ContainerCollector) to check, with a launch that, once
 // started, writes Content to File in its write grant and exits with Code,

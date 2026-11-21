@@ -130,6 +130,16 @@ func Encode(err error) *Error {
 	if errors.As(err, &oe) {
 		return &Error{Code: oe.Code, Message: oe.Message}
 	}
+	// Before the confinement refusals: it may wrap one, and its reason and
+	// time are what the host holds the Work on.
+	if errors.Is(err, extension.ErrNoCapacity) {
+		out := &Error{Code: CodeNoCapacity, Message: err.Error()}
+		var refusal *extension.NoCapacityError
+		if errors.As(err, &refusal) {
+			out.Message, out.ResetAt = refusal.Reason, refusal.RetryAt
+		}
+		return out
+	}
 	var hint extension.RetryHintProvider
 	if errors.As(err, &hint) {
 		return &Error{Code: CodeRetryAfter, Message: "retryable executor limit", ResetAt: hint.RetryHint().ResetAt}
@@ -179,6 +189,9 @@ func DecodeWith(code, message string, resetAt *time.Time, diagnostics []ConfigDi
 	if code == CodeRetryAfter {
 		return RetryAfter{&Error{Code: code, Message: message, ResetAt: resetAt}}
 	}
+	if code == CodeNoCapacity {
+		return &extension.NoCapacityError{Reason: message, RetryAt: resetAt}
+	}
 	if Known(code) {
 		return &Error{Code: code, Message: message}
 	}
@@ -188,7 +201,7 @@ func DecodeWith(code, message string, resetAt *time.Time, diagnostics []ConfigDi
 // Known reports whether code is one of the protocol's own codes.
 func Known(code string) bool {
 	switch code {
-	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeNotLive, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeSiteUnavailable, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
+	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeNotLive, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeSiteUnavailable, CodeNoCapacity, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
 		return true
 	}
 	return false

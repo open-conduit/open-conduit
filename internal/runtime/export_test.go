@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"context"
+
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -30,4 +33,9 @@ func WaitScanned(tx storage.Tx, id domain.ID) (uint64, error) {
 	var meta waitMetadata
 	err := getJSON(tx, waitNamespace, identity(string(id)), &meta)
 	return meta.Scanned, err
+}
+
+// HoldForCapacity exposes holdForCapacity to the external test package.
+func HoldForCapacity(ctx context.Context, s *Scheduler, ref domain.LeaseRef, r *extension.NoCapacityError) error {
+	return s.holdForCapacity(ctx, ref, r)
 }

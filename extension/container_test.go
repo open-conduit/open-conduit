@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,33 @@ func (h *containerHost) bindAs(hosts extension.ContainerHosts, p extension.Conta
 
 func (h *containerHost) needs() extension.SandboxNeeds {
 	return extension.SandboxNeeds{Write: []string{h.ws}, Read: []string{filepath.Join(h.home, ".gitconfig")}, Hosts: []string{"api.anthropic.com"}, Sockets: []string{h.toolbelt}}
+}
+
+// fullCreate refuses Create for capacity, or with a reason carrying secret.
+type fullCreate struct {
+	*fakeContainers
+	reason string
+}
+
+func (f fullCreate) Create(context.Context, extension.ContainerPlan, map[string]string) (extension.ContainerCreated, error) {
+	return extension.ContainerCreated{}, fmt.Errorf("pool: %w", &extension.NoCapacityError{Reason: f.reason})
+}
+
+// TestContainerLaunchKeepsANoCapacityRefusal: Create's refusal reaches the
+// host through Refusal even when wrapped, and stays typed for the executor.
+func TestContainerLaunchKeepsANoCapacityRefusal(t *testing.T) {
+	h := newContainerHost(t)
+	b := h.bind(fullCreate{newFakeContainers(), "all nodes full"}, containerConfig(testImage, ""), nil)
+	_, err := b.Launch(context.Background(), h.needs(), h.launch())
+	if !errors.Is(err, extension.ErrNoCapacity) || extension.ContainerReason(err) != "no_capacity" {
+		t.Fatalf("launch: %v", err)
+	}
+	if r := b.Refusal(); r == nil || r.Reason != "all nodes full" {
+		t.Fatalf("refusal %+v", r)
+	}
+	if len(h.pins) != 0 {
+		t.Fatalf("a refused launch pinned %+v", h.pins)
+	}
 }
 
 func TestContainerLaunchCreatesAndPins(t *testing.T) {
