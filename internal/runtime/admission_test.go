@@ -172,3 +172,53 @@ func TestProductionSchedulerAdmissionOff(t *testing.T) {
 		t.Fatalf("Work without admission limits did not start: %v", err)
 	}
 }
+
+// TestHeldForAdmissionFollowsTheRuntime: the public read agrees with the
+// runtime as it holds Work, lets it in as a place frees, and after an
+// operator's release.
+func TestHeldForAdmissionFollowsTheRuntime(t *testing.T) {
+	f, s, control := admissionFixture(t, map[domain.ID]int{"routing-scope": 1})
+	ctx := context.Background()
+	a := seedSchedulerWork(t, f, "a")
+	b := seedSchedulerWork(t, f, "b")
+	c := seedSchedulerWork(t, f, "c")
+	expect := func(when string, want map[domain.ID]bool) {
+		t.Helper()
+		routingRead(t, f, func(tx storage.Tx) error {
+			for id, held := range want {
+				got, err := storage.HeldForAdmission(tx, id)
+				if err != nil {
+					return err
+				}
+				if got != held {
+					t.Fatalf("%s: %s held = %v, want %v", when, id, got, held)
+				}
+			}
+			return nil
+		})
+	}
+	expect("before the pass", map[domain.ID]bool{a: false, b: false, c: false})
+	if _, err := s.Admit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	expect("after the pass", map[domain.ID]bool{a: false, b: true, c: true})
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) (err error) { w, err = tx.Work(c); return })
+	if _, err := control.ReleaseWork(ctx, c, w.Revision, "admit now", "held-read-release"); err != nil {
+		t.Fatal(err)
+	}
+	expect("after an operator's release", map[domain.ID]bool{b: true, c: false})
+	for _, id := range []domain.ID{a, c} {
+		x, err := s.Start(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Observe(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r, err := s.Admit(ctx); err != nil || !slices.Equal(r.Released, []domain.ID{b}) {
+		t.Fatalf("pass after places freed: %+v %v", r, err)
+	}
+	expect("after a place freed", map[domain.ID]bool{b: false})
+}

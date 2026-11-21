@@ -345,6 +345,9 @@ type projected struct {
 	latest  *domain.Execution
 	intents []Intent
 	held    bool
+	// queued is Work the core holds for admission: it owns the issue but
+	// no agent has it yet.
+	queued bool
 }
 
 // declaration is an execution's declared turn (domain.TurnSchema): the
@@ -363,7 +366,7 @@ func declaration(x *domain.Execution) (domain.TurnDeclaration, bool) {
 // absent while an attempt runs (the status comes off while a turn runs).
 // It assumes the issue is open.
 func (p *Projector) Desired(w domain.Work, latest *domain.Execution) []string {
-	return p.desired(w, latest, false)
+	return p.desired(w, latest, false, false)
 }
 
 // desired adds the hold projections: a held issue carries only the
@@ -373,14 +376,16 @@ func (p *Projector) Desired(w domain.Work, latest *domain.Execution) []string {
 // the issue any more, so the label would promise an agent who isn't there.
 // Its Work still owns the issue's generation, so admission never claims it
 // again; a reopening starts a new generation, which is admitted with or
-// without the label.
-func (p *Projector) desired(w domain.Work, latest *domain.Execution, held bool) []string {
+// without the label. Work queued for admission carries no claimed label
+// either, since no agent has the issue until a place frees; cancelled there,
+// it never had one.
+func (p *Projector) desired(w domain.Work, latest *domain.Execution, held, queued bool) []string {
 	l := p.o.Settings.Labels
 	if held && !w.State.Terminal() {
 		return []string{l.Scheduled}
 	}
 	var out []string
-	if w.State != domain.WorkCompleted {
+	if w.State != domain.WorkCompleted && !queued {
 		out = append(out, l.Claimed)
 	}
 	if w.State == domain.WorkRunning || w.State == domain.WorkCancelled {
@@ -481,6 +486,12 @@ func (p *Projector) snapshot(ctx context.Context) (pass, error) {
 				// The newest attempt is live: project no stale status.
 				item.latest = nil
 			}
+			if len(xs) == 0 {
+				// Admission holds Work only before its first attempt.
+				if item.queued, err = storage.HeldForAdmission(tx, w.ID); err != nil {
+					return err
+				}
+			}
 			prev, ok := byIssue[number]
 			switch {
 			case !ok:
@@ -535,13 +546,13 @@ func labelDigest(labels []string) string {
 func (p *Projector) converge(ctx context.Context, item projected) ([]string, bool, error) {
 	issue, err := p.o.Client.Issue(ctx, p.o.Settings.Repo, item.number)
 	if IsStatus(err, http.StatusNotFound) || IsStatus(err, http.StatusGone) {
-		return p.desired(item.work, item.latest, item.held), true, nil
+		return p.desired(item.work, item.latest, item.held, item.queued), true, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	closed := issue.State == "closed"
-	desired := p.desired(item.work, item.latest, item.held)
+	desired := p.desired(item.work, item.latest, item.held, item.queued)
 	l := p.o.Settings.Labels
 	managed := append([]string{l.Claimed, l.Scheduled}, l.Statuses()...)
 	var current []string
@@ -634,7 +645,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			if superseded {
 				continue
 			}
-			want := labelDigest(p.desired(item.work, item.latest, item.held))
+			want := labelDigest(p.desired(item.work, item.latest, item.held, item.queued))
 			// Terminal Work is settled: its labels are applied once.
 			verifyDue := !item.work.State.Terminal() && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
 			if st.Applied == want && st.Work == item.work.ID && !verifyDue {

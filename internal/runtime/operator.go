@@ -262,7 +262,7 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		} else if h.Kind == HoldKindGate {
 			return ErrGateHold
 		}
-		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: acted}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, domain.EventManualRelease, operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: acted}))
 		if e != nil {
 			return e
 		}

@@ -514,6 +514,45 @@ func TestGitHubProjectionConvergesAndRepairsDrift(t *testing.T) {
 	}
 }
 
+// TestGitHubAdmissionHeldIssueIsNotClaimed: an issue whose Work is held for
+// admission carries no claimed label, re-observing it starts no second Work,
+// and the label arrives once the Work is released.
+func TestGitHubAdmissionHeldIssueIsNotClaimed(t *testing.T) {
+	e := newGitHubEnv(t)
+	n := e.fake.OpenIssue("Queued", "", ghAlice)
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor("issue/" + strconv.Itoa(n))
+	admission := func(typ, id string) {
+		t.Helper()
+		now := e.clock.Now()
+		if err := e.store.Transact(context.Background(), storage.Guard{Now: now}, func(tx storage.Tx) error {
+			a, _, err := runtime.AcceptInTx(tx, ghScope, domain.Event{ID: domain.ID("admission-" + id), Type: typ, Source: "core.admission", DeliveryID: id, WorkID: w.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.admission.v1", Data: []byte(`{"reason":"test"}`)}})
+			if err != nil {
+				return err
+			}
+			return tx.MarkRouted(a.Event.ID, "", "control")
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admission(domain.EventAdmissionHeld, "held/1")
+	e.converge()
+	if got := e.fake.Labels(n); len(got) != 0 {
+		t.Fatalf("held issue labelled: %v", got)
+	}
+	e.reconcile()
+	e.route()
+	if again, _ := e.workFor("issue/" + strconv.Itoa(n)); again.ID != w.ID {
+		t.Fatalf("held issue claimed again: %s", again.ID)
+	}
+	admission(domain.EventAdmissionReleased, "released/1")
+	e.converge()
+	if !equal(e.fake.Labels(n), "agent-in-progress") {
+		t.Fatalf("released issue: %v", e.fake.Labels(n))
+	}
+}
+
 // TestGitHubCompletedIssueDropsTheClaim covers the label set a Work's end
 // projects: a completed Work's issue no longer reads as claimed, open or
 // closed, an open one is told once that nothing listens there any more,
