@@ -408,6 +408,7 @@ func TestManifestRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string][2]string{
+		"secret actions, no actions": {`"webhooks": true,`, `"webhooks": true, "secret_actions": true,`},
 		"unknown toolbelt":           {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "http"}}], "setup":`},
 		"unsupported protocol":       {`"protocol": [1]`, `"protocol": [2]`},
 		"reserved name":              {`"name": "chat"`, `"name": "core"`},

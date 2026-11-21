@@ -283,6 +283,11 @@ type Provides struct {
 	// Actions marks an extension that offers actions on scopes and Work
 	// (work.actions, work.act).
 	Actions bool `json:"actions,omitempty"`
+	// SecretActions declares that some of those actions ask a person for a
+	// secret (extension.Action.Secret). A host too old to take the value
+	// privately doesn't know this field and refuses the package, so it can
+	// never draw such a prompt as an ordinary text box. It needs actions.
+	SecretActions bool `json:"secret_actions,omitempty"`
 	// Panels marks an extension that shows panels on scope and Work pages
 	// (view.render). Their buttons invoke its actions.
 	Panels bool `json:"panels,omitempty"`
@@ -1315,6 +1320,9 @@ func (m Manifest) Validate() error {
 		if !p.Actions {
 			fail("page %q needs actions", pg.ID)
 		}
+	}
+	if p.SecretActions && !p.Actions {
+		fail("secret_actions needs actions")
 	}
 	if p.EntryNamed && len(p.Extensions) == 0 {
 		fail("entry_named needs an extension type")

@@ -37,7 +37,7 @@ var parity = map[string][]string{
 	"Recurring":     {"manifest:provides.recurrences", "method:recurrence.next"},
 	"Configurer":    {"method:configure"},
 	"Tooled":        {"method:operation.call", "method:operation.wait", "method:operation.emit"},
-	"Actor":         {"manifest:provides.actions", "method:work.actions", "method:work.act"},
+	"Actor":         {"manifest:provides.actions", "manifest:provides.secret_actions", "method:work.actions", "method:work.act"},
 	"Annotator":     {"manifest:provides.annotate", "method:work.annotate"},
 	"Renderer":      {"manifest:provides.render", "method:event.render"},
 	"Tasker":        {"manifest:provides.tasks", "method:task.run"},
