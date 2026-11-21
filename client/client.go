@@ -961,6 +961,10 @@ type Action struct {
 	// Awaited: the Work waits for a person to take this action, rather
 	// than offering one they may take at any time.
 	Awaited bool `json:"awaited,omitempty"`
+	// Secret: the action asks for a secret stored under this name. Store
+	// the value with SetSecret and invoke the action with the name as its
+	// input; the daemon refuses any other input.
+	Secret string `json:"secret,omitempty"`
 }
 
 // ActionTarget names what actions apply to: a scope, or Work.

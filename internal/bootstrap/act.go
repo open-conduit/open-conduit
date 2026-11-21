@@ -161,6 +161,11 @@ func (h actHost) list(ctx context.Context, scope, work domain.ID) ([]extension.A
 			continue
 		}
 		for _, a := range list {
+			// A surface acting for people has nowhere private to take a
+			// secret's value, so it isn't offered the action.
+			if a.Secret != "" {
+				continue
+			}
 			out = append(out, extension.ActionOffer{Provider: n, Action: a})
 		}
 	}

@@ -272,3 +272,44 @@ func (f *fake) record(call string) {
 	defer f.rmu.Unlock()
 	f.calls = append(f.calls, call)
 }
+
+func (f *fake) refusal() error {
+	if f.adminRefused {
+		return &client.Error{Status: 403, Code: "forbidden", Message: "operator:dana has role operate; this needs admin"}
+	}
+	return nil
+}
+func (f *fake) Secrets(context.Context) ([]client.Secret, error) {
+	return f.secrets, f.refusal()
+}
+func (f *fake) SetSecret(_ context.Context, name, value, store string) (client.StoredSecret, error) {
+	if err := f.refusal(); err != nil {
+		return client.StoredSecret{}, err
+	}
+	f.stored = append(f.stored, name+"="+value)
+	return client.StoredSecret{Name: name, Store: "file", Reference: "file:" + name}, nil
+}
+func (f *fake) DeleteSecret(_ context.Context, name string) error {
+	if err := f.refusal(); err != nil {
+		return err
+	}
+	f.removed = append(f.removed, name)
+	return nil
+}
+func (f *fake) Operators(context.Context) ([]client.Operator, error) {
+	return f.operators, nil
+}
+func (f *fake) IssueOperator(_ context.Context, req client.OperatorRequest) (client.IssuedOperator, error) {
+	if err := f.refusal(); err != nil {
+		return client.IssuedOperator{}, err
+	}
+	f.issued = append(f.issued, req)
+	return client.IssuedOperator{TokenFile: client.TokenFile{TokenID: "tok_1", Token: "oc-issued-canary"}}, nil
+}
+func (f *fake) Revoke(_ context.Context, id, _, _ string) (client.Revocation, error) {
+	if err := f.refusal(); err != nil {
+		return client.Revocation{}, err
+	}
+	f.revoked = append(f.revoked, id)
+	return client.Revocation{TokenID: id}, nil
+}

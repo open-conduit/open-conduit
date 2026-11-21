@@ -4216,3 +4216,22 @@ a.btn {
 .dialog-note {
   margin: 12px 0 4px;
 }
+
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.admin-form .field {
+  min-width: 180px;
+}
+
+.admin-issued {
+  border: 1px solid var(--line, currentColor);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}

@@ -1,0 +1,59 @@
+{{define "scripts"}}{{end}}
+
+{{define "content"}}{{$d := .Data}}{{$csrf := .Page.CSRF}}
+<div class="page admin">
+  <header class="page-head"><div><h1>{{.Page.Title}}</h1>
+    <p class="page-sub">{{if eq $d.Tab "secrets"}}Values go in and never come back out.{{else if eq $d.Tab "operators"}}Who can reach this daemon, and with what role.{{else}}Whether this daemon can do its work.{{end}}</p>
+  </div></header>
+  <nav class="tabs" aria-label="Admin">
+    <a href="/secrets"{{if eq $d.Tab "secrets"}} class="is-on" aria-current="page"{{end}}>Secrets</a>
+    <a href="/operators"{{if eq $d.Tab "operators"}} class="is-on" aria-current="page"{{end}}>Operators</a>
+    <a href="/doctor"{{if eq $d.Tab "doctor"}} class="is-on" aria-current="page"{{end}}>Doctor</a>
+  </nav>
+  {{- if $d.Refused}}
+  <div class="empty"><h2>This needs the admin role</h2><p>{{$d.Refused}}</p></div>
+  {{- else if eq $d.Tab "secrets"}}
+  <form method="post" action="/secrets" class="admin-form" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <label class="field"><span>Name</span><input name="name" required spellcheck="false" autocomplete="off"></label>
+    <label class="field"><span>Value</span><input name="value" type="password" required autocomplete="new-password"></label>
+    <label class="field"><span>Store</span><select name="store"><option value="">Keyring, else file</option><option value="keyring">Keyring</option><option value="file">Secrets file</option></select></label>
+    <button type="submit" class="btn btn-primary">Store secret</button>
+  </form>
+  {{- if $d.Secrets}}
+  <table class="xpanel-table"><thead><tr><th>Name</th><th>Stored in</th><th>Resolves</th><th>Used by</th><th></th></tr></thead><tbody>
+  {{- range $d.Secrets}}
+    <tr><td><code>{{.Name}}</code></td><td>{{.Store}}</td><td>{{if .Resolves}}Yes{{else}}No{{with .Failure}} ({{.}}){{end}}{{end}}</td>
+    <td>{{range .ReferencedBy}}<code>{{.}}</code> {{else}}<span class="quiet">nothing</span>{{end}}</td>
+    <td>{{if or (eq .Store "keyring") (eq .Store "file")}}<form method="post" action="/secrets/remove"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="name" value="{{.Name}}"><button type="submit" class="btn btn-quiet"{{if .ReferencedBy}} disabled title="The active config uses this secret"{{end}}>Remove</button></form>{{end}}</td></tr>
+  {{- end}}
+  </tbody></table>
+  {{- else}}<div class="empty"><p>No secrets stored yet.</p></div>{{end}}
+  {{- else if eq $d.Tab "operators"}}
+  {{- with $d.Issued}}
+  <div class="admin-issued" role="status"><h2>Credential for {{$d.IssuedTo}}</h2><p>Copy it now. It is not shown again.</p><pre class="code-block">{{.Token}}</pre></div>
+  {{- end}}
+  <form method="post" action="/operators" class="admin-form" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{$csrf}}">
+    <label class="field"><span>Name</span><input name="name" required spellcheck="false"></label>
+    <label class="field"><span>Role</span><select name="role"><option value="view">view</option><option value="operate" selected>operate</option><option value="admin">admin</option></select></label>
+    <label class="field"><span>Expires after</span><input name="ttl" placeholder="never, or 8h"></label>
+    <button type="submit" class="btn btn-primary">Issue credential</button>
+  </form>
+  <table class="xpanel-table"><thead><tr><th>Name</th><th>Role</th><th>Created</th><th>Expires</th><th>State</th><th></th></tr></thead><tbody>
+  {{- range $d.Operators}}
+    <tr><td>{{.Name}}</td><td>{{or .Role "grants"}}</td><td>{{ago .CreatedAt}}</td><td>{{or .ExpiresAt "never"}}</td><td>{{if .RevokedAt}}revoked{{else}}active{{end}}</td>
+    <td>{{if not .RevokedAt}}<form method="post" action="/operators/revoke"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="token_id" value="{{.TokenID}}"><button type="submit" class="btn btn-quiet">Revoke</button></form>{{end}}</td></tr>
+  {{- end}}
+  </tbody></table>
+  {{- else}}
+  <form method="post" action="/doctor" class="row-gap"><input type="hidden" name="csrf" value="{{$csrf}}"><button type="submit" class="btn btn-primary">Check with secrets</button></form>
+  {{- with $d.Doctor}}
+  <p>{{if $d.Checked}}Checked with secrets: {{else}}Without secrets: {{end}}<b>{{.State}}</b></p>
+  <table class="xpanel-table"><thead><tr><th>Check</th><th>Status</th><th>Code</th><th>Detail</th></tr></thead><tbody>
+  {{- range .Checks}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td><code>{{.Code}}</code></td><td>{{.Detail}}{{range .Items}}<br><span class="quiet small">{{.}}</span>{{end}}</td></tr>{{end}}
+  </tbody></table>
+  {{- end}}
+  {{- end}}
+</div>
+{{end}}

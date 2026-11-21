@@ -93,6 +93,12 @@ type Source interface {
 	Extensions(ctx context.Context) ([]client.ExtensionTitle, error)
 	ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (client.ConfigApplied, error)
 	InstallRelease(ctx context.Context, version, key string) (client.ReleaseInstalled, error)
+	Secrets(ctx context.Context) ([]client.Secret, error)
+	SetSecret(ctx context.Context, name, value, store string) (client.StoredSecret, error)
+	DeleteSecret(ctx context.Context, name string) error
+	Operators(ctx context.Context) ([]client.Operator, error)
+	IssueOperator(ctx context.Context, req client.OperatorRequest) (client.IssuedOperator, error)
+	Revoke(ctx context.Context, tokenID, reason, key string) (client.Revocation, error)
 }
 
 var _ Source = (*client.Client)(nil)
@@ -325,6 +331,14 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("GET /pages/{id}", s.authed(s.extPage))
 	mux.HandleFunc("GET /update", s.authed(s.updatePage))
 	mux.HandleFunc("POST /update", s.authed(s.changed(s.update)))
+	mux.HandleFunc("GET /secrets", s.authed(s.secretsPage))
+	mux.HandleFunc("POST /secrets", s.authed(s.changed(s.storeSecret)))
+	mux.HandleFunc("POST /secrets/remove", s.authed(s.changed(s.removeSecret)))
+	mux.HandleFunc("GET /operators", s.authed(s.operatorsPage))
+	mux.HandleFunc("POST /operators", s.authed(s.changed(s.issueOperator)))
+	mux.HandleFunc("POST /operators/revoke", s.authed(s.changed(s.revokeOperator)))
+	mux.HandleFunc("GET /doctor", s.authed(s.doctorPage))
+	mux.HandleFunc("POST /doctor", s.authed(s.changed(s.checkDoctor)))
 	mux.HandleFunc("GET /palette.json", s.authed(s.palette))
 	mux.HandleFunc("GET /work/confirm", s.authed(s.confirmPage))
 	mux.HandleFunc("GET /work/terminal", s.authed(s.terminalPage))
@@ -334,6 +348,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("POST /run/cancel", s.authed(s.changed(s.cancelRun)))
 	mux.HandleFunc("POST /events/{control}", s.authed(s.changed(s.eventControl)))
 	mux.HandleFunc("POST /actions", s.authed(s.changed(s.invokeAction)))
+	mux.HandleFunc("POST /actions/secret", s.authed(s.changed(s.answerSecret)))
 	mux.HandleFunc("POST /pages/apply", s.authed(s.changed(s.applyChanges)))
 	mux.HandleFunc("POST /scopes/reconcile", s.authed(s.changed(s.reconcileScope)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

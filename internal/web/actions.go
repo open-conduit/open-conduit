@@ -575,20 +575,25 @@ func (s *Server) invokeAction(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	input := strings.TrimSpace(lineBreaks.Replace(strings.Join(r.PostForm["input"], " ")))
 	res, err := s.src.InvokeAction(ctx, t, provider, id, input, s.opts.NewKey())
-	path := "/v1/scopes/" + shortPath(t.ScopeID)
-	if t.WorkID != "" {
-		path = "/v1/work/" + shortPath(t.WorkID)
-	}
 	summary := label
 	if input != "" {
 		summary += " · “" + input + "”"
 	}
-	rc := receipt{Summary: summary, Call: "POST " + path + "/actions/" + url.PathEscape(provider) + "/" + url.PathEscape(id), Event: res.Event.ID, WorkID: t.WorkID}
+	rc := receipt{Summary: summary, Call: actionCall(t, provider, id), Event: res.Event.ID, WorkID: t.WorkID}
 	text := label + " accepted"
 	if res.Message != "" {
 		text = res.Message
 	}
 	s.record(w, r, text, rc, err)
+}
+
+// actionCall is the endpoint line for invoking an action on t.
+func actionCall(t client.ActionTarget, provider, id string) string {
+	path := "/v1/scopes/" + shortPath(t.ScopeID)
+	if t.WorkID != "" {
+		path = "/v1/work/" + shortPath(t.WorkID)
+	}
+	return "POST " + path + "/actions/" + url.PathEscape(provider) + "/" + url.PathEscape(id)
 }
 
 // dialogView is a control's or extension action's confirmation: as a

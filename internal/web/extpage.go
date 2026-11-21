@@ -301,7 +301,9 @@ func (s *Server) pageSession(ctx context.Context, p *page, v workView, d *extPag
 		ss.Panels = append(ss.Panels, panelView{Panel: x, Page: p, WorkID: v.ID})
 	}
 	for _, id := range d.P.Compose {
-		if a, ok := d.action(actions, v.ScopeID, id); ok {
+		// The message box sends text as the input, which an action asking
+		// for a secret must never get; its panel control takes the value.
+		if a, ok := d.action(actions, v.ScopeID, id); ok && a.Secret == "" {
 			ss.Compose = av(a)
 			break
 		}

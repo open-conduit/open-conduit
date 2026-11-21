@@ -26,6 +26,7 @@
       <a href="/" class="nav-item{{if eq .Page.Nav "runs"}} is-on{{end}}"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}} title="g then r">Runs</a>
       <a href="/attention" class="nav-item{{if eq .Page.Nav "attention"}} is-on{{end}}"{{if eq .Page.Nav "attention"}} aria-current="page"{{end}} title="g then a">Needs you{{with .Page.NeedsYou}}<span class="nav-count" aria-label="{{.}} items">{{.}}</span>{{end}}</a>
       <a href="/config" class="nav-item{{if eq .Page.Nav "config"}} is-on{{end}}"{{if eq .Page.Nav "config"}} aria-current="page"{{end}} title="g then c">Configuration</a>
+      <a href="/secrets" class="nav-item{{if eq .Page.Nav "admin"}} is-on{{end}}"{{if eq .Page.Nav "admin"}} aria-current="page"{{end}}>Admin</a>
       {{- range .Page.Pages}}{{$on := eq $.Page.Nav (print "page:" .ID)}}
       <a href="{{.Href}}" class="nav-item{{if $on}} is-on{{end}}"{{if $on}} aria-current="page"{{end}}>{{.Title}}</a>
       {{- end}}
