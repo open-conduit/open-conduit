@@ -36,6 +36,19 @@ type backupState struct {
 	mu      sync.Mutex
 	running bool
 	next    time.Time
+	// shipDue is when the newest bundle is next offered to the destinations;
+	// zero when no shipment is owed.
+	shipDue time.Time
+	// shipping is the bundle a shipment has in flight, which pruning leaves
+	// alone. Shipping never shares running: a destination that hangs can't
+	// hold up the local backup.
+	shipping string
+	// shipStall replaces shipStallLimit (tests).
+	shipStall time.Duration
+	// shipped is each destination's latest outcome since the daemon started.
+	shipped map[string]shipResult
+	// targets replaces the configured destinations (tests).
+	targets func() []shipTarget
 }
 
 // scheduledBundles are the scheduled bundles in dir and their times, oldest
@@ -86,6 +99,8 @@ func (d *daemon) startBackups(name string, db storage.Database) error {
 	d.backups.next = d.now()
 	if len(times) > 0 {
 		d.backups.next = times[len(times)-1].Add(d.o.BackupInterval)
+		// A daemon that stopped mid-upload owes its newest bundle.
+		d.backups.shipDue = d.now()
 	}
 	return nil
 }
@@ -101,6 +116,13 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 		return
 	}
 	now := d.now()
+	if bundle, ok := d.claimShipment(now); ok {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.shipBundle(ctx, bundle)
+		}()
+	}
 	b.mu.Lock()
 	if b.running || now.Before(b.next) {
 		b.mu.Unlock()
@@ -127,8 +149,8 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 	}()
 }
 
-// backupNow publishes one scheduled bundle and prunes the oldest beyond
-// BackupsKept.
+// backupNow publishes one scheduled bundle, marks it owed to the destinations
+// and prunes the oldest beyond BackupsKept, except one still being shipped.
 func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	name := bundlePrefix + now.UTC().Format(bundleLayout)
 	destination := filepath.Join(d.o.BackupDir, name)
@@ -139,16 +161,28 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
+	// The shipment runs on its own (scheduleBackup), so a destination never
+	// delays or fails the backup.
+	d.backups.mu.Lock()
+	d.backups.shipDue = now
+	d.backups.mu.Unlock()
 	names, _, err := scheduledBundles(d.o.BackupDir)
 	if err != nil {
 		return err
 	}
 	for len(names) > d.o.BackupsKept {
-		if err := os.RemoveAll(filepath.Join(d.o.BackupDir, names[0])); err != nil {
+		oldest := names[0]
+		names = names[1:]
+		d.backups.mu.Lock()
+		inFlight := d.backups.shipping == oldest
+		d.backups.mu.Unlock()
+		if inFlight {
+			continue // the next backup prunes it
+		}
+		if err := os.RemoveAll(filepath.Join(d.o.BackupDir, oldest)); err != nil {
 			return err
 		}
-		d.log.Info("backup pruned", "path", filepath.Join(d.o.BackupDir, names[0]))
-		names = names[1:]
+		d.log.Info("backup pruned", "path", filepath.Join(d.o.BackupDir, oldest))
 	}
 	return nil
 }

@@ -231,6 +231,10 @@ Extension entry `config`:
 | `accounts` |  | Required. the 12-digit AWS account IDs a role may be in; a role in any other account is refused, at validation and at the call |
 | `roles` |  | Required. [{"name": "read", "arn": "arn:aws:iam::111122223333:role/agent-read", "for_bindings": ["helper"], "duration": "15m", "tag_session": false, "external_id": ""}]: the roles a run may get credentials for, each only for the bindings it names; duration from 15m (the default) to 12h; tag_session sends the scope, binding and Work as session tags, which the role's trust policy must allow (sts:TagSession) |
 
+### AWS (aws-s3) (`aws-s3`)
+
+Short-lived AWS credentials for a named IAM role, issued by the host to a run when it asks, with the run named in CloudTrail, and secrets read from AWS Secrets Manager. Registers: backup destination.
+
 ### Bitbucket Cloud (`bitbucket`)
 
 Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket. Registers: connection, extension, route.

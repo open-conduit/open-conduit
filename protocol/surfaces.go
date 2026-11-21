@@ -96,6 +96,10 @@ const (
 	// Type is the tunnel type, Config its config as the operator wrote it,
 	// which the host passes to tunnel.run unchanged.
 	ValidateTunnel = "tunnel"
+	// ValidateBackupDestination checks one
+	// settings.backup.destinations[].config for a type declared in
+	// backup_destinations.
+	ValidateBackupDestination = "backup_destination"
 	// ValidateVerifier checks a trusted issuer's config for a credential
 	// verifier type declared in verifiers. Type is the verifier type,
 	// Config the issuer's config as the admin gave it, which the host
@@ -1143,6 +1147,78 @@ type TunnelRunParams struct {
 type TunnelURLParams struct {
 	Run string `json:"run"`
 	URL string `json:"url"`
+}
+
+// BackupTargetParams names one configured backup destination.
+type BackupTargetParams struct {
+	Type   string  `json:"type"`
+	Name   string  `json:"name"`
+	Config Payload `json:"config"`
+}
+
+// BackupWriteParams carries one chunk of a file being put
+// (backup_destination.write; extension.BackupDestination.Put). Upload is the
+// host's ID for this put. Chunks arrive in order from Offset 0, each at most
+// MaxChunkBytes, and the answer to the one with Final says the file is
+// stored. An error ends the upload.
+type BackupWriteParams struct {
+	Target BackupTargetParams `json:"target"`
+	Bundle string             `json:"bundle"`
+	Path   string             `json:"path"`
+	Size   int64              `json:"size"`
+	Upload string             `json:"upload"`
+	Offset int64              `json:"offset"`
+	Chunk  []byte             `json:"chunk,omitempty"`
+	Final  bool               `json:"final,omitempty"`
+}
+
+// BackupAbortParams abandons an upload (backup_destination.abort), so
+// nothing of it becomes visible.
+type BackupAbortParams struct {
+	Upload string `json:"upload"`
+}
+
+// BackupListParams asks for the complete bundles (backup_destination.list).
+type BackupListParams struct {
+	Target BackupTargetParams `json:"target"`
+}
+
+// BackupListResult names them.
+type BackupListResult struct {
+	Bundles []string `json:"bundles"`
+}
+
+// BackupFilesParams asks for a bundle's files (backup_destination.files).
+type BackupFilesParams struct {
+	Target BackupTargetParams `json:"target"`
+	Bundle string             `json:"bundle"`
+}
+
+// BackupFileEntry is one stored file.
+type BackupFileEntry struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// BackupFilesResult lists them.
+type BackupFilesResult struct {
+	Files []BackupFileEntry `json:"files"`
+}
+
+// BackupReadParams reads part of a file (backup_destination.read). Length
+// is at most MaxChunkBytes.
+type BackupReadParams struct {
+	Target BackupTargetParams `json:"target"`
+	Bundle string             `json:"bundle"`
+	Path   string             `json:"path"`
+	Offset int64              `json:"offset"`
+	Length int                `json:"length"`
+}
+
+// BackupReadResult is that part, and whether it reaches the file's end.
+type BackupReadResult struct {
+	Chunk []byte `json:"chunk,omitempty"`
+	EOF   bool   `json:"eof,omitempty"`
 }
 
 // CredentialVerifyParams asks a verifier about one bearer credential

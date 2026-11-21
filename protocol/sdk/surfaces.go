@@ -319,6 +319,8 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromSiteResult(res), nil
+	case "backup_destination.write", "backup_destination.abort", "backup_destination.list", "backup_destination.files", "backup_destination.read":
+		return s.backupDestination(ctx, method, raw)
 	case "tunnel.run":
 		var p protocol.TunnelRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

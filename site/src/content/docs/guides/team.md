@@ -34,7 +34,7 @@ The daemon's state, its management socket and its operator token stay owner-only
 
 ## 2. Backups off the machine
 
-The daemon backs itself up every day, without stopping, into `backups/` in its state directory and keeps the newest seven (see [scheduled backups](/open-conduit/architecture/recovery/#scheduled-backups)). That survives a bad release, not a lost disk. Copy each bundle elsewhere, with whatever the server already uses (a `restic` or `rsync` timer, a volume snapshot), or point the bundles at a mounted volume:
+The daemon backs itself up every day, without stopping, into `backups/` in its state directory and keeps the newest seven (see [scheduled backups](/open-conduit/architecture/recovery/#scheduled-backups)). That survives a bad release, not a lost disk. Ship them to a [backup destination](/open-conduit/guides/backups/#ship-bundles-off-this-machine) such as an S3 bucket, copy each bundle elsewhere with whatever the server already uses (a `restic` or `rsync` timer, a volume snapshot), or point the bundles at a mounted volume:
 
 ```sh
 open-conduit service install --web --web-host conduit.example.com --backup-dir /mnt/backups/open-conduit

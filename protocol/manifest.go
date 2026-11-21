@@ -237,6 +237,11 @@ type Provides struct {
 	// daemon's life, and the package reports each public URL back through
 	// tunnel.url.
 	Tunnels []TunnelDecl `json:"tunnels,omitempty"`
+	// BackupDestinations are backup destination types
+	// (extension.BackupDestination): settings.backup.destinations names
+	// one, and the host ships each published bundle to it and can list and
+	// fetch bundles from it.
+	BackupDestinations []BackupDestinationDecl `json:"backup_destinations,omitempty"`
 	// Verifiers are credential verifier types (extension.CredentialVerifier)
 	// that check bearer credentials an identity provider issued: an admin
 	// trusts an issuer of one of these types (PUT /v1/auth/issuers/{id}),
@@ -848,6 +853,14 @@ type TunnelDecl struct {
 	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
+// BackupDestinationDecl declares a backup destination type
+// (settings.backup.destinations). Fields describe its config's fields
+// (FieldDecl).
+type BackupDestinationDecl struct {
+	Type   string      `json:"type"`
+	Fields []FieldDecl `json:"fields,omitempty"`
+}
+
 // VerifierDecl declares a credential verifier type (a trusted issuer's
 // type). Fields describe the issuer config's fields (FieldDecl).
 type VerifierDecl struct {
@@ -1241,6 +1254,15 @@ func (m Manifest) Validate() error {
 		}
 		tunnels[x.Type] = true
 	}
+	destinations := map[string]bool{}
+	for _, x := range p.BackupDestinations {
+		ident("backup destination", x.Type)
+		fieldDecls("backup destination", x.Type, x.Fields, false)
+		if destinations[x.Type] {
+			fail("backup destination %q is declared twice", x.Type)
+		}
+		destinations[x.Type] = true
+	}
 	verifiers := map[string]bool{}
 	for _, x := range p.Verifiers {
 		ident("credential verifier", x.Type)
@@ -1409,6 +1431,7 @@ func (m Manifest) Enabled() []string {
 		set("containers.collect", c.Collect)
 	}
 	set("tunnels", len(p.Tunnels) > 0)
+	set("backup_destinations", len(p.BackupDestinations) > 0)
 	set("verifiers", len(p.Verifiers) > 0)
 	set("secret_schemes", len(p.SecretSchemes) > 0)
 	set("tasks", len(p.Tasks) > 0)

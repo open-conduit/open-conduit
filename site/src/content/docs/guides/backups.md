@@ -58,6 +58,29 @@ rm ./backup-signing.key
 
 With trust keys set, `backup verify` and `backup restore` refuse a bundle that a trusted key didn't sign. Pass `--accept-unsigned` to take one with no signature, such as a bundle from before you turned signing on. On a host that has lost its config, name the key with `--trust-key ed25519:...`.
 
+## Ship bundles off this machine
+
+Name a destination in the config, and the daemon uploads each scheduled bundle to it. The bundled `aws-s3` type uses the daemon's own AWS identity, so grant the package the variables that give it one:
+
+```json
+{ "settings": {
+  "extensions": { "aws": { "pass_env": ["AWS_REGION", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"] } },
+  "backup": { "destinations": [
+    { "name": "offsite", "type": "aws-s3", "config": { "bucket": "acme-conduit-backups", "region": "eu-west-2", "prefix": "prod" } }
+  ] }
+} }
+```
+
+Bundles hold private Work and config, so turn on default encryption for the bucket, and set its lifecycle rules: Open Conduit never deletes anything there. `open-conduit doctor` shows whether the latest bundle landed. To restore on a new host:
+
+```sh
+open-conduit backup list offsite
+open-conduit backup fetch offsite conduit-20261102T090000Z ./bundle --trust-key ed25519:...
+open-conduit backup restore ./bundle --in-place --trust-key ed25519:...
+```
+
+A fetch needs a trust key, because anyone who can write to the bucket can put a bundle there. `--accept-unsigned` takes a bundle with no signature instead.
+
 ## Move to a new host
 
 The bundle carries the config: the database holds every config generation, secret references included, and the daemon starts from the active one. It doesn't carry what the references point at (keyring entries, `secrets.json`, environment variables) or the packages you installed, so set those up on the new host first.

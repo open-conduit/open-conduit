@@ -135,6 +135,10 @@ type Extension struct {
 	// Tunnels are tunnel providers by declared type (manifest tunnels),
 	// served through tunnel.run.
 	Tunnels map[string]extension.TunnelProvider
+	// BackupDestinations are backup destinations by declared type (manifest
+	// backup_destinations), served through backup_destination.*.
+	BackupDestinations map[string]extension.BackupDestination
+	backups            backupUploads
 	// Verifiers are credential verifiers by declared type (manifest
 	// verifiers), served through credential.verify.
 	Verifiers map[string]extension.CredentialVerifier
@@ -305,7 +309,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "container_provider.place", "container_provider.site_run", "container_provider.collect", "tunnel.run", "credential.verify", "secret.serve", "telemetry.export", "telemetry.metrics", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "container_provider.place", "container_provider.site_run", "container_provider.collect", "tunnel.run", "backup_destination.write", "backup_destination.abort", "backup_destination.list", "backup_destination.files", "backup_destination.read", "credential.verify", "secret.serve", "telemetry.export", "telemetry.metrics", "run.environment", "work.annotate", "work.actions", "work.requests", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

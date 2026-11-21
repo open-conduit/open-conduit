@@ -113,6 +113,9 @@ func manifestAdapters(m protocol.Manifest) []cli.Adapter {
 			}
 		})
 	}
+	for _, b := range p.BackupDestinations {
+		add("backup destination", b.Type, b.Fields, func(*cli.Adapter, []cli.Field) {})
+	}
 	for _, v := range p.Verifiers {
 		add("verifier", v.Type, v.Fields, func(a *cli.Adapter, f []cli.Field) {
 			if len(f) > 0 || a.Issuer == nil {

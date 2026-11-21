@@ -33,7 +33,8 @@ import (
 //     granted one of its operations, or a binding naming a connection of
 //     one of its types. Disabled scopes count, since a package keeps what
 //     it holds for their entries;
-//   - the host needs it: the webhook tunnel it runs, the first-run setup
+//   - the host needs it: the webhook tunnel it runs, a backup destination
+//     it ships bundles to, the first-run setup
 //     while there is no config file, the verifier of a trusted issuer, or
 //     a surface asked for on demand (a verifier, started on first use);
 //   - it is a resource or container provider whose state directory holds
@@ -290,6 +291,12 @@ func (d *daemon) packagesWanted(ctx context.Context, s *config.Snapshot) map[str
 		tunnels = append(tunnels, k)
 	}
 	d.hooks.mu.Unlock()
+	var destinations []string
+	if s != nil && d.o.BackupInterval >= 0 {
+		for _, b := range s.Settings.Backup.Destinations {
+			destinations = append(destinations, b.Type)
+		}
+	}
 	_, noFile := os.Stat(d.o.ConfigPath)
 	firstRun := errors.Is(noFile, os.ErrNotExist)
 	issuers, _ := management.IssuerTypes(ctx, d.coord, d.now)
@@ -308,6 +315,7 @@ func (d *daemon) packagesWanted(ctx context.Context, s *config.Snapshot) map[str
 		switch {
 		case startAll(), onDemand[name], packageUsed(s, m), d.holdsState(m):
 		case slices.ContainsFunc(m.Provides.Tunnels, func(t protocol.TunnelDecl) bool { return slices.Contains(tunnels, t.Type) }):
+		case slices.ContainsFunc(m.Provides.BackupDestinations, func(t protocol.BackupDestinationDecl) bool { return slices.Contains(destinations, t.Type) }):
 		case firstRun && m.Provides.Setup != nil && m.Provides.Setup.FirstRun:
 		case slices.ContainsFunc(m.Provides.Recurrences, func(kind string) bool { return armed[kind] }):
 			// A timer of one of its recurrence kinds is armed: the package

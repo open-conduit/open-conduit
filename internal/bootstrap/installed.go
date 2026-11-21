@@ -308,6 +308,16 @@ func (x *installed) providerTypes(reg *config.Registry) {
 		}
 		reg.Tunnels[t.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 	}
+	if len(x.m.Provides.BackupDestinations) > 0 && reg.BackupDestinations == nil {
+		reg.BackupDestinations = map[string]func(json.RawMessage) error{}
+	}
+	for _, t := range x.m.Provides.BackupDestinations {
+		v := x.validator(protocol.ValidateBackupDestination, t.Type)
+		if v == nil {
+			v = func(json.RawMessage, []string) error { return nil }
+		}
+		reg.BackupDestinations[t.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+	}
 	if reg.Resources == nil {
 		reg.Resources = map[string]bool{}
 	}

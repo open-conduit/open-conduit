@@ -122,6 +122,11 @@ var Methods = []Method{
 	{Name: "container_provider.site_run", Direction: HostToExtension, Provides: "containers.place", Contract: []string{"extension.ContainerPlacer.SiteRun", "extension.SiteCommand", "extension.SiteResult"}},
 	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfigSchema"}},
 	{Name: "tunnel.url", Direction: ExtensionToHost, Provides: "tunnels", Contract: []string{"host:extension.TunnelProvider.Run publish"}},
+	{Name: "backup_destination.write", Direction: HostToExtension, Provides: "backup_destinations", Contract: []string{"extension.BackupDestination.Put", "extension.BackupTarget", "extension.BackupFile"}},
+	{Name: "backup_destination.abort", Direction: HostToExtension, Provides: "backup_destinations", Contract: []string{"host:extension.BackupDestination.Put (reader failed)"}},
+	{Name: "backup_destination.list", Direction: HostToExtension, Provides: "backup_destinations", Contract: []string{"extension.BackupDestination.List"}},
+	{Name: "backup_destination.files", Direction: HostToExtension, Provides: "backup_destinations", Contract: []string{"extension.BackupDestination.Files"}},
+	{Name: "backup_destination.read", Direction: HostToExtension, Provides: "backup_destinations", Contract: []string{"extension.BackupDestination.Read"}},
 	{Name: "credential.verify", Direction: HostToExtension, Provides: "verifiers", Contract: []string{"extension.CredentialVerifier.Verify", "extension.CredentialCheck", "extension.VerifiedCredential", "extension.IssuerConfigSchema"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.

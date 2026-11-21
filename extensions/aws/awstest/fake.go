@@ -9,10 +9,11 @@ package awstest
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,13 @@ type Server struct {
 	assumed  []Assumed
 	secrets  map[string]string // SecretString by secret ID
 	denied   map[string]bool   // secret IDs the keys may not read
+
+	objects map[string][]byte   // S3 objects by bucket/key
+	uploads map[string][][]byte // multipart uploads' parts by upload ID
+	// FailS3 refuses a PUT of a bucket/key it returns true for.
+	FailS3 func(key string) bool
+	// S3PageSize bounds a listing's page; zero is 1000.
+	S3PageSize int
 }
 
 type key struct {
@@ -56,7 +64,7 @@ type key struct {
 
 // New starts a fake for region.
 func New(region string) *Server {
-	s := &Server{Region: region, Now: time.Now, keys: map[string]key{}, roles: map[string]bool{}, untagged: map[string]bool{}, secrets: map[string]string{}, denied: map[string]bool{}}
+	s := &Server{Region: region, Now: time.Now, keys: map[string]key{}, roles: map[string]bool{}, untagged: map[string]bool{}, secrets: map[string]string{}, denied: map[string]bool{}, objects: map[string][]byte{}, uploads: map[string][][]byte{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	return s
 }
@@ -93,7 +101,7 @@ func (s *Server) Assumed() []Assumed {
 	return append([]Assumed(nil), s.assumed...)
 }
 
-var credentialRE = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([^/]+)/(\d{8})/([^/]+)/(sts|secretsmanager)/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$`)
+var credentialRE = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([^/]+)/(\d{8})/([^/]+)/(sts|secretsmanager|s3)/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$`)
 
 func (s *Server) fail(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "text/xml")
@@ -109,7 +117,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if secrets {
 		fail = jsonFail
 	}
-	if r.Method != http.MethodPost || m == nil || (m[4] == "secretsmanager") != secrets {
+	isS3 := m != nil && m[4] == "s3"
+	if isS3 {
+		fail = s3Fail
+	}
+	if (r.Method != http.MethodPost && !isS3) || m == nil || (m[4] == "secretsmanager") != secrets {
 		fail(w, 403, "MissingAuthenticationToken")
 		return
 	}
@@ -144,6 +156,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if secrets {
 		s.secret(w, body)
+		return
+	}
+	if isS3 {
+		sum := sha256.Sum256(body)
+		if r.Header.Get("X-Amz-Content-Sha256") != hex.EncodeToString(sum[:]) {
+			s3Fail(w, 400, "XAmzContentSHA256Mismatch")
+			return
+		}
+		s.s3(w, r, body)
 		return
 	}
 	form, err := url.ParseQuery(string(body))
@@ -233,10 +254,10 @@ func (s *Server) assume(w http.ResponseWriter, form url.Values) {
 
 // esc is a value as XML text: STS escapes its answers, and so must the
 // fake, which echoes what the request named.
+// esc escapes a value for an XML response. html.EscapeString's entities are
+// all valid XML, and static analysis recognises it as a sanitizer.
 func esc(s string) string {
-	var b strings.Builder
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
+	return html.EscapeString(s)
 }
 
 func random(n int) string {

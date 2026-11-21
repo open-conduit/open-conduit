@@ -3,6 +3,7 @@ package extproc
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -556,6 +557,17 @@ func (r *Remote) Tunnel(typ string) (extension.TunnelProvider, bool) {
 	for _, d := range r.m.Provides.Tunnels {
 		if d.Type == typ {
 			return &remoteTunnel{r: r, typ: typ}, true
+		}
+	}
+	return nil, false
+}
+
+// BackupDestination returns the backup destination adapter of a declared
+// type.
+func (r *Remote) BackupDestination(typ string) (extension.BackupDestination, bool) {
+	for _, d := range r.m.Provides.BackupDestinations {
+		if d.Type == typ {
+			return &remoteBackupDestination{r: r, typ: typ}, true
 		}
 	}
 	return nil, false
@@ -1154,4 +1166,73 @@ func (s *Service) setup(ctx context.Context, method string, raw json.RawMessage)
 		}
 		return struct{}{}, host.Run(ctx, p.Dir, p.Name, p.Args...)
 	}
+}
+
+// remoteBackupDestination carries a destination over the protocol, a file
+// at a time in chunks of at most MaxChunkBytes.
+type remoteBackupDestination struct {
+	r   *Remote
+	typ string
+}
+
+func (d *remoteBackupDestination) target(t extension.BackupTarget) protocol.BackupTargetParams {
+	return protocol.BackupTargetParams{Type: d.typ, Name: t.Name, Config: protocol.FromPayload(t.Config)}
+}
+
+func (d *remoteBackupDestination) Put(ctx context.Context, t extension.BackupTarget, bundle string, f extension.BackupFile, r io.Reader) (err error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	upload := hex.EncodeToString(id[:])
+	started := false
+	defer func() {
+		if err != nil && started {
+			abort, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			_ = d.r.p.Call(abort, "backup_destination.abort", protocol.BackupAbortParams{Upload: upload}, nil)
+		}
+	}()
+	buf := make([]byte, protocol.MaxChunkBytes)
+	var offset int64
+	for {
+		want := min(f.Size-offset, int64(len(buf)))
+		if _, err := io.ReadFull(r, buf[:want]); err != nil {
+			return fmt.Errorf("reading %s: %w", f.Path, err)
+		}
+		final := offset+want == f.Size
+		started = true
+		if err := d.r.p.Call(ctx, "backup_destination.write", protocol.BackupWriteParams{Target: d.target(t), Bundle: bundle, Path: f.Path, Size: f.Size, Upload: upload, Offset: offset, Chunk: buf[:want], Final: final}, nil); err != nil {
+			return err
+		}
+		offset += want
+		if final {
+			started = false
+			return nil
+		}
+	}
+}
+
+func (d *remoteBackupDestination) List(ctx context.Context, t extension.BackupTarget) ([]string, error) {
+	var out protocol.BackupListResult
+	err := d.r.p.Call(ctx, "backup_destination.list", protocol.BackupListParams{Target: d.target(t)}, &out)
+	return out.Bundles, err
+}
+
+func (d *remoteBackupDestination) Files(ctx context.Context, t extension.BackupTarget, bundle string) ([]extension.BackupFile, error) {
+	var out protocol.BackupFilesResult
+	if err := d.r.p.Call(ctx, "backup_destination.files", protocol.BackupFilesParams{Target: d.target(t), Bundle: bundle}, &out); err != nil {
+		return nil, err
+	}
+	files := make([]extension.BackupFile, 0, len(out.Files))
+	for _, f := range out.Files {
+		files = append(files, extension.BackupFile{Path: f.Path, Size: f.Size})
+	}
+	return files, nil
+}
+
+func (d *remoteBackupDestination) Read(ctx context.Context, t extension.BackupTarget, bundle, path string, offset int64, length int) ([]byte, bool, error) {
+	var out protocol.BackupReadResult
+	err := d.r.p.Call(ctx, "backup_destination.read", protocol.BackupReadParams{Target: d.target(t), Bundle: bundle, Path: path, Offset: offset, Length: min(length, protocol.MaxChunkBytes)}, &out)
+	return out.Chunk, out.EOF, err
 }
