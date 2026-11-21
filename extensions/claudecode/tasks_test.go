@@ -278,7 +278,17 @@ func TestTaskStopTimeoutAndLost(t *testing.T) {
 	if err := syscall.Kill(-pidOf(lost["task"].(string)), syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
-	events := th.ended(3)
+	// A stop that lands before the wrapper has started the command is absorbed
+	// by its trap, and only the grace period's kill ends the task, so the clock
+	// has to keep moving for a stop made after the jump above.
+	waitFor(t, "the tasks' ends", func() bool {
+		if _, err := th.e.SweepTasks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		th.clock.Advance(100 * time.Millisecond)
+		return len(th.got.all()) >= 3
+	})
+	events := th.got.all()
 	outcomes := map[string]string{}
 	for _, ev := range events {
 		var p map[string]any
