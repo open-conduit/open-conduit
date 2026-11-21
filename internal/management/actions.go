@@ -7,6 +7,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -26,6 +27,7 @@ type wireAction struct {
 	Prompt   string   `json:"prompt,omitempty"`
 	Choices  []string `json:"choices,omitempty"`
 	Awaited  bool     `json:"awaited,omitempty"`
+	Secret   string   `json:"secret,omitempty"`
 }
 
 var actionID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -63,7 +65,12 @@ func wellFormed(name string, actions []extension.Action) []wireAction {
 		if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
 			continue
 		}
-		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: choices(a), Awaited: a.Awaited})
+		// An action asking for a secret needs a prompt and a name the
+		// secret store accepts, and takes no choices.
+		if a.Secret != "" && (a.Prompt == "" || len(a.Choices) > 0 || !config.ValidSecretName(a.Secret)) {
+			continue
+		}
+		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: choices(a), Awaited: a.Awaited, Secret: a.Secret})
 	}
 	return out
 }

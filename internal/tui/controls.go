@@ -164,6 +164,11 @@ func (m Model) fetchScopeActions() tea.Cmd {
 				return menuMsg{err: err}
 			}
 			for _, a := range actions {
+				// Typed here, a secret's value would be the action's input,
+				// so an action asking for one is answered in the web view.
+				if a.Secret != "" {
+					continue
+				}
 				menu.items = append(menu.items, targeted{t, a})
 			}
 		}

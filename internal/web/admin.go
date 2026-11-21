@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -90,6 +91,64 @@ func (s *Server) removeSecret(w http.ResponseWriter, r *http.Request) {
 		flash(w, "Removed "+name+".", false)
 	}
 	http.Redirect(w, r, "/secrets", http.StatusSeeOther)
+}
+
+// answerSecret takes the value an extension's action asked for. The name
+// comes from the daemon's own listing of the action, never the form. The
+// value goes only to the secret store (admin, checked by the daemon), and
+// the action is invoked with the name. A name already stored isn't
+// replaced from here, since whoever wrote the prompt chose the name: an
+// empty value uses the stored one, and replacing it is the Secrets page's.
+func (s *Server) answerSecret(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := call(r)
+	defer cancel()
+	t := client.ActionTarget{ScopeID: r.PostFormValue("scope"), WorkID: r.PostFormValue("work")}
+	provider, id, value := r.PostFormValue("provider"), r.PostFormValue("action"), r.PostFormValue("value")
+	fail := func(text string) {
+		flash(w, text, true)
+		http.Redirect(w, r, back(r), http.StatusSeeOther)
+	}
+	if (t.ScopeID == "") == (t.WorkID == "") {
+		http.Error(w, "an action needs a scope or Work", http.StatusBadRequest)
+		return
+	}
+	offered, err := s.src.Actions(ctx, t)
+	if err != nil {
+		fail(actionsErr(err))
+		return
+	}
+	i := slices.IndexFunc(offered, func(a client.Action) bool { return a.Provider == provider && a.ID == id && a.Secret != "" })
+	if i < 0 {
+		fail("That request for a secret is no longer open.")
+		return
+	}
+	a := offered[i]
+	stored, err := s.src.Secrets(ctx)
+	if err != nil {
+		fail("Storing a secret needs the admin role: " + errText(err))
+		return
+	}
+	exists := slices.ContainsFunc(stored, func(x client.Secret) bool { return x.Name == a.Secret && x.Resolves })
+	switch {
+	case value == "" && !exists:
+		fail("Enter a value for " + a.Secret + ".")
+		return
+	case value != "" && exists:
+		fail(a.Secret + " is already stored. Leave the value empty to use it, or replace it on the Secrets page first.")
+		return
+	case value != "":
+		if _, err := s.src.SetSecret(ctx, a.Secret, value, ""); err != nil {
+			fail("Could not store " + a.Secret + ": " + errText(err))
+			return
+		}
+	}
+	res, err := s.src.InvokeAction(ctx, t, provider, id, a.Secret, s.opts.NewKey())
+	rc := receipt{Summary: a.Label + " · " + a.Secret, Call: "PUT /v1/secrets/" + a.Secret, Event: res.Event.ID, WorkID: t.WorkID}
+	text := "Stored " + a.Secret + "."
+	if res.Message != "" {
+		text = res.Message
+	}
+	s.record(w, r, text, rc, err)
 }
 
 func (s *Server) operatorsPage(w http.ResponseWriter, r *http.Request) {

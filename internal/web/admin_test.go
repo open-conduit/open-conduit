@@ -100,3 +100,39 @@ func TestDoctorChecksSecretsOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("checked doctor: %d", w.Code)
 	}
 }
+
+// An action asking for a secret stores the value under the name the daemon
+// listed, whatever the form says, and is invoked with the name alone.
+func TestSecretActionSendsOnlyTheName(t *testing.T) {
+	f, s, h := setup(t)
+	f.actions = map[string][]client.Action{"wrk_1": {{Provider: "setup", ID: "give_token", Label: "GitHub token", Prompt: "Paste a token", Secret: "github_token"}}}
+	form := url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}, "name": {"other"}, "value": {secretCanary}, "back": {"/pages/setup"}}
+	w := do(h, "POST", "/actions/secret", form, s)
+	if w.Code != http.StatusSeeOther || !slices.Equal(f.stored, []string{"github_token=" + secretCanary}) {
+		t.Fatalf("store: %d %v", w.Code, f.stored)
+	}
+	if len(f.invoked) != 1 || f.invoked[0].in != "github_token" {
+		t.Fatalf("invoked %+v", f.invoked)
+	}
+	assertNoCanary(t, w.Header(), w.Body.String())
+
+	// A stored name isn't replaced from a prompt; an empty value uses it.
+	f.stored, f.invoked = nil, nil
+	f.secrets = []client.Secret{{Name: "github_token", Store: "file", Resolves: true}}
+	do(h, "POST", "/actions/secret", url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}, "value": {secretCanary}}, s)
+	if len(f.stored) != 0 || len(f.invoked) != 0 {
+		t.Fatalf("replaced a stored secret: %v %v", f.stored, f.invoked)
+	}
+	do(h, "POST", "/actions/secret", url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}}, s)
+	if len(f.stored) != 0 || len(f.invoked) != 1 || f.invoked[0].in != "github_token" {
+		t.Fatalf("reuse: %v %+v", f.stored, f.invoked)
+	}
+
+	// An action that doesn't ask for a secret stores nothing.
+	f.stored, f.invoked = nil, nil
+	f.actions["wrk_1"][0].Secret = ""
+	do(h, "POST", "/actions/secret", url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}, "value": {secretCanary}}, s)
+	if len(f.stored) != 0 || len(f.invoked) != 0 {
+		t.Fatalf("not a secret action: %v %v", f.stored, f.invoked)
+	}
+}

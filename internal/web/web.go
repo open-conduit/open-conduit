@@ -348,6 +348,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("POST /run/cancel", s.authed(s.changed(s.cancelRun)))
 	mux.HandleFunc("POST /events/{control}", s.authed(s.changed(s.eventControl)))
 	mux.HandleFunc("POST /actions", s.authed(s.changed(s.invokeAction)))
+	mux.HandleFunc("POST /actions/secret", s.authed(s.changed(s.answerSecret)))
 	mux.HandleFunc("POST /pages/apply", s.authed(s.changed(s.applyChanges)))
 	mux.HandleFunc("POST /scopes/reconcile", s.authed(s.changed(s.reconcileScope)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

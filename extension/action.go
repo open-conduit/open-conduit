@@ -85,6 +85,15 @@ type Action struct {
 	// awaited, so offering it does not put the Work in front of an operator
 	// as blocked on them.
 	Awaited bool
+	// Secret, when set with a Prompt, makes this an action that asks a
+	// person for a secret, stored under this name ([a-z][a-z0-9_-]*). A
+	// surface that can take a value privately stores it in the daemon's
+	// secret store as that person (which needs the admin role) and invokes
+	// the action with the name as its Input. The value never reaches the
+	// provider, an Event or a panel: the host refuses any other Input, and
+	// doesn't offer the action to a surface that can't take a value this
+	// way. Choices don't apply.
+	Secret string
 }
 
 // ActionCall is one invocation.

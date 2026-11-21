@@ -719,6 +719,9 @@ type Action struct {
 	// Awaited: the Work waits for a person to take this action
 	// (extension.Action.Awaited).
 	Awaited bool `json:"awaited,omitempty"`
+	// Secret: the action asks a person for a secret stored under this name,
+	// and is invoked with the name, never the value (extension.Action.Secret).
+	Secret string `json:"secret,omitempty"`
 }
 
 // Request is one request a person is asked to decide (extension.Request).

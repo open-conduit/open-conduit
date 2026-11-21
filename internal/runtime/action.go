@@ -98,6 +98,9 @@ func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvid
 	if old, ok, err := c.PriorAction(ctx, call.Target.Scope.ID, name, call.Action, key); err != nil || ok {
 		return old, false, "", err
 	}
+	if err := refuseSecretInput(ctx, p, call); err != nil {
+		return accepted, false, "", err
+	}
 	plan, err := p.Invoke(ctx, call)
 	if err != nil {
 		return accepted, false, "", err
@@ -117,6 +120,24 @@ func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvid
 		message = strings.ToValidUTF8(message[:500], "")
 	}
 	return accepted, added, message, nil
+}
+
+// refuseSecretInput keeps a secret's value out of an action's Input, and so
+// out of the provider and its Event, whichever surface made the call: an
+// action that asks for a secret takes only the name it was stored under. If
+// the provider can't say what it offers, the call is refused rather than
+// risk passing a value on.
+func refuseSecretInput(ctx context.Context, p extension.ActionProvider, call extension.ActionCall) error {
+	offered, err := p.Actions(ctx, call.Target)
+	if err != nil {
+		return err
+	}
+	for _, a := range offered {
+		if a.ID == call.Action && a.Secret != "" && call.Input != a.Secret {
+			return &extension.OperationError{Code: "secret_in_input", Message: "this action asks for a secret: store the value in the daemon's secret store and invoke the action with the secret's name"}
+		}
+	}
+	return nil
 }
 
 // PriorAction is the Event an earlier invocation of provider's action under

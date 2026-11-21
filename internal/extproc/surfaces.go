@@ -995,7 +995,7 @@ func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([
 	}
 	actions := make([]extension.Action, 0, len(out.Actions))
 	for _, x := range out.Actions {
-		actions = append(actions, extension.Action{ID: x.ID, Label: x.Label, Prompt: x.Prompt, Choices: x.Choices, Detail: x.Detail, Awaited: x.Awaited})
+		actions = append(actions, extension.Action{ID: x.ID, Label: x.Label, Prompt: x.Prompt, Choices: x.Choices, Detail: x.Detail, Awaited: x.Awaited, Secret: x.Secret})
 	}
 	return actions, nil
 }
