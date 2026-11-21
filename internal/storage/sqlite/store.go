@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,6 +51,17 @@ type Store struct {
 	// db's writer or for each other.
 	readers *sql.DB
 	path    string
+	// timing receives each write transaction's timings, when set.
+	timing atomic.Pointer[func(storage.TransactionTiming)]
+}
+
+// TimeTransactions implements storage.TransactionTimer.
+func (s *Store) TimeTransactions(fn func(storage.TransactionTiming)) {
+	if fn == nil {
+		s.timing.Store(nil)
+		return
+	}
+	s.timing.Store(&fn)
 }
 
 // readerConns bounds the connections Views read through at once.
@@ -468,6 +480,21 @@ func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// The report is deferred first so it runs last, once the connection is
+	// back in the pool: a slow observer never lengthens the hold it reports.
+	var (
+		asked, began time.Time
+		held         time.Duration
+		committed    bool
+	)
+	if timing := s.timing.Load(); timing != nil {
+		asked = time.Now()
+		defer func() {
+			if !began.IsZero() {
+				(*timing)(storage.TransactionTiming{Wait: began.Sub(asked), Hold: held, Committed: committed})
+			}
+		}()
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -477,7 +504,12 @@ func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	if _, err = conn.ExecContext(work, "BEGIN IMMEDIATE"); err != nil {
 		return mapError(err)
 	}
-	committed := false
+	// Registered before the rollback below, so it runs after it: the hold
+	// is the whole time this transaction kept the writer.
+	if !asked.IsZero() {
+		began = time.Now()
+		defer func() { held = time.Since(began) }()
+	}
 	defer func() {
 		if !committed {
 			rollback(work, conn)

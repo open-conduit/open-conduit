@@ -113,7 +113,7 @@ Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-c
 ### To measure
 
 - Go benchmarks in `internal/storage/sqlite`: `BenchmarkTransactEmpty` (the floor: `BEGIN IMMEDIATE` and `COMMIT` at `synchronous=FULL`), `BenchmarkAcceptEvent`, and `BenchmarkListEvents` at 10,000 and 100,000 rows. Run with `b.RunParallel` to show queueing on the single connection. Record ns/op and the p99 wait for the connection.
-- In the daemon, time from requesting the connection to `BEGIN IMMEDIATE` succeeding, and from there to `COMMIT`, exported as histograms. A load test would drive the TUI's 2 s refresh, a management list loop and webhook pushes together, and report how long reads wait behind writes.
+- The daemon times each write transaction, from requesting the connection to `BEGIN IMMEDIATE` succeeding and from there to `COMMIT` or rollback: the `open_conduit.storage.transaction.wait` and `.hold` histograms, and doctor's `transactions` check over the latest 600. A load test would drive the TUI's 2 s refresh, a management list loop and webhook pushes together, and report how long reads wait behind writes.
 
 ## Large-queue recovery
 
