@@ -251,6 +251,7 @@ func (a *appToken) token(ctx context.Context, repo string) (string, error) {
 	a.mu.Lock()
 	a.cache[key] = cachedToken{t.Token, t.ExpiresAt}
 	a.mu.Unlock()
+	a.c.tr.budgets.installation(t.Token, a.c.api, id, t.ExpiresAt, a.c.now())
 	return t.Token, nil
 }
 
@@ -333,6 +334,7 @@ func (a *appToken) scopedTo(ctx context.Context, repos []string, perms map[strin
 	if t.Token == "" {
 		return "", time.Time{}, ErrCredential
 	}
+	a.c.tr.budgets.installation(t.Token, a.c.api, id, t.ExpiresAt, a.c.now())
 	return t.Token, t.ExpiresAt, nil
 }
 

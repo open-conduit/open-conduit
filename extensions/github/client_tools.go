@@ -516,6 +516,13 @@ func (c *Client) Fetch(ctx context.Context, repos []string, link FetchLink) ([]b
 			return nil, "", err
 		}
 		defer done()
+		// A fetch skips the transport (its redirects leave GitHub), so an
+		// API link checks the budget it would spend here.
+		if link.URL.Host == c.tr.apiHost {
+			if limit := c.tr.pausedFor(c.tr.budgets.of(tokenDigest(tok))); limit != nil {
+				return nil, "", limit
+			}
+		}
 		req.Header.Set("Authorization", "token "+tok)
 	}
 	req.Header.Set("User-Agent", "open-conduit")

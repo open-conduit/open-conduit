@@ -97,6 +97,8 @@ type registry struct {
 	// memos are the deliveries a connection's webhook route is delivering,
 	// by delivery ID.
 	memos map[string]*sharedMemo
+	// budgets are the rate-limit budgets every client here shares.
+	budgets *Budgets
 	// converge stands in for an entry's projector in tests.
 	converge func(ctx context.Context, e *entry, limit int) (ProjectionResult, error)
 }
@@ -106,7 +108,7 @@ type registry struct {
 func New() *Extension {
 	x := NewExtension(nil)
 	x.own = &registry{entries: map[string]*entry{}, failed: map[string]string{}, hooks: map[string]*hook{}, codes: map[string]string{},
-		unmatched: map[string]*unmatched{}, memos: map[string]*sharedMemo{}}
+		unmatched: map[string]*unmatched{}, memos: map[string]*sharedMemo{}, budgets: NewBudgets()}
 	return x
 }
 
@@ -323,7 +325,7 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 		return codeError("github_connection_invalid")
 	}
 	scope := domain.ID(e.ScopeID)
-	client, err := NewClient(cfg, x.secrets(scope, e.Connection.ID), ClientOptions{Now: x.now})
+	client, err := NewClient(cfg, x.secrets(scope, e.Connection.ID), ClientOptions{Now: x.now, Budgets: x.own.budgets})
 	if err != nil {
 		return err
 	}
@@ -409,7 +411,7 @@ func (x *Extension) toolSources() []Source {
 func (x *Extension) Sources() []inproc.Source {
 	var out []inproc.Source
 	for _, e := range x.list() {
-		out = append(out, inproc.Source{Name: e.name, Source: extension.Source{Namespace: e.ingress.Settings().Namespace, ScopeID: e.scope}, Ingress: e.ingress})
+		out = append(out, inproc.Source{Name: e.name, Source: extension.Source{Namespace: e.ingress.Settings().Namespace, ScopeID: e.scope}, Ingress: e.ingress, Interval: e.ingress.Settings().Reconcile})
 	}
 	return out
 }

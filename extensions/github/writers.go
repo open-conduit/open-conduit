@@ -75,7 +75,7 @@ func (w *Writers) Client(scope domain.ID, id string, entry *Client) (*Client, er
 	}
 	opts := ClientOptions{Now: w.now}
 	if entry != nil {
-		opts.HTTP = entry.base
+		opts.HTTP, opts.Budgets = entry.base, entry.tr.budgets
 	}
 	client, err := NewClient(cfg, secrets, opts)
 	if err != nil {

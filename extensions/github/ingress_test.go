@@ -613,6 +613,30 @@ func TestScanAfterAnOutageLooksBackToTheLastCompletedGeneration(t *testing.T) {
 	}
 }
 
+// A daemon stopped for three days sees, on its first pass, a pull request
+// that opened and merged while it was down.
+func TestFirstPassAfterThreeDaysSeesAPullThatOpenedAndMerged(t *testing.T) {
+	f := newFixture(t, `,"reconcile_seconds":3600`)
+	fk := f.fake
+	fk.OpenIssue("Header", "", alice)
+	_, checkpoint := f.scanFrom(t, "")
+	fk.Advance(24 * time.Hour)
+	n := fk.OpenPull("Fix", "", "agent/issue-1", "abc123", alice)
+	fk.Advance(time.Hour)
+	fk.MergePull(n)
+	f.now = fk.Now().Add(47 * time.Hour)
+	scanned, _ := f.scanFrom(t, checkpoint)
+	found := false
+	for _, o := range scanned {
+		if o.ID == "pr/"+strconv.Itoa(n) && o.Event.Type == gh.TypePullMerged {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the merged pull request was not observed: %d items", len(scanned))
+	}
+}
+
 func TestItemClosedDuringAScanIsObservedOnce(t *testing.T) {
 	f := newFixture(t, `,"track_pull_requests":true`)
 	fk := f.fake
