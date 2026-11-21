@@ -39,7 +39,7 @@ type page struct {
 }
 
 // pageNames are the page templates; each is parsed with the shared ones.
-var pageNames = []string{"runs", "work", "attention", "config", "page", "output", "confirm", "update"}
+var pageNames = []string{"terminal", "runs", "work", "attention", "config", "page", "output", "confirm", "update"}
 
 // shared are the templates every page can use.
 var shared = []string{"templates/layout.html", "templates/panels.html", "templates/conversation.html", "templates/actions.html"}

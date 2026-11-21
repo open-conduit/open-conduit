@@ -56,13 +56,14 @@ func (c *Client) OpenTerminal(ctx context.Context, id string, o TerminalOptions)
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
-	header := http.Header{}
-	probe, err := http.NewRequest(http.MethodGet, c.base, nil)
+	// Through the request's context, so a client acting for someone opens
+	// the terminal as them.
+	probe, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base, nil)
 	if err != nil {
 		return nil, err
 	}
 	authorize(probe, c.token)
-	header.Set("Authorization", probe.Header.Get("Authorization"))
+	header := probe.Header
 	conn, resp, err := websocket.Dial(ctx, u, &websocket.DialOptions{HTTPClient: c.streaming(), HTTPHeader: header})
 	if err != nil {
 		if resp != nil && resp.StatusCode >= 400 {

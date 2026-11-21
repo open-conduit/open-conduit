@@ -1,0 +1,17 @@
+{{define "content"}}{{$d := .Data}}
+<div class="terminal-page">
+  <a class="back" href="/work?id={{$d.ID}}">Back to the Work</a>
+  <div class="terminal-head">
+    <h1>Terminal on {{$d.Name}}</h1>
+    <p class="terminal-status" id="terminal-status" role="status">Connecting</p>
+    <button type="button" class="btn" id="terminal-detach" disabled>Detach</button>
+  </div>
+  <div class="terminal-screen" id="terminal" data-work="{{$d.ID}}" data-csrf="{{.Page.CSRF}}"></div>
+  <noscript><p>The terminal needs JavaScript. From a shell: <code>open-conduit work attach {{$d.ID}}</code></p></noscript>
+</div>
+{{end}}
+
+{{define "scripts"}}<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+<script src="/static/vendor/xterm/xterm.js" defer></script>
+<script src="/static/vendor/xterm/addon-fit.js" defer></script>
+<script src="/static/terminal.js" defer></script>{{end}}
