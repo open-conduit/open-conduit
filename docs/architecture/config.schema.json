@@ -145,6 +145,23 @@
           "default": 20,
           "description": "Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
+        "backup": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "How backup bundles are signed and checked.",
+          "properties": {
+            "signing_key": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Secret reference to the private key bundles are signed with (from open-conduit backup keygen). Keep the key outside the state directory, so it survives losing the disk."
+            },
+            "trust_keys": {
+              "type": "array",
+              "items": {"type": "string", "pattern": "^ed25519:[A-Za-z0-9+/]{43}=$"},
+              "description": "Public keys backup verify and backup restore accept. With any set, a bundle must be signed by one of them unless the operator passes --accept-unsigned for a bundle with no signature."
+            }
+          }
+        },
         "kept_finished_days": {
           "type": "integer",
           "minimum": 1,

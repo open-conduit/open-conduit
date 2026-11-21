@@ -2,10 +2,12 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,7 +28,7 @@ import (
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {
-	return &cli.StateOps{Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
+	return &cli.StateOps{Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
 }
 
 // locked opens a stopped instance's state directory under its daemon lock.
@@ -53,7 +55,11 @@ func locked(stateDir string) (*management.Lock, error) {
 
 // BackupState publishes a verified bundle of a stopped instance's database
 // and referenced artifacts at an absent destination.
-func BackupState(ctx context.Context, stateDir, destination, build string) (cli.BackupInfo, error) {
+func BackupState(ctx context.Context, stateDir, destination, build string, o cli.BackupOptions) (cli.BackupInfo, error) {
+	key, err := offlineSigningKey(ctx, o)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
 	lock, err := locked(stateDir)
 	if err != nil {
 		return cli.BackupInfo{}, err
@@ -72,7 +78,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, c.name, store, files, build, retention(time.Now)); err != nil {
+	if err := backup.Create(ctx, destination, key, c.name, store, files, build, retention(time.Now)); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
@@ -102,8 +108,8 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 
 // VerifyBundle restores a bundle into a private temporary directory, checks
 // the result and removes it.
-func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
-	info, err := bundleInfo(bundle)
+func VerifyBundle(ctx context.Context, bundle string, o cli.RestoreOptions) (cli.BackupInfo, error) {
+	info, trust, err := authenticated(bundle, o)
 	if err != nil {
 		return info, err
 	}
@@ -115,7 +121,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	dest := filepath.Join(tmp, "state")
 	// Verification restores into the file store in its own temporary
 	// directory, never into a store the operator uses.
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired, restoreBackends, backup.ArtifactTarget{Backend: artifacts.Backend}, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, trust, time.Now().UTC(), retentionExpired, restoreBackends, backup.ArtifactTarget{Backend: artifacts.Backend}, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)
@@ -148,14 +154,14 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	info, err := bundleInfo(bundle)
+	info, trust, err := authenticated(bundle, o)
 	if err != nil {
 		return info, err
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -386,4 +392,83 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		r.Scopes = append(r.Scopes, *s)
 	}
 	return r, nil
+}
+
+// offlineSigningKey is the key `backup create` signs with: the config file's
+// settings.backup.signing_key, nil when there is none or the operator asked
+// for an unsigned bundle. Unlike a scheduled backup, an operator is there to
+// see a failure, so a configured key that can't be had fails the command.
+func offlineSigningKey(ctx context.Context, o cli.BackupOptions) (ed25519.PrivateKey, error) {
+	if o.Unsigned {
+		return nil, nil
+	}
+	settings, err := fileBackupSettings(o.ConfigPath)
+	if err != nil || settings.SigningKey == "" {
+		return nil, err
+	}
+	resolver := &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath)}
+	value, err := resolver.ResolveNamed(ctx, "backup_signing_key", settings.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("resolving settings.backup.signing_key: %w (--unsigned publishes without it)", err)
+	}
+	return backup.ParsePrivateKey(value)
+}
+
+// fileBackupSettings reads settings.backup from the operator's config file.
+// A missing file configures nothing. A file that can't be read or parsed is
+// an error rather than no policy, so a damaged config can't turn the
+// signature check off.
+func fileBackupSettings(path string) (config.BackupSettings, error) {
+	if path == "" {
+		return config.BackupSettings{}, nil
+	}
+	data, err := config.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return config.BackupSettings{}, nil
+	}
+	if err != nil {
+		return config.BackupSettings{}, fmt.Errorf("reading the backup trust settings: %w", err)
+	}
+	doc, err := config.ParseFile(data)
+	if err != nil {
+		return config.BackupSettings{}, fmt.Errorf("reading the backup trust settings from %s: %w", path, err)
+	}
+	return doc.Settings.Backup, nil
+}
+
+// restoreTrust is the operator's policy for a bundle: the config file's
+// trust keys and any given on the command line. It never reads the bundle.
+func restoreTrust(o cli.RestoreOptions) (backup.Trust, error) {
+	settings, err := fileBackupSettings(o.ConfigPath)
+	if err != nil {
+		return backup.Trust{}, err
+	}
+	trust := backup.Trust{AcceptUnsigned: o.AcceptUnsigned}
+	for _, text := range append(slices.Clone(settings.TrustKeys), o.TrustKeys...) {
+		key, err := backup.ParsePublicKey(text)
+		if err != nil {
+			return backup.Trust{}, err
+		}
+		trust.Keys = append(trust.Keys, key)
+	}
+	return trust, nil
+}
+
+// authenticated reads a bundle's manifest and applies the operator's trust
+// policy, before anything is restored.
+func authenticated(bundle string, o cli.RestoreOptions) (cli.BackupInfo, backup.Trust, error) {
+	info, err := bundleInfo(bundle)
+	if err != nil {
+		return info, backup.Trust{}, err
+	}
+	trust, err := restoreTrust(o)
+	if err != nil {
+		return info, trust, err
+	}
+	found, err := backup.Authenticate(bundle, trust)
+	if err != nil {
+		return info, trust, err
+	}
+	info.Authenticity, info.SigningKey = found.Status, found.KeyID
+	return info, trust, nil
 }

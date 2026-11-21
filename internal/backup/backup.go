@@ -8,7 +8,9 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -162,8 +164,9 @@ const snapshotName = "conduit.db"
 // rather than copied, since their content may already be gone. backend is
 // the name db's Backend is registered under; Restore looks it up again.
 // Content a reference names that is missing anyway fails the backup, which
-// then publishes nothing.
-func Create(ctx context.Context, destination string, backend string, db storage.Database, files storage.ArtifactStore, build string, retention Retention) error {
+// then publishes nothing. With a key, the manifest is signed (sign.go); nil
+// publishes an unsigned bundle.
+func Create(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, build string, retention Retention) error {
 	if backend == "" || files == nil {
 		return storage.ErrInvalid
 	}
@@ -248,7 +251,14 @@ func Create(ctx context.Context, destination string, backend string, db storage.
 		if err != nil {
 			return err
 		}
-		return writeDurable(filepath.Join(stage, "manifest.json"), append(data, '\n'))
+		data = append(data, '\n')
+		if err := writeDurable(filepath.Join(stage, "manifest.json"), data); err != nil {
+			return err
+		}
+		if key != nil {
+			return writeSignature(stage, data, key)
+		}
+		return nil
 	})
 	return err
 }
@@ -282,13 +292,17 @@ type ArtifactTarget struct {
 // is checked against its reference's digest, or, for a reference recorded
 // before references carried one, the digest the manifest vouches for. No
 // daemon may own destination; an existing path is rejected, never
-// overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired, backends Backends, target ArtifactTarget, record Record) (err error) {
+// overwritten. The bundle must pass trust first, checked on the same manifest
+// bytes the restore then acts on.
+func Restore(ctx context.Context, bundle, destination string, trust Trust, now time.Time, expired Expired, backends Backends, target ArtifactTarget, record Record) (err error) {
 	if now.IsZero() || target.Backend == nil {
 		return storage.ErrInvalid
 	}
-	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
+	m, raw, err := readManifestBytes(filepath.Join(bundle, "manifest.json"))
 	if err != nil {
+		return err
+	}
+	if _, err := trust.check(bundle, raw); err != nil {
 		return err
 	}
 	backend, err := backends(m.backend())
@@ -437,32 +451,43 @@ func (m manifest) backend() string {
 }
 
 func readManifest(path string) (manifest, error) {
+	m, _, err := readManifestBytes(path)
+	return m, err
+}
+
+// readManifestBytes reads a manifest and the exact bytes it was parsed from,
+// which are what a signature covers.
+func readManifestBytes(path string) (manifest, []byte, error) {
 	var m manifest
 	f, err := os.Open(path)
 	if err != nil {
-		return m, err
+		return m, nil, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return m, err
+		return m, nil, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > 16<<20 {
-		return m, fmt.Errorf("backup: invalid manifest size or type")
+		return m, nil, fmt.Errorf("backup: invalid manifest size or type")
 	}
-	d := json.NewDecoder(io.LimitReader(f, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(f, 16<<20))
+	if err != nil {
+		return m, nil, err
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&m); err != nil {
-		return m, err
+		return m, nil, err
 	}
 	var extra any
 	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
-		return m, fmt.Errorf("backup: trailing manifest data")
+		return m, nil, fmt.Errorf("backup: trailing manifest data")
 	}
 	if m.Version != 1 || m.Schema != 1 || m.CreatedAt.IsZero() || len(m.DatabaseSHA256) != 64 {
-		return m, fmt.Errorf("backup: unsupported or incomplete manifest")
+		return m, nil, fmt.Errorf("backup: unsupported or incomplete manifest")
 	}
-	return m, nil
+	return m, raw, nil
 }
 
 func publish(ctx context.Context, destination string, create func(string) error) (published bool, err error) {

@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,6 +39,11 @@ type BackupInfo struct {
 	// from the generation: it publishes the config file over it when the
 	// file validates, and otherwise refuses to start.
 	ConfigProblems []ConfigEntry `json:"config_problems,omitempty"`
+	// Authenticity is what checking the bundle's signature found: verified
+	// (a trusted key signed it), unverified (signed, with no trust key to
+	// check it against) or unsigned. SigningKey is the key's ID.
+	Authenticity string `json:"authenticity,omitempty"`
+	SigningKey   string `json:"signing_key,omitempty"`
 	// InPlace is what an in-place restore did to the state directory.
 	InPlace *InPlaceReport `json:"in_place,omitempty"`
 }
@@ -123,14 +130,37 @@ type RestoreOptions struct {
 	// already restored from this bundle (serve --restore, which runs on
 	// every start).
 	Once bool
+	// TrustKeys are public keys to accept besides the config file's
+	// settings.backup.trust_keys, for a host that has lost its config.
+	TrustKeys []string
+	// AcceptUnsigned lets a bundle with no signature through when trust
+	// keys are configured. A bundle with a wrong signature is still refused.
+	AcceptUnsigned bool
+}
+
+// BackupOptions are `backup create`'s choices.
+type BackupOptions struct {
+	// ConfigPath is the config file whose settings.backup.signing_key signs
+	// the bundle.
+	ConfigPath string
+	// Unsigned publishes without signing even when a key is configured.
+	Unsigned bool
+}
+
+// KeyPair is a new signing key: the private half went to Path.
+type KeyPair struct {
+	Path      string `json:"path"`
+	PublicKey string `json:"public_key"`
 }
 
 // StateOps are the offline state-directory operations. Each takes the
 // state directory's exclusive daemon lock, so it refuses to run while a
 // daemon owns the directory.
 type StateOps struct {
-	Backup  func(ctx context.Context, stateDir, destination, build string) (BackupInfo, error)
-	Verify  func(ctx context.Context, bundle string) (BackupInfo, error)
+	// Keygen makes a signing key's private and public text forms.
+	Keygen  func() (private, public string, err error)
+	Backup  func(ctx context.Context, stateDir, destination, build string, o BackupOptions) (BackupInfo, error)
+	Verify  func(ctx context.Context, bundle string, o RestoreOptions) (BackupInfo, error)
 	Restore func(ctx context.Context, bundle, destination string, o RestoreOptions) (BackupInfo, error)
 	// RestoreInPlace restores a bundle into stateDir itself, moving the
 	// state it replaces aside.
@@ -149,23 +179,28 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup create DEST | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--config FILE]")
+		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE]")
 	}
-	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config")
+	f := newFlags("backup", "to", "artifacts", "artifacts-location", "config", "trust-key")
 	inPlace := f.fs.Bool("in-place", false, "")
+	unsigned := f.fs.Bool("unsigned", false, "")
+	acceptUnsigned := f.fs.Bool("accept-unsigned", false, "")
 	pos, err := f.parse(args[1:])
 	if err != nil || len(pos) != 1 {
 		return usageError(o.errOut, "expected one path")
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
+	trust := splitKeys(f.get("trust-key"))
 	switch args[0] {
+	case "keygen":
+		return o.emit(o.backupKeygen(o.abs(pos[0])))
 	case "create":
-		return o.emit(o.env.State.Backup(cx, o.stateDir(), o.abs(pos[0]), o.build))
+		return o.emit(o.env.State.Backup(cx, o.stateDir(), o.abs(pos[0]), o.build, BackupOptions{ConfigPath: o.configPath(f.get("config")), Unsigned: *unsigned}))
 	case "verify":
-		return o.emit(o.env.State.Verify(cx, o.abs(pos[0])))
+		return o.emit(o.env.State.Verify(cx, o.abs(pos[0]), RestoreOptions{ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}))
 	case "restore":
-		ro := RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config"))}
+		ro := RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
 		switch {
 		case *inPlace && f.get("to") != "":
 			return usageError(o.errOut, "backup restore takes --to DIR (a new directory) or --in-place (the daemon's own), not both")
@@ -176,7 +211,43 @@ func (o *operator) backup(args []string) int {
 		}
 		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	}
-	return usageError(o.errOut, "expected backup create|verify|restore")
+	return usageError(o.errOut, "expected backup keygen|create|verify|restore")
+}
+
+// splitKeys reads a comma-separated --trust-key.
+func splitKeys(text string) []string {
+	var out []string
+	for _, k := range strings.Split(text, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// backupKeygen writes a new signing key to an absent owner-only file and
+// returns its public half. The private key is never printed.
+func (o *operator) backupKeygen(path string) (KeyPair, error) {
+	private, public, err := o.env.State.Keygen()
+	if err != nil {
+		return KeyPair{}, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return KeyPair{}, err
+	}
+	_, err = f.WriteString(private + "\n")
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return KeyPair{}, err
+	}
+	return KeyPair{Path: path, PublicKey: public}, nil
 }
 
 // restoredInPlace prints an in-place restore's report, and fails when the

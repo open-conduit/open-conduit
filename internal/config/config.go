@@ -141,7 +141,25 @@ type Settings struct {
 	// Extensions are the operator's grants to installed or bundled
 	// extension packages by package name (settings.extensions).
 	Extensions map[string]PackageSettings
+	// Backup is how bundles are signed and checked (settings.backup).
+	Backup BackupSettings
 }
+
+// BackupSettings are settings.backup. SigningKey is a secret reference to
+// the key scheduled and offline bundles are signed with; TrustKeys are the
+// public keys `backup verify` and `backup restore` accept, as the config
+// file gives them. A restore never takes them from the bundle it checks.
+type BackupSettings struct {
+	SigningKey string
+	TrustKeys  []string
+}
+
+// IsZero says whether no backup signing is configured.
+func (b BackupSettings) IsZero() bool { return b.SigningKey == "" && len(b.TrustKeys) == 0 }
+
+// backupTrustKey matches a trust key's text form: ed25519: and the base64 of
+// 32 bytes.
+var backupTrustKey = regexp.MustCompile(`^ed25519:[A-Za-z0-9+/]{43}=$`)
 
 // PackageSettings are one package's grants (settings.extensions.<name>).
 type PackageSettings struct {
@@ -575,7 +593,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil}
+	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil, BackupSettings{}}
 	fields := []struct {
 		key string
 		dst *int
@@ -583,7 +601,7 @@ func (c *checker) settings(n *node) Settings {
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
 		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays}}
-	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions"}
+	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions", "backup"}
 	for _, f := range fields {
 		names = append(names, f.key)
 	}
@@ -609,7 +627,39 @@ func (c *checker) settings(n *node) Settings {
 	s.Webhooks = c.webhooks(n.field("webhooks"))
 	s.Budgets = c.budgets(n.field("budgets"))
 	s.Extensions = c.packages(n.field("extensions"))
+	s.Backup = c.backupSettings(n.field("backup"))
 	return s
+}
+
+// backupSettings checks settings.backup offline.
+func (c *checker) backupSettings(n *node) BackupSettings {
+	const path = "settings/backup"
+	var b BackupSettings
+	if n == nil || !c.object(n, path, nil, "signing_key", "trust_keys") {
+		return b
+	}
+	if k := n.field("signing_key"); k != nil {
+		if v, ok := c.str(k, path+"/signing_key", nil); ok {
+			// The key's own text has the shape of a provider reference, and
+			// a config generation goes into every bundle.
+			if !ValidSecretRef(v) || strings.HasPrefix(v, "ed25519-private:") {
+				c.fail(path+"/signing_key", "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
+				return b
+			}
+			b.SigningKey = v
+		}
+	}
+	if r := n.field("trust_keys"); r != nil && c.typed(r, path+"/trust_keys", kArray, "array") {
+		for i, item := range r.items {
+			if v, ok := c.str(item, ptr(path+"/trust_keys", i), nil); ok {
+				if !backupTrustKey.MatchString(v) {
+					c.fail(ptr(path+"/trust_keys", i), "invalid_value", "a trust key is the public key `backup keygen` prints: ed25519:<base64>")
+				}
+				b.TrustKeys = append(b.TrustKeys, v)
+			}
+		}
+	}
+	return b
 }
 
 // packages checks settings.extensions offline: an object keyed by package
@@ -1196,6 +1246,18 @@ func (d *Document) normalized(redact bool) any {
 			pkgs[name] = m
 		}
 		settings["extensions"] = pkgs
+	}
+	// Only configured signing joins the hash, so configurations without it
+	// keep their generation hash.
+	if b := s.Backup; !b.IsZero() {
+		m := map[string]any{}
+		if b.SigningKey != "" {
+			m["signing_key"] = b.SigningKey
+		}
+		if len(b.TrustKeys) > 0 {
+			m["trust_keys"] = b.TrustKeys
+		}
+		settings["backup"] = m
 	}
 	out := map[string]any{
 		"version":     d.Version,
