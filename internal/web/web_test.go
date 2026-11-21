@@ -68,6 +68,7 @@ type fake struct {
 	doctorCalled int
 	// The admin pages: adminRefused is the daemon refusing the caller's role.
 	adminRefused bool
+	invokeErr    error
 	secrets      []client.Secret
 	stored       []string
 	removed      []string
@@ -210,6 +211,9 @@ func (f *fake) Panels(_ context.Context, t client.ActionTarget) ([]client.Panel,
 }
 func (f *fake) InvokeAction(_ context.Context, t client.ActionTarget, provider, id, input, _ string) (client.ActionResult, error) {
 	f.invoked = append(f.invoked, invoked{t, provider, id, input})
+	if f.invokeErr != nil {
+		return client.ActionResult{}, f.invokeErr
+	}
 	return client.ActionResult{Event: client.Event{ID: "evt_answer"}, Message: "answered"}, nil
 }
 

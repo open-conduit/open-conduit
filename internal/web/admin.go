@@ -3,7 +3,9 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -128,6 +130,7 @@ func (s *Server) answerSecret(w http.ResponseWriter, r *http.Request) {
 		fail("Storing a secret needs the admin role: " + errText(err))
 		return
 	}
+	wrote := false
 	exists := slices.ContainsFunc(stored, func(x client.Secret) bool { return x.Name == a.Secret && x.Resolves })
 	switch {
 	case value == "" && !exists:
@@ -141,12 +144,21 @@ func (s *Server) answerSecret(w http.ResponseWriter, r *http.Request) {
 			fail("Could not store " + a.Secret + ": " + errText(err))
 			return
 		}
+		wrote = true
 	}
 	res, err := s.src.InvokeAction(ctx, t, provider, id, a.Secret, s.opts.NewKey())
-	rc := receipt{Summary: a.Label + " · " + a.Secret, Call: "PUT /v1/secrets/" + a.Secret, Event: res.Event.ID, WorkID: t.WorkID}
-	text := "Stored " + a.Secret + "."
+	rc := receipt{Summary: a.Label + " · " + a.Secret, Call: actionCall(t, provider, id), Event: res.Event.ID, WorkID: t.WorkID}
+	text := "Using the stored " + a.Secret + "."
+	if wrote {
+		text = "Stored " + a.Secret + "."
+		rc.Call = "PUT /v1/secrets/" + url.PathEscape(a.Secret) + ", then " + rc.Call
+		if err != nil {
+			// The value is safe: the retry only has to send the action.
+			err = fmt.Errorf("%s is stored, but passing it on failed: %w. Leave the value empty to try again", a.Secret, err)
+		}
+	}
 	if res.Message != "" {
-		text = res.Message
+		text += " " + res.Message
 	}
 	s.record(w, r, text, rc, err)
 }

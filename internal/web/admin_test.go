@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -134,5 +136,51 @@ func TestSecretActionSendsOnlyTheName(t *testing.T) {
 	do(h, "POST", "/actions/secret", url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}, "value": {secretCanary}}, s)
 	if len(f.stored) != 0 || len(f.invoked) != 0 {
 		t.Fatalf("not a secret action: %v %v", f.stored, f.invoked)
+	}
+}
+
+// The page reports what this request did: the store and the action apart.
+func TestSecretActionReportsWhatHappened(t *testing.T) {
+	flashOf := func(w *httptest.ResponseRecorder) flashNote {
+		t.Helper()
+		for _, c := range w.Result().Cookies() {
+			if c.Name == flashCookie {
+				v, _ := url.QueryUnescape(c.Value)
+				var n flashNote
+				if err := json.Unmarshal([]byte(v), &n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+		}
+		t.Fatal("no flash")
+		return flashNote{}
+	}
+	f, s, h := setup(t)
+	f.actions = map[string][]client.Action{"wrk_1": {{Provider: "setup", ID: "give_token", Label: "GitHub token", Prompt: "Paste a token", Secret: "github_token"}}}
+	form := func(value string) url.Values {
+		return url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"setup"}, "action": {"give_token"}, "value": {value}}
+	}
+
+	// Stored, but the action failed: it says so, and how to retry.
+	f.invokeErr = &client.Error{Status: 409, Code: "conflict", Message: "moved on"}
+	n := flashOf(do(h, "POST", "/actions/secret", form(secretCanary), s))
+	if !n.Err || !strings.Contains(n.Text, "github_token is stored") || !strings.Contains(n.Text, "moved on") || !strings.Contains(n.Text, "Leave the value empty") || strings.Contains(n.Text, secretCanary) {
+		t.Fatalf("store ok, invoke failed: %+v", n)
+	}
+
+	// Reusing a stored secret names no store and no PUT.
+	f.invokeErr = nil
+	f.secrets = []client.Secret{{Name: "github_token", Store: "file", Resolves: true}}
+	n = flashOf(do(h, "POST", "/actions/secret", form(""), s))
+	if n.Err || strings.Contains(n.Text, "Stored") || strings.Contains(n.Call, "PUT") || !strings.Contains(n.Call, "/actions/setup/give_token") {
+		t.Fatalf("reuse: %+v", n)
+	}
+
+	// A real store names both calls.
+	f.secrets = nil
+	n = flashOf(do(h, "POST", "/actions/secret", form(secretCanary), s))
+	if n.Err || !strings.Contains(n.Text, "Stored github_token") || !strings.Contains(n.Call, "PUT /v1/secrets/github_token") || !strings.Contains(n.Call, "/actions/setup/give_token") {
+		t.Fatalf("store: %+v", n)
 	}
 }
