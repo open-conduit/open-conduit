@@ -70,6 +70,10 @@ A budget hold doesn't lift when a new day or week begins. Release it when you're
 
 A budget never ends a turn that is already running, so usage can pass `max`. `active_seconds` is charged when a turn ends or parks, so one long turn can run well past the limit before it counts. To limit how long one turn runs, set the binding's `timeout_seconds`.
 
+## Time and machine size
+
+Open Conduit records how long a run took and what size of container it ran in, and doesn't know what a machine costs. Each segment of a run in `GET /v1/runs` has its start and end, and a containerised segment's `container` shows the `cpus` and `memory` its binding planned (`limits` in the [container config](../../architecture/sandboxes/)). They are absent when the binding set no limit. To work out a cost, multiply them by your own price.
+
 ## Warnings
 
 When a count crosses a budget's `warn_at`, the daemon accepts a `core.budget.warning` event in the Work's scope. When it reaches `max` it accepts a `core.budget.exceeded` event. Each fires once per budget, period and scope (a `per: all` budget notifies each scope whose Work crosses or meets it), and again if you change `max`. Their data (schema `core.budget.v1`) names the budget in words (`budget`), the `unit`, `max`, the amount `used`, the `window`, and the `work_id` and `scope_id` that crossed it.

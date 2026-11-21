@@ -93,6 +93,10 @@ type wireContainer struct {
 	Image   string `json:"image"`
 	Daemon  string `json:"daemon"`
 	ID      string `json:"id"`
+	// CPUs and Memory are the limits planned for the container, absent
+	// when its binding set none.
+	CPUs   float64 `json:"cpus,omitempty"`
+	Memory string  `json:"memory,omitempty"`
 }
 
 // wireAttach is an operator's attach container: when it was pinned, and
@@ -167,7 +171,7 @@ func toRun(r runtime.Run) wireRun {
 			seg.Sandbox = &wireSandbox{Digest: g.Sandbox.Digest, Summary: g.Sandbox.Summary}
 		}
 		if c := g.Container; c != nil {
-			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}
+			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID, CPUs: c.CPUs, Memory: c.Memory}
 		}
 		for _, a := range g.Artifacts {
 			seg.Artifacts = append(seg.Artifacts, wireArtifact{ID: a.ID, Size: a.Size, MediaType: a.MediaType, SHA256: a.SHA256})
@@ -175,7 +179,7 @@ func toRun(r runtime.Run) wireRun {
 		out.Segments = append(out.Segments, seg)
 	}
 	for _, c := range r.Attaches {
-		out.Attaches = append(out.Attaches, wireAttach{At: ts(c.At), wireContainer: wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}})
+		out.Attaches = append(out.Attaches, wireAttach{At: ts(c.At), wireContainer: wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID, CPUs: c.CPUs, Memory: c.Memory}})
 	}
 	out.SegmentsDropped = r.DroppedSegments
 	out.ActiveMS = r.ActiveTime.Milliseconds()

@@ -281,11 +281,15 @@ type ContainerBroker interface {
 // container daemon's ID, the container's ID, the run directory and when it
 // was pinned. The container must start after At. A segment whose workspace
 // was at its site (Resource.Site) also records the workspace's path there
-// and the site, so an attach to the Work's session goes back to it.
+// and the site, so an attach to the Work's session goes back to it. CPUs
+// and Memory are the limits the binding planned for the container, in its
+// config's terms; zero says it set none and the provider's default applied.
 type ContainerPin struct {
 	Provider, Digest, Summary, Image, Daemon, ID, Run string
 	At                                                time.Time
-	Workspace, Site                                   string `json:",omitempty"`
+	Workspace, Site                                   string  `json:",omitempty"`
+	CPUs                                              float64 `json:",omitempty"`
+	Memory                                            string  `json:",omitempty"`
 }
 
 // ContainerEgress is how a provider holds a binding's network.allow. Every

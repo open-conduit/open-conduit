@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -68,5 +69,36 @@ func TestRunWireNamesEachSegmentsArtifacts(t *testing.T) {
 	}
 	if a := got.Segments[1].Artifacts; len(a) != 1 || a[0].ID != last.ID {
 		t.Fatalf("last segment's artifacts: %s", data)
+	}
+}
+
+// A segment's container pin shows the size it was planned at, and one with
+// no limits says nothing.
+func TestRunWireCarriesContainerSize(t *testing.T) {
+	start := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	raw, err := json.Marshal(toRun(runtime.Run{Segments: []runtime.Segment{
+		{StartedAt: start, Container: &extension.ContainerPin{ID: "sized", CPUs: 2.5, Memory: "8g"}},
+		{StartedAt: start, Container: &extension.ContainerPin{ID: "unsized"}},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Segments []struct {
+			Container map[string]any `json:"container"`
+		} `json:"segments"`
+	}
+	if err = json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if c := got.Segments[0].Container; c["cpus"] != 2.5 || c["memory"] != "8g" {
+		t.Fatalf("sized container %v", c)
+	}
+	c := got.Segments[1].Container
+	if _, ok := c["cpus"]; ok {
+		t.Fatalf("unsized container %v", c)
+	}
+	if _, ok := c["memory"]; ok {
+		t.Fatalf("unsized container %v", c)
 	}
 }
