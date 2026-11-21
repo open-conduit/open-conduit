@@ -129,8 +129,8 @@ func start(ctx context.Context, path, location string) (*process, error) {
 	}()
 	cx, cancel := context.WithTimeout(ctx, startTimeout)
 	defer cancel()
-	var res initializeResult
-	err = p.conn.Call(cx, methodInitialize, initializeParams{Version: Version, Location: location}, &res)
+	var res InitializeResult
+	err = p.conn.Call(cx, MethodInitialize, InitializeParams{Version: Version, Location: location}, &res)
 	if err == nil && res.Version != Version {
 		err = protocol.Errorf(protocol.CodeUnsupportedVersion, "artifact provider answered with another version")
 	}
@@ -160,8 +160,8 @@ func (s *client) Create(ctx context.Context, mediaType string) (storage.Artifact
 	if err != nil {
 		return nil, err
 	}
-	var h handle
-	if err := s.call(ctx, p, methodCreate, createParams{MediaType: mediaType}, &h); err != nil {
+	var h Handle
+	if err := s.call(ctx, p, MethodCreate, CreateParams{MediaType: mediaType}, &h); err != nil {
 		return nil, err
 	}
 	return &clientWriter{s: s, p: p, id: h.Handle, mediaType: mediaType, hash: sha256.New()}, nil
@@ -172,8 +172,8 @@ func (s *client) Open(ctx context.Context, ref storage.ArtifactRef) (io.ReadClos
 	if err != nil {
 		return nil, err
 	}
-	var h handle
-	if err := s.call(ctx, p, methodOpen, toWire(ref), &h); err != nil {
+	var h Handle
+	if err := s.call(ctx, p, MethodOpen, toWire(ref), &h); err != nil {
 		return nil, err
 	}
 	return &clientReader{s: s, p: p, id: h.Handle, ref: ref, hash: sha256.New()}, nil
@@ -184,7 +184,7 @@ func (s *client) Delete(ctx context.Context, ref storage.ArtifactRef) error {
 	if err != nil {
 		return err
 	}
-	return s.call(ctx, p, methodDelete, toWire(ref), nil)
+	return s.call(ctx, p, MethodDelete, toWire(ref), nil)
 }
 
 func (s *client) List(ctx context.Context, after string, limit int) ([]storage.StoredArtifact, error) {
@@ -192,8 +192,8 @@ func (s *client) List(ctx context.Context, after string, limit int) ([]storage.S
 	if err != nil {
 		return nil, err
 	}
-	var res listResult
-	if err := s.call(ctx, p, methodList, listParams{After: after, Limit: limit}, &res); err != nil {
+	var res ListResult
+	if err := s.call(ctx, p, MethodList, ListParams{After: after, Limit: limit}, &res); err != nil {
 		return nil, err
 	}
 	out := make([]storage.StoredArtifact, 0, len(res.Items))
@@ -210,15 +210,15 @@ func (s *client) Import(ctx context.Context, ref storage.ArtifactRef, source io.
 	if err != nil {
 		return err
 	}
-	var h handle
-	if err := s.call(ctx, p, methodImportBegin, toWire(ref), &h); err != nil {
+	var h Handle
+	if err := s.call(ctx, p, MethodImportBegin, toWire(ref), &h); err != nil {
 		return err
 	}
 	abort := func(cause error) error {
-		_ = s.call(context.WithoutCancel(ctx), p, methodImportAbort, h, nil)
+		_ = s.call(context.WithoutCancel(ctx), p, MethodImportAbort, h, nil)
 		return cause
 	}
-	sum, size, buf := sha256.New(), int64(0), make([]byte, maxChunk)
+	sum, size, buf := sha256.New(), int64(0), make([]byte, MaxChunk)
 	for {
 		n, rerr := source.Read(buf)
 		if n > 0 {
@@ -227,9 +227,9 @@ func (s *client) Import(ctx context.Context, ref storage.ArtifactRef, source io.
 				return abort(fmt.Errorf("import %s runs long: %w", ref.ID, storage.ErrCorrupt))
 			}
 			_, _ = sum.Write(buf[:n])
-			if err := s.call(ctx, p, methodImportWrite, chunkParams{Handle: h.Handle, Chunk: buf[:n]}, nil); err != nil {
+			if err := s.call(ctx, p, MethodImportWrite, ChunkParams{Handle: h.Handle, Chunk: buf[:n]}, nil); err != nil {
 				// The import has already answered (a conflict, say).
-				_ = s.call(context.WithoutCancel(ctx), p, methodImportAbort, h, nil)
+				_ = s.call(context.WithoutCancel(ctx), p, MethodImportAbort, h, nil)
 				return err
 			}
 		}
@@ -243,7 +243,7 @@ func (s *client) Import(ctx context.Context, ref storage.ArtifactRef, source io.
 	if size != ref.Size || (ref.SHA256 != "" && hex.EncodeToString(sum.Sum(nil)) != ref.SHA256) {
 		return abort(fmt.Errorf("import %s doesn't match its ref: %w", ref.ID, storage.ErrCorrupt))
 	}
-	return s.call(ctx, p, methodImportFinish, h, nil)
+	return s.call(ctx, p, MethodImportFinish, h, nil)
 }
 
 // Close stops the provider, which aborts its unfinished writers.
@@ -287,8 +287,8 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	}
 	written := 0
 	for len(b) > 0 {
-		chunk := b[:min(len(b), maxChunk)]
-		if err := w.s.call(context.Background(), w.p, methodWrite, chunkParams{Handle: w.id, Chunk: chunk}, nil); err != nil {
+		chunk := b[:min(len(b), MaxChunk)]
+		if err := w.s.call(context.Background(), w.p, MethodWrite, ChunkParams{Handle: w.id, Chunk: chunk}, nil); err != nil {
 			w.err = err
 			return written, err
 		}
@@ -306,18 +306,23 @@ func (w *clientWriter) Commit(ctx context.Context) (storage.ArtifactRef, error) 
 	}
 	w.done = true
 	if w.err != nil {
-		_ = w.s.call(context.WithoutCancel(ctx), w.p, methodAbort, handle{Handle: w.id}, nil)
+		_ = w.s.call(context.WithoutCancel(ctx), w.p, MethodAbort, Handle{Handle: w.id}, nil)
 		return storage.ArtifactRef{}, w.err
 	}
-	var res wireRef
-	if err := w.s.call(ctx, w.p, methodCommit, handle{Handle: w.id}, &res); err != nil {
+	var res Ref
+	if err := w.s.call(ctx, w.p, MethodCommit, Handle{Handle: w.id}, &res); err != nil {
 		return storage.ArtifactRef{}, err
 	}
 	ref := res.ref()
 	if ref.ID == "" || ref.Size != w.size || ref.MediaType != w.mediaType || ref.SHA256 != hex.EncodeToString(w.hash.Sum(nil)) {
 		// Published under a ref that doesn't describe what was written:
 		// take it back rather than record it.
-		_ = w.s.call(context.WithoutCancel(ctx), w.p, methodDelete, res, nil)
+		// The delete names what was really written, since a store refuses
+		// a ref that doesn't match what it holds.
+		if res.ID != "" {
+			actual := Ref{ID: res.ID, Size: w.size, MediaType: w.mediaType, SHA256: hex.EncodeToString(w.hash.Sum(nil))}
+			_ = w.s.call(context.WithoutCancel(ctx), w.p, MethodDelete, actual, nil)
+		}
 		return storage.ArtifactRef{}, fmt.Errorf("artifact provider returned a ref that doesn't match the content: %w", storage.ErrCorrupt)
 	}
 	return ref, nil
@@ -328,7 +333,7 @@ func (w *clientWriter) Close() error {
 		return fmt.Errorf("artifact writer: %w", os.ErrClosed)
 	}
 	w.done = true
-	return w.s.call(context.Background(), w.p, methodAbort, handle{Handle: w.id}, nil)
+	return w.s.call(context.Background(), w.p, MethodAbort, Handle{Handle: w.id}, nil)
 }
 
 // clientReader verifies the size and digest itself, so a read to EOF proves
@@ -356,10 +361,14 @@ func (r *clientReader) Read(b []byte) (int, error) {
 		if r.err != nil {
 			return 0, r.err
 		}
-		var res readResult
-		if err := r.s.call(context.Background(), r.p, methodRead, handle{Handle: r.id}, &res); err != nil {
+		var res ReadResult
+		if err := r.s.call(context.Background(), r.p, MethodRead, Handle{Handle: r.id}, &res); err != nil {
 			r.err = err
 			return 0, err
+		}
+		if len(res.Chunk) > MaxChunk || (len(res.Chunk) == 0 && !res.EOF) {
+			r.err = fmt.Errorf("artifact provider answered a read with %d bytes: %w", len(res.Chunk), storage.ErrInvalid)
+			return 0, r.err
 		}
 		if len(res.Chunk) > 0 {
 			r.size += int64(len(res.Chunk))
@@ -397,5 +406,5 @@ func (r *clientReader) Close() error {
 		return nil
 	}
 	r.closed = true
-	return r.s.call(context.Background(), r.p, methodCloseReader, handle{Handle: r.id}, nil)
+	return r.s.call(context.Background(), r.p, MethodCloseReader, Handle{Handle: r.id}, nil)
 }

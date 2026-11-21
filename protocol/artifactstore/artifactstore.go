@@ -37,83 +37,113 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Version is the provider protocol's version.
+// Version is the provider protocol's version. The protocol is provisional;
+// site/src/content/docs/architecture/artifact-providers.md describes it.
 const Version = 1
 
-// maxChunk is the most content one message carries. Base64 in JSON keeps it
+// MaxChunk is the most content one message carries. Base64 in JSON keeps it
 // well inside protocol.MaxMessageBytes.
-const maxChunk = 1 << 20
+const MaxChunk = 1 << 20
 
-// Methods the host calls on a provider.
+// The methods the host calls on a provider.
 const (
-	methodInitialize   = "artifactstore.initialize"
-	methodCreate       = "artifactstore.create"
-	methodWrite        = "artifactstore.write"
-	methodCommit       = "artifactstore.commit"
-	methodAbort        = "artifactstore.abort"
-	methodOpen         = "artifactstore.open"
-	methodRead         = "artifactstore.read"
-	methodCloseReader  = "artifactstore.close_reader"
-	methodDelete       = "artifactstore.delete"
-	methodList         = "artifactstore.list"
-	methodImportBegin  = "artifactstore.import_begin"
-	methodImportWrite  = "artifactstore.import_write"
-	methodImportFinish = "artifactstore.import_finish"
-	methodImportAbort  = "artifactstore.import_abort"
+	MethodInitialize   = "artifactstore.initialize"
+	MethodCreate       = "artifactstore.create"
+	MethodWrite        = "artifactstore.write"
+	MethodCommit       = "artifactstore.commit"
+	MethodAbort        = "artifactstore.abort"
+	MethodOpen         = "artifactstore.open"
+	MethodRead         = "artifactstore.read"
+	MethodCloseReader  = "artifactstore.close_reader"
+	MethodDelete       = "artifactstore.delete"
+	MethodList         = "artifactstore.list"
+	MethodImportBegin  = "artifactstore.import_begin"
+	MethodImportWrite  = "artifactstore.import_write"
+	MethodImportFinish = "artifactstore.import_finish"
+	MethodImportAbort  = "artifactstore.import_abort"
 )
+
+// Methods lists every method a provider serves.
+var Methods = []string{
+	MethodInitialize, MethodCreate, MethodWrite, MethodCommit, MethodAbort,
+	MethodOpen, MethodRead, MethodCloseReader, MethodDelete, MethodList,
+	MethodImportBegin, MethodImportWrite, MethodImportFinish, MethodImportAbort,
+}
 
 // Error codes for the storage errors the shared protocol has no code for.
+// A provider answers with these, or protocol.CodeNotFound, CodeConflict or
+// CodeInvalid, as a JSON-RPC error with code -32000 and data.code.
 const (
-	codeCorrupt = "artifact_corrupt"
-	codeInUse   = "artifact_in_use"
+	CodeCorrupt = "artifact_corrupt"
+	CodeInUse   = "artifact_in_use"
 )
 
-type wireRef struct {
+// Ref is an artifact reference on the wire.
+type Ref struct {
 	ID        string `json:"id"`
 	Size      int64  `json:"size"`
 	MediaType string `json:"media_type"`
 	SHA256    string `json:"sha256,omitempty"`
 }
 
-func toWire(r storage.ArtifactRef) wireRef {
-	return wireRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType, SHA256: r.SHA256}
+func toWire(r storage.ArtifactRef) Ref {
+	return Ref{ID: r.ID, Size: r.Size, MediaType: r.MediaType, SHA256: r.SHA256}
 }
 
-func (r wireRef) ref() storage.ArtifactRef {
+func (r Ref) ref() storage.ArtifactRef {
 	return storage.ArtifactRef{ID: r.ID, Size: r.Size, MediaType: r.MediaType, SHA256: r.SHA256}
 }
 
-type initializeParams struct {
+// InitializeParams is MethodInitialize's input, the first call on a
+// connection.
+type InitializeParams struct {
 	Version  int    `json:"version"`
 	Location string `json:"location"`
 }
-type initializeResult struct {
+
+// InitializeResult is MethodInitialize's answer.
+type InitializeResult struct {
 	Version int `json:"version"`
 }
-type createParams struct {
+
+// CreateParams is MethodCreate's input.
+type CreateParams struct {
 	MediaType string `json:"media_type"`
 }
-type handle struct {
+
+// Handle names an open writer, reader or import within one connection.
+type Handle struct {
 	Handle string `json:"handle"`
 }
-type chunkParams struct {
+
+// ChunkParams carries content to a writer or import, at most MaxChunk bytes.
+type ChunkParams struct {
 	Handle string `json:"handle"`
 	Chunk  []byte `json:"chunk"`
 }
-type readResult struct {
+
+// ReadResult is MethodRead's answer: at most MaxChunk bytes, and EOF once
+// nothing follows. An answer with neither is refused.
+type ReadResult struct {
 	Chunk []byte `json:"chunk,omitempty"`
 	EOF   bool   `json:"eof,omitempty"`
 }
-type listParams struct {
+
+// ListParams is MethodList's input.
+type ListParams struct {
 	After string `json:"after,omitempty"`
 	Limit int    `json:"limit"`
 }
-type listItem struct {
-	Ref         wireRef   `json:"ref"`
+
+// ListItem is one committed artifact.
+type ListItem struct {
+	Ref         Ref       `json:"ref"`
 	PublishedAt time.Time `json:"published_at"`
 }
-type listResult struct {
-	Items []listItem `json:"items"`
+
+// ListResult is MethodList's answer.
+type ListResult struct {
+	Items []ListItem `json:"items"`
 }
 
 // encodeError gives a storage error a code that survives the wire.
@@ -122,9 +152,9 @@ func encodeError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, storage.ErrCorrupt):
-		return protocol.Errorf(codeCorrupt, "artifact content is corrupt")
+		return protocol.Errorf(CodeCorrupt, "artifact content is corrupt")
 	case errors.Is(err, storage.ErrInUse):
-		return protocol.Errorf(codeInUse, "artifact store is in use")
+		return protocol.Errorf(CodeInUse, "artifact store is in use")
 	case errors.Is(err, storage.ErrNotFound):
 		return protocol.Errorf(protocol.CodeNotFound, "artifact not found")
 	case errors.Is(err, storage.ErrConflict):
@@ -146,9 +176,9 @@ func decodeError(err error) error {
 		code = op.Code
 	}
 	switch code {
-	case codeCorrupt:
+	case CodeCorrupt:
 		return fmt.Errorf("artifact provider: %w", storage.ErrCorrupt)
-	case codeInUse:
+	case CodeInUse:
 		return fmt.Errorf("artifact provider: %w", storage.ErrInUse)
 	case protocol.CodeNotFound:
 		return fmt.Errorf("artifact provider: %w", storage.ErrNotFound)
@@ -237,8 +267,8 @@ func (s *server) handle(ctx context.Context, method string, raw json.RawMessage)
 }
 
 func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) (any, error) {
-	if method == methodInitialize {
-		var p initializeParams
+	if method == MethodInitialize {
+		var p InitializeParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -256,15 +286,15 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 		s.store = store
-		return initializeResult{Version: Version}, nil
+		return InitializeResult{Version: Version}, nil
 	}
 	store, err := s.opened()
 	if err != nil {
 		return nil, err
 	}
 	switch method {
-	case methodCreate:
-		var p createParams
+	case MethodCreate:
+		var p CreateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -276,9 +306,9 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		defer s.mu.Unlock()
 		id := s.id()
 		s.writers[id] = w
-		return handle{Handle: id}, nil
-	case methodWrite:
-		var p chunkParams
+		return Handle{Handle: id}, nil
+	case MethodWrite:
+		var p ChunkParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -288,8 +318,8 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		_, err = w.Write(p.Chunk)
 		return struct{}{}, err
-	case methodCommit:
-		var p handle
+	case MethodCommit:
+		var p Handle
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -302,8 +332,8 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 		return toWire(ref), nil
-	case methodAbort:
-		var p handle
+	case MethodAbort:
+		var p Handle
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -312,8 +342,8 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 		return struct{}{}, w.Close()
-	case methodOpen:
-		var p wireRef
+	case MethodOpen:
+		var p Ref
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -325,9 +355,9 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		defer s.mu.Unlock()
 		id := s.id()
 		s.readers[id] = &serverReader{r: r}
-		return handle{Handle: id}, nil
-	case methodRead:
-		var p handle
+		return Handle{Handle: id}, nil
+	case MethodRead:
+		var p Handle
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -338,8 +368,8 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, protocol.Errorf(protocol.CodeInvalid, "unknown reader")
 		}
 		return r.read()
-	case methodCloseReader:
-		var p handle
+	case MethodCloseReader:
+		var p Handle
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -351,14 +381,14 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, protocol.Errorf(protocol.CodeInvalid, "unknown reader")
 		}
 		return struct{}{}, r.r.Close()
-	case methodDelete:
-		var p wireRef
+	case MethodDelete:
+		var p Ref
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
 		return struct{}{}, store.Delete(ctx, p.ref())
-	case methodList:
-		var p listParams
+	case MethodList:
+		var p ListParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -366,13 +396,13 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		if err != nil {
 			return nil, err
 		}
-		out := listResult{Items: make([]listItem, 0, len(items))}
+		out := ListResult{Items: make([]ListItem, 0, len(items))}
 		for _, it := range items {
-			out.Items = append(out.Items, listItem{Ref: toWire(it.Ref), PublishedAt: it.PublishedAt})
+			out.Items = append(out.Items, ListItem{Ref: toWire(it.Ref), PublishedAt: it.PublishedAt})
 		}
 		return out, nil
-	case methodImportBegin:
-		var p wireRef
+	case MethodImportBegin:
+		var p Ref
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -388,9 +418,9 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		defer s.mu.Unlock()
 		id := s.id()
 		s.imports[id] = imp
-		return handle{Handle: id}, nil
-	case methodImportWrite:
-		var p chunkParams
+		return Handle{Handle: id}, nil
+	case MethodImportWrite:
+		var p ChunkParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -402,8 +432,8 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		}
 		_, err := imp.w.Write(p.Chunk)
 		return struct{}{}, err
-	case methodImportFinish, methodImportAbort:
-		var p handle
+	case MethodImportFinish, MethodImportAbort:
+		var p Handle
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
@@ -414,7 +444,7 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 		if imp == nil {
 			return nil, protocol.Errorf(protocol.CodeInvalid, "unknown import")
 		}
-		if method == methodImportAbort {
+		if method == MethodImportAbort {
 			_ = imp.w.CloseWithError(errors.New("artifact provider: import aborted"))
 			<-imp.done
 			return struct{}{}, nil
@@ -447,23 +477,23 @@ func (s *server) writer(id string, end bool) (storage.ArtifactWriter, error) {
 	return w, nil
 }
 
-func (r *serverReader) read() (readResult, error) {
+func (r *serverReader) read() (ReadResult, error) {
 	if r.err != nil {
 		if errors.Is(r.err, io.EOF) {
-			return readResult{EOF: true}, nil
+			return ReadResult{EOF: true}, nil
 		}
-		return readResult{}, r.err
+		return ReadResult{}, r.err
 	}
-	buf := make([]byte, maxChunk)
+	buf := make([]byte, MaxChunk)
 	n, err := r.r.Read(buf)
 	if err != nil && n == 0 {
 		r.err = err
 		if errors.Is(err, io.EOF) {
-			return readResult{EOF: true}, nil
+			return ReadResult{EOF: true}, nil
 		}
-		return readResult{}, err
+		return ReadResult{}, err
 	}
 	// Bytes first: the error, or EOF, is the next read's answer.
 	r.err = err
-	return readResult{Chunk: buf[:n]}, nil
+	return ReadResult{Chunk: buf[:n]}, nil
 }

@@ -136,6 +136,14 @@ func TestHostVerifiesWhatAProviderReturns(t *testing.T) {
 	if _, err = w.Commit(ctx); !errors.Is(err, storage.ErrCorrupt) {
 		t.Fatalf("commit with a false ref: got %v, want ErrCorrupt", err)
 	}
+	// What the refused commit stored is taken back.
+	listed, err := lying.List(ctx, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Ref.ID != ref.ID {
+		t.Fatalf("after the refused commit the store lists %+v, want only %s", listed, ref.ID)
+	}
 }
 
 // A provider that dies is started again; the store keeps working.
