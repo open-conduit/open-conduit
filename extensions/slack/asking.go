@@ -35,6 +35,10 @@ type asked struct {
 	// direct lays it out for the one person it is sent to, in a DM: they
 	// are not mentioned.
 	direct bool
+	// replies lays it out for an entry that can't receive a press
+	// (Settings.Presses): its choices are named, without buttons, and a
+	// reply in the thread that says one answers it (replies.go).
+	replies bool
 }
 
 // laidOut is a request's message: its notification text, its blocks, and
@@ -72,6 +76,14 @@ func outsideSlack(responders []string) int {
 		}
 	}
 	return n
+}
+
+// orAll joins choices as "A", "A or B", "A, B or C".
+func orAll(words []string) string {
+	if len(words) <= 1 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " or " + words[len(words)-1]
 }
 
 // mentionAll joins people as Slack mentions: "<@A>", "<@A> and <@B>",
@@ -164,6 +176,15 @@ func (a asked) layout() (laidOut, bool) {
 	}
 	if len(notes) > 0 {
 		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": strings.Join(notes, "\n")}}})
+	}
+	if a.replies {
+		labels := make([]string, len(o.Choices))
+		for i, c := range o.Choices {
+			labels[i] = "*" + escape(clipRunes(w.ChoiceWording(c).Label, 75)) + "*"
+		}
+		line := "Reply in this thread with " + orAll(labels) + " to answer."
+		blocks = append(blocks, map[string]any{"type": "context", "elements": []map[string]any{{"type": "mrkdwn", "text": clipRunes(line, 2000)}}})
+		return laidOut{text: clipRunes(text, maxSection), blocks: blocks, shown: shown}, true
 	}
 	var buttons []map[string]any
 	for i, c := range o.Choices {

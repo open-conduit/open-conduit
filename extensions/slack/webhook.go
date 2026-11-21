@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -70,13 +71,8 @@ type Verified struct {
 // fresh timestamp) before parsing it. This is the transport-authentication
 // boundary; Push itself trusts its caller.
 func VerifyDelivery(secret string, h http.Header, body []byte, received time.Time) (Verified, error) {
-	ts := h.Get("X-Slack-Request-Timestamp")
-	secs, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || !VerifySignature(secret, ts, body, h.Get("X-Slack-Signature")) {
-		return Verified{}, ErrSignature
-	}
-	if skew := received.Sub(time.Unix(secs, 0)); skew > MaxSkew || skew < -MaxSkew {
-		return Verified{}, ErrSignature
+	if err := VerifyRequest(secret, h, body, received); err != nil {
+		return Verified{}, err
 	}
 	var env struct {
 		Type      string `json:"type"`
@@ -99,6 +95,78 @@ func VerifyDelivery(secret string, h http.Header, body []byte, received time.Tim
 		return Verified{Delivery: extension.Delivery{ID: env.EventID, ReceivedAt: received.UTC(), ContentType: DeliveryContentType, Body: append([]byte(nil), body...)}}, nil
 	}
 	return Verified{}, nil
+}
+
+// VerifyRequest authenticates a raw request from Slack: the signature over
+// its body and a timestamp within MaxSkew of receipt. It is ErrSignature
+// otherwise.
+func VerifyRequest(secret string, h http.Header, body []byte, received time.Time) error {
+	ts := h.Get("X-Slack-Request-Timestamp")
+	secs, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || !VerifySignature(secret, ts, body, h.Get("X-Slack-Signature")) {
+		return ErrSignature
+	}
+	if skew := received.Sub(time.Unix(secs, 0)); skew > MaxSkew || skew < -MaxSkew {
+		return ErrSignature
+	}
+	return nil
+}
+
+// InteractivityPath is the path below an Events API route ("/slack/<scope>/
+// <entry>/interactivity", "/slack/<connection>/interactivity") that serves
+// the app's interactivity Request URL: its button presses over HTTP.
+const InteractivityPath = "interactivity"
+
+// MaxInteractionBytes bounds an interactivity request's body.
+const MaxInteractionBytes = 1 << 20
+
+// InteractivityHandler serves an interactivity Request URL. It verifies the
+// signature and timestamp over the raw body before parsing it, then takes
+// the form's payload field, which must be a JSON object, to take. take
+// must not act within the request: Slack wants an answer within three
+// seconds, so it starts the work detached and reports whether it did. The
+// answer is 200 with an empty body once it has (whatever the payload turns
+// out to be for, including another workspace), 503 when it couldn't start
+// it, so the person sees the press failed and can press again, 401 for a
+// bad signature or a stale timestamp, and 400 for a body that isn't a form
+// with a JSON payload.
+func InteractivityHandler(secret func(context.Context) (string, error), take func(payload []byte) bool, now func() time.Time) http.Handler {
+	if now == nil {
+		now = time.Now
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, MaxInteractionBytes+1))
+		if err != nil || len(body) > MaxInteractionBytes {
+			http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		key, err := secret(r.Context())
+		if err != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if err := VerifyRequest(key, r.Header, body, extension.WebhookReceivedAt(r, now)); err != nil {
+			http.Error(w, "signature rejected", http.StatusUnauthorized)
+			return
+		}
+		form, err := url.ParseQuery(string(body))
+		payload := []byte(form.Get("payload"))
+		var obj map[string]json.RawMessage
+		if err != nil || json.Unmarshal(payload, &obj) != nil {
+			http.Error(w, "invalid interaction", http.StatusBadRequest)
+			return
+		}
+		if !take(payload) {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 // Routed is what a webhook route made of a verified callback.

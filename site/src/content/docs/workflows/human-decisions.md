@@ -173,7 +173,7 @@ When the Work was handed its task by a Slack conversation (`create_work`), at an
 
 An approver who isn't in the thread, or Work with no thread at all, such as a scheduled job's, needs telling. Turn on `"request_messages": {"enabled": true}` in the Slack entry, and each Slack person a request names (`slack:<member id>`) gets a direct message from the app, laid out as in a thread ("**Steve** wants to sign in to git for acme/backend. Do you approve?"), with a link to the conversation it was asked in when there is one. A press answers as you, as in a thread. Once the request is answered, refused or times out, wherever that happens, the message says so in the same one line and loses its buttons. A bare `slack` responder names nobody, so it is sent nothing. For any other way of telling people, see [Telling people about a request](#telling-people-about-a-request).
 
-A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
+A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work over Socket Mode, the default receiver, or over HTTP (`receiver: http`, with the app's interactivity Request URL), and the Slack app needs **Interactivity** turned on (apps created by `init slack` have it). An entry with `receiver: none` can't receive a press, so it posts the request without buttons and asks for a reply in the thread instead: a reply that says one of the options answers as you.
 
 ## Telling people about a request
 

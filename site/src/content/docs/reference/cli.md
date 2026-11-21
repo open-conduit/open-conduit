@@ -36,7 +36,7 @@ Types (from the registered extensions):
   setup    a scope for setting Open Conduit up from the web view (package setup 0.1.0)
            [--scope ID]
   slack    add a workspace-free scope whose agent works Slack threads (package slack 0.1.0)
-           [--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]
+           [--scope ID] [--name APP] [--channel C…] [--start all|mention] [--receiver socket|http] [--public-url URL] [--bot-token REF (--app-token REF | --signing-secret REF) --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]
 ```
 
 ### `open-conduit config`

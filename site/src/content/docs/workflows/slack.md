@@ -16,6 +16,18 @@ open-conduit config check
 
 To answer only when the app is mentioned, set `"start": "mention"` with the app's `bot_user_id` in the extension's config.
 
+### Without Socket Mode
+
+Socket Mode needs an app-level token, which only the app's settings page can create, and keeps a connection open to Slack. To have Slack post to the daemon instead, give the URL that reaches its [webhook listener](/open-conduit/guides/configuration/):
+
+```sh
+open-conduit init slack --receiver http --public-url https://oc.example.com
+```
+
+The app is created with Socket Mode off and two Request URLs: `https://oc.example.com/slack/slack` for events and `https://oc.example.com/slack/slack/interactivity` for button presses. Setup asks for the bot token and the app's signing secret (Basic Information → App Credentials), with no app-level token. Slack checks the events URL when the app is created, so once `open-conduit serve` is running, retry it from the app's **Event Subscriptions** page if it wasn't verified. `doctor` lists both URLs.
+
+With `"receiver": "none"`, the daemon only reads the channel on its reconcile interval and nothing can reach it from Slack, so it posts no buttons: a question or an approval names its options and asks for a reply in the thread, and a reply that says one answers it as you. A progress message has no Stop button, replies have no feedback buttons, and no request is sent by direct message.
+
 ## Give the agent a folder of instructions and knowledge
 
 By default each thread's agent runs in an empty private directory. To give it instructions and reference files, point the binding's `dir` at a folder:

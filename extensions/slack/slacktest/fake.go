@@ -1,5 +1,6 @@
-// Package slacktest is an in-memory fake of the Slack Web API and Events API
-// deliveries for tests. It implements only what the Slack extension calls:
+// Package slacktest is an in-memory fake of the Slack Web API, Events API
+// deliveries and interactivity requests (button presses over HTTP) for
+// tests. It implements only what the Slack extension calls:
 // conversations.history, conversations.replies, chat.postMessage,
 // chat.update, reactions.add and reactions.remove, the external file upload
 // and auth.test, with cursor pagination, message metadata, edits, deletions
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -887,4 +889,23 @@ func Headers(secret string, body []byte, at time.Time) http.Header {
 	h.Set("X-Slack-Request-Timestamp", ts)
 	h.Set("X-Slack-Signature", slack.Sign(secret, ts, body))
 	return h
+}
+
+// ---- Interactivity over HTTP -------------------------------------------------
+
+// InteractionBody is a button press's payload (Press) as Slack posts it to
+// an app's interactivity Request URL: a form whose payload field is the
+// JSON.
+func InteractionBody(payload []byte) []byte {
+	return []byte(url.Values{"payload": {string(payload)}}.Encode())
+}
+
+// InteractionRequest is the signed POST of payload to target, an
+// interactivity Request URL, as Slack sends it at time at.
+func InteractionRequest(target, secret string, payload []byte, at time.Time) *http.Request {
+	body := InteractionBody(payload)
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(string(body)))
+	req.Header = Headers(secret, body, at)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
 }

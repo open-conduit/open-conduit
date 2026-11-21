@@ -1751,3 +1751,133 @@ func TestSlackPromptWaitsForItsRequest(t *testing.T) {
 		t.Fatalf("prompts: %+v", prompts)
 	}
 }
+
+// An entry that can't receive a press (receiver none) posts its prompts
+// without buttons: the prompt names its choices and asks for a reply in the
+// thread. A reply that says one of them answers the action through Act as
+// whoever wrote it, keyed by the reply, so a later pass doesn't answer it
+// again; a reply the provider refuses is told so and doesn't close the
+// prompt, and a reply that says something else is only the thread's.
+func TestSlackPromptWithoutPressesIsAnsweredByReply(t *testing.T) {
+	e := newSlackEnv(t, `,"receiver":"none"`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	// A long history in the scope before the prompt (more than one pass
+	// reads) is never read: with no prompt open, the pass moves its cursor
+	// to the head, so each reply below is answered by the next pass.
+	e.read(func(tx storage.Tx) error {
+		for n := range 10000 {
+			id := domain.ID("backlog-" + strconv.Itoa(n))
+			if _, _, err := runtime.AcceptInTx(tx, slScope, domain.Event{ID: id, Type: "other.thing", Source: "other", DeliveryID: string(id),
+				OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now(), Data: domain.Payload{Schema: "other.thing.v1", Data: json.RawMessage(`{}`)}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	e.converge()
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}}}, nil
+	}
+	var got []extension.ActRequest
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		if r.Caller != slAlice {
+			return extension.ActResult{}, &extension.OperationError{Code: "not_allowed", Message: "you are not one of the people this question is for"}
+		}
+		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
+	}
+	// Ready Work is prompted (held for an approval, say), and a reply
+	// routes to it as input, as it would to waiting Work.
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	var prompt sl.Message
+	for _, m := range e.fake.Thread(slChannel, root) {
+		if len(m.Blocks) > 0 {
+			prompt = m
+		}
+	}
+	raw, _ := json.Marshal(prompt.Blocks)
+	if strings.Contains(string(raw), `"actions"`) || strings.Contains(string(raw), `"button"`) || !strings.Contains(string(raw), "Reply in this thread with *approve* or *refuse* to answer.") {
+		t.Fatalf("prompt blocks: %s", raw)
+	}
+
+	reply := func(user, text string) string {
+		t.Helper()
+		ts := e.fake.Reply(slChannel, root, user, text)
+		e.sync()
+		e.reconcile()
+		e.route()
+		return ts
+	}
+	reply(slAlice, "thanks, looking now")
+	if e.converge(); len(got) != 0 {
+		t.Fatalf("a reply naming no choice answered: %+v", got)
+	}
+	reply(slBob, "approve")
+	e.converge()
+	if len(got) != 1 || got[0].Caller != slBob {
+		t.Fatalf("bob's reply: %+v", got)
+	}
+	ts := reply(slAlice, "<@UBOT> Approve.")
+	e.converge()
+	e.converge()
+	if len(got) != 2 || got[1].Caller != slAlice || got[1].Work != w.ID || got[1].Provider != "decisions" || got[1].Action != "answer" || got[1].Input != "approve" || got[1].Key != "reply/"+slAlice+"/"+ts {
+		t.Fatalf("alice's reply: %+v", got)
+	}
+	eph := e.fake.Ephemerals()
+	if len(eph) != 2 || eph[0].User != slBob || !strings.Contains(eph[0].Text, "not one of the people") || eph[1].User != slAlice || eph[1].Text != "answered: approve" || eph[1].ThreadTS != root {
+		t.Fatalf("ephemerals: %+v", eph)
+	}
+	// Answered: a later reply naming a choice isn't taken.
+	reply(slAlice, "refuse")
+	if e.converge(); len(got) != 2 {
+		t.Fatalf("a reply after the answer was taken: %+v", got)
+	}
+}
+
+// A prompt whose post's answer was lost stays attempted until its marker
+// search finds it, and holds the reply cursor meanwhile: a reply that
+// answers it before it is recovered is answered once it is. (Deliver
+// marks a prompt attempted before posting it; only a post Slack refused
+// outright goes back to pending, and nothing was posted then.)
+func TestSlackReplyToALostPromptIsAnswered(t *testing.T) {
+	e := newSlackEnv(t, `,"receiver":"none"`, sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}}}, nil
+	}
+	var got []extension.ActRequest
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
+	}
+	e.fake.FailNextPost("lost")
+	e.converge()
+	if res := e.converge(); res.Posted != 0 || res.Recovered != 0 {
+		t.Fatalf("the lost prompt was settled before its search: %+v", res)
+	}
+	ts := e.fake.Reply(slChannel, root, slAlice, "approve")
+	e.sync()
+	e.reconcile()
+	e.route()
+	e.converge()
+	if len(got) != 1 || got[0].Caller != slAlice || got[0].Key != "reply/"+slAlice+"/"+ts {
+		t.Fatalf("the reply to the lost prompt: %+v", got)
+	}
+	// Recovered later, it isn't answered again.
+	e.fake.Advance(time.Minute)
+	e.sync()
+	e.converge()
+	e.converge()
+	if len(got) != 1 {
+		t.Fatalf("answered again once recovered: %+v", got)
+	}
+}

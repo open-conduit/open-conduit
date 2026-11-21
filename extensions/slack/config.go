@@ -158,11 +158,12 @@ type ExtensionConfig struct {
 	// RefreshMinutes bounds how long an unchanged thread's replies are taken
 	// from memory instead of re-read (default 60).
 	RefreshMinutes int `json:"refresh_minutes,omitempty"`
-	// Receiver is how push deliveries arrive: socket (default; Socket Mode
-	// with the connection's app_token, no public endpoint), http (Events API
-	// Request URL on the webhook listener: the entry's own, verified with
-	// signing_secret, or the connection's, verified with the connection's
-	// signing_secret) or none (reconcile only).
+	// Receiver is how push deliveries and button presses arrive: socket
+	// (default; Socket Mode with the connection's app_token, no public
+	// endpoint), http (the Events API and interactivity Request URLs on the
+	// webhook listener: the entry's own, verified with signing_secret, or
+	// the connection's, verified with the connection's signing_secret) or
+	// none (reconcile only, and no buttons: see Settings.Presses).
 	Receiver string `json:"receiver,omitempty"`
 	// SigningSecret names a selected scope secret: the app's signing secret
 	// used to verify HTTP Events API deliveries to the entry's own route
@@ -347,10 +348,23 @@ type Settings struct {
 	RequestMessages bool
 }
 
+// Presses reports whether the entry can receive a button press: over
+// Socket Mode, or over its HTTP interactivity Request URL (receiver http).
+// An entry that can't (receiver none) posts no buttons: a prompt asks for a
+// reply in its thread instead, and a progress message's Stop, a reply's
+// feedback buttons and request messages are left out.
+func (s Settings) Presses() bool { return s.Receiver != ReceiverNone }
+
+// TakesPress reports whether a press in channel of team is the entry's: its
+// workspace, and a channel it observes or, with request messages on, a DM.
+func (s Settings) TakesPress(team, channel string) bool {
+	return (s.Team == "" || team == s.Team) && (s.Observes(channel) || s.RequestMessages && IsDirect(channel))
+}
+
 // AsksFeedback reports whether a reply posted on binding carries feedback
 // buttons.
 func (s Settings) AsksFeedback(binding string) bool {
-	if !s.Feedback {
+	if !s.Feedback || !s.Presses() {
 		return false
 	}
 	if len(s.FeedbackBindings) == 0 {

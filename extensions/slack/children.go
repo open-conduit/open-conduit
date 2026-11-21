@@ -258,7 +258,7 @@ func (p *Projector) childPrompts(ctx context.Context) ([]Intent, error) {
 					continue
 				}
 				req := r.Request
-				in, ok := asked{who: h.who, work: h.work.ID, offer: o, request: &req}.intent(h.channel, h.thread, h.binding)
+				in, ok := asked{who: h.who, work: h.work.ID, offer: o, request: &req, replies: !p.o.Settings.Presses()}.intent(h.channel, h.thread, h.binding)
 				if !ok {
 					continue
 				}

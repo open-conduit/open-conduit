@@ -126,7 +126,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			if r == nil && slices.ContainsFunc(rs, func(q extension.RequestOffer) bool { return q.Provider == o.Provider }) {
 				continue
 			}
-			in, ok := asked{who: w.who, work: w.work, offer: o, request: r}.intent(w.channel, w.thread, w.binding)
+			in, ok := asked{who: w.who, work: w.work, offer: o, request: r, replies: !p.o.Settings.Presses()}.intent(w.channel, w.thread, w.binding)
 			if !ok || seen[in.ID] {
 				continue
 			}
@@ -151,6 +151,17 @@ func (a asked) intent(channel, thread, binding string) (Intent, bool) {
 		Work: a.work, Channel: channel, Thread: thread, Text: l.text, Blocks: l.blocks, Binding: binding, Shown: l.shown}
 	if a.request != nil {
 		in.Asks = &promptAsks{Provider: a.offer.Provider, Request: a.request.ID}
+	}
+	if a.replies {
+		var w *extension.Wording
+		if a.request != nil {
+			w = a.request.Wording
+		}
+		r := &promptReplies{Provider: a.offer.Provider, Action: a.offer.ID}
+		for _, c := range a.offer.Choices {
+			r.Choices = append(r.Choices, promptChoice{Input: c, Label: w.ChoiceWording(c).Label})
+		}
+		in.Replies = r
 	}
 	return in, true
 }
@@ -189,8 +200,7 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 	}
 	// A press in a DM is taken when the entry sends request messages
 	// there: the provider still decides whether the presser may answer.
-	where := p.o.Settings.Observes(in.Container.ChannelID) || p.o.Settings.RequestMessages && IsDirect(in.Container.ChannelID)
-	if !slackIDPattern.MatchString(in.User.ID) || p.o.Settings.Team != "" && in.Team.ID != p.o.Settings.Team || !where {
+	if !slackIDPattern.MatchString(in.User.ID) || !p.o.Settings.TakesPress(in.Team.ID, in.Container.ChannelID) {
 		return nil
 	}
 	for _, a := range in.Actions {
@@ -207,37 +217,53 @@ func (p *Projector) Interact(ctx context.Context, payload []byte) error {
 		if json.Unmarshal([]byte(a.Value), &v) != nil || v.Work == "" || v.Action == "" || !tsPattern.MatchString(a.ActionTS) {
 			return nil
 		}
-		res, err := p.o.Act(ctx, extension.ActRequest{Scope: domain.ID(p.o.Settings.Scope), Work: v.Work, Provider: v.Provider, Action: v.Action, Input: v.Input,
-			Caller: in.User.ID, Key: "block/" + in.User.ID + "/" + a.ActionTS})
-		var oe *extension.OperationError
-		msg := ""
-		switch {
-		case err == nil:
-			msg = res.Message
-			if msg == "" {
-				msg = "Answered: " + v.Input
-			}
-		case errors.As(err, &oe):
-			msg = oe.Message
-		case errors.Is(err, storage.ErrNotFound):
-			msg = "That request is no longer open."
-		default:
-			msg = "Open Conduit couldn't take that answer just now. Please press it again."
-		}
 		thread := in.Container.ThreadTS
 		if thread == "" {
 			thread = in.Container.MessageTS
 		}
-		if p.o.Settings.Projection.DryRun {
-			return err
-		}
-		if e := p.o.Client.PostEphemeral(ctx, Ephemeral{Channel: in.Container.ChannelID, User: in.User.ID, ThreadTS: thread, Text: msg}); e != nil && err == nil {
-			err = e
-		}
-		if oe != nil || errors.Is(err, storage.ErrNotFound) {
-			return nil
-		}
+		_, err := p.answer(ctx, v, in.User.ID, in.Container.ChannelID, thread, "block/"+in.User.ID+"/"+a.ActionTS, "Open Conduit couldn't take that answer just now. Please press it again.")
 		return err
 	}
 	return nil
+}
+
+// answer hands a person's choice to Act as them, keyed so a retried press
+// or reply answers once, and tells them the outcome in a message only they
+// see. taken is false when the action's provider refused it (or the request
+// is no longer open); an error is one the host could not act on now, when
+// they are told again ("" tells them nothing, for an answer tried again
+// without them).
+func (p *Projector) answer(ctx context.Context, v buttonValue, user, channel, thread, key, again string) (taken bool, err error) {
+	res, err := p.o.Act(ctx, extension.ActRequest{Scope: domain.ID(p.o.Settings.Scope), Work: v.Work, Provider: v.Provider, Action: v.Action, Input: v.Input,
+		Caller: user, Key: key})
+	var oe *extension.OperationError
+	msg := ""
+	switch {
+	case err == nil:
+		msg = res.Message
+		if msg == "" {
+			msg = "Answered: " + v.Input
+		}
+	case errors.As(err, &oe):
+		msg = oe.Message
+	case errors.Is(err, storage.ErrNotFound):
+		msg = "That request is no longer open."
+	default:
+		msg = again
+	}
+	refused := oe != nil || errors.Is(err, storage.ErrNotFound)
+	if p.o.Settings.Projection.DryRun || msg == "" {
+		if refused {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	if e := p.o.Client.PostEphemeral(ctx, Ephemeral{Channel: channel, User: user, ThreadTS: thread, Text: msg}); e != nil && err == nil {
+		// The answer was taken: only telling them failed.
+		return true, e
+	}
+	if refused {
+		return false, nil
+	}
+	return err == nil, err
 }

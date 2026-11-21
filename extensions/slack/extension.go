@@ -74,9 +74,13 @@ type Extension struct {
 	// unmatched is by route ("slack/<connection>" or an entry's name).
 	unmatched map[string]*unmatched
 	sockets   sync.WaitGroup
-	stop      context.CancelFunc
-	stopped   bool
-	stopping  context.Context
+	// presses are the button presses taken over HTTP, each acted on
+	// detached from its request (pressing counts them, up to maxPresses).
+	presses  sync.WaitGroup
+	pressing int
+	stop     context.CancelFunc
+	stopped  bool
+	stopping context.Context
 }
 
 // New returns the Slack extension.
@@ -148,6 +152,7 @@ func (x *Extension) Stop() {
 	x.mu.Unlock()
 	x.stop()
 	x.sockets.Wait()
+	x.presses.Wait()
 }
 
 func (x *Extension) Registration() extension.Registration {
@@ -475,7 +480,22 @@ func (x *Extension) Sources() []inproc.Source {
 // names a signing_secret (POST /slack/<connection>): the one Request URL of
 // a Slack app, which delivers each callback to every receiver http entry of
 // the connection that watches its workspace and channel.
+//
+// Below each, /interactivity serves the app's interactivity Request URL
+// (POST /slack/<scope>/<entry>/interactivity, POST
+// /slack/<connection>/interactivity): its button presses, for the entry or
+// for whichever of the connection's entries the press is in.
 func (x *Extension) Webhook(path string) http.Handler {
+	if h := x.eventsWebhook(path); h != nil {
+		return h
+	}
+	if base, ok := strings.CutSuffix(path, "/"+InteractivityPath); ok {
+		return x.interactivityWebhook(base)
+	}
+	return nil
+}
+
+func (x *Extension) eventsWebhook(path string) http.Handler {
 	if !strings.Contains(path, "/") {
 		return x.connectionWebhook(path)
 	}
@@ -563,6 +583,104 @@ func (x *Extension) connectionWebhook(conn string) http.Handler {
 	return RoutedHandler(secret, route, x.now)
 }
 
+// maxPresses bounds the presses taken over HTTP being acted on at once; a
+// press beyond it is answered 503, so its presser can press again.
+const maxPresses = 32
+
+// pressTimeout bounds acting on one press taken over HTTP.
+const pressTimeout = time.Minute
+
+// interactivityWebhook serves the interactivity Request URL below the Events
+// API route base (an entry's "<scope>/<entry>" or a connection's ID), with
+// the same secret and the same receiver http entries, or nil when base
+// serves none.
+func (x *Extension) interactivityWebhook(base string) http.Handler {
+	var sources []*source
+	var secret func(context.Context) (string, error)
+	route := Type + "/" + base + "/" + InteractivityPath
+	if !strings.Contains(base, "/") {
+		for _, s := range x.list() {
+			x.mu.Lock()
+			shared := s.shared
+			x.mu.Unlock()
+			if s.connection == base && shared && s.settings.Receiver == ReceiverHTTP {
+				sources = append(sources, s)
+			}
+		}
+		if len(sources) == 0 {
+			return nil
+		}
+		first := sources[0]
+		secret = func(ctx context.Context) (string, error) {
+			if x.h.Secrets == nil {
+				return "", ErrCredential
+			}
+			values, err := x.h.Secrets(ctx, first.scope, base, []string{SecretSigning})
+			if err != nil || values[SecretSigning] == "" {
+				return "", ErrCredential
+			}
+			return values[SecretSigning], nil
+		}
+	} else {
+		for _, s := range x.list() {
+			if s.name == Type+"/"+base && s.settings.Receiver == ReceiverHTTP && s.settings.SigningSecret != "" {
+				sources, secret = []*source{s}, x.signingSecret(s)
+				break
+			}
+		}
+		if len(sources) == 0 {
+			return nil
+		}
+	}
+	return InteractivityHandler(secret, func(payload []byte) bool { return x.takePress(route, sources, payload) }, x.now)
+}
+
+// takePress acts on a press taken over HTTP, detached from its request and
+// bounded by pressTimeout, in the first of sources whose workspace and
+// channel it is in. A press for none of them (another workspace, a channel
+// no entry observes) is recorded for the slack check and ignored. It is
+// false only when it couldn't start: too many presses are in hand, or the
+// daemon is stopping.
+func (x *Extension) takePress(route string, sources []*source, payload []byte) bool {
+	var in interaction
+	_ = json.Unmarshal(payload, &in)
+	var to *source
+	for _, s := range sources {
+		if s.settings.TakesPress(in.Team.ID, in.Container.ChannelID) {
+			to = s
+			break
+		}
+	}
+	if to == nil {
+		if in.Type == "block_actions" {
+			x.recordUnmatched(route, in.Team.ID, in.Container.ChannelID)
+		}
+		return true
+	}
+	x.mu.Lock()
+	if x.stopped || x.pressing >= maxPresses {
+		x.mu.Unlock()
+		return false
+	}
+	x.pressing++
+	x.presses.Add(1)
+	x.mu.Unlock()
+	go func() {
+		defer func() {
+			x.mu.Lock()
+			x.pressing--
+			x.mu.Unlock()
+			x.presses.Done()
+		}()
+		ctx, cancel := context.WithTimeout(x.stopping, pressTimeout)
+		defer cancel()
+		if err := to.projector.Interact(ctx, payload); err != nil && x.h.Log != nil {
+			x.h.Log.Warn("slack button press not taken", "name", to.name, "code", ErrorCode(err))
+		}
+	}()
+	return true
+}
+
 // deliver hands a verified callback to each entry in turn. Every entry is
 // tried even after one fails, so Slack's retry finds the rest already
 // accepted; any failure fails the whole. A refusal is kept for the entry's
@@ -626,6 +744,10 @@ func (x *Extension) unmatchedItems() []string {
 			what += " channel " + u.channel
 		} else {
 			what += " in no channel"
+		}
+		if strings.HasSuffix(route, "/"+InteractivityPath) {
+			out = append(out, fmt.Sprintf("POST /%s: %d button presses for no configured entry (acknowledged and ignored), the last from %s at %s", route, u.count, what, u.at.UTC().Format(time.RFC3339)))
+			continue
 		}
 		out = append(out, fmt.Sprintf("POST /%s: %d callbacks for no configured entry (answered 421), the last from %s at %s", route, u.count, what, u.at.UTC().Format(time.RFC3339)))
 	}
@@ -782,13 +904,14 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 			x.mu.Unlock()
 			switch {
 			case shared:
-				notes = append(notes, "POST /"+Type+"/"+s.connection+" (the connection's; set it as the app's Events API Request URL)")
+				notes = append(notes, "POST /"+Type+"/"+s.connection+" (the connection's; set it as the app's Events API Request URL)",
+					"POST /"+Type+"/"+s.connection+"/"+InteractivityPath+" (set it as the app's Interactivity Request URL)")
 			case set.SigningSecret == "":
 				raise(inproc.CheckWarn, "receiver_unmounted")
 				notes = append(notes, "receiver http has no route: name a signing_secret on the entry or the connection")
 			}
 			if set.SigningSecret != "" {
-				notes = append(notes, "POST /"+s.name+" (the entry's own)")
+				notes = append(notes, "POST /"+s.name+" (the entry's own)", "POST /"+s.name+"/"+InteractivityPath+" (the entry's own Interactivity Request URL)")
 			}
 		case ReceiverSocket:
 			st := s.socket.Status()
@@ -806,6 +929,10 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 			}
 		default:
 			notes = append(notes, "reconcile only")
+			if left := unpressable(set); len(left) > 0 {
+				raise(inproc.CheckWarn, "presses_unreceived")
+				notes = append(notes, "receiver none takes no button presses, so "+strings.Join(left, ", ")+" "+map[bool]string{true: "is", false: "are"}[len(left) == 1]+" left out (prompts ask for a reply in the thread instead; use receiver socket or http for buttons)")
+			}
 		}
 		if x.h.DryRun || set.Projection.DryRun {
 			notes = append(notes, "dry run (no Slack writes)")
@@ -815,6 +942,22 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 	check.Items = append(check.Items, x.unmatchedItems()...)
 	sort.Strings(check.Items)
 	return check
+}
+
+// unpressable are the buttons set turns on that an entry without presses
+// (Settings.Presses) leaves out.
+func unpressable(set Settings) []string {
+	var out []string
+	if set.Progress && len(set.StopUsers) > 0 {
+		out = append(out, "the progress message's Stop")
+	}
+	if set.Feedback {
+		out = append(out, "the feedback buttons")
+	}
+	if set.RequestMessages {
+		out = append(out, "request messages")
+	}
+	return out
 }
 
 func threads(n int) string {
