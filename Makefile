@@ -117,7 +117,7 @@ gateway-image:
 		for binary in open-conduit-gateway os; do \
 			CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/gateway/linux-$$arch/$$binary ./cmd/$$binary; \
 		done; \
-		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
+		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
 
 # The daemon's image (image/Dockerfile), from the Linux archives `make
 # release-snapshot` wrote (which runs this after it, so CI and the release

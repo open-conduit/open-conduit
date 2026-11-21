@@ -250,7 +250,9 @@ func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol
 	var details, names []string
 	for _, u := range uses {
 		names = append(names, u.name)
-		key := u.settings.Endpoint() + "\x00" + u.settings.HostKey
+		egress, how := u.settings.Egress()
+		out.Items = append(out.Items, u.name+": "+egress.Describe(how))
+		key := u.settings.Endpoint() + "\x00" + u.settings.HostKey + "\x00" + u.settings.Network
 		if seen[key] {
 			continue
 		}
@@ -272,7 +274,8 @@ func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol
 
 // Certification is the package's certification.json: a static fixture of
 // container configs, one ssh accepts and ones it refuses (an image that
-// doesn't pin the host key, and a network it can't hold).
+// doesn't pin the host key, and a network it doesn't know), and one behind
+// the egress gateway.
 func Certification() protocol.CertificationFile {
 	key := "ssh-ed25519 " + base64.StdEncoding.EncodeToString([]byte("open-conduit certification host key"))
 	digest, _ := ssh.HostKeyDigest(key)
@@ -284,6 +287,7 @@ func Certification() protocol.CertificationFile {
 		{Type: ssh.Type, Config: json.RawMessage(`{"image":"` + pinned + `","write":["{workspace}"],"provider":` + settings("host") + `}`)},
 		{Type: ssh.Type, Config: json.RawMessage(`{"image":"runner.test@sha256:` + strings.Repeat("0", 64) + `","provider":` + settings("host") + `}`), Refused: true},
 		{Type: ssh.Type, Config: json.RawMessage(`{"image":"` + pinned + `","provider":` + settings("none") + `}`), Refused: true},
+		{Type: ssh.Type, Config: json.RawMessage(`{"image":"` + pinned + `","write":["{workspace}"],"network":{"allow":["example.test"]},"provider":` + settings("gateway") + `}`)},
 	}}}
 }
 

@@ -72,6 +72,13 @@ const (
 	ForwardTCP  = "tcp"
 )
 
+// egressHow is the provider's account of a run's way out, for its plan and
+// doctor (extension.ContainerEgress).
+const egressHow = "the container's only way out is its gateway"
+
+// Egress is how every docker binding holds its network.allow.
+func Egress() string { return extension.EgressEnforced.Describe(egressHow) }
+
 // GatewayImage is the gateway image this build runs, pinned by digest. A
 // release sets it (-ldflags -X); a build without one runs container
 // bindings only with OPEN_CONDUIT_GATEWAY_IMAGE set (make gateway-image).
@@ -354,7 +361,7 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if len(gw.Allow) > 0 {
 		reach = strings.Join(gw.Allow, ", ")
 	}
-	summary := fmt.Sprintf("docker %s: %s, %d mounts, gateway allowing %s", s.Context, shortImage(cfg.Image), len(mounts), reach)
+	summary := fmt.Sprintf("docker %s: %s, %d mounts, gateway allowing %s, %s", s.Context, shortImage(cfg.Image), len(mounts), reach, Egress())
 	if gw.Forward != "" {
 		summary += ", toolbelt forwarded (" + p.o.Forward + ")"
 	}

@@ -59,6 +59,7 @@ done
 shift
 cd ` + quote(f.home) + ` || exit 255
 export HOME=` + quote(f.home) + ` PATH=` + quote(path) + `
+if [ -f ` + quote(filepath.Join(tmp, "ssh_connection")) + ` ]; then SSH_CONNECTION=$(cat ` + quote(filepath.Join(tmp, "ssh_connection")) + `); export SSH_CONNECTION; fi
 exec /bin/sh -c "$*"
 `
 	write(t, filepath.Join(bin, "ssh"), fake, 0o700)
