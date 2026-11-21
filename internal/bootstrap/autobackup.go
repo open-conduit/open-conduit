@@ -106,10 +106,29 @@ func (d *daemon) startBackups(name string, db storage.Database) error {
 	d.backups.next = d.now()
 	if len(times) > 0 {
 		d.backups.next = times[len(times)-1].Add(d.o.BackupInterval)
-		// A daemon that stopped mid-upload owes its newest bundle.
+		// A daemon that stopped mid-upload owes its newest bundle. A retry
+		// still backing off keeps its time.
 		d.backups.shipDue = d.now()
+		r, err := d.loadDuty(context.Background(), dutyShipment, d.now(), min(backupRetry, d.o.BackupInterval))
+		if err != nil {
+			return err
+		}
+		//duty:backup_shipment
+		if r.NextDue.After(d.now()) {
+			d.backups.shipDue = r.NextDue
+		}
+		d.storeShipDue(context.Background())
 	}
 	return d.planBackup(context.Background(), len(times) > 0)
+}
+
+// storeShipDue records when a shipment is next owed (zero: none is), so a
+// failed upload's retry survives a restart and shows in the quiescence answer.
+func (d *daemon) storeShipDue(ctx context.Context) {
+	d.backups.mu.Lock()
+	due := d.backups.shipDue
+	d.backups.mu.Unlock()
+	d.setDuty(ctx, dutyShipment, dutyRecord{NextDue: due})
 }
 
 // planBackup records the backup's due time. One already overdue at a start
@@ -123,6 +142,7 @@ func (d *daemon) planBackup(ctx context.Context, hasBundle bool) error {
 	}
 	now := d.now()
 	r.NextDue = b.next
+	//duty:backup
 	if !hasBundle || now.Before(b.next) {
 		r.Deferred = time.Time{}
 		d.setDuty(ctx, dutyBackup, r)
@@ -131,6 +151,7 @@ func (d *daemon) planBackup(ctx context.Context, hasBundle bool) error {
 	if r.Deferred.IsZero() {
 		r.Deferred = now
 	}
+	//duty:backup
 	if until := r.Deferred.Add(backupStartGrace); now.Before(until) {
 		b.next, b.deferred, r.NextDue = until, true, until
 		d.log.Info("overdue backup waits for the first request", "until", until)
@@ -171,6 +192,7 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 		}()
 	}
 	b.mu.Lock()
+	//duty:backup
 	if b.running || now.Before(b.next) {
 		b.mu.Unlock()
 		return
@@ -224,6 +246,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	d.backups.mu.Lock()
 	d.backups.shipDue = now
 	d.backups.mu.Unlock()
+	d.storeShipDue(ctx)
 	names, _, err := scheduledBundles(d.o.BackupDir)
 	if err != nil {
 		return err

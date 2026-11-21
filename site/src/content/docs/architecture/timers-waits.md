@@ -55,7 +55,7 @@ Otherwise it is **quiescent until T**, the earliest `latest` among its obligatio
 
 Every periodic duty of the host is listed in `hostDuties` (`internal/bootstrap/duties.go`), and each place that paces one carries a `//duty:<name>` comment; a test parses the package and fails on a ticker or elapsed-time pace that names no listed duty. A duty is one of two kinds:
 
-- **Durable** (retention, the workspace sweep, the scheduled backup): its next due time is in the `core.host.duties` namespace, so a restart keeps it. An awake daemon runs it when due. Retention carries six hours of slack, so its ten-minute pace doesn't wake a stopped daemon: it counts towards T only at due plus slack.
+- **Durable** (retention, the workspace sweep, the scheduled backup, and a failed upload's retry to a backup destination): its next due time is in the `core.host.duties` namespace, so a restart keeps it. An awake daemon runs it when due. Retention carries six hours of slack, so its ten-minute pace doesn't wake a stopped daemon: it counts towards T only at due plus slack.
 - **Process-bound** (the host loop, lease renewal, resource and container reconcile, tunnel probe, metric export, usage heartbeat and others): it owes nothing while the daemon is stopped, and the answer lists why.
 
 A package task can't yet say when it next has work ([#733](https://github.com/open-conduit/open-conduit/issues/733)), so tasks aren't part of T. The answer lists each with its pace, and every task runs on the first pass after a start. Until then, work a projection has pending when the daemon stops waits for the next start. A Slack Socket Mode connection is one of these tasks and receives nothing while the daemon is stopped.

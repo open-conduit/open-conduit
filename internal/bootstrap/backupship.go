@@ -44,6 +44,7 @@ var errShipStalled = errors.New("the destination stopped responding")
 func withinStall(ctx context.Context, limit time.Duration, call func(ctx context.Context, progress func()) error) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	//duty:shipment_stall
 	timer := time.AfterFunc(limit, func() { cancel(errShipStalled) })
 	defer timer.Stop()
 	err := call(ctx, func() { timer.Reset(limit) })
@@ -312,16 +313,20 @@ func holdsBundle(ctx context.Context, t shipTarget, dir, name string, limit time
 func (d *daemon) claimShipment(now time.Time) (string, bool) {
 	b := &d.backups
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	//duty:backup_shipment
 	if b.shipping != "" || b.shipDue.IsZero() || now.Before(b.shipDue) {
+		b.mu.Unlock()
 		return "", false
 	}
 	names, _, err := scheduledBundles(d.o.BackupDir)
 	if err != nil || len(names) == 0 {
 		b.shipDue = time.Time{}
+		b.mu.Unlock()
+		d.storeShipDue(context.Background())
 		return "", false
 	}
 	b.shipping = names[len(names)-1]
+	defer b.mu.Unlock()
 	return b.shipping, true
 }
 
@@ -383,7 +388,6 @@ func (d *daemon) shipBundle(ctx context.Context, name string) {
 	now := d.now()
 	names, _, _ := scheduledBundles(d.o.BackupDir)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	switch {
 	case failed:
 		b.shipDue = now.Add(min(backupRetry, d.o.BackupInterval))
@@ -392,6 +396,9 @@ func (d *daemon) shipBundle(ctx context.Context, name string) {
 	default:
 		b.shipDue = time.Time{}
 	}
+	b.mu.Unlock()
+	// Not ctx: an upload that a shutdown cut short still records its retry.
+	d.storeShipDue(context.WithoutCancel(ctx))
 }
 
 // offlineDestination starts the package that serves a named destination in

@@ -400,6 +400,7 @@ func (d *daemon) superviseTunnel(ctx context.Context, kind string, run extension
 		select {
 		case <-ctx.Done():
 			return
+		//duty:tunnel_restart
 		case <-time.After(backoff):
 		}
 		backoff = min(backoff*2, tunnelMaxBackoff)

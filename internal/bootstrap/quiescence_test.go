@@ -20,6 +20,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/runtime/runtimetest"
 	"github.com/open-conduit/open-conduit/storage"
@@ -96,8 +97,9 @@ func armJob(t *testing.T, f conformance.RuntimeFixture, at time.Time) *runtime.T
 
 func slotEvents(t *testing.T, f conformance.RuntimeFixture) int {
 	t.Helper()
-	n := 0
+	var n int
 	runtimetest.Read(t, f, func(tx storage.Tx) error {
+		n = 0 // the callback may run again
 		all, err := tx.Events(0, 0)
 		for _, a := range all {
 			if a.Event.Type == sc.TypeSlot {
@@ -139,8 +141,9 @@ func TestQuiescentUntilTheEarliestObligation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fired := 0
+	var fired int
 	runtimetest.Read(t, f, func(tx storage.Tx) error {
+		fired = 0 // the callback may run again
 		all, e := tx.Events(0, 0)
 		for _, a := range all {
 			if a.Event.ID == "timeout/quiet" {
@@ -289,7 +292,7 @@ func TestOverdueBackupWaitsForTheFirstRequest(t *testing.T) {
 
 	// No request ever comes: the grace, spent across starts, ends the wait.
 	now = now.Add(48 * time.Hour)
-	r = restart()
+	restart()
 	now = now.Add(backupStartGrace)
 	r = restart()
 	r.scheduleBackup(ctx)
@@ -299,6 +302,60 @@ func TestOverdueBackupWaitsForTheFirstRequest(t *testing.T) {
 		t.Fatalf("bundles once the grace was spent: %v, want %s", names, want)
 	}
 }
+
+// A failed upload's retry is in the answer and survives a restart, so a
+// waker can't hold the off-site copy back until the next backup.
+func TestShipmentRetryIsAnObligation(t *testing.T) {
+	ctx := context.Background()
+	f := quietFixture(t)
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, bundlePrefix+f.Clock.Now().UTC().Format(bundleLayout)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := func() *daemon {
+		d := quietDaemon(f)
+		d.o.BackupInterval, d.o.BackupDir = 24*time.Hour, dir
+		if err := d.startBackups("test", fakeDatabase{}); err != nil {
+			t.Fatal(err)
+		}
+		d.dutyRan(ctx, dutyRetention, f.Clock.Now().Add(time.Hour))
+		return d
+	}
+	d := start()
+	retry := f.Clock.Now().Add(backupRetry)
+	d.backups.mu.Lock()
+	d.backups.shipDue = retry
+	d.backups.mu.Unlock()
+	d.storeShipDue(ctx)
+	check := func(d *daemon) {
+		t.Helper()
+		q, err := d.quiescence(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !q.Quiescent || q.Until == nil || !q.Until.Equal(retry) || q.Next != dutyShipment {
+			t.Fatalf("answer %+v, want quiescent until the retry at %v", q, retry)
+		}
+	}
+	check(d)
+	f.Clock.Advance(time.Minute)
+	check(start())
+
+	d.backups.mu.Lock()
+	d.backups.shipDue = time.Time{}
+	d.backups.mu.Unlock()
+	d.storeShipDue(ctx)
+	q, err := d.quiescence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(q.Obligations, func(o management.QuiescenceObligation) bool { return o.Duty == dutyShipment }) {
+		t.Fatalf("nothing is owed, yet: %+v", q.Obligations)
+	}
+}
+
+// fakeDatabase stands for a store whose backups these tests don't take.
+type fakeDatabase struct{ storage.Database }
 
 // unlistedDuties are the pace sites in the Go source files of dir with no
 // `//duty:<name>` comment naming a listed duty, and the listed duties no site
@@ -339,7 +396,11 @@ func unlistedDuties(t *testing.T, files map[string]string, listed []hostDuty) (u
 			switch x := n.(type) {
 			case *ast.CallExpr:
 				if s, ok := x.Fun.(*ast.SelectorExpr); ok {
-					if p, ok := s.X.(*ast.Ident); ok && p.Name == "time" && (s.Sel.Name == "NewTicker" || s.Sel.Name == "Tick") {
+					if p, ok := s.X.(*ast.Ident); ok && p.Name == "time" && slices.Contains([]string{"NewTicker", "Tick", "NewTimer", "AfterFunc", "After"}, s.Sel.Name) {
+						check(x.Pos())
+					}
+					// A deadline: the clock against a stored time, either way round.
+					if (s.Sel.Name == "Before" || s.Sel.Name == "After") && len(x.Args) == 1 && (isClock(s.X) || isClock(x.Args[0])) {
 						check(x.Pos())
 					}
 				}
@@ -364,7 +425,22 @@ func unlistedDuties(t *testing.T, files map[string]string, listed []hostDuty) (u
 	return unlisted, unused
 }
 
-// Every ticker and elapsed-time pace in this package names a listed duty, so
+// isClock is an expression that reads the current time: now, now(), d.now()
+// or time.Now().
+func isClock(e ast.Expr) bool {
+	if call, ok := e.(*ast.CallExpr); ok {
+		e = call.Fun
+	}
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == "now"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "now" || x.Sel.Name == "Now"
+	}
+	return false
+}
+
+// Every ticker, timer, elapsed-time pace and deadline in this package names a listed duty, so
 // a new in-memory clock can't hide from the quiescence answer.
 func TestEveryPeriodicDutyIsListed(t *testing.T) {
 	paths, err := filepath.Glob("*.go")
@@ -373,7 +449,8 @@ func TestEveryPeriodicDutyIsListed(t *testing.T) {
 	}
 	files := map[string]string{}
 	for _, p := range paths {
-		if strings.HasSuffix(p, "_test.go") {
+		// duties.go is the mechanism: it compares every duty's time.
+		if strings.HasSuffix(p, "_test.go") || p == "duties.go" {
 			continue
 		}
 		b, err := os.ReadFile(p)
@@ -395,8 +472,16 @@ func TestEveryPeriodicDutyIsListed(t *testing.T) {
 		}
 	}
 
-	// The negative control: an in-memory ticker, then an elapsed-time pace.
-	for _, body := range []string{"_ = time.NewTicker(time.Second)", "if time.Now().Sub(last) < time.Minute {\n}"} {
+	// The negative control: each shape of in-memory pace.
+	for _, body := range []string{
+		"_ = time.NewTicker(time.Second)",
+		"_ = time.NewTimer(time.Second)",
+		"_ = time.AfterFunc(time.Second, func() {})",
+		"<-time.After(time.Second)",
+		"if time.Now().Sub(last) < time.Minute {\n}",
+		"if time.Now().Before(last) {\n}",
+		"if last.After(time.Now()) {\n}",
+	} {
 		src := "package p\nimport \"time\"\nvar last time.Time\nfunc f() {\n" + body + "\n}\n"
 		if got, _ := unlistedDuties(t, map[string]string{"new.go": src}, hostDuties); len(got) != 1 {
 			t.Fatalf("an unlisted duty went unnoticed: %q gave %v", body, got)

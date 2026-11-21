@@ -30,6 +30,7 @@ const (
 	dutyRetention = "retention"
 	dutySweep     = "workspace_sweep"
 	dutyBackup    = "backup"
+	dutyShipment  = "backup_shipment"
 )
 
 // retentionSlack is how late retention may run while the daemon is stopped.
@@ -49,6 +50,9 @@ type hostDuty struct {
 	// due+Slack brings the next wake forward, so a ten-minute sweep doesn't
 	// wake a sleeping laptop every ten minutes.
 	Slack time.Duration
+	// WhenOwed marks a duty that exists only while something is owed: a
+	// zero due time means nothing is.
+	WhenOwed bool
 	// Why is why a process-bound duty needs no process while stopped.
 	Why string
 }
@@ -57,6 +61,7 @@ var hostDuties = []hostDuty{
 	{Name: dutyRetention, Durable: true, Slack: retentionSlack},
 	{Name: dutySweep, Durable: true, Applies: func(d *daemon) bool { return len(d.resources.providers.all()) > 0 }},
 	{Name: dutyBackup, Durable: true, Applies: func(d *daemon) bool { return d.o.BackupInterval >= 0 && d.backups.db != nil }},
+	{Name: dutyShipment, Durable: true, WhenOwed: true, Applies: func(d *daemon) bool { return d.o.BackupInterval >= 0 && d.backups.db != nil }},
 	{Name: "host_loop", Why: "drives the other duties; each one's due time is durable or re-derived at start"},
 	{Name: "lease_renewal", Why: "only while an attempt runs, which is itself a reason not to stop"},
 	{Name: "resource_reconcile", Why: "re-derived from durable leases on the first pass after a start"},
@@ -71,6 +76,9 @@ var hostDuties = []hostDuty{
 	{Name: "metric_export", Why: "exports this process's meter"},
 	{Name: "usage_heartbeat", Why: "reports on this process while it runs"},
 	{Name: "dev_watch", Why: "belongs to the dev command, not a served daemon"},
+	{Name: "shipment_stall", Why: "bounds an upload in flight, which is itself a reason not to stop"},
+	{Name: "tunnel_restart", Why: "restarts this process's tunnel child"},
+	{Name: "terminal_hangup", Why: "ends an operator's terminal on this process"},
 }
 
 // dutyRecord is a durable duty's schedule. Deferred is when an overdue duty
@@ -251,6 +259,9 @@ func (d *daemon) quiescence(ctx context.Context) (management.Quiescence, error) 
 			continue
 		}
 		if duty.Applies != nil && !duty.Applies(d) {
+			continue
+		}
+		if duty.WhenOwed && stored[duty.Name].NextDue.IsZero() {
 			continue
 		}
 		// A durable duty with no record yet is due: it hasn't been scheduled.

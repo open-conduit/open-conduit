@@ -58,6 +58,9 @@ func TestDaemonArtifactCleanup(t *testing.T) {
 	aged := plantObject(t, store, old)
 	recent := plantObject(t, store, time.Now().UTC())
 
+	// Retention's due time survives the restart, so a short interval brings
+	// the pass this drill waits for forward.
+	d.extra = []string{"--retention-interval", "200ms"}
 	d.start("")
 	if _, err = os.Stat(pending); !os.IsNotExist(err) {
 		t.Fatalf("unfinished write survived restart: %v", err)
