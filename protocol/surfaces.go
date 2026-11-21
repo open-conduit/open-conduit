@@ -502,6 +502,12 @@ type TelemetryExportParams struct {
 	Records []TelemetryRecord `json:"records"`
 }
 
+// TelemetryMetricsParams is one collection of the host's meter
+// (telemetry.metrics), for a package with that permission.
+type TelemetryMetricsParams struct {
+	Metrics []observability.Metric `json:"metrics"`
+}
+
 // TelemetryEvent is one named telemetry event of the host's telemetry
 // events log: telemetry.capture writes one (permission telemetry.capture),
 // and telemetry.sink hands one to an extension (permission telemetry.sink).

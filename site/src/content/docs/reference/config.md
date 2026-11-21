@@ -589,6 +589,18 @@ Route `config`:
 
 Verifies the signed tokens an OpenID Connect identity provider issues, so the company's directory decides who can reach the management API. Registers: verifier.
 
+### OpenTelemetry (OTLP) (`otlp`)
+
+Sends the daemon's metrics (lifecycle, capacity, backlog, reconcile lag, loop timings) to an OpenTelemetry collector over OTLP/HTTP. Registers: extension.
+
+Extension entry `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `endpoint` |  | the collector's OTLP/HTTP base URL, such as https://collector:4318 (/v1/metrics is added when it has no path); empty takes OTEL_EXPORTER_OTLP_METRICS_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT from the package's pass_env, else http://localhost:4318 |
+| `headers` |  | {"Authorization": "otlp-token"}: headers sent with each export, each value the name of one of the entry's secret_names |
+| `insecure` | `false` | allow a plain http:// endpoint other than a loopback one |
+
 ### PostHog (`posthog`)
 
 Sends an agent_turn event per finished execution, the lifecycle records an entry selects and the host's telemetry events to PostHog. Registers: connection, extension.

@@ -25,6 +25,7 @@ import (
 	mcpext "github.com/open-conduit/open-conduit/extensions/mcp/pkg"
 	observeext "github.com/open-conduit/open-conduit/extensions/observe/pkg"
 	oidcext "github.com/open-conduit/open-conduit/extensions/oidc/pkg"
+	"github.com/open-conduit/open-conduit/extensions/otlp"
 	"github.com/open-conduit/open-conduit/extensions/pagerduty"
 	posthogext "github.com/open-conduit/open-conduit/extensions/posthog/pkg"
 	scheduleext "github.com/open-conduit/open-conduit/extensions/schedule/pkg"
@@ -74,6 +75,7 @@ var runnable = map[string]struct {
 	"mcp":              {mcpext.Main, mcpext.Manifest, nil, true},
 	"observe":          {observeext.Main, observeext.Manifest, nil, true},
 	"oidc":             {oidcext.Main, oidcext.Manifest, nil, true},
+	"otlp":             {otlp.Main, otlp.Manifest, nil, true},
 	"pagerduty":        {pagerduty.Main, pagerduty.Manifest, nil, false},
 	"posthog":          {posthogext.Main, posthogext.Manifest, nil, true},
 	"schedule":         {scheduleext.Main, scheduleext.Manifest, nil, true},
