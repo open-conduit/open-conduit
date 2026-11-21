@@ -94,7 +94,7 @@ func (d *daemon) transactionsCheck(context.Context) runtime.Check {
 	}
 	check.Detail = fmt.Sprintf("latest %d of %d write transactions", len(waits), t.total)
 	if t.notBegun > 0 {
-		check.Detail += fmt.Sprintf(", %d of them never got the writer", t.notBegun)
+		check.Detail += fmt.Sprintf(", %d since start never got the writer", t.notBegun)
 	}
 	check.Items = []string{"wait: " + spread(waits)}
 	if holds := t.holds.sorted(); len(holds) > 0 {

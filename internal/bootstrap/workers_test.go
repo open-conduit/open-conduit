@@ -255,7 +255,7 @@ func TestTransactionsCheckSummarisesTimings(t *testing.T) {
 	x.record(storage.TransactionTiming{Wait: 9 * time.Millisecond})
 	got = d.transactionsCheck(context.Background())
 	want = []string{"wait: median 2ms, p95 9ms, longest 9ms", "hold: median 2µs, p95 3µs, longest 3µs"}
-	if got.Detail != "latest 4 of 4 write transactions, 1 of them never got the writer" || strings.Join(got.Items, "|") != strings.Join(want, "|") {
+	if got.Detail != "latest 4 of 4 write transactions, 1 since start never got the writer" || strings.Join(got.Items, "|") != strings.Join(want, "|") {
 		t.Fatalf("check with a transaction that never began %+v", got)
 	}
 	only, _ := newTxTimes(nil)
