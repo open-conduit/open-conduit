@@ -1,0 +1,42 @@
+name: Release
+
+# Publishes a signed release archive when a tag v* is pushed. The package is
+# portable, so one archive serves every platform with Node on the daemon's
+# PATH. Its Sigstore bundle sits beside it
+# ({{NAME}}-VERSION.tar.gz.sigstore.json), a keyless signature by this
+# workflow at that tag, which an operator's settings.extension_trust checks
+# at install (see the README).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload the archive
+      id-token: write # sign it as this workflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: sigstore/cosign-installer@v3
+      - run: npm ci
+      - name: Build the archive
+        id: archive
+        run: |
+          make archive VERSION="${GITHUB_REF_NAME#v}"
+          echo "file=$(make -s archive-name VERSION="${GITHUB_REF_NAME#v}")" >> "$GITHUB_OUTPUT"
+      - name: Sign it
+        run: cosign sign-blob --yes --bundle "${{ steps.archive.outputs.file }}.sigstore.json" "${{ steps.archive.outputs.file }}"
+      - name: Upload it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${{ steps.archive.outputs.file }}" "${{ steps.archive.outputs.file }}.sigstore.json" --clobber

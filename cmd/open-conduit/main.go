@@ -99,7 +99,9 @@ func main() {
 	// diagnostics.
 	check := bootstrap.NewConfigCheck()
 	env.ValidateConfigAt = func(path string, data []byte) ([]client.Detail, error) { return details(check.Validate(path, data)) }
-	env.Extensions = bootstrap.ExtensionOps(version, commit)
+	env.Extensions = bootstrap.ExtensionOps(version, commit, packageVerifier(func(ctx context.Context) (root.TrustedMaterial, error) {
+		return provenance.PublicGood(ctx, nil)
+	}))
 	env.ConfigWarnings = func(path string, data []byte) []string {
 		return bootstrap.ConfigWarnings(path, data, check.ModeWarnings(path, data), true)
 	}

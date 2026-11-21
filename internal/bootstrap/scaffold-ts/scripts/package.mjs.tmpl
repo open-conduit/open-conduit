@@ -37,6 +37,12 @@ await build({
   target: "node22",
   format: "cjs",
   conditions: ["development"],
+  // The release `make package VERSION=...` writes into the manifest.
+  define: {
+    "process.env.EXTENSION_VERSION": process.env.EXTENSION_VERSION
+      ? JSON.stringify(process.env.EXTENSION_VERSION)
+      : "undefined",
+  },
   outfile: `${bin}.cjs`,
   logLevel: "warning",
 });

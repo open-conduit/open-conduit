@@ -53,8 +53,9 @@ Replace `src/extension.ts` with:
 
 import { extension, OperationError, t } from "@open-conduit/sdk";
 
-// The package's release, written into the manifest.
-export const version = "0.1.0";
+// The package's release, written into the manifest. `make package
+// VERSION=...` sets it, as the release workflow does from the tag.
+export const version = process.env.EXTENSION_VERSION ?? "0.1.0";
 
 // The config of a scope's weather entry. A config that doesn't match is
 // refused before the daemon applies it.
@@ -330,7 +331,7 @@ open-conduit runs log ID --transcript
 
 ## Where next
 
-- **Publish it.** Push the repository, and CI (`.github/workflows/ci.yml`) runs `make check` and certifies the package against Open Conduit's `main` and its latest release. Build what you distribute with `make package PORTABLE=1`, which records no path from your machine and runs on the Node on the daemon's PATH.
+- **Publish it.** Push the repository, and CI (`.github/workflows/ci.yml`) runs `make check` and certifies the package against Open Conduit's `main` and its latest release. Push a tag (`v1.0.0`) to publish a release: `.github/workflows/release.yml` builds one portable archive, which records no path from your machine and runs on the Node on the daemon's PATH, signs it with Sigstore and uploads it with its bundle. The generated README shows the `settings.extension_trust` entry an operator adds to trust it.
 - **Own a source.** An extension can poll a vendor's API, verify its webhooks, map its objects to Work and let an agent wait for "this ticket is resolved". [Writing an extension in TypeScript](/open-conduit/architecture/extension-packaging/#writing-an-extension-in-typescript) covers `ingressType`, `route`, `workKind`, `wait` and `emit`.
 - **Test more.** [The test host](/open-conduit/architecture/extension-packaging/#unit-tests-in-typescript-open-conduitsdktesting) drives each of those surfaces in memory, with a clock that moves only when your test moves it.
 - **The reference.** [Extension packaging, SDK and certification](/open-conduit/architecture/extension-packaging/) and [the extension protocol](/open-conduit/architecture/extension-protocol/) are the full references.

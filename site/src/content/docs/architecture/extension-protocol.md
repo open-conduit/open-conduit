@@ -498,7 +498,7 @@ Runs are addressed by unguessable host-assigned IDs. A closed run refuses persis
 
 ### Trust model
 
-An extension process runs with the operator's user privileges. **Process separation is fault isolation, not a sandbox.** An extension can read and write anything the operator's account can, open network connections, and spawn processes. Installing an extension is therefore the same trust decision as installing any program the operator runs. [Certification](../extension-packaging/#certification) checks protocol conformance. It cannot make a malicious extension safe.
+An extension process runs with the operator's user privileges. **Process separation is fault isolation, not a sandbox.** An extension can read and write anything the operator's account can, open network connections, and spawn processes. Installing an extension is therefore the same trust decision as installing any program the operator runs. [Certification](../extension-packaging/#certification) checks protocol conformance. It cannot make a malicious extension safe. The operator can make that decision enforceable: `settings.extension_trust` names the publishers (Sigstore identities) and digests they trust, and the host refuses any installed package outside it at install and at every start ([provenance](../extension-packaging/#provenance)).
 
 What the host does enforce is the protocol surface. Every extension-to-host call is bound to the identity the host started the process with, never to anything the extension sends:
 

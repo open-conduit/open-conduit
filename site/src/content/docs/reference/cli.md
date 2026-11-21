@@ -263,9 +263,11 @@ Usage: open-conduit extension COMMAND [--config PATH]
   check DIR [--json] [--allow NAME,…]
                                 lint a package without starting it: manifest, compatibility with this binary,
                                 the operations its playbooks name, certification.json; says what to change for each problem
-  install SOURCE | update SOURCE [--sha256 HEX]
+  install SOURCE | update SOURCE [--sha256 HEX] [--signature PATH|URL]
                                 install a package, or replace an installed one (the old release is kept for rollback);
-                                SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256)
+                                SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256);
+                                under settings.extension_trust, a trusted publisher must have signed the archive
+                                (its bundle is SOURCE.sigstore.json unless --signature names it) or its digest be pinned
   rollback NAME                 swap back the release the last update replaced
   remove NAME [--force]         remove a package (refused while the config uses its types; its state is kept)
   certify DIR [--json] [--report FILE]   run the conformance runner on a package

@@ -35,7 +35,7 @@ With `--lang ts` it writes the same package in TypeScript, on the [TypeScript SD
 - `src/extension.ts`, with `NAME.hello`, its certification fixture and the playbooks directory; `src/main.ts`, the command; and `src/extension.test.ts`, on the [test host](#unit-tests-in-typescript-open-conduitsdktesting).
 - `scripts/package.mjs`, which lays out the package in `dist/NAME`. It bundles the extension to a `.cjs` file, which Node loads as CommonJS whatever `package.json` is above it, and writes the executable as a small `sh` launcher. The launcher runs the bundle with the Node that packaged it while that Node still exists, whatever the daemon's PATH finds, and otherwise with the first Node on PATH, so a package copied to another machine still runs. `make package PORTABLE=1` records no path, for a package you publish: it always uses the Node on PATH.
 - A `Makefile`: `check` (Prettier, the typecheck, the tests and `package`), `package`, and `lint` and `certify`, which run the `open-conduit` on PATH (or `OPEN_CONDUIT`).
-- `.github/workflows/ci.yml`, which runs `make check`, then lints and certifies with Open Conduit's `main` and its latest release built by `go install`.
+- `.github/workflows/ci.yml`, which runs `make check`, then lints and certifies with Open Conduit's `main` and its latest release built by `go install`, and `.github/workflows/release.yml`, which [signs each release](#provenance).
 - `playbooks/NAME.md` and a README, as for Go.
 
 It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`, and `TestExtensionNewTS` (`make ts-scaffold-check`) does the same for `--lang ts`, then runs the built package with and without Node on PATH. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working. `TestTutorialFirstExtensionTS` does the same for [the TypeScript tutorial](../../guides/first-extension-typescript/).
@@ -266,13 +266,43 @@ The release archive carries packages as well as binaries, under `extensions/<nam
 Installed packages live in `<config dir>/extensions/<name>/`, beside `config.json`. The daemon reads them only at start, so **every change takes effect at the next `open-conduit serve`**. Directories starting with `.` belong to the installer: `.staging` and `.previous/<name>`.
 
 - **`open-conduit extension install DIR`** checks the layout and protocol compatibility. It refuses, atomically, any name that conflicts with a first-party registration or another installed package. It then copies into a staging directory and renames into place, so a failed install changes nothing. A package that claims a name the core registers (a built-in route handler such as `manual`, say) is refused (`registration_conflict`); one named after a bundled package (`slack`, `shell`, `claude-code`, …) replaces it.
-- **`open-conduit extension install ARCHIVE [--sha256 HEX]`** installs a release archive instead of a directory. `ARCHIVE` is a path or an `http(s)` URL to a `.tar.gz` holding one package directory (`acme/open-conduit-extension.json`, `acme/acme-extension`, …). The archive is checked against `--sha256` when given, unpacked into the installer's staging directory and then installed exactly as a directory is. It is refused (`invalid_archive`) when it comes over plain `http` without `--sha256`, when an entry's path escapes the package directory, when it holds a link or special file, or when it holds more than one top-level entry (macOS `._*` metadata is skipped). Publish one archive per OS and architecture.
+- **`open-conduit extension install ARCHIVE [--sha256 HEX] [--signature PATH|URL]`** installs a release archive instead of a directory. `ARCHIVE` is a path or an `http(s)` URL to a `.tar.gz` holding one package directory (`acme/open-conduit-extension.json`, `acme/acme-extension`, …). The archive is checked against `--sha256` when given, unpacked into the installer's staging directory and then installed exactly as a directory is. It is refused (`invalid_archive`) when it comes over plain `http` without `--sha256`, when an entry's path escapes the package directory, when it holds a link or special file, or when it holds more than one top-level entry (macOS `._*` metadata is skipped). Publish one archive per OS and architecture, each with its Sigstore bundle beside it ([provenance](#provenance)).
 - Any install or update refuses a package whose command is an executable built for another OS or architecture (`wrong_platform`), naming both platforms. A command that is a script is not checked.
 - **`open-conduit extension update DIR`** (or `ARCHIVE [--sha256 HEX]`) does the same for an installed name. A lower `kv_version` is refused. The replaced release is kept as `.previous/<name>`.
 - **`open-conduit extension rollback NAME`** swaps the kept release back. If the newer release already migrated the extension's KV layout, the daemon refuses the older one at start with `kv_downgrade`, because there is no automatic downgrade. The remedy is to restore a backup taken before the update ([backup bundles](../backup-bundles/)).
 - **`open-conduit extension remove NAME`** is refused while the config at `--config` still uses the package's types (it validates the config without the package). `--force` overrides. Removal deletes the package and its kept release, never its durable state. Its KV namespaces and recorded layout stay in the coordination store, and `<state>/extensions/<name>` and its log stay on disk, so reinstalling the same or a newer release resumes from them. To purge, delete those directories after removal.
 - Install, update and rollback print the [permissions](../extension-protocol/#permissions) the installed release declares, each with what it allows, so the operator sees what the package may use beyond its own surfaces.
-- **`open-conduit extension list`** shows installed packages, their protocol versions, what they provide, their permissions, the release kept for rollback, and any discovery or conflict problems. `inspect` shows a directory's permissions before install.
+- **`open-conduit extension list`** shows installed packages, their protocol versions, what they provide, their permissions, the release kept for rollback, who published each ([provenance](#provenance)), and any discovery, conflict or provenance problems. `inspect` shows a directory's permissions and its digest before install.
+
+### Provenance
+
+A package runs with the operator's privileges, and its playbooks are the instructions agents start their turns on. So which packages may run is the operator's to say, and the host enforces it where it installs and discovers packages. Open Conduit runs no registry and doesn't decide whose packages are good: `settings.extension_trust` in the operator's config file ([reference](../../reference/config/#settingsextension_trust)) lists whom the operator trusts. Included fragments can't set it.
+
+```json
+"extension_trust": {
+  "publishers": [
+    {
+      "subject_regexp": "https://github\\.com/acme/acme-extension/\\.github/workflows/release\\.yml@refs/tags/v.*",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "packages": ["acme"]
+    }
+  ],
+  "pinned": {
+    "local-tools": ["sha256:<64 hex digits>"]
+  }
+}
+```
+
+- **A publisher** is a Sigstore identity, the same check the release updater makes for Open Conduit itself: the signing certificate's subject (exactly, or `subject_regexp` matching all of it) and the OIDC issuer that vouched for it. `packages`, when set, limits the packages it is trusted for, so a publisher's stolen signing identity can't stand in for another package's.
+- **A pin** admits one package's exact contents, whoever published them: the package tree's digest (`extension list` and `inspect` show it), or its release archive's SHA-256 (the digest `--sha256` takes).
+- **Install** records what it installed in `.open-conduit-install.json` in the package directory: the tree's digest, the archive's, where it came from and, when a signature verified, the identity that signed it. A record that a package ships itself is never copied. Under a policy, install admits a package when a pin names one of its digests. Only otherwise does it fetch the Sigstore bundle published beside the archive (`ARCHIVE.sigstore.json`, as `cosign sign-blob --bundle` writes it, with a URL's query kept at the end, or the path or URL `--signature` names), so a pinned install never depends on the signature's host, and verifies it over the archive's bytes as a publisher trusted for the package. The certificate must chain to Sigstore's public-good root (brought up to date over TUF, so install needs to reach `tuf-repo-cdn.sigstore.dev`) and its entry must be in the Rekor log. A directory carries no signature, so under a policy only its tree's pin admits it. Anything else installs nothing and fails with `untrusted_package`. Without a policy, install behaves as before and still writes the record.
+- **Start** compares every installed package's tree with its record and the current policy. A package with no record (installed before the policy, or copied in by hand), one whose tree changed since install (its command, a playbook, any file), or one whose recorded signer the policy no longer trusts is refused with `untrusted_package`. The refused package still replaces a bundled one of the same name, as a refused package always does. Start verifies no signature, so it needs no network. Without a policy, a changed tree is logged and shown by `extension list` and doctor, and the package still runs.
+- **Which policy:** `extension install`, `update`, `list`, `config check` and offline doctor read the config file's. The daemon reads the committed generation's at start (the file's on a first start), as it reads package grants. Apply a change with `config apply` and restart serve. A policy that can't be read, because the file can't be read or the policy is malformed, refuses every installed package rather than admit them unchecked. A problem elsewhere in the document doesn't drop the policy.
+- **Bundled packages** are the release's. The updater verifies the release's signature before it installs them, so they aren't subject to the policy. An installed host-run package (`open-conduit extension-run NAME`) runs the host's executable, but its playbooks are files in the package, so it is checked like any other.
+- **Doctor** has an `extension_trust` check that lists each installed package's publisher and result: `untrusted_package` (fail) for one the daemon refuses, `changed_package` (warn) for one changed without a policy, and `no_policy` (info) when none is set.
+- **What it doesn't prove.** A process running as the daemon's user can rewrite a package and its record alike. The check proves what was installed and that it was the publisher's, not that nothing running as the operator changed it afterwards; only a kernel boundary closes that, as for the operator token.
+
+`open-conduit extension new` writes a release workflow (`.github/workflows/release.yml`) that builds the release with `make archive` (an archive per platform for Go, one portable archive for TypeScript), signs each with `cosign sign-blob` as that workflow, and uploads it with its bundle beside it. Its README gives the `publishers` entry an operator adds.
 
 ### Upgrade procedure
 
@@ -349,6 +379,7 @@ What each code means and what to change. `extension check` gives the codes marke
 | `invalid_certification` (check) | `certification.json` doesn't parse or has neither a fixture nor a command | Fix it against `protocol.CertificationFile` |
 | `fixture_missing_case` (check) | The fixture lacks a case `certify` requires, or a case names something undeclared | Add an ingress or executor case, or name a declared handler or operation |
 | `invalid_archive` | The release archive was refused | Check the URL or path and its `--sha256`; an archive is a `.tar.gz` holding one package directory of regular files |
+| `untrusted_package` | `settings.extension_trust` doesn't admit the package: no trusted publisher signed it, no pin names it, it changed on disk since install, or it has no install record | Install a release a trusted publisher signed (`extension update ARCHIVE`, with `--signature` if its bundle isn't beside it), or pin its digest; `extension list` shows who published each package |
 | `install_state` | Installing over an installed package, or changing one that isn't installed | `extension list` shows what is installed; use `update` to replace |
 | `manifest_mismatch` | The process announced a different manifest | Binary and manifest are from different releases; reinstall |
 | `kv_downgrade` | Older KV layout than recorded | Roll forward, or restore a backup |
@@ -527,7 +558,7 @@ A package is certified when every applicable criterion passes. A declared ingres
 A report states:
 
 - the runner and criteria version;
-- the package name, version and digest (SHA-256 of the manifest and binary);
+- the package name, version and digest (SHA-256 of the whole package tree, as `settings.extension_trust` pins it);
 - the package's and host's protocol versions and the negotiated one;
 - the host build, Go version, OS and architecture;
 - every criterion's result;

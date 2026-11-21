@@ -43,6 +43,13 @@ func TestVerifyARealBundle(t *testing.T) {
 	if err := Verify(publicGood(t), testdata(t, "checksums.txt.sigstore.json"), testdata(t, "checksums.txt"), releaseWorkflow); err != nil {
 		t.Fatal(err)
 	}
+	// A regexp matches the whole subject, so a publisher can trust every
+	// ref of one workflow.
+	any := Identity{SubjectRegexp: `https://github\.com/open-conduit/open-conduit/\.github/workflows/release\.yml@refs/.*`, Issuer: GitHubActions}
+	got, err := Signer(publicGood(t), testdata(t, "checksums.txt.sigstore.json"), testdata(t, "checksums.txt"), any)
+	if err != nil || got != releaseWorkflow {
+		t.Fatalf("signer %+v %v", got, err)
+	}
 }
 
 // Each case changes one thing the positive case above relies on, and must
@@ -60,10 +67,12 @@ func TestVerifyRefuses(t *testing.T) {
 		id       Identity
 	}{
 		"a changed artifact":   {publicGood(t), bundle, append([]byte("0000  extra.tar.gz\n"), sums...), releaseWorkflow},
-		"another subject":      {publicGood(t), bundle, sums, Identity{strings.Replace(releaseWorkflow.Subject, "refs/heads/main", "refs/heads/dev", 1), GitHubActions}},
-		"another repository":   {publicGood(t), bundle, sums, Identity{strings.Replace(releaseWorkflow.Subject, "open-conduit/open-conduit", "someone/open-conduit", 1), GitHubActions}},
-		"another issuer":       {publicGood(t), bundle, sums, Identity{releaseWorkflow.Subject, "https://accounts.google.com"}},
+		"another subject":      {publicGood(t), bundle, sums, Identity{Subject: strings.Replace(releaseWorkflow.Subject, "refs/heads/main", "refs/heads/dev", 1), Issuer: GitHubActions}},
+		"another repository":   {publicGood(t), bundle, sums, Identity{Subject: strings.Replace(releaseWorkflow.Subject, "open-conduit/open-conduit", "someone/open-conduit", 1), Issuer: GitHubActions}},
+		"another issuer":       {publicGood(t), bundle, sums, Identity{Subject: releaseWorkflow.Subject, Issuer: "https://accounts.google.com"}},
 		"no identity":          {publicGood(t), bundle, sums, Identity{}},
+		"both subject forms":   {publicGood(t), bundle, sums, Identity{Subject: releaseWorkflow.Subject, SubjectRegexp: ".*", Issuer: GitHubActions}},
+		"a partial regexp":     {publicGood(t), bundle, sums, Identity{SubjectRegexp: "https://github.com/open-conduit/open-conduit/", Issuer: GitHubActions}},
 		"another trusted root": {other, bundle, sums, releaseWorkflow},
 		"no trusted root":      {nil, bundle, sums, releaseWorkflow},
 		"a bundle that isn't":  {publicGood(t), []byte(`{"mediaType": "nope"}`), sums, releaseWorkflow},
@@ -90,14 +99,14 @@ func TestVerifyMatchesTheIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyEntity(vs, entity, artifact, releaseWorkflow); err != nil {
-		t.Fatal(err)
+	if got, err := verifyEntity(vs, entity, artifact, releaseWorkflow); err != nil || got != releaseWorkflow {
+		t.Fatalf("%+v %v", got, err)
 	}
 	impostor, err := vs.Sign("https://github.com/someone/fork/.github/workflows/release.yml@refs/heads/main", releaseWorkflow.Issuer, artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyEntity(vs, impostor, artifact, releaseWorkflow); err == nil {
+	if _, err := verifyEntity(vs, impostor, artifact, releaseWorkflow); err == nil {
 		t.Fatal("verified another identity's signature")
 	}
 }

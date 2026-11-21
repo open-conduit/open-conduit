@@ -52,3 +52,21 @@ func FileGrants(data []byte) map[string][]string {
 	}
 	return doc.PackageGrants()
 }
+
+// ExtensionTrustOf reads settings.extension_trust alone from a config file
+// or stored generation, so that a problem elsewhere in the document never
+// drops the operator's package policy. It is nil when the document sets
+// none, and an error when the document can't be decoded or the policy is
+// malformed: the caller fails closed.
+func ExtensionTrustOf(data []byte) (*ExtensionTrust, error) {
+	root, diags := decode(data)
+	if root == nil {
+		return nil, invalid(diags)
+	}
+	c := &checker{}
+	t := c.extensionTrust(root.field("settings").field("extension_trust"))
+	if len(c.diags) > 0 {
+		return nil, invalid(c.diags)
+	}
+	return t, nil
+}

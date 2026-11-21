@@ -75,7 +75,7 @@ func TestNewTSPackage(t *testing.T) {
 	if res.Lang != "ts" || res.Requires != "1.4.0" {
 		t.Errorf("result %+v", res)
 	}
-	for _, f := range []string{"package.json", "src/extension.ts", "src/extension.test.ts", "src/main.ts", "scripts/package.mjs", "Makefile", ".gitignore", ".prettierignore", ".github/workflows/ci.yml", "playbooks/acme.md", "README.md", "tsconfig.json"} {
+	for _, f := range []string{"package.json", "src/extension.ts", "src/extension.test.ts", "src/main.ts", "scripts/package.mjs", "Makefile", ".gitignore", ".prettierignore", ".github/workflows/ci.yml", ".github/workflows/release.yml", "playbooks/acme.md", "README.md", "tsconfig.json"} {
 		if !slices.Contains(res.Files, f) {
 			t.Errorf("no %s in %v", f, res.Files)
 		}

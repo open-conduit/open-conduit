@@ -37,6 +37,13 @@ type ExtensionPackage struct {
 	// answers (`extension list`): it runs the packages its configuration
 	// uses. Absent when none does.
 	Running *bool `json:"running,omitempty"`
+	// Publisher is who the install record says published an installed
+	// package: "signed by IDENTITY", "pinned digest", "unverified" or "no
+	// install record". Refused is why settings.extension_trust refuses it,
+	// and Warning a problem no policy refuses (it changed on disk).
+	Publisher string `json:"publisher,omitempty"`
+	Refused   string `json:"refused,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // ExtensionPermission is one permission a package declares.
@@ -59,6 +66,8 @@ type ExtensionChange struct {
 	Version  string `json:"version,omitempty"`
 	Previous string `json:"previous,omitempty"`
 	Dir      string `json:"dir"`
+	// Publisher is who install recorded as the release's publisher.
+	Publisher string `json:"publisher,omitempty"`
 	// Permissions are those the installed release declares.
 	Permissions []ExtensionPermission `json:"permissions,omitempty"`
 	Notes       []string              `json:"notes,omitempty"`
@@ -66,11 +75,13 @@ type ExtensionChange struct {
 
 // InstallRequest installs or updates a package from Source: a package
 // directory, or a release archive (.tar.gz) given as a path or an http(s)
-// URL, checked against SHA256 when set.
+// URL, checked against SHA256 when set. Signature is the archive's Sigstore
+// bundle as a path or URL, when it isn't beside the archive.
 type InstallRequest struct {
-	Source string
-	SHA256 string
-	Update bool
+	Source    string
+	SHA256    string
+	Signature string
+	Update    bool
 }
 
 // CertifyRequest runs the conformance runner on a package directory.
@@ -169,9 +180,11 @@ const extensionHelp = `Usage: open-conduit extension COMMAND [--config PATH]
   check DIR [--json] [--allow NAME,…]
                                 lint a package without starting it: manifest, compatibility with this binary,
                                 the operations its playbooks name, certification.json; says what to change for each problem
-  install SOURCE | update SOURCE [--sha256 HEX]
+  install SOURCE | update SOURCE [--sha256 HEX] [--signature PATH|URL]
                                 install a package, or replace an installed one (the old release is kept for rollback);
-                                SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256)
+                                SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256);
+                                under settings.extension_trust, a trusted publisher must have signed the archive
+                                (its bundle is SOURCE.sigstore.json unless --signature names it) or its digest be pinned
   rollback NAME                 swap back the release the last update replaced
   remove NAME [--force]         remove a package (refused while the config uses its types; its state is kept)
   certify DIR [--json] [--report FILE]   run the conformance runner on a package
@@ -208,7 +221,7 @@ func (o *operator) extension(args []string) int {
 	}
 	sub := args[0]
 	rest, bools := boolFlags(args[1:], "json", "force")
-	f := newFlags(sub, "config", "report", "sha256", "allow", "dir", "module", "replace", "lang")
+	f := newFlags(sub, "config", "report", "sha256", "signature", "allow", "dir", "module", "replace", "lang")
 	pos, err := f.parse(rest)
 	if err != nil {
 		return usageError(o.errOut, "invalid extension flags")
@@ -295,6 +308,15 @@ func (o *operator) extension(args []string) int {
 			if len(p.Permissions) > 0 {
 				fmt.Fprintf(w, "  \t\t\tpermissions: %s\n", permissionNames(p.Permissions))
 			}
+			if p.Publisher != "" {
+				fmt.Fprintf(w, "  \t\t\tpublisher: %s\n", p.Publisher)
+			}
+			if p.Refused != "" {
+				fmt.Fprintf(w, "  \t\t\trefused: %s\n", p.Refused)
+			}
+			if p.Warning != "" {
+				fmt.Fprintf(w, "  \t\t\twarning: %s\n", p.Warning)
+			}
 		}
 		_ = w.Flush()
 		for _, p := range l.Problems {
@@ -336,13 +358,17 @@ func (o *operator) extension(args []string) int {
 		return 0
 	case "install", "update":
 		if len(pos) != 1 {
-			return usageError(o.errOut, "expected extension "+sub+" DIR|ARCHIVE|URL [--sha256 HEX]")
+			return usageError(o.errOut, "expected extension "+sub+" DIR|ARCHIVE|URL [--sha256 HEX] [--signature PATH|URL]")
 		}
 		source := pos[0]
 		if !strings.Contains(source, "://") {
 			source = o.abs(source)
 		}
-		c, err := ops.Install(path, InstallRequest{Source: source, SHA256: f.get("sha256"), Update: sub == "update"})
+		signature := f.get("signature")
+		if signature != "" && !strings.Contains(signature, "://") {
+			signature = o.abs(signature)
+		}
+		c, err := ops.Install(path, InstallRequest{Source: source, SHA256: f.get("sha256"), Signature: signature, Update: sub == "update"})
 		return o.change(c, err, bools["json"])
 	case "rollback":
 		name, ok := one("NAME")
@@ -434,6 +460,9 @@ func (o *operator) change(c ExtensionChange, err error, asJSON bool) int {
 		} else {
 			fmt.Fprintf(o.out, "Installed %s %s in %s\n", c.Name, c.Version, c.Dir)
 		}
+	}
+	if c.Publisher != "" {
+		fmt.Fprintf(o.out, "  publisher: %s\n", c.Publisher)
 	}
 	if c.Action != "removed" {
 		o.permissions(c.Permissions)

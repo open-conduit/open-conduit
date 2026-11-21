@@ -52,7 +52,7 @@ func validateOffline(data []byte) ([]client.Detail, error) {
 func (o *operatorCLI) run(args ...string) (string, string, int) {
 	var out, errOut bytes.Buffer
 	env := cli.Env{Getenv: func(k string) string { return o.env[k] }, Cwd: o.cwd, Stdin: strings.NewReader(o.stdin), ValidateConfig: validateOffline, Attach: o.attach, Adapters: bootstrap.Adapters,
-		State: bootstrap.StateOps(), Extensions: bootstrap.ExtensionOps("test", "abc")}
+		State: bootstrap.StateOps(), Extensions: bootstrap.ExtensionOps("test", "abc", nil)}
 	code := cli.RunOperator("test", "abc", args, env, &out, &errOut)
 	return out.String(), errOut.String(), code
 }

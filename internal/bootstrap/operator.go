@@ -474,7 +474,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	case err != nil:
 		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
 	}
-	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg)}
+	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg), provenanceCheck(configPath, filePolicy(configPath))}
 	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath), pkgs.installed)...)
 	return append(out, skipped)
 }

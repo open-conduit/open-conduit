@@ -19,16 +19,27 @@ import (
 
 // ExtensionOps implements `open-conduit extension …` (07-03) offline: the
 // packages live in <config dir>/extensions and a running daemon picks up a
-// change at its next start.
-func ExtensionOps(version, commit string) *cli.ExtensionOps {
+// change at its next start. verify checks a package's signature bundle for
+// settings.extension_trust; nil when this build can't, and a policy that
+// trusts a publisher then refuses every unpinned package.
+func ExtensionOps(version, commit string, verify extproc.SignatureCheck) *cli.ExtensionOps {
 	return &cli.ExtensionOps{
 		List: func(configPath string) (cli.ExtensionList, error) {
 			root := extensionsRoot(configPath)
 			out := cli.ExtensionList{Root: root, Packages: []cli.ExtensionPackage{}}
 			installed, errs := extproc.List(root)
+			policy := filePolicy(configPath)
 			for _, in := range installed {
 				p := describe(in.Package)
 				p.Previous = in.Previous
+				pr := extproc.CheckProvenance(in.Dir, in.Manifest.Name, policy.p)
+				p.Publisher, p.Warning = pr.Publisher(), pr.Warning
+				switch {
+				case policy.err != nil:
+					p.Refused = policy.err.Error()
+				case pr.Refused != nil:
+					p.Refused = pr.Refused.Error()
+				}
 				out.Packages = append(out.Packages, p)
 			}
 			for _, err := range errs {
@@ -71,16 +82,21 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 		Install: func(configPath string, r cli.InstallRequest) (cli.ExtensionChange, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			src := extproc.Source{Location: r.Source, SHA256: r.SHA256}
-			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: hostTaken()})
+			policy := filePolicy(configPath)
+			if policy.err != nil {
+				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), fmt.Errorf("%w: %w", extproc.ErrProvenance, policy.err))
+			}
+			src := extproc.Source{Location: r.Source, SHA256: r.SHA256, Signature: r.Signature}
+			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: hostTaken(), Policy: policy.p, Verify: verify})
 			if err != nil {
 				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), err)
 			}
+			publisher := extproc.Provenance{Record: &res.Record}.Publisher()
 			action := "installed"
 			if r.Update {
 				action = "updated"
 			}
-			return cli.ExtensionChange{Action: action, Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir, Permissions: permissions(res.Permissions),
+			return cli.ExtensionChange{Action: action, Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir, Publisher: publisher, Permissions: permissions(res.Permissions),
 				Notes: []string{"Takes effect at the next open-conduit serve.", "Certify it with: open-conduit extension certify " + res.Dir}}, nil
 		},
 		Rollback: func(configPath, name string) (cli.ExtensionChange, error) {

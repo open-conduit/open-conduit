@@ -1,8 +1,7 @@
 package extproc
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,8 +42,8 @@ type Package struct {
 	Dir      string
 	Manifest protocol.Manifest
 	Raw      []byte
-	// Digest is the SHA-256 of the manifest file and command binary, for
-	// reports and update diagnostics.
+	// Digest is the hex SHA-256 of the whole package tree (TreeDigest),
+	// which install records and settings.extension_trust can pin.
 	Digest string
 }
 
@@ -75,8 +74,7 @@ func ReadPackage(dir string) (Package, error) {
 				return Package{}, fmt.Errorf("%w: playbooks directory %q is missing", ErrPackage, m.Provides.Playbooks)
 			}
 		}
-		sum := sha256.Sum256(raw)
-		return Package{Dir: dir, Manifest: m, Raw: raw, Digest: hex.EncodeToString(sum[:])}, nil
+		return readTree(dir, m, raw)
 	}
 	cmd := m.Command[0]
 	if filepath.IsAbs(cmd) {
@@ -92,13 +90,15 @@ func ReadPackage(dir string) (Package, error) {
 			return Package{}, fmt.Errorf("%w: playbooks directory %q is missing", ErrPackage, m.Provides.Playbooks)
 		}
 	}
-	h := sha256.New()
-	h.Write(raw)
-	if f, err := os.Open(bin); err == nil {
-		_, _ = io.Copy(h, f)
-		f.Close()
+	return readTree(dir, m, raw)
+}
+
+func readTree(dir string, m protocol.Manifest, raw []byte) (Package, error) {
+	digest, err := TreeDigest(dir)
+	if err != nil {
+		return Package{}, err
 	}
-	return Package{Dir: dir, Manifest: m, Raw: raw, Digest: hex.EncodeToString(h.Sum(nil))}, nil
+	return Package{Dir: dir, Manifest: m, Raw: raw, Digest: digest}, nil
 }
 
 // Found returns the package as a discovered extension.
@@ -112,6 +112,18 @@ type InstallOptions struct {
 	// Taken are the names registered in-process (first-party extensions,
 	// executors, builtins); a package claiming one is refused.
 	Taken Taken
+	// Policy is the operator's provenance policy (nil: none, and every
+	// package is admitted); Verify checks a signature bundle for it.
+	Policy *Policy
+	Verify SignatureCheck
+
+	// Set by InstallSource for an archive: where it came from, the
+	// archive file and its digest, and how to fetch its signature bundle
+	// (nil for none, with where it looked). The bundle is fetched only
+	// once the policy needs it, so a pinned package never depends on the
+	// signature's host.
+	source, archive, archiveSum string
+	signature                   func(context.Context) ([]byte, string, error)
 }
 
 // InstallResult describes a completed install or update.
@@ -121,6 +133,8 @@ type InstallResult struct {
 	Previous string
 	// Permissions are those the installed release's manifest declares.
 	Permissions []string
+	// Record is what was recorded about the installed release.
+	Record Record
 }
 
 // ErrInstalled refuses installing over an installed package without Update.
@@ -143,11 +157,17 @@ var ErrIncompatiblePackage = errors.New("extproc: the package is incompatible wi
 //     another installed package (atomic, as at discovery);
 //   - a package of the same name is replaced only with Update, never by
 //     one declaring an older kv_version, and the replaced release is kept
-//     as root/.previous/<name> for Rollback.
+//     as root/.previous/<name> for Rollback;
+//   - with a Policy, a trusted publisher signed it or a pinned digest names
+//     it (trust.go); the install record (RecordFile) says which.
 //
 // The copy is staged beside the install root and renamed into place, so a
 // failed install leaves the installed release untouched.
 func Install(root, src string, o InstallOptions) (InstallResult, error) {
+	return install(context.Background(), root, src, o)
+}
+
+func install(ctx context.Context, root, src string, o InstallOptions) (InstallResult, error) {
 	pkg, err := ReadPackage(src)
 	if err != nil {
 		return InstallResult{}, err
@@ -194,12 +214,26 @@ func Install(root, src string, o InstallOptions) (InstallResult, error) {
 		os.RemoveAll(stage)
 		return InstallResult{}, err
 	}
-	if _, err := ReadPackage(stage); err != nil {
+	staged, err := ReadPackage(stage)
+	if err != nil {
+		os.RemoveAll(stage)
+		return InstallResult{}, err
+	}
+	source := o.source
+	if source == "" {
+		source = pkg.Dir
+	}
+	rec, err := o.admit(ctx, m.Name, Record{Tree: staged.Digest, Archive: o.archiveSum, Source: source, InstalledAt: time.Now().UTC()})
+	if err != nil {
+		os.RemoveAll(stage)
+		return InstallResult{}, err
+	}
+	if err := writeRecord(stage, rec); err != nil {
 		os.RemoveAll(stage)
 		return InstallResult{}, err
 	}
 	dest := filepath.Join(root, m.Name)
-	res := InstallResult{Name: m.Name, Version: m.Version, Dir: dest}
+	res := InstallResult{Name: m.Name, Version: m.Version, Dir: dest, Record: rec}
 	if current != nil {
 		res.Previous = current.Manifest.Version
 		prev := filepath.Join(root, previousDir, m.Name)
@@ -325,6 +359,9 @@ func copyTree(src, dst string) error {
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+		if filepath.ToSlash(rel) == RecordFile {
+			return nil // the installer's, never the package's own
 		}
 		target := filepath.Join(dst, rel)
 		info, err := os.Stat(path)

@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -127,5 +128,94 @@ func TestPackageGrants(t *testing.T) {
 	}
 	if got := FileGrants([]byte(`{"version":1,"settings":{"extensions":{"ssh":{"pass_env":["SSH_AUTH_SOCK"]}}},"bogus":1}`)); len(got) != 0 {
 		t.Fatalf("a file that doesn't parse granted %v", got)
+	}
+}
+
+// TestExtensionTrust: settings.extension_trust reaches the snapshot and
+// survives normalization (a stored generation must start packages under
+// the same policy), an empty one is still a policy, a configuration without
+// one keeps its generation hash, and each malformed entry is refused.
+func TestExtensionTrust(t *testing.T) {
+	withTrust := func(trust any) map[string]any {
+		m := generic(t, example(t, "git-scope"))
+		settings, _ := m["settings"].(map[string]any)
+		if settings == nil {
+			settings = map[string]any{}
+			m["settings"] = settings
+		}
+		settings["extension_trust"] = trust
+		return m
+	}
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	const issuer = "https://token.actions.githubusercontent.com"
+	snap, err := Validate(encode(t, withTrust(map[string]any{
+		"publishers": []any{
+			map[string]any{"subject_regexp": `https://github\.com/acme/ext/.+`, "issuer": issuer, "packages": []any{"acme"}},
+			map[string]any{"subject": "https://github.com/beta/ext/.github/workflows/release.yml@refs/heads/main", "issuer": issuer},
+		},
+		"pinned": map[string]any{"local": []any{digest}},
+	})), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &ExtensionTrust{
+		Publishers: []TrustedPublisher{
+			{SubjectRegexp: `https://github\.com/acme/ext/.+`, Issuer: issuer, Packages: []string{"acme"}},
+			{Subject: "https://github.com/beta/ext/.github/workflows/release.yml@refs/heads/main", Issuer: issuer},
+		},
+		Pinned: map[string][]string{"local": {strings.Repeat("ab", 32)}},
+	}
+	if !reflect.DeepEqual(snap.Settings.ExtensionTrust, want) {
+		t.Fatalf("policy %+v", snap.Settings.ExtensionTrust)
+	}
+	again, err := Validate(snap.Normalized, registry())
+	if err != nil || again.Hash != snap.Hash || !reflect.DeepEqual(again.Settings.ExtensionTrust, want) {
+		t.Fatalf("the stored generation lost the policy: %+v %v", again, err)
+	}
+	doc, err := Parse(snap.Normalized)
+	if err != nil || !reflect.DeepEqual(doc.Settings.ExtensionTrust, want) {
+		t.Fatalf("the parsed stored generation lost the policy: %v", err)
+	}
+	if got, err := ExtensionTrustOf(snap.Normalized); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("read alone: %+v %v", got, err)
+	}
+
+	empty, err := Validate(encode(t, withTrust(map[string]any{})), registry())
+	if err != nil || empty.Settings.ExtensionTrust == nil {
+		t.Fatalf("an empty policy is still a policy: %+v %v", empty, err)
+	}
+	plain, err := Validate(encode(t, generic(t, example(t, "git-scope"))), registry())
+	if err != nil || plain.Settings.ExtensionTrust != nil {
+		t.Fatalf("no policy: %v", err)
+	}
+	if empty.Hash == plain.Hash {
+		t.Fatal("adding a policy kept the generation hash")
+	}
+
+	for name, tc := range map[string]struct {
+		trust      any
+		path, code string
+	}{
+		"not an object":   {[]any{}, "settings/extension_trust", "invalid_type"},
+		"unknown field":   {map[string]any{"allow": true}, "settings/extension_trust/allow", "unknown_field"},
+		"no issuer":       {map[string]any{"publishers": []any{map[string]any{"subject": "x"}}}, "settings/extension_trust/publishers/0/issuer", "missing_field"},
+		"no subject":      {map[string]any{"publishers": []any{map[string]any{"issuer": issuer}}}, "settings/extension_trust/publishers/0", "invalid_value"},
+		"both subjects":   {map[string]any{"publishers": []any{map[string]any{"issuer": issuer, "subject": "x", "subject_regexp": "x"}}}, "settings/extension_trust/publishers/0", "invalid_value"},
+		"bad regexp":      {map[string]any{"publishers": []any{map[string]any{"issuer": issuer, "subject_regexp": "("}}}, "settings/extension_trust/publishers/0/subject_regexp", "invalid_value"},
+		"empty subject":   {map[string]any{"publishers": []any{map[string]any{"issuer": issuer, "subject": ""}}}, "settings/extension_trust/publishers/0/subject", "invalid_value"},
+		"bad package":     {map[string]any{"publishers": []any{map[string]any{"issuer": issuer, "subject": "x", "packages": []any{"Acme"}}}}, "settings/extension_trust/publishers/0/packages/0", "invalid_value"},
+		"bare hex pin":    {map[string]any{"pinned": map[string]any{"acme": []any{strings.Repeat("ab", 32)}}}, "settings/extension_trust/pinned/acme/0", "invalid_value"},
+		"short pin":       {map[string]any{"pinned": map[string]any{"acme": []any{"sha256:abcd"}}}, "settings/extension_trust/pinned/acme/0", "invalid_value"},
+		"bad pinned name": {map[string]any{"pinned": map[string]any{"Acme": []any{digest}}}, "settings/extension_trust/pinned/Acme", "invalid_value"},
+		"duplicate pin":   {map[string]any{"pinned": map[string]any{"acme": []any{digest, digest}}}, "settings/extension_trust/pinned/acme/1", "duplicate_value"},
+	} {
+		_, err := Validate(encode(t, withTrust(tc.trust)), registry())
+		found := false
+		for _, d := range diagnostics(t, err) {
+			found = found || d.Code == tc.code && d.Path == tc.path
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s at %s", name, diagnostics(t, err), tc.code, tc.path)
+		}
 	}
 }

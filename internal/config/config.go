@@ -143,6 +143,29 @@ type Settings struct {
 	Extensions map[string]PackageSettings
 	// Backup is how bundles are signed and checked (settings.backup).
 	Backup BackupSettings
+	// ExtensionTrust is the operator's package provenance policy
+	// (settings.extension_trust): nil when unset, and every installed
+	// package is admitted as before.
+	ExtensionTrust *ExtensionTrust
+}
+
+// ExtensionTrust says which installed extension packages may run: those a
+// listed publisher signed, or whose digest is pinned. Bundled packages are
+// the release's and are not subject to it.
+type ExtensionTrust struct {
+	Publishers []TrustedPublisher
+	// Pinned are admitted digests by package name, as lower-case hex: a
+	// package tree's (extension list and inspect show it) or its release
+	// archive's SHA-256.
+	Pinned map[string][]string
+}
+
+// TrustedPublisher is a Sigstore identity: an exact certificate Subject or
+// a SubjectRegexp matching the whole subject, and its OIDC Issuer.
+// Packages, when set, are the only packages it is trusted for.
+type TrustedPublisher struct {
+	Subject, SubjectRegexp, Issuer string
+	Packages                       []string
 }
 
 // BackupSettings are settings.backup. SigningKey is a secret reference to
@@ -593,7 +616,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil, BackupSettings{}}
+	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil, BackupSettings{}, nil}
 	fields := []struct {
 		key string
 		dst *int
@@ -601,7 +624,7 @@ func (c *checker) settings(n *node) Settings {
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
 		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays}}
-	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions", "backup"}
+	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions", "backup", "extension_trust"}
 	for _, f := range fields {
 		names = append(names, f.key)
 	}
@@ -628,6 +651,7 @@ func (c *checker) settings(n *node) Settings {
 	s.Budgets = c.budgets(n.field("budgets"))
 	s.Extensions = c.packages(n.field("extensions"))
 	s.Backup = c.backupSettings(n.field("backup"))
+	s.ExtensionTrust = c.extensionTrust(n.field("extension_trust"))
 	return s
 }
 
@@ -660,6 +684,63 @@ func (c *checker) backupSettings(n *node) BackupSettings {
 		}
 	}
 	return b
+}
+
+var (
+	pinnedDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	nonEmpty     = regexp.MustCompile(`\S`)
+)
+
+// extensionTrust checks settings.extension_trust offline. Present, even
+// empty, it is a policy: an empty one admits no installed package.
+func (c *checker) extensionTrust(n *node) *ExtensionTrust {
+	const path = "settings/extension_trust"
+	if n == nil || !c.object(n, path, nil, "publishers", "pinned") {
+		return nil
+	}
+	out := &ExtensionTrust{Publishers: []TrustedPublisher{}, Pinned: map[string][]string{}}
+	if pubs := n.field("publishers"); pubs != nil && c.typed(pubs, path+"/publishers", kArray, "array") {
+		for i, item := range pubs.items {
+			p := ptr(path+"/publishers", i)
+			if !c.object(item, p, []string{"issuer"}, "subject", "subject_regexp", "packages") {
+				continue
+			}
+			var tp TrustedPublisher
+			tp.Issuer, _ = c.str(item.field("issuer"), p+"/issuer", nonEmpty)
+			subject, regexpField := item.field("subject"), item.field("subject_regexp")
+			switch {
+			case (subject == nil) == (regexpField == nil):
+				c.fail(p, "invalid_value", "a publisher names exactly one of subject (the certificate identity) or subject_regexp")
+			case subject != nil:
+				tp.Subject, _ = c.str(subject, p+"/subject", nonEmpty)
+			default:
+				if v, ok := c.str(regexpField, p+"/subject_regexp", nonEmpty); ok {
+					if _, err := regexp.Compile("^(?:" + v + ")$"); err != nil {
+						c.fail(p+"/subject_regexp", "invalid_value", "not a valid regular expression: "+err.Error())
+					}
+					tp.SubjectRegexp = v
+				}
+			}
+			if pk := item.field("packages"); pk != nil {
+				tp.Packages = c.list(pk, p+"/packages", idPattern)
+			}
+			out.Publishers = append(out.Publishers, tp)
+		}
+	}
+	if pins := n.field("pinned"); pins != nil && c.typed(pins, path+"/pinned", kObject, "object") {
+		for _, name := range pins.keys {
+			p := ptr(path+"/pinned", name)
+			if !idPattern.MatchString(name) {
+				c.fail(p, "invalid_value", "a package name is lower case letters, digits, - and _, starting with a letter")
+			}
+			var digests []string
+			for _, d := range c.list(pins.obj[name], p, pinnedDigest) {
+				digests = append(digests, strings.TrimPrefix(d, "sha256:"))
+			}
+			out.Pinned[name] = digests
+		}
+	}
+	return out
 }
 
 // packages checks settings.extensions offline: an object keyed by package
@@ -1258,6 +1339,33 @@ func (d *Document) normalized(redact bool) any {
 			m["trust_keys"] = b.TrustKeys
 		}
 		settings["backup"] = m
+	}
+	// Only a configured policy joins the hash, so configurations without
+	// one keep their generation hash; it must survive normalization, or a
+	// stored generation would start packages with no policy.
+	if t := s.ExtensionTrust; t != nil {
+		pubs := []any{}
+		for _, p := range t.Publishers {
+			m := map[string]any{"issuer": p.Issuer}
+			if p.SubjectRegexp != "" {
+				m["subject_regexp"] = p.SubjectRegexp
+			} else {
+				m["subject"] = p.Subject
+			}
+			if p.Packages != nil {
+				m["packages"] = p.Packages
+			}
+			pubs = append(pubs, m)
+		}
+		pinned := map[string]any{}
+		for name, ds := range t.Pinned {
+			list := []string{}
+			for _, d := range ds {
+				list = append(list, "sha256:"+d)
+			}
+			pinned[name] = list
+		}
+		settings["extension_trust"] = map[string]any{"publishers": pubs, "pinned": pinned}
 	}
 	out := map[string]any{
 		"version":     d.Version,

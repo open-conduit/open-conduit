@@ -349,6 +349,83 @@
             },
             "additionalProperties": false
           }
+        },
+        "extension_trust": {
+          "description": "Which installed extension packages may run: those a listed publisher signed, or whose digest is pinned. Present, even empty, it is enforced at install and at every start, and a package it doesn't admit is refused; without it every package is admitted. Bundled packages are the release's and are not subject to it. extension install and update read it from the config file; serve reads the committed generation's at each start (the file's on a first start), so a change reaches the daemon once applied with open-conduit config apply and serve restarts.",
+          "type": "object",
+          "properties": {
+            "publishers": {
+              "type": "array",
+              "description": "Trusted publishers, each a Sigstore identity: install verifies the signature bundle published beside a package's release archive against them.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The signing certificate's identity, matched exactly: for a GitHub Actions workflow, its URL at a ref (https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/heads/main)."
+                  },
+                  "subject_regexp": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "In place of subject, a regular expression the whole identity must match, for a workflow that signs at each release tag."
+                  },
+                  "issuer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The OIDC issuer that vouched for the identity: https://token.actions.githubusercontent.com for GitHub Actions."
+                  },
+                  "packages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                    },
+                    "uniqueItems": true,
+                    "description": "The only packages this publisher is trusted for; every package when unset."
+                  }
+                },
+                "required": [
+                  "issuer"
+                ],
+                "anyOf": [
+                  {
+                    "required": [
+                      "subject"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "subject_regexp"
+                    ]
+                  }
+                ],
+                "not": {
+                  "required": [
+                    "subject",
+                    "subject_regexp"
+                  ]
+                },
+                "additionalProperties": false
+              }
+            },
+            "pinned": {
+              "type": "object",
+              "description": "Digests admitted for each package by name, whoever published it: the package tree's (open-conduit extension list and inspect show it) or its release archive's SHA-256.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [],
