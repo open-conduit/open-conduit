@@ -95,6 +95,8 @@ Beside these, `POST /work/{id}/cancel` ends the Work, `POST /executions/{id}/can
 
 `GET /work/{id}` also carries `annotations`: display-only lines an extension contributes. Management asks every annotating extension at once, each bounded like an action provider's call, and skips one that keeps timing out until it answers again, so a slow annotator costs a read at most its timeout and doctor's `providers` check names it. For GitHub these are the issue, its URL, a held issue's state, projection dry run and the counts of corrections and problems the agent logged (`github.Annotate`, durable state only).
 
+**Web view.** **Attach to session** opens `/work/terminal`, an [xterm.js](https://xtermjs.org/) terminal vendored under `internal/web/static/vendor/xterm`. Its WebSocket goes to the view, which opens `GET /work/{id}/terminal` as whoever the request acts for, so the daemon checks that person's role and records them. A browser lets any page open a WebSocket with a site's cookies, so the view requires an `Origin` naming its own host and the session's form token, sent as a subprotocol to keep it out of URLs. A refusal arrives as a message the page shows. When the browser goes, the view detaches and the daemon releases the hold. This page alone allows inline styles, because xterm.js writes its own style element; scripts stay same-origin.
+
 **CLI.** The CLI adds:
 
 - `work rebind|hold|release|interrupt`;

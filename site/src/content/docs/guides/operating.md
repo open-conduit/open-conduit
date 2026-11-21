@@ -81,7 +81,7 @@ open-conduit work retry ID
 open-conduit work hold ID --reason "needs a decision"
 open-conduit work interrupt ID --reason "read my message"   # stop the running turn; its queued input starts the next
 open-conduit events emit --scope eng --work-id ID --type operator.reply --delivery-id reply-1 --schema operator.reply.v1 --data '{"text":"try again"}'   # send a Work input
-open-conduit work attach ID                          # hold, attach to the agent's session, release on exit
+open-conduit work attach ID                          # hold, attach to the agent's session, release on exit (or Attach to session in the web view)
 open-conduit runs list
 open-conduit runs log ID --follow                    # follow a running turn
 open-conduit route issue/12                          # explain how an issue's Events were routed

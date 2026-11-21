@@ -169,11 +169,12 @@ else the content of the confirmation page. */}}
 </form>
 {{- else if eq .Action "attach"}}
 <ul class="consequences">
-  <li><span>Attaching needs a terminal: the agent's session is an interactive process.</span></li>
-  <li><span>The command holds the Work, opens the session in its workspace, and releases the hold when you exit — so nothing resumes underneath you.</span></li>
+  <li><span>The terminal holds the Work and opens its session where the run can reach it, so nothing resumes underneath you.</span></li>
+  <li><span>Leaving the page, or detaching, ends the session and releases the hold. Your role needs to be operate.</span></li>
 </ul>
+<p class="dialog-note">From a terminal instead:</p>
 <div class="cmd"><code>open-conduit work attach {{$w.ID}}</code><button type="button" class="btn btn-quiet btn-xs" data-copy="open-conduit work attach {{$w.ID}}" hidden>Copy</button></div>
-<footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Done")}}</footer>
+<footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Close")}}{{if .Control.Enabled}}<a class="btn btn-primary" href="/work/terminal?id={{$w.ID}}">Open terminal</a>{{end}}</footer>
 {{- else if eq .Action "ext"}}
 <p class="dialog-lede">Offered by {{providerName .Ext.Provider}}. The extension checks the input and decides what happens; Open Conduit records the Event it produces.</p>
 {{template "action-control" .Ext}}

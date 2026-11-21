@@ -4167,3 +4167,52 @@ a.btn {
     white-space: nowrap;
   }
 }
+
+/* The terminal page: the session takes all the room the shell leaves. */
+.terminal-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* The viewport less the bar above and the status line below, so fitting
+     the grid to its box can never grow the box. */
+  height: calc(100dvh - 84px);
+  min-height: 360px;
+  padding: 16px var(--gutter);
+  box-sizing: border-box;
+}
+
+.terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.terminal-head h1 {
+  margin: 0;
+  font-size: 16px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-status {
+  margin: 0 0 0 auto;
+  color: var(--ink-3);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.terminal-screen {
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+  background: #101216;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.dialog-note {
+  margin: 12px 0 4px;
+}

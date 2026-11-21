@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"sort"
 	"strconv"
@@ -100,6 +101,10 @@ func (f *fake) RouteSamples(_ context.Context, scope string) ([]client.RouteSamp
 func (f *fake) RebindWork(_ context.Context, id, rev, binding, _, _ string) (client.ControlResult, error) {
 	return f.control("rebind:"+binding, id, rev)
 }
+func (f *fake) OpenTerminal(context.Context, string, client.TerminalOptions) (*client.Terminal, error) {
+	return nil, errors.New("no terminal in this fake")
+}
+
 func (f *fake) AttachWork(_ context.Context, id, _ string) (client.AttachSpec, error) {
 	return client.AttachSpec{WorkID: id, Executor: "claude-code", Argv: []string{"claude", "--resume", "sess_1"}}, nil
 }
