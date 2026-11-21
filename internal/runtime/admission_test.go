@@ -222,3 +222,40 @@ func TestHeldForAdmissionFollowsTheRuntime(t *testing.T) {
 	}
 	expect("after a place freed", map[domain.ID]bool{b: false})
 }
+
+// TestProductionTerminalKeepsAdmittedWorkOffItsSession: an operator's
+// terminal on Work held for admission relies on a hold the admission pass
+// removes when a place opens. The Work is admitted, but no attempt starts on
+// the session until the terminal closes.
+func TestProductionTerminalKeepsAdmittedWorkOffItsSession(t *testing.T) {
+	f, s, control := admissionFixture(t, map[domain.ID]int{"routing-scope": 1})
+	ctx := context.Background()
+	a := seedSchedulerWork(t, f, "a")
+	b := seedSchedulerWork(t, f, "b")
+	if r, err := s.Admit(ctx); err != nil || !slices.Equal(r.Held, []domain.ID{b}) {
+		t.Fatalf("first pass: %+v %v", r, err)
+	}
+	session, err := control.OpenTerminal(ctx, b, "admission-terminal", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := s.Start(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Observe(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.Admit(ctx); err != nil || !slices.Equal(r.Released, []domain.ID{b}) {
+		t.Fatalf("pass after a place opened: %+v %v", r, err)
+	}
+	if _, err = s.Start(ctx, b); !errors.Is(err, runtime.ErrNotEligible) {
+		t.Fatalf("an attempt started under an open terminal: %v", err)
+	}
+	if err = control.CloseTerminal(ctx, session, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Start(ctx, b); err != nil {
+		t.Fatalf("the start after the terminal closed: %v", err)
+	}
+}

@@ -323,11 +323,40 @@ func TestTerminalThirdPartyContainerProvider(t *testing.T) {
 	}
 	readUntil(t, r, "pod-got:hi")
 	heldUntil(t, c, id, false)
+
+	// A daemon that dies mid-terminal: on restart it removes the attach
+	// container through the provider before the Work is released.
+	before := podRemovals(t, d.StateDir())
+	second, err := c.OpenTerminal(ctx, id, client.TerminalOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, bufio.NewReader(second), "pod-tty")
+	heldUntil(t, c, id, true)
+	d.Restart()
+	d.Until("the restarted daemon to remove the attach container and release the Work", extensiontest.Deadline, func() bool {
+		w, err := c.Work(ctx, id)
+		return err == nil && w.Hold == nil && podRemovals(t, d.StateDir()) > before
+	})
+}
+
+func podRemovals(t *testing.T, root string) int {
+	t.Helper()
+	n := 0
+	_ = filepath.WalkDir(root, func(path string, e os.DirEntry, err error) error {
+		if err == nil && e.Name() == "podterm-removed" {
+			b, _ := os.ReadFile(path)
+			n += strings.Count(string(b), "\n")
+		}
+		return nil
+	})
+	return n
 }
 
 // A terminal lives in the daemon's process: after a crash its record is
 // closed under the operator who opened it, and the hold it placed goes, while
-// a hold that was there first stays.
+// a hold that was there first stays. While what it ran in can't be removed,
+// the Work stays out of dispatch, and a later sweep finishes it.
 func TestTerminalRecoveredAfterRestart(t *testing.T) {
 	h := newManagementHarness(t)
 	ctx := runtime.WithActor(context.Background(), "operator:olly")
@@ -337,22 +366,107 @@ func TestTerminalRecoveredAfterRestart(t *testing.T) {
 	h.mustCLI(&w, "work", "get", earlier)
 	h.mustCLI(nil, "work", "hold", earlier, "--revision", w.Revision, "--key", "hold-crash")
 	for i, id := range []string{placed, earlier} {
-		if _, err := h.control.OpenTerminal(ctx, domain.ID(id), "crashed"+string(rune('a'+i))); err != nil {
+		if _, err := h.control.OpenTerminal(ctx, domain.ID(id), "crashed"+string(rune('a'+i)), false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	n, err := h.control.RecoverTerminals(context.Background())
-	if err != nil || n != 2 {
-		t.Fatalf("recovered %d: %v", n, err)
+	stuck := errors.New("the provider is unreachable")
+	fail := func(context.Context, runtime.TerminalSession) error { return stuck }
+	if n, err := h.control.SweepTerminals(context.Background(), true, fail); !errors.Is(err, stuck) || n != 0 {
+		t.Fatalf("a sweep that can't remove the container: %d %v", n, err)
 	}
 	c := h.operatorClient()
+	heldUntil(t, c, placed, true)
+	got, err := c.Work(context.Background(), placed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.ReleaseWork(context.Background(), placed, got.Revision, "", "release-stranded"); !isCode(err, "terminal_open") {
+		t.Fatalf("a release of a stranded terminal: %v", err)
+	}
+	ok := func(context.Context, runtime.TerminalSession) error { return nil }
+	n, err := h.control.SweepTerminals(context.Background(), false, ok)
+	if err != nil || n != 2 {
+		t.Fatalf("the retry closed %d: %v", n, err)
+	}
 	heldUntil(t, c, placed, false)
 	heldUntil(t, c, earlier, true)
 	events, err := c.Events(context.Background(), url.Values{"work_id": {placed}, "type": {"core.manual.terminal_closed"}})
 	if err != nil || len(events.Items) != 1 || events.Items[0].Actor != "operator:olly" {
 		t.Fatalf("the close on record: %+v %v", events.Items, err)
 	}
-	if n, err = h.control.RecoverTerminals(context.Background()); err != nil || n != 0 {
-		t.Fatalf("a second recovery closed %d: %v", n, err)
+	if n, err = h.control.SweepTerminals(context.Background(), true, ok); err != nil || n != 0 {
+		t.Fatalf("a second sweep closed %d: %v", n, err)
 	}
+}
+
+// An open terminal keeps attempts off the session even when the hold it
+// relied on goes by a path that knows nothing of terminals.
+func TestTerminalBlocksDispatchWithoutItsHold(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := runtime.WithActor(context.Background(), "operator:olly")
+	// Fresh Work: its queued input would start an attempt at once.
+	var created struct {
+		Work client.Work `json:"work"`
+	}
+	h.mustCLI(&created, "work", "create", "--scope-id", "ops", "--kind", "fixture.work", "--binding", "run", "--key", "terminal-dispatch")
+	id := created.Work.ID
+	session, err := h.control.OpenTerminal(ctx, domain.ID(id), "dispatch", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.store.Transact(ctx, storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+		rows, e := tx.List("core.manual.hold", "")
+		if e != nil || len(rows) != 1 {
+			return errors.Join(e, errors.New("want the terminal's one hold"))
+		}
+		return tx.Delete("core.manual.hold", rows[0].Key)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.scheduler.Start(ctx, domain.ID(id)); !errors.Is(err, runtime.ErrNotEligible) {
+		t.Fatalf("a start under an open terminal: %v", err)
+	}
+	if err = h.control.CloseTerminal(ctx, session, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.scheduler.Start(ctx, domain.ID(id)); errors.Is(err, runtime.ErrNotEligible) {
+		t.Fatalf("a start after the terminal closed: %v", err)
+	}
+}
+
+// The listener's read and write timeouts don't end a terminal.
+func TestTerminalOutlivesListenerTimeouts(t *testing.T) {
+	h := newManagementHarness(t)
+	id, _ := terminalWork(t, h, "terminal-timeouts")
+	dir := t.TempDir()
+	networkCerts(t, dir)
+	cfg := management.NetworkConfig{Addr: "127.0.0.1:0", CertFile: filepath.Join(dir, "server.pem"), KeyFile: filepath.Join(dir, "server.key")}
+	ln, err := management.ListenNetwork(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := management.NetworkServer(management.NewNetwork(cfg, h.clock.Now).Handler(h.server))
+	srv.ReadTimeout, srv.WriteTimeout = 200*time.Millisecond, 200*time.Millisecond
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	c, err := client.NewWithOptions("https://"+ln.Addr().String(), ownerToken(t, h), client.Options{CAFile: filepath.Join(dir, "ca.pem")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.attach = func(context.Context, string, domain.Work) (management.AttachSpec, error) {
+		return management.AttachSpec{Argv: []string{"sh", "-c", `stty -echo; printf 'ready\n'; read line; printf 'got:%s\n' "$line"`}}, nil
+	}
+	term, err := c.OpenTerminal(context.Background(), id, client.TerminalOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer term.Close()
+	r := bufio.NewReader(term)
+	readUntil(t, r, "ready")
+	time.Sleep(600 * time.Millisecond)
+	if _, err = term.Write([]byte("late\n")); err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, r, "got:late")
 }

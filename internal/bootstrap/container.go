@@ -451,6 +451,7 @@ func (d *daemon) reconcileContainers(ctx context.Context) {
 }
 
 func (d *daemon) reconcileContainersPass(ctx context.Context) {
+	d.sweepTerminals(ctx, false)
 	providers := d.containers.providers.all()
 	names := make([]string, 0, len(providers))
 	for name := range providers {
@@ -677,13 +678,75 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 	if p == nil {
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
 	}
-	// A terminal whose client went leaves its container running: the attach
-	// process was only attached to it. A container that has exited is left
-	// to Remove.
+	return d.removeAttach(ctx, p, pin, execution)
+}
+
+// removeAttach stops an attach container and removes it. A terminal whose
+// client or daemon went leaves its container running, since the attach
+// process was only attached to it.
+func (d *daemon) removeAttach(ctx context.Context, p extension.ContainerProvider, pin *extension.ContainerPin, execution domain.ID) error {
 	if err := extension.StopContainer(ctx, p, pin, d.containerRecords(execution), containerStopGrace); err != nil {
 		return err
 	}
 	return extension.RemoveContainer(ctx, p, extension.ContainerRef{ID: pin.ID})
+}
+
+// terminalDetach removes every attach container made for a terminal no
+// process serves: those pinned since it opened, including one its daemon
+// died before noting anywhere else.
+func (d *daemon) terminalDetach(ctx context.Context, t runtime.TerminalSession) error {
+	type made struct {
+		pin       extension.ContainerPin
+		execution domain.ID
+	}
+	var pins []made
+	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		pins = nil
+		xs, err := tx.ListExecutions(t.WorkID)
+		if err != nil {
+			return err
+		}
+		for _, x := range xs {
+			st, err := runtime.AttemptStateInTx(tx, x.ID)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			for _, a := range st.Attaches {
+				if !a.At.Before(t.At) {
+					pins = append(pins, made{a, x.ID})
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	var errs []error
+	for _, m := range pins {
+		p := d.containers.providers.all()[m.pin.Provider]
+		if p == nil {
+			errs = append(errs, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, m.pin.Provider))
+			continue
+		}
+		errs = append(errs, d.removeAttach(ctx, p, &m.pin, m.execution))
+	}
+	return errors.Join(errs...)
+}
+
+// sweepTerminals finishes terminals no process serves (SweepTerminals).
+func (d *daemon) sweepTerminals(ctx context.Context, all bool) {
+	c := d.current.Load()
+	if c == nil {
+		return
+	}
+	n, err := c.control.SweepTerminals(ctx, all, d.terminalDetach)
+	if err != nil {
+		d.log.Error("terminals still holding their sessions", "closed", n, "error", err.Error())
+	} else if n > 0 {
+		d.log.Info("closed terminals no process was serving", "closed", n)
+	}
 }
 
 // forwardAddress checks an address a provider names for an execution's

@@ -87,10 +87,22 @@ func (p *pod) List(_ context.Context, owner extension.ResourceOwner) ([]extensio
 	return out, nil
 }
 
-func (p *pod) Remove(_ context.Context, ref extension.ContainerRef) error {
+// Remove also notes the reference in its state directory, which outlives
+// this process, so a test can see a restarted daemon remove a container.
+func (p *pod) Remove(ctx context.Context, ref extension.ContainerRef) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.made, ref.ID)
+	if h := sdk.HostFrom(ctx); h != nil && h.StateDir() != "" {
+		f, err := os.OpenFile(filepath.Join(h.StateDir(), "podterm-removed"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err = fmt.Fprintln(f, ref.ID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -21,9 +22,13 @@ const terminalNamespace = "core.manual.terminal"
 // local attach or a release would put two writers on one session.
 var ErrTerminalOpen = errors.New("a terminal is open on this Work")
 
-// TerminalSession is the durable record of an open terminal. PlacedHold says
-// the terminal placed the Work's hold (under OpenEvent) and so removes it;
-// a hold that was already there is left as it was.
+// TerminalSession is the durable record of an open terminal, and while it
+// exists no attempt of the Work starts, whatever becomes of the Work's hold
+// (heldInTx). PlacedHold says the terminal placed the hold (under OpenEvent)
+// and so removes it, unless KeepHeld; a hold that was already there is left
+// as it was. Stranded means its process is gone but what it ran in may not
+// be: the record stays, keeping the session to itself, until SweepTerminals
+// has removed that.
 type TerminalSession struct {
 	ID         string    `json:"id"`
 	WorkID     domain.ID `json:"work_id"`
@@ -31,6 +36,8 @@ type TerminalSession struct {
 	Via        string    `json:"via,omitempty"`
 	OpenEvent  domain.ID `json:"open_event"`
 	PlacedHold bool      `json:"placed_hold,omitempty"`
+	KeepHeld   bool      `json:"keep_held,omitempty"`
+	Stranded   bool      `json:"stranded,omitempty"`
 	At         time.Time `json:"at"`
 }
 
@@ -59,7 +66,7 @@ func TerminalInTx(tx storage.Tx, work domain.ID) (TerminalSession, bool, error) 
 // running attempt, holding the Work unless it is already held, and commits
 // core.manual.terminal_opened under the caller's actor in the same
 // transaction.
-func (c *Control) OpenTerminal(ctx context.Context, workID domain.ID, session string) (TerminalSession, error) {
+func (c *Control) OpenTerminal(ctx context.Context, workID domain.ID, session string, keepHeld bool) (TerminalSession, error) {
 	if !validDelivery(session) {
 		return TerminalSession{}, storage.ErrInvalid
 	}
@@ -94,7 +101,7 @@ func (c *Control) OpenTerminal(ctx context.Context, workID domain.ID, session st
 				return e
 			}
 		}
-		out = TerminalSession{ID: session, WorkID: w.ID, Actor: ActorFrom(ctx), Via: ViaFrom(ctx), OpenEvent: event, PlacedHold: !held, At: now}
+		out = TerminalSession{ID: session, WorkID: w.ID, Actor: ActorFrom(ctx), Via: ViaFrom(ctx), OpenEvent: event, PlacedHold: !held, KeepHeld: keepHeld, At: now}
 		if e = putJSON(tx, terminalNamespace, identity(string(w.ID)), out); e != nil {
 			return e
 		}
@@ -105,9 +112,9 @@ func (c *Control) OpenTerminal(ctx context.Context, workID domain.ID, session st
 
 // CloseTerminal ends the session's record and commits
 // core.manual.terminal_closed, removing the hold the terminal placed unless
-// keepHold is set. Closing a session that is no longer the open one changes
-// nothing, so a retry is safe.
-func (c *Control) CloseTerminal(ctx context.Context, t TerminalSession, reason string, keepHold bool) error {
+// it was opened to keep it. Closing a session that is no longer the open one
+// changes nothing, so a retry is safe.
+func (c *Control) CloseTerminal(ctx context.Context, t TerminalSession, reason string) error {
 	return c.transact(ctx, func(tx storage.Tx) error {
 		open, found, e := TerminalInTx(tx, t.WorkID)
 		if e != nil || !found || open.ID != t.ID {
@@ -121,7 +128,7 @@ func (c *Control) CloseTerminal(ctx context.Context, t TerminalSession, reason s
 		if e != nil {
 			return e
 		}
-		release := open.PlacedHold && !keepHold && held && h.EventID == open.OpenEvent
+		release := open.PlacedHold && !open.KeepHeld && held && h.EventID == open.OpenEvent
 		kept := open.PlacedHold && !release && held && h.EventID == open.OpenEvent
 		event, e := c.controlEvent(ctx, tx, w, "terminal-close/"+open.ID, "core.manual.terminal_closed", terminalData(terminalPayload{Session: open.ID, Reason: reason, HoldKept: kept}))
 		if e != nil {
@@ -148,11 +155,35 @@ func (c *Control) CloseTerminal(ctx context.Context, t TerminalSession, reason s
 	})
 }
 
-// RecoverTerminals closes every recorded terminal. A terminal lives in the
-// daemon's process, so at startup none of them is still connected. Each is
-// closed under the operator who opened it. Call it once per process, never
-// on a configuration reload, when terminals are still live.
-func (c *Control) RecoverTerminals(ctx context.Context) (int, error) {
+// StrandTerminal marks a terminal whose process is gone but whose attach
+// container could not be removed, and commits core.manual.terminal_stranded
+// the first time. The Work stays out of dispatch until SweepTerminals clears
+// it.
+func (c *Control) StrandTerminal(ctx context.Context, t TerminalSession, reason string) error {
+	return c.transact(ctx, func(tx storage.Tx) error {
+		open, found, e := TerminalInTx(tx, t.WorkID)
+		if e != nil || !found || open.ID != t.ID || open.Stranded {
+			return e
+		}
+		w, e := tx.Work(t.WorkID)
+		if e != nil {
+			return e
+		}
+		if _, e = c.controlEvent(ctx, tx, w, "terminal-stranded/"+open.ID, "core.manual.terminal_stranded", terminalData(terminalPayload{Session: open.ID, Reason: reason})); e != nil {
+			return e
+		}
+		open.Stranded = true
+		return putJSON(tx, terminalNamespace, identity(string(w.ID)), open)
+	})
+}
+
+// SweepTerminals finishes terminals no process is serving: every one on
+// record when all is set (at startup, since a terminal lives in the daemon's
+// process), else the stranded ones. detach removes what the terminal ran in;
+// when it fails the terminal stays, stranded, for the next sweep. Each is
+// closed under the operator who opened it. Never sweep all once this process
+// serves terminals.
+func (c *Control) SweepTerminals(ctx context.Context, all bool, detach func(context.Context, TerminalSession) error) (int, error) {
 	var open []TerminalSession
 	if err := c.transact(ctx, func(tx storage.Tx) error {
 		open = nil
@@ -165,7 +196,9 @@ func (c *Control) RecoverTerminals(ctx context.Context) (int, error) {
 			if e = getJSON(tx, terminalNamespace, row.Key, &t); e != nil {
 				return e
 			}
-			open = append(open, t)
+			if all || t.Stranded {
+				open = append(open, t)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -181,7 +214,18 @@ func (c *Control) RecoverTerminals(ctx context.Context) (int, error) {
 		if t.Via != "" {
 			cx = WithVia(cx, t.Via)
 		}
-		if err := c.CloseTerminal(cx, t, "daemon restarted", false); err != nil {
+		if err := detach(cx, t); err != nil {
+			errs = append(errs, fmt.Errorf("terminal on %s: %w", t.WorkID, err))
+			if err = c.StrandTerminal(cx, t, "attach container not removed: "+err.Error()); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		reason := "daemon restarted"
+		if t.Stranded {
+			reason = "attach container removed"
+		}
+		if err := c.CloseTerminal(cx, t, reason); err != nil {
 			errs = append(errs, err)
 			continue
 		}

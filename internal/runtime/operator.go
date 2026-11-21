@@ -58,6 +58,13 @@ func heldInTx(tx storage.Tx, work domain.ID) error {
 	if held {
 		return ErrNotEligible
 	}
+	// An open terminal keeps the session to itself whichever hold is on the
+	// Work, and whatever released it.
+	if _, open, err := TerminalInTx(tx, work); err != nil {
+		return err
+	} else if open {
+		return ErrNotEligible
+	}
 	return nil
 }
 

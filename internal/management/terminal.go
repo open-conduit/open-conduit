@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -158,7 +159,7 @@ func (s *Server) openTerminal(c *call) (int, any, error) {
 	}
 	keep := q.Get("keep_held") == "true"
 
-	session, err := s.o.Control.OpenTerminal(c.ctx, domain.ID(c.params[0]), strings.TrimPrefix(requestID(), "req_"))
+	session, err := s.o.Control.OpenTerminal(c.ctx, domain.ID(c.params[0]), strings.TrimPrefix(requestID(), "req_"), keep)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -172,15 +173,15 @@ func (s *Server) openTerminal(c *call) (int, any, error) {
 	defer func() {
 		cx, cancel := context.WithTimeout(context.WithoutCancel(c.ctx), terminalCleanup)
 		defer cancel()
-		hold := keep
 		if ref != "" && s.o.ContainerDetach != nil {
 			if e := s.o.ContainerDetach(cx, work, ref); e != nil {
 				// The container may still be running on the session, so the
-				// Work stays held until an operator has looked.
-				hold, reason = true, "attach container not removed: "+e.Error()
+				// terminal keeps it until a sweep has removed the container.
+				_ = s.o.Control.StrandTerminal(cx, session, "attach container not removed: "+e.Error())
+				return
 			}
 		}
-		_ = s.o.Control.CloseTerminal(cx, session, reason, hold)
+		_ = s.o.Control.CloseTerminal(cx, session, reason)
 	}()
 
 	spec, containerRef, w, err := s.terminalTarget(c)
@@ -197,6 +198,11 @@ func (s *Server) openTerminal(c *call) (int, any, error) {
 	}
 	defer proc.Close()
 
+	// A hijacked connection may keep the server's deadlines, and a terminal
+	// outlives them; the relay's pings and write timeouts take over.
+	rc := http.NewResponseController(c.w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
 	conn, err := websocket.Accept(c.w, c.r, nil)
 	c.written = true
 	if err != nil {

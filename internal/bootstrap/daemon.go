@@ -552,18 +552,15 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.current.Store(c)
-	// A terminal lives in this process, so any on record lost its client
-	// when the last one ended. Their holds go before anything is scheduled.
-	if n, err := c.control.RecoverTerminals(ctx); err != nil {
-		d.log.Error("terminals left by the last run not closed", "closed", n, "error", err.Error())
-	} else if n > 0 {
-		d.log.Info("closed terminals left by the last run", "closed", n)
-	}
 	// Extensions are configured once the generation is active, so a
 	// configure can arm timers through it, as every later apply can.
 	d.configureExtensions(ctx)
 	d.stopUnused(ctx, snapshot, snapshot)
 	d.external.change.Unlock()
+	// A terminal lives in this process, so any on record lost its client
+	// with the last one. Its record keeps the Work from starting until what
+	// it ran in is gone, so this needs the container providers up.
+	d.sweepTerminals(ctx, true)
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
