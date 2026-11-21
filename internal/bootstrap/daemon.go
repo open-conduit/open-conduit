@@ -79,7 +79,8 @@ type Options struct {
 	// container runtime's list and inspect (default 5s).
 	CallTimeout time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
-	// The first sweep runs one interval after start.
+	// The first sweep runs one interval after the first start; its due
+	// time is durable, so restarts don't put it off.
 	SweepInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
@@ -150,13 +151,18 @@ type daemon struct {
 	configHandles configHandles
 	// defaultDoc is the first-run setup's configuration (DefaultConfig),
 	// built once the packages have started.
-	defaultDoc    []byte
-	log           *slog.Logger
-	now           func() time.Time
-	owner         string
-	coord         storage.Store
-	artifacts     storage.ArtifactStore
-	backups       backupState
+	defaultDoc []byte
+	log        *slog.Logger
+	now        func() time.Time
+	owner      string
+	coord      storage.Store
+	artifacts  storage.ArtifactStore
+	backups    backupState
+	duties     dutyClock
+	// retaining is set while a retention pass runs. startup is this start's
+	// timing, recorded once its first pass is done.
+	retaining     atomic.Bool
+	startup       startupClock
 	configs       *management.ConfigService
 	resolver      *config.Resolver
 	pipeline      *telemetry.Pipeline
@@ -377,6 +383,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	host, _ := os.Hostname()
 	d.owner = fmt.Sprintf("open-conduit/%s/%d/%s", host, os.Getpid(), hex.EncodeToString(suffix))
 	d.health.phase.Store(management.PhaseStarting)
+	d.startup.began = d.now()
 	// A listener that would serve plaintext to the network, or is
 	// half-configured, stops the start before anything is touched.
 	if err = o.Management.Check(); err != nil {
@@ -626,6 +633,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	case "invalid":
 		d.log.Warn("config file is invalid; the active generation keeps running", "generation", generation, "config", o.ConfigPath, "check_with", "open-conduit config validate "+o.ConfigPath)
 	}
+	d.startup.listening = d.now()
 	if o.Ready != nil {
 		o.Ready()
 	}
@@ -739,7 +747,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
-		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
+		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Quiescence: d.quiescence, RequestServed: d.requestServed, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
 		return nil, err
 	}
 	return c, nil

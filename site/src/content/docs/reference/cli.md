@@ -124,6 +124,12 @@ daemon needs. Output goes to <state>/logs/service.log.
 health                     the daemon's state and components; exits 1 unless it is ready
 ```
 
+### `open-conduit quiescence`
+
+```text
+quiescence                 what is in flight, or when the daemon is next due; exits 1 unless it is quiescent
+```
+
 ### `open-conduit doctor`
 
 ```text

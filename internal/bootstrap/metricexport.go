@@ -28,6 +28,7 @@ const metricCallTimeout = 10 * time.Second
 // metricTicker paces the collections; tests replace it so none waits on
 // real time.
 var metricTicker = func(every time.Duration) (<-chan time.Time, func()) {
+	//duty:metric_export
 	t := time.NewTicker(every)
 	return t.C, t.Stop
 }

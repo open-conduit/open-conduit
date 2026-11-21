@@ -53,6 +53,7 @@ func (d *daemon) sweepExecutorState(ctx context.Context) {
 	}
 	var due []string
 	for name, e := range executors {
+		//duty:executor_state_sweep
 		if _, ok := e.(extension.StateSweeper); !ok || s.done[name] || d.now().Before(s.next[name]) {
 			continue
 		}

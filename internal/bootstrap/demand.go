@@ -644,6 +644,7 @@ func (d *daemon) rebuildWithout(why string) {
 func (d *daemon) drainPackages(ctx context.Context) {
 	x := &d.external
 	x.mu.Lock()
+	//duty:package_drain
 	due := len(x.retiring) > 0 && !x.draining && d.now().Sub(x.drained) >= d.o.ResourceInterval
 	if due {
 		x.draining, x.drained = true, d.now()
@@ -748,6 +749,7 @@ func (d *daemon) startOnDemand(ctx context.Context, name string) {
 	if x.onDemand == nil {
 		x.onDemand, x.onDemandFailed = map[string]bool{}, map[string]time.Time{}
 	}
+	//duty:package_retry
 	if at, ok := x.onDemandFailed[name]; ok && d.now().Sub(at) < onDemandRetry {
 		x.mu.Unlock()
 		return

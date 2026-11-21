@@ -157,7 +157,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
+	commands := map[string]func([]string) int{"health": o.health, "quiescence": o.quiescence, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -413,6 +413,26 @@ func (o *operator) health(args []string) int {
 	// The JSON is printed either way; the exit code is for a probe or a
 	// script: 0 only when the daemon is ready.
 	if code := o.emit(h, err); code != 0 || h.State == "ready" {
+		return code
+	}
+	return 1
+}
+
+// quiescence prints what the daemon has in flight and when it next has
+// something to do; it exits 0 only when it is quiescent, for a script or a
+// service manager deciding whether to stop it.
+func (o *operator) quiescence(args []string) int {
+	if len(args) != 0 {
+		return usageError(o.errOut, "quiescence takes no arguments")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	q, err := c.Quiescence(cx)
+	if code := o.emit(q, err); code != 0 || q.Quiescent {
 		return code
 	}
 	return 1

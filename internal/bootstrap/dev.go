@@ -100,6 +100,7 @@ func devRun(ctx context.Context, r cli.DevRequest) (err error) {
 		return err
 	}
 	s.announce()
+	//duty:dev_watch
 	tick := time.NewTicker(r.Watch)
 	defer tick.Stop()
 	for {

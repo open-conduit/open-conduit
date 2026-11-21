@@ -45,6 +45,23 @@ Cross-scope aliases require an explicit `AuthorizeAlias` callback from trusted c
 
 Translated waits ([engineering tools, waits and playbooks](../engineering-tools/)) carry their dependency subscriptions in the toolbelt declaration and persist them as pending in the wait-registration transaction. `ReconcileSubscriptions` installs them through `Subscribe` (best effort right after `Complete`), so a crash before installation only delays it. `SubscriptionRequest` adds `After` (the source scan start; zero scans all history), an opaque `Filter` evaluated by `SchedulerOptions.AliasFilter`, and a `Label`. The alias payload carries `subscription`, `event`, `source_type` and `label`.
 
+## When the daemon next needs to be awake
+
+`GET /v1/quiescence` (`open-conduit quiescence`, which exits 0 only when quiescent) answers whether anything is in flight and, if not, when the daemon next has something to do. It is built from storage (`runtime.QuiescenceInTx`), so it doesn't depend on what the process remembers; only a pass running at that moment (a backup, a shipment, a retention pass, a workspace sweep) comes from the process.
+
+The daemon is **not quiescent** while it has a live attempt, a finished attempt whose stop is unconfirmed, an unrouted Event, ready unheld Work with unread input, an unsettled control on a running attempt, staged budget usage, an active Wait or subscription behind accepted history, a pending subscription, a pass in progress, or an obligation whose latest time has come. Each is a reason with a count. A parked attempt holds no process and is not a reason. Neither is Work held by a budget: a budget hold ends only when an operator releases it, so a period rollover needs no wake, and a capacity hold is already a core Timer.
+
+Otherwise it is **quiescent until T**, the earliest `latest` among its obligations: the earliest core Timer, each ingress source's `NextDue`, and each durable host duty. If the process is stopped and started again by T, or earlier for a delivery, durable state carries on: a Timer fires once and a schedule slot follows its [six-hour catch-up](../schedule-extension/). Whatever wakes a stopped daemon has to hold deliveries until `/readyz` answers, because `github.delivery` Events and webhook POSTs can't be derived again.
+
+Every periodic duty of the host is listed in `hostDuties` (`internal/bootstrap/duties.go`), and each place that paces one carries a `//duty:<name>` comment; a test parses the package and fails on a ticker or elapsed-time pace that names no listed duty. A duty is one of two kinds:
+
+- **Durable** (retention, the workspace sweep, the scheduled backup): its next due time is in the `core.host.duties` namespace, so a restart keeps it. An awake daemon runs it when due. Retention carries six hours of slack, so its ten-minute pace doesn't wake a stopped daemon: it counts towards T only at due plus slack.
+- **Process-bound** (the host loop, lease renewal, resource and container reconcile, tunnel probe, metric export, usage heartbeat and others): it owes nothing while the daemon is stopped, and the answer lists why.
+
+A package task can't yet say when it next has work ([#733](https://github.com/open-conduit/open-conduit/issues/733)), so tasks aren't part of T. The answer lists each with its pace, and every task runs on the first pass after a start. Until then, work a projection has pending when the daemon stops waits for the next start. A Slack Socket Mode connection is one of these tasks and receives nothing while the daemon is stopped.
+
+The answer also carries the latest start's cost, from the process starting to the management socket listening and to its first completed pass.
+
 ## Evidence
 
 The [wait runtime tests](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/waits_test.go) adapt all nineteen shared runtime scenarios to production components over persistent/reopened SQLite, with deterministic clocks and synchronization. [Timer runtime tests](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/timers_test.go) exercise recurrence, causal refusal, revision replay, restart and atomic fire/rearm process boundaries. [The recurrence contract test](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/recurrence_test.go) covers the core side of calendar recurrence. These are local correctness/durability proofs and make no production throughput claim.

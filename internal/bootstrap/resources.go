@@ -42,14 +42,27 @@ type resourceState struct {
 // packages' declared ones (manifest resources) join as they start.
 func (d *daemon) openResources() {
 	d.resources.lastSweep = d.now()
+	// The first sweep is one interval after the first start; a restart
+	// keeps the stored time, so restarts can't put it off for ever.
+	r, err := d.loadDuty(context.Background(), dutySweep, d.now().Add(d.o.SweepInterval), d.o.SweepInterval)
+	if err != nil {
+		d.report("duty_schedule", "", errorCode(err))
+		return
+	}
+	d.setDuty(context.Background(), dutySweep, r)
+	// Retention is due at once on a first start, as it always was.
+	if _, err = d.loadDuty(context.Background(), dutyRetention, d.now(), d.o.RetentionInterval); err != nil {
+		d.report("duty_schedule", "", errorCode(err))
+	}
 }
 
 // sweepResources runs each sweeping provider's spare-workspace sweep in the
-// background, once per SweepInterval (every 6 hours).
+// background, once per SweepInterval (every 6 hours), by its durable due
+// time (duties.go).
 func (d *daemon) sweepResources(c *components) {
 	r := &d.resources
 	r.mu.Lock()
-	if r.sweeping || len(r.providers.all()) == 0 || d.now().Sub(r.lastSweep) < d.o.SweepInterval {
+	if r.sweeping || len(r.providers.all()) == 0 || !d.dutyDue(dutySweep) {
 		r.mu.Unlock()
 		return
 	}
@@ -81,6 +94,7 @@ func (d *daemon) sweepResources(c *components) {
 		r.mu.Lock()
 		r.sweeping, r.swept, r.lastSweep, r.sweep, r.sweepErr = false, true, d.now(), total, errors.Join(errs...)
 		r.mu.Unlock()
+		d.dutyRan(d.ctx, dutySweep, d.now().Add(d.o.SweepInterval))
 	})
 }
 
@@ -158,6 +172,7 @@ func (r phasedResources) Acquire(ctx context.Context, req extension.ResourceRequ
 func (d *daemon) reconcileResources(c *components) {
 	r := &d.resources
 	r.mu.Lock()
+	//duty:resource_reconcile
 	if r.running || len(r.providers.all()) == 0 || d.now().Sub(r.last) < d.o.ResourceInterval {
 		r.mu.Unlock()
 		return

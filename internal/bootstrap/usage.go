@@ -228,6 +228,7 @@ func (u *usageReporter) run(ctx context.Context, interval time.Duration, snapsho
 		_ = u.send(ctx, "install", nil)
 	}
 	_ = u.send(ctx, "daemon_started", u.shape(snapshot()))
+	//duty:usage_heartbeat
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {

@@ -489,6 +489,7 @@ func (p *offlinePackage) validated() *extproc.Remote {
 func (p *offlinePackage) idle(now time.Time, d time.Duration) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	//duty:package_idle
 	return p.started && now.Sub(p.used) >= d
 }
 
@@ -1077,6 +1078,7 @@ func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, ru
 	if d.external.tasks == nil {
 		d.external.tasks, d.external.running = map[string]time.Time{}, map[string]bool{}
 	}
+	//duty:package_task
 	due := !d.external.running[key] && d.now().Sub(d.external.tasks[key]) >= pace
 	if due {
 		d.external.running[key], d.external.tasks[key] = true, d.now()

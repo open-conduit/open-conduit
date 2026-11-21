@@ -19,9 +19,9 @@ const passLimit = 100
 // progress is durable in coordination storage, so a crash at any point only
 // repeats work that the runtime deduplicates or fences.
 func (d *daemon) loop(ctx context.Context) error {
+	//duty:host_loop
 	ticker := time.NewTicker(d.o.PollInterval)
 	defer ticker.Stop()
-	var lastSweep time.Time
 	if d.passTimes == nil {
 		d.passTimes, _ = newPassTimes(nil)
 	}
@@ -79,10 +79,11 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.sweepResources(c)
 			d.sweepExecutorState(ctx)
 		})
-		pass.phase("retention", func() { d.retentionPass(ctx, c, &lastSweep) })
+		pass.phase("retention", func() { d.retentionPass(ctx, c) })
 		pass.phase("backup", func() { d.scheduleBackup(ctx) })
 		pass.done(ctx)
 		d.passDone()
+		d.recordStartup(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -125,18 +126,21 @@ func (d *daemon) pollPass(ctx context.Context, c *components) {
 }
 
 // retentionPass runs the retention sweep and artifact collection once
-// RetentionInterval has passed since the last sweep. It runs during a
+// RetentionInterval has passed since the last sweep, by its durable due time
+// (duties.go), so a daemon restarted more often still sweeps. It runs during a
 // backup too: the backup's retention hold defers the sweep's deletes
 // (runtime.HoldRetention), and collection never deletes content an attempt
 // references. It reports whether it ran.
-func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *time.Time) bool {
-	if d.now().Sub(*lastSweep) < d.o.RetentionInterval {
+func (d *daemon) retentionPass(ctx context.Context, c *components) bool {
+	if !d.dutyDue(dutyRetention) {
 		return false
 	}
+	d.retaining.Store(true)
+	defer d.retaining.Store(false)
 	if _, err := c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
 		d.report("retention", "", errorCode(err))
 	} else {
-		*lastSweep = d.now()
+		d.dutyRan(ctx, dutyRetention, d.now().Add(d.o.RetentionInterval))
 	}
 	d.collectArtifacts(ctx, c)
 	d.pruneReported()
@@ -306,6 +310,7 @@ func (d *daemon) attend(c *components, a runtime.Attempt, work domain.ID) {
 			d.mu.Unlock()
 			d.poke()
 		}()
+		//duty:lease_renewal
 		ticker := time.NewTicker(d.o.LeaseDuration / 3)
 		defer ticker.Stop()
 		ctx, lost, stop := c.scheduler.Hold(d.ctx, a.Lease, ticker.C, func(err error) {

@@ -27,6 +27,11 @@ const (
 	bundleLayout = "20060102T150405Z"
 	// backupRetry is how soon a failed scheduled backup is tried again.
 	backupRetry = 15 * time.Minute
+	// backupStartGrace is how long an overdue backup waits after a start
+	// for the daemon's first request, so waking to answer a delivery doesn't
+	// begin with a full copy. It is counted from the first start that put
+	// the backup off, so short runs can't put it off for ever.
+	backupStartGrace = 10 * time.Minute
 )
 
 type backupState struct {
@@ -36,6 +41,8 @@ type backupState struct {
 	mu      sync.Mutex
 	running bool
 	next    time.Time
+	// deferred is set while an overdue backup waits for the first request.
+	deferred bool
 	// shipDue is when the newest bundle is next offered to the destinations;
 	// zero when no shipment is owed.
 	shipDue time.Time
@@ -102,7 +109,47 @@ func (d *daemon) startBackups(name string, db storage.Database) error {
 		// A daemon that stopped mid-upload owes its newest bundle.
 		d.backups.shipDue = d.now()
 	}
+	return d.planBackup(context.Background(), len(times) > 0)
+}
+
+// planBackup records the backup's due time. One already overdue at a start
+// is put off until the first request or backupStartGrace, whichever is
+// first; once that has passed it runs at once, and the log says why.
+func (d *daemon) planBackup(ctx context.Context, hasBundle bool) error {
+	b := &d.backups
+	r, err := d.loadDuty(ctx, dutyBackup, b.next, 0)
+	if err != nil {
+		return err
+	}
+	now := d.now()
+	r.NextDue = b.next
+	if !hasBundle || now.Before(b.next) {
+		r.Deferred = time.Time{}
+		d.setDuty(ctx, dutyBackup, r)
+		return nil
+	}
+	if r.Deferred.IsZero() {
+		r.Deferred = now
+	}
+	if until := r.Deferred.Add(backupStartGrace); now.Before(until) {
+		b.next, b.deferred, r.NextDue = until, true, until
+		d.log.Info("overdue backup waits for the first request", "until", until)
+	} else {
+		d.log.Warn("taking an overdue backup before the first request: it has already waited its grace", "waiting_since", r.Deferred)
+	}
+	d.setDuty(ctx, dutyBackup, r)
 	return nil
+}
+
+// requestServed lets a backup put off at the start go ahead, now the daemon
+// has done what it was woken for.
+func (d *daemon) requestServed() {
+	b := &d.backups
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.deferred {
+		b.deferred, b.next = false, d.now()
+	}
 }
 
 // scheduleBackup starts a scheduled backup in the background when one is due
@@ -135,16 +182,27 @@ func (d *daemon) scheduleBackup(ctx context.Context) {
 		defer d.wg.Done()
 		err := d.backupNow(ctx, now)
 		b.mu.Lock()
-		defer b.mu.Unlock()
-		b.running = false
+		b.running, b.deferred = false, false
 		if err != nil {
 			b.next = now.Add(min(backupRetry, d.o.BackupInterval))
+		} else {
+			b.next = now.Add(d.o.BackupInterval)
+		}
+		next := b.next
+		b.mu.Unlock()
+		if err != nil {
+			// The grace already spent stays spent.
+			d.duties.mu.Lock()
+			r := d.duties.records[dutyBackup]
+			d.duties.mu.Unlock()
+			r.NextDue = next
+			d.setDuty(ctx, dutyBackup, r)
 			if ctx.Err() == nil {
 				d.report("backup", "", errorCode(err), err.Error())
 			}
 			return
 		}
-		b.next = now.Add(d.o.BackupInterval)
+		d.dutyRan(ctx, dutyBackup, next)
 		d.clear("backup", "")
 	}()
 }
