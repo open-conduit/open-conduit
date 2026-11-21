@@ -3,7 +3,7 @@ title: "Extension packaging, SDK and certification"
 description: "How to write, package, install, upgrade, roll back, remove and certify a third-party extension package."
 ---
 
-New to extensions? [Build your first extension](../../guides/first-extension/) is a 30-minute tutorial that writes, tests and installs one; this page is the reference behind it.
+New to extensions? [Build your first extension](../../guides/first-extension/) (or [in TypeScript](../../guides/first-extension-typescript/)) is a 30-minute tutorial that writes, tests and installs one; this page is the reference behind it.
 
 This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. Installed packages run as separate processes that speak the [subprocess protocol](../extension-protocol/) (decision B08) and are supervised under its [runtime, trust model and schema evolution](../extension-protocol/#runtime-trust-model-and-schema-evolution). **Packaging, the SDK and certification are provisional**, like the protocol: they may still change, and decisions 21–32 at the end are listed for review.
 
@@ -38,7 +38,7 @@ With `--lang ts` it writes the same package in TypeScript, on the [TypeScript SD
 - `.github/workflows/ci.yml`, which runs `make check`, then lints and certifies with Open Conduit's `main` and its latest release built by `go install`.
 - `playbooks/NAME.md` and a README, as for Go.
 
-It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`, and `TestExtensionNewTS` (`make ts-scaffold-check`) does the same for `--lang ts`, then runs the built package with and without Node on PATH. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working.
+It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`, and `TestExtensionNewTS` (`make ts-scaffold-check`) does the same for `--lang ts`, then runs the built package with and without Node on PATH. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working. `TestTutorialFirstExtensionTS` does the same for [the TypeScript tutorial](../../guides/first-extension-typescript/).
 
 ## Writing an extension with the SDK
 

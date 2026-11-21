@@ -270,7 +270,7 @@ ts-check: require-node
 # certify runs it, as the CI job with both Go and Node.
 ts-scaffold-check: require-node
 	@set -eu; for d in $(TS_DIRS); do (cd $$d && { [ -d node_modules ] || npm ci --no-audit --no-fund; }); done
-	OPEN_CONDUIT_TS_SCAFFOLD_TESTS=1 go test ./integration -run '^TestExtensionNewTS$$' -count=1
+	OPEN_CONDUIT_TS_SCAFFOLD_TESTS=1 go test ./integration -run '^(TestExtensionNewTS|TestTutorialFirstExtensionTS)$$' -count=1
 
 ts-packages: require-node
 	cd protocol/examples/weather && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && node scripts/package.mjs $(abspath $(PACKAGES_DIR))/weather

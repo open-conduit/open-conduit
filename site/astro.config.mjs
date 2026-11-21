@@ -68,6 +68,7 @@ export default defineConfig({
 						{ label: 'Cap spend and attempts', slug: 'guides/budgets' },
 						{ label: 'Backups and recovery', slug: 'guides/backups' },
 						{ label: 'Build your first extension', slug: 'guides/first-extension' },
+						{ label: 'Build your first extension in TypeScript', slug: 'guides/first-extension-typescript' },
 					],
 				},
 				{
