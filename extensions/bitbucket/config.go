@@ -106,9 +106,12 @@ type ExtensionConfig struct {
 	// "{key}" (Jira links it), "Closes {key}" for Linear.
 	IssueRef           string `json:"issue_ref,omitempty"`
 	ClosedHorizonHours int    `json:"closed_horizon_hours,omitempty"`
-	BaseBranch         string `json:"base_branch,omitempty"`
-	WebhookSecret      string `json:"webhook_secret,omitempty"`
-	ManageWebhook      bool   `json:"manage_webhook,omitempty"`
+	// ReconcileSeconds is how often this entry reconciles (default
+	// settings.reconcile_seconds), from 1 up to closed_horizon_hours.
+	ReconcileSeconds int    `json:"reconcile_seconds,omitempty"`
+	BaseBranch       string `json:"base_branch,omitempty"`
+	WebhookSecret    string `json:"webhook_secret,omitempty"`
+	ManageWebhook    bool   `json:"manage_webhook,omitempty"`
 	// DryRun makes the tools write nothing (the daemon's --dry-run sets it).
 	DryRun bool `json:"dry_run,omitempty"`
 }
@@ -122,6 +125,7 @@ type Settings struct {
 	Branch, Preview, Refs  *regexp.Regexp
 	IssueRef               string
 	ClosedHorizon          time.Duration
+	Reconcile              time.Duration
 	BaseBranch             string
 	WebhookSecret          string
 	ManageWebhook          bool
@@ -203,6 +207,13 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("bitbucket extension: closed_horizon_hours must be 1-8760")
 		}
 		s.ClosedHorizon = time.Duration(c.ClosedHorizonHours) * time.Hour
+	}
+	if c.ReconcileSeconds != 0 {
+		// A pass looks back only the horizon, so a longer gap loses closes.
+		if c.ReconcileSeconds < 1 || c.ReconcileSeconds > 365*24*3600 || time.Duration(c.ReconcileSeconds)*time.Second > s.ClosedHorizon {
+			return s, errors.New("bitbucket extension: reconcile_seconds must be at least 1 and within closed_horizon_hours")
+		}
+		s.Reconcile = time.Duration(c.ReconcileSeconds) * time.Second
 	}
 	if c.BaseBranch != "" && (strings.ContainsAny(c.BaseBranch, " \t\r\n~^:?*[\\") || len(c.BaseBranch) > 255) {
 		return s, errors.New("bitbucket extension: base_branch must be a branch name")

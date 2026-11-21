@@ -106,7 +106,10 @@ type Common struct {
 	// state leaves the status alone.
 	Transitions        map[string]string `json:"transitions,omitempty"`
 	ClosedHorizonHours int               `json:"closed_horizon_hours,omitempty"`
-	Projection         Projection        `json:"projection,omitempty"`
+	// ReconcileSeconds is how often this entry reconciles (default
+	// settings.reconcile_seconds), from 1 up to closed_horizon_hours.
+	ReconcileSeconds int        `json:"reconcile_seconds,omitempty"`
+	Projection       Projection `json:"projection,omitempty"`
 	// WebhookSecret names a selected scope secret used to verify deliveries.
 	WebhookSecret string `json:"webhook_secret,omitempty"`
 	// ManageWebhook lets the host create or re-point the tracker's webhook
@@ -122,6 +125,7 @@ type Settings struct {
 	Labels                 Labels
 	Transitions            map[string]string
 	ClosedHorizon          time.Duration
+	Reconcile              time.Duration
 	Projection             Projection
 	VerifyInterval         time.Duration
 	WebhookSecret          string
@@ -171,6 +175,13 @@ func (c Common) Settings(typ string, secretNames []string, checkSecrets bool) (S
 			return s, fmt.Errorf("%s extension: closed_horizon_hours must be 1-8760", typ)
 		}
 		s.ClosedHorizon = time.Duration(c.ClosedHorizonHours) * time.Hour
+	}
+	if c.ReconcileSeconds != 0 {
+		// A pass looks back only the horizon, so a longer gap loses closes.
+		if c.ReconcileSeconds < 1 || c.ReconcileSeconds > 365*24*3600 || time.Duration(c.ReconcileSeconds)*time.Second > s.ClosedHorizon {
+			return s, fmt.Errorf("%s extension: reconcile_seconds must be at least 1 and within closed_horizon_hours", typ)
+		}
+		s.Reconcile = time.Duration(c.ReconcileSeconds) * time.Second
 	}
 	if c.Projection.VerifySeconds != 0 {
 		if c.Projection.VerifySeconds < 10 || c.Projection.VerifySeconds > 86400 {

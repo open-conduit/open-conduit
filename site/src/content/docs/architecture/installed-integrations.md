@@ -13,6 +13,7 @@ Besides GitHub, Open Conduit ships adapters for Linear and Jira (trackers), Bitb
   - An issue is keyed `issue/KEY`, or `issue/KEY/generation/reopen-<unix>` after a reopening. The generation is derived from the service's immutable reopen history. A comment joins the generation current when it was written.
   - The issue payload omits update times, status labels and any workflow status the entry's `transitions` manage, so projection never feeds back as input.
   - Reconcile lists open issues and issues updated within `closed_horizon_hours` in creation order, plus each listed issue's comments. Pages are bounded by detail reads and wall time. Failures are errors, so no absence is inferred.
+  - An entry's `reconcile_seconds` sets its own interval (default `settings.reconcile_seconds`), from 1 up to `closed_horizon_hours`, because a pass looks back only that far. A longer interval lengthens how long a lost delivery stays lost. Reconcile can't recover, at any interval, a close older than the horizon. Bitbucket entries take the same field with the same bound.
   - Push re-reads exactly the issue or comment a verified delivery reports.
 - **Route** (handler = type). The opt-in/skip claim policy:
   - The issue must be open and not *waiting*: outside Linear's claim states.

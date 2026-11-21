@@ -12,6 +12,7 @@ func EntryFields() []protocol.FieldDecl {
 		{Name: "labels", Help: "claimed, help, review, done, skip[], require[] (defaults agent-in-progress, agent-needs-help, ready-for-review, might-be-done; skip backlog, human, milestone)"},
 		{Name: "transitions", Help: "workflow status per state: claimed, building, review, help, done, finished (missing leaves it alone)"},
 		{Name: "closed_horizon_hours", Help: "how long closed issues stay observed", Default: "168"},
+		{Name: "reconcile_seconds", Help: "this entry's reconcile interval, up to closed_horizon_hours (default settings.reconcile_seconds); longer means a lost delivery stays lost longer"},
 		{Name: "projection", Help: "disabled, verify_seconds (default 900), dry_run"},
 		{Name: "webhook_secret", Help: "names a selected scope secret that verifies deliveries"},
 		{Name: "manage_webhook", Help: "create or re-point the service webhook at the listener's public URL (needs admin)"},
