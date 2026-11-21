@@ -107,9 +107,10 @@ func settleIntent(stateDir string) error {
 	return os.Remove(filepath.Join(stateDir, restoreIntent))
 }
 
-// claimDatabase records that this restore is about to write location. When
-// an earlier restore recorded the same location and state is there, that
-// state is what the earlier restore left, so it refuses and says so. It
+// claimDatabase records that this restore is about to write location, which
+// must be empty. When an earlier restore recorded the same location and
+// state is there, that state is what the earlier restore left, so it
+// refuses and says so; any other state there is refused with no record. It
 // isn't carried on from: the leftover may hold part of the steps after the
 // write, and a restore doesn't delete a database. A leftover at another
 // location is reported.
@@ -122,15 +123,25 @@ func claimDatabase(ctx context.Context, stateDir, location, digest, bundle, back
 	if err != nil {
 		return err
 	}
-	if ok {
-		present, err := backend.Present(ctx, prior.Location)
-		switch {
-		case err != nil:
-			return err
-		case present && prior.Location == location:
+	present, err := backend.Present(ctx, location)
+	if err != nil {
+		return err
+	}
+	if present {
+		if ok && prior.Location == location {
 			return fmt.Errorf("%s holds the database an earlier restore of %s wrote before it stopped. Nothing uses it, so unless you have put state there since, it is safe to clear: clear it and run the restore again", location, prior.Bundle)
-		case present:
-			report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: prior.Location, Note: "the database an earlier restore wrote before it stopped: nothing uses it, so it is safe to clear"})
+		}
+		// Only a record written while the location was empty can vouch
+		// for what is there, so this state gets none.
+		return fmt.Errorf("%s already holds state: restore into an empty location: %w", location, os.ErrExist)
+	}
+	if ok && prior.Location != location {
+		left, err := backend.Present(ctx, prior.Location)
+		if err != nil {
+			return err
+		}
+		if left {
+			report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: prior.Location, Note: "the database an earlier restore wrote before it stopped: nothing uses it, so unless you have put state there since, it is safe to clear"})
 		}
 	}
 	data, err := json.Marshal(databaseIntent{Location: location, DatabaseSHA256: digest, Bundle: bundle})

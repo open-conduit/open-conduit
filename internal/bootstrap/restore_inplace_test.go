@@ -406,6 +406,47 @@ func TestRestoreInPlaceRefusedBeforeTheWriteLeavesNoIntent(t *testing.T) {
 	}
 }
 
+// A location that held state before the restore ran is never called a
+// leftover, however many times the restore is run against it, and naming
+// it doesn't lose the record of a real leftover elsewhere.
+func TestRestoreInPlaceNeverCallsExistingStateALeftover(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	occupied := filepath.Join(t.TempDir(), "kept.db")
+	db, err := sqlite.Backend.Open(ctx, occupied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	refused := func() {
+		t.Helper()
+		_, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: occupied})
+		if err == nil || !strings.Contains(err.Error(), "already holds state") || strings.Contains(err.Error(), "safe to clear") {
+			t.Fatalf("restore onto existing state: %v", err)
+		}
+	}
+	refused()
+	refused()
+	if _, err := os.Lstat(filepath.Join(f.state, restoreIntent)); !os.IsNotExist(err) {
+		t.Fatalf("refusing existing state left a record: %v", err)
+	}
+
+	leftover := filepath.Join(t.TempDir(), "leftover.db")
+	restoreStopped = func() error { return errors.New("power cut") }
+	_, err = RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: leftover})
+	restoreStopped = func() error { return nil }
+	if err == nil || !strings.Contains(err.Error(), "power cut") {
+		t.Fatalf("stopped restore: %v", err)
+	}
+	refused()
+	_, err = RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: leftover})
+	if err == nil || !strings.Contains(err.Error(), "safe to clear") {
+		t.Fatalf("the real leftover's record was lost: %v", err)
+	}
+}
+
 // A swap interrupted after the journal is finished by the rerun, which
 // settles the intent, so the now-live database is not offered for clearing.
 func TestRestoreInPlaceSettlesTheIntentWhenItFinishesASwap(t *testing.T) {
