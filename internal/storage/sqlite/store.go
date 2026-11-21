@@ -490,9 +490,12 @@ func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	if timing := s.timing.Load(); timing != nil {
 		asked = time.Now()
 		defer func() {
-			if !began.IsZero() {
-				(*timing)(storage.TransactionTiming{Wait: began.Sub(asked), Hold: held, Committed: committed})
+			if began.IsZero() {
+				// It never got the writer: the longest waits end here.
+				(*timing)(storage.TransactionTiming{Wait: time.Since(asked)})
+				return
 			}
+			(*timing)(storage.TransactionTiming{Wait: began.Sub(asked), Hold: held, Began: true, Committed: committed})
 		}()
 	}
 	conn, err := s.db.Conn(ctx)

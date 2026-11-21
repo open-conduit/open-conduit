@@ -92,3 +92,81 @@ func TestTimeTransactionsReportsWaitAndHold(t *testing.T) {
 		t.Fatalf("reported after the observer was removed: %+v", got)
 	}
 }
+
+// TestTimeTransactionsReportsOnesThatNeverBegan: a transaction that gives up
+// on the writer still reports its wait, whether its context ended in the
+// pool's queue or BEGIN IMMEDIATE stayed busy against another handle.
+func TestTimeTransactionsReportsOnesThatNeverBegan(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	other, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	// The other handle's one connection gives up on the lock at once.
+	if _, err = other.db.ExecContext(ctx, "PRAGMA busy_timeout=1"); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []storage.TransactionTiming
+	report := func(x storage.TransactionTiming) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, x)
+	}
+	other.TimeTransactions(report)
+	guard := storage.Guard{Now: time.Unix(1, 0)}
+	entered, release := make(chan struct{}), make(chan struct{})
+	holder := make(chan error, 1)
+	go func() {
+		holder <- store.Transact(ctx, guard, func(storage.Tx) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	if err := other.Transact(ctx, guard, func(storage.Tx) error { return nil }); err == nil {
+		t.Fatal("the other handle began while the writer was held")
+	}
+	// Queued behind the holder on the store's one connection, then cancelled.
+	store.TimeTransactions(report)
+	before := store.db.Stats().WaitCount
+	queued, cancel := context.WithCancel(ctx)
+	defer cancel()
+	gaveUp := make(chan error, 1)
+	go func() {
+		gaveUp <- store.Transact(queued, guard, func(storage.Tx) error { return nil })
+	}()
+	for store.db.Stats().WaitCount == before {
+		runtime.Gosched()
+	}
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the queued transaction ended with %v", err)
+	}
+	close(release)
+	if err := <-holder; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	notBegun := 0
+	for _, x := range got {
+		if !x.Began {
+			notBegun++
+			if x.Wait <= 0 || x.Hold != 0 || x.Committed {
+				t.Errorf("a transaction that never began reported %+v", x)
+			}
+		}
+	}
+	if notBegun != 2 {
+		t.Fatalf("%d reports of a transaction that never began, want 2: %+v", notBegun, got)
+	}
+}

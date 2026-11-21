@@ -19,10 +19,11 @@ type txTimes struct {
 	mu    sync.Mutex
 	waits window
 	holds window
-	// total counts every transaction recorded, beyond the window.
-	total uint64
-	wait  metric.Float64Histogram
-	hold  metric.Float64Histogram
+	// total counts every transaction recorded, beyond the window, and
+	// notBegun those that never got the writer.
+	total, notBegun uint64
+	wait            metric.Float64Histogram
+	hold            metric.Float64Histogram
 }
 
 // newTxTimes registers the histograms on meter (none when nil).
@@ -46,14 +47,33 @@ func (t *txTimes) record(x storage.TransactionTiming) {
 	t.mu.Lock()
 	t.total++
 	t.waits.add(x.Wait)
-	t.holds.add(x.Hold)
+	// A transaction that never began held nothing: a zero would pull the
+	// hold's spread down.
+	if x.Began {
+		t.holds.add(x.Hold)
+	} else {
+		t.notBegun++
+	}
 	t.mu.Unlock()
 	if t.wait != nil {
 		ctx := context.Background()
-		outcome := metric.WithAttributes(attribute.Bool("open_conduit.committed", x.Committed))
+		outcome := metric.WithAttributes(attribute.String("open_conduit.outcome", txOutcome(x)))
 		t.wait.Record(ctx, x.Wait.Seconds(), outcome)
-		t.hold.Record(ctx, x.Hold.Seconds(), outcome)
+		if x.Began {
+			t.hold.Record(ctx, x.Hold.Seconds(), outcome)
+		}
 	}
+}
+
+// txOutcome is how a write transaction ended, a small fixed set.
+func txOutcome(x storage.TransactionTiming) string {
+	switch {
+	case !x.Began:
+		return "not_begun"
+	case x.Committed:
+		return "committed"
+	}
+	return "rolled_back"
 }
 
 // transactionsCheck summarises the latest write transactions for doctor. It
@@ -73,6 +93,12 @@ func (d *daemon) transactionsCheck(context.Context) runtime.Check {
 		return check
 	}
 	check.Detail = fmt.Sprintf("latest %d of %d write transactions", len(waits), t.total)
-	check.Items = []string{"wait: " + spread(waits), "hold: " + spread(t.holds.sorted())}
+	if t.notBegun > 0 {
+		check.Detail += fmt.Sprintf(", %d of them never got the writer", t.notBegun)
+	}
+	check.Items = []string{"wait: " + spread(waits)}
+	if holds := t.holds.sorted(); len(holds) > 0 {
+		check.Items = append(check.Items, "hold: "+spread(holds))
+	}
 	return check
 }

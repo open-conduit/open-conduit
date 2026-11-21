@@ -5,11 +5,16 @@ import "time"
 // TransactionTiming is how long one write transaction waited and held the
 // store's writer.
 type TransactionTiming struct {
-	// Wait runs from asking for the writer until the transaction began.
+	// Wait runs from asking for the writer until the transaction began,
+	// or until it gave up when it never did.
 	Wait time.Duration
 	// Hold runs from the transaction beginning until it committed or
-	// rolled back.
+	// rolled back. It is zero when the transaction never began.
 	Hold time.Duration
+	// Began reports whether the transaction got the writer. One that
+	// didn't (its context ended in the queue, or the lock stayed busy) is
+	// still reported, since those are the longest waits.
+	Began bool
 	// Committed reports whether it committed.
 	Committed bool
 }
