@@ -93,7 +93,7 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 			defer wg.Done()
 			cx, cancel := context.WithTimeout(ctx, budget)
 			defer cancel()
-			code, detail := x.credential(cx, j.scope, j.b, j.c)
+			code, detail := x.bindingCredential(cx, j.scope, j.b, j.c)
 			codes[i] = code
 			res.Items[i] = fmt.Sprintf("%s/%s: %s (%s)", j.scope, j.b.Name, code, detail)
 		}()
@@ -111,6 +111,33 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 	}
 	res.Status, res.Code = credStatus[worst], worst
 	return res
+}
+
+// bindingCredential is the binding's credential, taking account of the grants
+// that select a secret. A grant is optional, so one whose secret isn't stored
+// yet says nothing. One that resolves can supply the credential a binding
+// otherwise lacks, and if it is refused, that is reported, because a Work that
+// takes the grant would fail.
+func (x *Extension) bindingCredential(ctx context.Context, scope domain.ID, b protocol.CheckBinding, c Config) (string, string) {
+	rank := func(code string) int { return credRank[credStatus[code]] }
+	code, detail := x.credential(ctx, scope, b, c)
+	lacking := code == credNotConfigured
+	for _, g := range b.Grants {
+		granted, err := ParseConfig(g.Config)
+		if err != nil {
+			continue
+		}
+		with := b
+		with.Config, with.SecretNames, with.Grants = g.Config, g.SecretNames, nil
+		gc, gd := x.credential(ctx, scope, with, granted)
+		if gc == credUnresolved || gc == credNotConfigured {
+			continue
+		}
+		if lacking || rank(gc) > rank(code) {
+			code, detail, lacking = gc, "with grant "+g.Name+": "+gd, false
+		}
+	}
+	return code, detail
 }
 
 // credential tries one binding's credential: its code and what was

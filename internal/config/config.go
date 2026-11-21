@@ -409,6 +409,42 @@ func (b Binding) domainGrants() []domain.BindingGrant {
 	return out
 }
 
+// SecretNamesWith are the secrets a run of the binding has when its Work took
+// grants: the binding's own, then those of each grant it offers under one of
+// the names, without repeats.
+func (b Binding) SecretNamesWith(grants []string) []string {
+	out := slices.Clone(b.SecretNames)
+	for _, g := range b.Grants {
+		if !slices.Contains(grants, g.Name) {
+			continue
+		}
+		for _, n := range g.SecretNames {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// OfferedSecretNames are the secrets some run of the binding could have: its
+// own and those of every grant it offers.
+func (b Binding) OfferedSecretNames() []string {
+	names := make([]string, 0, len(b.Grants))
+	for _, g := range b.Grants {
+		names = append(names, g.Name)
+	}
+	return b.SecretNamesWith(names)
+}
+
+// GrantedConfig is the binding's executor config with the named grant
+// applied.
+func (b Binding) GrantedConfig(grant string) json.RawMessage {
+	base := domain.Binding{Config: domain.Payload{Data: b.Config}, Grants: b.domainGrants()}
+	granted, _ := base.Granted([]string{grant})
+	return granted.Config.Data
+}
+
 // Operation reports whether the binding grants op itself or offers it in
 // one of its grants: the ceiling a Work's toolbelt is checked against.
 func (b Binding) Operation(op string) bool {
@@ -416,11 +452,13 @@ func (b Binding) Operation(op string) bool {
 }
 
 // Grant is one grant a binding offers: more operations, within the scope
-// authorization like the binding's own, and executor config whose top-level
-// fields replace the binding config's.
+// authorization like the binding's own, executor config whose top-level
+// fields replace the binding config's, and more of the scope's secrets for
+// the runs of a Work that opts in.
 type Grant struct {
 	Name, Label string
 	Operations  []string
+	SecretNames []string
 	Config      json.RawMessage
 }
 type Route struct {
@@ -1153,7 +1191,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 	if g := n.field("grants"); g != nil && c.typed(g, path+"/grants", kArray, "array") {
 		for i, item := range g.items {
 			p := ptr(path+"/grants", i)
-			if !c.object(item, p, []string{"name"}, "label", "operations", "config") {
+			if !c.object(item, p, []string{"name"}, "label", "operations", "secret_names", "config") {
 				continue
 			}
 			var grant Grant
@@ -1162,6 +1200,9 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 				grant.Label, _ = c.str(l, p+"/label", nil)
 			}
 			grant.Operations = c.list(item.field("operations"), p+"/operations", grantPattern)
+			if names := item.field("secret_names"); names != nil {
+				grant.SecretNames = c.list(names, p+"/secret_names", idPattern)
+			}
 			if cfg := item.field("config"); cfg != nil {
 				grant.Config = c.opaque(cfg, p+"/config")
 			}
@@ -1463,6 +1504,9 @@ func (b BindingEntry) normalized() any {
 			gm := map[string]any{"name": g.Name, "operations": g.Operations}
 			if g.Label != "" {
 				gm["label"] = g.Label
+			}
+			if len(g.SecretNames) > 0 {
+				gm["secret_names"] = g.SecretNames
 			}
 			if g.Config != nil {
 				gm["config"] = g.Config

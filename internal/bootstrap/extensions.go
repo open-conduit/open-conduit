@@ -806,7 +806,7 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes, containerTypes m
 // for the package whose executor the binding names: the values each of the
 // binding's runs is given (ConfigService.Secrets), which the executor's
 // doctor check of the binding's credential needs. Any other binding, or a
-// name the binding doesn't select, is refused.
+// name neither the binding nor one of its grants selects, is refused.
 func (d *daemon) bindingSecrets(m protocol.Manifest) func(ctx context.Context, id domain.ID, binding string, names []string) (map[string]string, error) {
 	own := map[string]bool{}
 	for _, e := range m.Provides.Executors {
@@ -823,7 +823,7 @@ func (d *daemon) bindingSecrets(m protocol.Manifest) func(ctx context.Context, i
 			return nil, extension.ErrUnauthorized
 		}
 		for _, n := range names {
-			if !slices.Contains(b.SecretNames, n) {
+			if !slices.Contains(b.OfferedSecretNames(), n) {
 				return nil, extension.ErrUnauthorized
 			}
 		}

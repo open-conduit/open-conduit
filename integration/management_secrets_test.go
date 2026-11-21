@@ -12,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
 )
 
@@ -264,6 +267,46 @@ func TestManagementStoredReference(t *testing.T) {
 	}
 	if _, err := admin.SetSecret(ctx, "model-key", "shadowed", "keyring"); !errors.As(err, &api) || api.Code != "secret_in_file" {
 		t.Fatalf("a keyring write the file would shadow: %v", err)
+	}
+}
+
+// TestManagementGrantSecrets: a secret a grant selects reaches only the runs
+// of a Work that took the grant, so a credential that isn't stored yet fails
+// only those, and a grant the config later withdraws stops supplying it.
+func TestManagementGrantSecrets(t *testing.T) {
+	ctx := context.Background()
+	const from = `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "secret_names": ["api"], "config": {}`
+	withGrant := strings.Replace(strings.Replace(managementConfig, `"other": "env:SECRET_FIXTURE_TOKEN"`, `"other": "stored:model-key"`, 1),
+		from, from+`, "grants": [{"name": "model", "secret_names": ["other"]}]`, 1)
+	if withGrant == managementConfig {
+		t.Fatal("the config fixture changed")
+	}
+	h := newManagementHarnessWith(t, withGrant, nil)
+	admin := h.operatorClient()
+	secrets := h.configs.Secrets(&config.Resolver{SecretsFile: filepath.Join(h.state, "config", "secrets.json"), Keyring: h.keyring})
+	attempt := func(grants ...string) runtime.AttemptState {
+		return runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}, Grants: grants}
+	}
+	if got, err := secrets(ctx, attempt()); err != nil || len(got) != 1 || got["api"] == "" {
+		t.Fatalf("a Work without the grant, before the secret is stored: %v %v", got, err)
+	}
+	if _, err := secrets(ctx, attempt("model")); config.SecretCode(err) != "stored_missing" {
+		t.Fatalf("a Work with the grant, before the secret is stored: %v", err)
+	}
+	if _, err := admin.SetSecret(ctx, "model-key", "sk-canary", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := secrets(ctx, attempt("model")); err != nil || got["other"] != "sk-canary" || got["api"] == "" {
+		t.Fatalf("a Work with the grant: %v", err)
+	}
+	if got, err := secrets(ctx, attempt()); err != nil || got["other"] != "" {
+		t.Fatalf("a Work without the grant received its secret (%d names): %v", len(got), err)
+	}
+	// Withdrawn from the current generation, it stops reaching a run pinned
+	// to the generation that offered it.
+	h.applyText(strings.Replace(withGrant, `"grants": [{"name": "model", "secret_names": ["other"]}]`, `"grants": [{"name": "model"}]`, 1))
+	if got, err := secrets(ctx, attempt("model")); err != nil || got["other"] != "" || got["api"] == "" {
+		t.Fatalf("a withdrawn grant still supplied its secret (%d names): %v", len(got), err)
 	}
 }
 

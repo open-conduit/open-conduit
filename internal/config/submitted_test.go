@@ -195,6 +195,15 @@ func TestSubmittedIncludeAllowsOnlyWhatTheFileSays(t *testing.T) {
 	if !got["fragment/scopes/0/bindings/0/executor"] || !got["fragment/scopes/0/bindings/0/secret_names/0"] {
 		t.Fatalf("a binding the include doesn't allow: %v", diagnostics(t, err))
 	}
+	// A grant is no way round the include's secret list.
+	allowingExecutor := []byte(strings.Replace(string(bare), `{"name":"web","parent":"teams"}`, `{"name":"web","parent":"teams","executors":["folder_agent"]}`, 1))
+	granting := `{"version":1,"scopes":[{"id":"web","name":"web","bindings":[{"name":"own","executor":"folder_agent","requires":{"toolbelt":"cli"},"config":{"command":"x"},"grants":[{"name":"model","secret_names":["key"]}]}]}]}`
+	_, err = ApplyFragment(mustFile(t, allowingExecutor, nil).Normalized, "web", []byte(granting), includeRegistry())
+	if !slices.ContainsFunc(diagnostics(t, err), func(d Diagnostic) bool {
+		return d.Code == "not_allowed" && d.Path == "fragment/scopes/0/bindings/0/grants/0/secret_names/0"
+	}) {
+		t.Fatalf("a grant selecting a secret the include doesn't allow: %v", err)
+	}
 	entry := `{"version":1,"scopes":[{"id":"web","name":"web","extensions":[{"name":"gh","type":"schedule","config":{}}]}]}`
 	_, err = ApplyFragment(root.Normalized, "web", []byte(entry), includeRegistry())
 	if !slices.Contains(codes(diagnostics(t, err)), "not_allowed") {
