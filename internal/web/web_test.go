@@ -66,6 +66,14 @@ type fake struct {
 	applied      []string
 	doctor       *client.Doctor
 	doctorCalled int
+	// The admin pages: adminRefused is the daemon refusing the caller's role.
+	adminRefused bool
+	secrets      []client.Secret
+	stored       []string
+	removed      []string
+	operators    []client.Operator
+	issued       []client.OperatorRequest
+	revoked      []string
 	// installed are the releases the daemon was asked to install, each
 	// with the subject it was asked as ("" for the view's own credential);
 	// installErr is the daemon's refusal.

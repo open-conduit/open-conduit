@@ -26,6 +26,8 @@ type page struct {
 	Flash    *flashNote
 	FlashErr bool
 	Err      string
+	// Status is the page's HTTP status when it isn't 200.
+	Status int
 	// Down says the daemon did not answer: the page shows the steps to
 	// bring it back instead of its content.
 	Down     bool
@@ -39,7 +41,7 @@ type page struct {
 }
 
 // pageNames are the page templates; each is parsed with the shared ones.
-var pageNames = []string{"terminal", "runs", "work", "attention", "config", "page", "output", "confirm", "update"}
+var pageNames = []string{"terminal", "runs", "work", "attention", "config", "page", "output", "confirm", "update", "admin"}
 
 // shared are the templates every page can use.
 var shared = []string{"templates/layout.html", "templates/panels.html", "templates/conversation.html", "templates/actions.html"}
@@ -114,6 +116,8 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p *
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if p.Down {
 		w.WriteHeader(http.StatusBadGateway)
+	} else if p.Status != 0 {
+		w.WriteHeader(p.Status)
 	}
 	if err := s.template(name, r).Execute(w, map[string]any{"Page": p, "Data": data}); err != nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
