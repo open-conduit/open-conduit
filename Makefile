@@ -32,6 +32,7 @@ fmt-check:
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
+	$(GO) vet -tags loadtest ./integration
 
 # staticcheck with the checks staticcheck.conf selects. It is pinned with a
 # go tool directive in tools/go.mod, a module of its own so staticcheck's
@@ -47,7 +48,8 @@ lint:
 		{ echo "lint skipped: staticcheck needs Go $(STATICCHECK_GO) or later, this is $$($(GO) env GOVERSION)"; exit 0; }; \
 		set -ex; \
 		$(STATICCHECK) ./...; \
-		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit
+		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit; \
+		$(STATICCHECK) -tags loadtest ./integration
 
 test: test-unit test-rerun test-integration
 
