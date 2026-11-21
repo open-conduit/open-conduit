@@ -429,7 +429,7 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		case err != nil:
 			return err
 		case present:
-			return fmt.Errorf("backup: %s already holds state: restore into an empty location: %w", target.Database, os.ErrExist)
+			return fmt.Errorf("backup: %s already holds state: restore into an empty location (if an earlier restore to it stopped, clear what it left): %w", target.Database, os.ErrExist)
 		}
 	}
 	// The bundle may be somewhere others can write, so its database is read

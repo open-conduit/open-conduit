@@ -137,6 +137,8 @@ To go back a release, install the older binary first and run these commands with
 
 If the restore stops part way through the swap (a crash, a full disk), the journal stays and the daemon and the other offline commands refuse the directory. Run the same `backup restore BUNDLE --in-place` again: it finishes the swap from the journal and doesn't restore a second time.
 
+A restore to a named database (`--database-location`) records that location in `restore-database.json` before it writes there, because it can't take a database back. If it stops before the swap's journal exists, the next run finds the record and the database, and refuses with a message that names the location as safe to clear. It doesn't carry on from it, since the leftover may hold part of the later steps, and it never deletes it. `serve --restore` keeps refusing until the location is cleared, then restores normally. The record goes once the swap has made that database the directory's own.
+
 What stays from after the bundle is reported, never deleted by the restore, since its layout belongs to its owner:
 
 - `executors/<name>/`: the executor's private state. The restored executions recover or retry, and no process from before the bundle is adopted. When the daemon starts, an executor that sweeps its state (shell, claude-code and codex) removes the run directories of executions the restored database doesn't know, except one whose process still runs, and doctor's `executor_state` check lists each execution whose state it released and what it kept and why (the daemon log has every one). Another executor's stay until you remove them.

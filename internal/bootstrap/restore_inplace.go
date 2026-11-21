@@ -36,6 +36,9 @@ const (
 	// restoredFile records the bundle the directory was last restored
 	// from, so serve --restore restores a bundle once.
 	restoredFile = "restored.json"
+	// restoreIntent records a named database a restore is about to write,
+	// until the swap has made it the directory's own.
+	restoreIntent = "restore-database.json"
 	// stagedToken is the operator token's path in a state directory.
 	stagedToken = "private/operator.token"
 )
@@ -63,6 +66,78 @@ type restoredRecord struct {
 	BundleCreatedAt time.Time `json:"bundle_created_at"`
 	Bundle          string    `json:"bundle"`
 	RestoredAt      time.Time `json:"restored_at"`
+}
+
+// databaseIntent is restoreIntent. A restore can't take a database back
+// from a location outside the directory, so what it wrote there before
+// stopping has to be told apart from state that was already there.
+type databaseIntent struct {
+	Location       string `json:"location"`
+	DatabaseSHA256 string `json:"database_sha256"`
+	Bundle         string `json:"bundle"`
+}
+
+func readIntent(stateDir string) (databaseIntent, bool, error) {
+	var intent databaseIntent
+	data, err := os.ReadFile(filepath.Join(stateDir, restoreIntent))
+	if errors.Is(err, os.ErrNotExist) {
+		return intent, false, nil
+	}
+	if err != nil {
+		return intent, false, err
+	}
+	if err := json.Unmarshal(data, &intent); err != nil {
+		return intent, false, fmt.Errorf("%s: %w", restoreIntent, err)
+	}
+	return intent, true, nil
+}
+
+// settleIntent drops the intent once the directory's storage choice names
+// its location: that database is now the live one, and must never again be
+// described as a leftover.
+func settleIntent(stateDir string) error {
+	intent, ok, err := readIntent(stateDir)
+	if err != nil || !ok {
+		return err
+	}
+	choice, err := readChoice(stateDir)
+	if err != nil || choice.Location != intent.Location {
+		return err
+	}
+	return os.Remove(filepath.Join(stateDir, restoreIntent))
+}
+
+// claimDatabase records that this restore is about to write location. When
+// an earlier restore recorded the same location and state is there, that
+// state is what the earlier restore left, so it refuses and says so. It
+// isn't carried on from: the leftover may hold part of the steps after the
+// write, and a restore doesn't delete a database. A leftover at another
+// location is reported.
+func claimDatabase(ctx context.Context, stateDir, location, digest, bundle, backendName string, report *cli.InPlaceReport) error {
+	backend, err := restoreBackends(backendName)
+	if err != nil {
+		return err
+	}
+	prior, ok, err := readIntent(stateDir)
+	if err != nil {
+		return err
+	}
+	if ok {
+		present, err := backend.Present(ctx, prior.Location)
+		switch {
+		case err != nil:
+			return err
+		case present && prior.Location == location:
+			return fmt.Errorf("%s holds the database an earlier restore of %s wrote before it stopped. Nothing uses it, so unless you have put state there since, it is safe to clear: clear it and run the restore again", location, prior.Bundle)
+		case present:
+			report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: prior.Location, Note: "the database an earlier restore wrote before it stopped: nothing uses it, so it is safe to clear"})
+		}
+	}
+	data, err := json.Marshal(databaseIntent{Location: location, DatabaseSHA256: digest, Bundle: bundle})
+	if err != nil {
+		return err
+	}
+	return writeFileDurable(filepath.Join(stateDir, restoreIntent), append(data, '\n'))
 }
 
 // restoreInterrupted refuses a state directory an in-place restore left
@@ -121,6 +196,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if resumed != nil {
 		report.MovedAside, report.MovedItems = filepath.Join(stateDir, resumed.Aside), resumed.Moved
 	}
+	if err := settleIntent(stateDir); err != nil {
+		return info, err
+	}
 	// A stage no journal names is from a restore that stopped before its
 	// swap began: nothing else makes one, and the lock is held.
 	if report.RemovedStages, err = removeStaleStages(stateDir); err != nil {
@@ -152,10 +230,27 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		return info, err
 	}
 
+	if o.DatabaseLocation != "" {
+		if err := claimDatabase(ctx, stateDir, o.DatabaseLocation, digest, bundle, info.Backend, report); err != nil {
+			return info, err
+		}
+	}
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
 	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
+		// Refused before the write: the record must not outlive it, or
+		// whatever is put at the location later would pass for a leftover.
+		if o.DatabaseLocation != "" {
+			if backend, lookup := restoreBackends(info.Backend); lookup == nil {
+				if present, perr := backend.Present(ctx, o.DatabaseLocation); perr == nil && !present {
+					_ = os.Remove(filepath.Join(stateDir, restoreIntent))
+				}
+			}
+		}
+		return info, err
+	}
+	if err := restoreStopped(); err != nil {
 		return info, err
 	}
 	swap, err := prepareSwap(ctx, stateDir, stage, stamp, restoredRecord{DatabaseSHA256: digest, BundleCreatedAt: info.CreatedAt, Bundle: bundle, RestoredAt: now})
@@ -168,6 +263,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	}
 	if err := runSwap(stateDir, swap); err != nil {
 		return info, fmt.Errorf("the in-place restore stopped part way: %w (run it again to finish)", err)
+	}
+	if err := settleIntent(stateDir); err != nil {
+		return info, err
 	}
 	report.MovedAside, report.MovedItems = filepath.Join(stateDir, swap.Aside), swap.Moved
 	aside := filepath.Join(stateDir, swap.Aside, storageFile)
@@ -295,6 +393,10 @@ func runSwap(stateDir string, swap swapJournal) error {
 	}
 	return continueSwap(stateDir, swap)
 }
+
+// restoreStopped is a test seam: an error stops the restore where a crash
+// would leave a named database written and no swap journal.
+var restoreStopped = func() error { return nil }
 
 // swapInterrupted is a test seam: an error stops the swap after it moved
 // the replaced item at index i aside.

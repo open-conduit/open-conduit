@@ -336,6 +336,101 @@ func TestRestoreInPlaceToANamedDatabase(t *testing.T) {
 	}
 }
 
+// A restore that dies after writing a named database and before its swap
+// journal is told apart from state that was already there: the rerun says
+// the leftover is safe to clear, and runs once it has been. A database the
+// swap went on to adopt is never called a leftover.
+func TestRestoreInPlaceAfterACrashWritingANamedDatabase(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	named := filepath.Join(t.TempDir(), "new.db")
+	o := cli.RestoreOptions{DatabaseLocation: named, Once: true}
+	restoreStopped = func() error { return errors.New("power cut") }
+	_, err := RestoreInPlace(ctx, f.bundle, f.state, o)
+	restoreStopped = func() error { return nil }
+	if err == nil || !strings.Contains(err.Error(), "power cut") {
+		t.Fatalf("stopped restore: %v", err)
+	}
+	if _, err := os.Stat(named); err != nil {
+		t.Fatalf("the crash should leave the database written: %v", err)
+	}
+	for range 2 { // Every restart of serve --restore says the same.
+		_, err = RestoreInPlace(ctx, f.bundle, f.state, o)
+		if err == nil || !strings.Contains(err.Error(), "safe to clear") || !strings.Contains(err.Error(), named) {
+			t.Fatalf("rerun over the leftover: %v", err)
+		}
+	}
+	if len(asides(t, f.state)) != 0 {
+		t.Fatal("the refused rerun moved state aside")
+	}
+	for _, suffix := range []string{"", "-wal", "-shm", ".lock"} {
+		if err := os.Remove(named + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if _, err := RestoreInPlace(ctx, f.bundle, f.state, o); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := coordinationOf(f.state); err != nil || c.location != named {
+		t.Fatalf("restored choice = %+v, %v", c, err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.state, restoreIntent)); !os.IsNotExist(err) {
+		t.Fatalf("the intent outlived the swap: %v", err)
+	}
+	if info, err := RestoreInPlace(ctx, f.bundle, f.state, o); err != nil || !info.InPlace.AlreadyRestored {
+		t.Fatalf("restart after the restore: %+v, %v", info.InPlace, err)
+	}
+}
+
+// A restore refused before it writes leaves no record, so state put at the
+// location afterwards is never described as its leftover.
+func TestRestoreInPlaceRefusedBeforeTheWriteLeavesNoIntent(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	named := filepath.Join(t.TempDir(), "new.db")
+	database := filepath.Join(f.bundle, "conduit.db")
+	if err := os.Chmod(database, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(database, []byte("not the database the manifest names"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: named}); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("restore of a damaged bundle: %v", err)
+	}
+	if _, err := os.Lstat(named); !os.IsNotExist(err) {
+		t.Fatalf("a refused restore wrote the location: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.state, restoreIntent)); !os.IsNotExist(err) {
+		t.Fatalf("a refused restore left its intent: %v", err)
+	}
+}
+
+// A swap interrupted after the journal is finished by the rerun, which
+// settles the intent, so the now-live database is not offered for clearing.
+func TestRestoreInPlaceSettlesTheIntentWhenItFinishesASwap(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	named := filepath.Join(t.TempDir(), "new.db")
+	o := cli.RestoreOptions{DatabaseLocation: named}
+	swapInterrupted = func(int) error { return errors.New("power cut") }
+	_, err := RestoreInPlace(ctx, f.bundle, f.state, o)
+	swapInterrupted = func(int) error { return nil }
+	if err == nil || !strings.Contains(err.Error(), "power cut") {
+		t.Fatalf("interrupted swap: %v", err)
+	}
+	if _, err := RestoreInPlace(ctx, f.bundle, f.state, o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.state, restoreIntent)); !os.IsNotExist(err) {
+		t.Fatalf("the intent outlived the finished swap: %v", err)
+	}
+	_, err = RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: named})
+	if err == nil || strings.Contains(err.Error(), "safe to clear") {
+		t.Fatalf("restore onto the live database: %v", err)
+	}
+}
+
 // TestRestoreInPlaceClearsStaleStages: stages a restore left when it was
 // killed before its swap began are removed and reported by the next one,
 // so repeated failures don't fill the volume with copies of the database.
