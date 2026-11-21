@@ -155,6 +155,74 @@ func (s *Server) quiescence(c *call) (int, any, error) {
 	return 200, q, nil
 }
 
+// DrainControl is the daemon's drain, as the management API serves it.
+type DrainControl interface {
+	DrainStatus(context.Context) (runtime.DrainStatus, error)
+	BeginDrain(ctx context.Context, reason string) (runtime.DrainStatus, error)
+	EndDrain(context.Context) (runtime.DrainStatus, error)
+}
+
+func (s *Server) drainControl() (DrainControl, error) {
+	if s.o.Drain == nil {
+		return nil, fail(503, "unavailable", "this server doesn't support draining")
+	}
+	return s.o.Drain, nil
+}
+
+func (s *Server) drainStatus(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	d, err := s.drainControl()
+	if err != nil {
+		return 0, nil, err
+	}
+	out, err := d.DrainStatus(c.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, out, nil
+}
+
+func (s *Server) drainBegin(c *call) (int, any, error) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	d, err := s.drainControl()
+	if err != nil {
+		return 0, nil, err
+	}
+	if in.Reason != "" {
+		c.note("reason", in.Reason)
+	}
+	out, err := d.BeginDrain(c.ctx, in.Reason)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, out, nil
+}
+
+func (s *Server) drainEnd(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	d, err := s.drainControl()
+	if err != nil {
+		return 0, nil, err
+	}
+	out, err := d.EndDrain(c.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	if s.o.Nudge != nil {
+		s.o.Nudge()
+	}
+	return 200, out, nil
+}
+
 func (s *Server) schema(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err

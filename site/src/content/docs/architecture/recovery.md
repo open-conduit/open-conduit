@@ -65,6 +65,20 @@ Going back a release that changed the stored format needs a bundle from before i
 - **Signing.** It is signed with `settings.backup.signing_key` from the config file when that resolves without packages, as `backup create` is. Otherwise it is published unsigned, the log says so, and a restore with trust keys needs `--accept-unsigned`.
 - **Offline commands don't raise the format first.** `backup create` from the newer binary bundles the database as it stands. `auth recover` refuses until the daemon has started once on this binary, or is run with the older binary.
 
+## Draining a daemon
+
+`open-conduit drain` stops the daemon starting attempts, so its state can be moved or backed up with nothing running. Attempts already running finish or park. Events, timers, Waits and input keep being recorded, and wait for whichever daemon next runs on the state.
+
+```sh
+open-conduit drain --reason "moving to a new host"   # begin; exits 1 until it is safe to move
+open-conduit drain status                            # the same report, changing nothing
+open-conduit drain end                               # start attempts again
+```
+
+The report (`GET /v1/drain`) gives `safe_to_move`, what is still `blocking` it (an attempt in flight, a stop not yet confirmed, an unsettled control or usage), what is `carried` in the state for the next daemon (unrouted Events, unread input, Waits still to judge), and each scope's attempts in flight, parked attempts and active Waits. A parked attempt holds no process, so it doesn't block a move: it resumes on its wake on the new daemon. Beginning and ending a drain are in the audit ledger.
+
+A drain is durable, so a restart on the same host and path stays drained until `drain end`. It ends by itself, with an audit record, when a daemon starts from a different host or state directory, and when its state is restored from a bundle, since either is the move it was for. A move that keeps both the hostname and the path stays drained until you run `drain end`.
+
 ## Restoring after a bad release or lost state
 
 Restore puts the bundle's database and artifacts back, and with the database the config generation the bundle was taken on. Installed packages and the config file, beside the config, aren't touched: while the restored generation validates, the daemon starts from it whatever the file says, and doctor reports the file as out of step (`pending_edit`) until you apply one. Applying the file replaces the restored generation, so check the diff first. When the restored generation doesn't validate (the restore listed `config_problems`, say a package removed since the bundle), the daemon publishes the config file over it as a new generation if the file validates, and refuses to start if it doesn't or there is none. Fix the problems before starting to keep the restored config.
@@ -146,7 +160,7 @@ Run `open-conduit state check [--json]` with the daemon stopped. It examines the
 | `artifacts` | Referenced artifacts missing, not counting content retention released on purpose. A backup refuses missing content, so restore the directory or the latest bundle. |
 | `timers` | The number of durable timers that resume on start. |
 
-Per scope it also gives Work by state, live executions, active waits, and `drained` (no running or waiting Work, live execution or active wait), which is the drain check before an upgrade or restore.
+Per scope it also gives Work by state, live executions, active waits, and `drained`: no attempt pending or running. A parked attempt and its Waits hold no process and travel with the state, so they don't stop a scope being drained. This is the check before an upgrade or restore, and `drain status` is the same question for a running daemon.
 
 Recovery order:
 
@@ -160,6 +174,8 @@ Recovery order:
 `TestBundleRoundTripAndRefusal` (in `internal/backup`) creates, verifies and restores a bundle (a pre-backup lease fenced off), and refuses an existing destination, a tampered or corrupted bundle and one missing referenced content. `TestShellRetentionReleasesRunDirectories` (in `integration`) backs up and restores after a retention sweep. No composed-daemon drill exercises the offline commands since `TestDaemonMigrationRehearsal` went with the migrator in [#413](https://github.com/open-conduit/open-conduit/pull/413).
 
 `TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
+
+`TestDrainStopsNewAttempts` (in `internal/runtime`) refuses a new attempt during a drain, reports the one in flight, lets it launch, and starts Work again once the drain ends. `TestMovedDaemonEndsTheDrain` keeps the drain across a restart at the same origin, with a start at another origin ending it.
 
 `TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
 

@@ -58,7 +58,10 @@ type Options struct {
 	// daemon is next due (optional: without it the route is unavailable).
 	// RequestServed is told of each request served, other than the reads a
 	// waker polls (health and quiescence).
-	Quiescence    func(context.Context) (Quiescence, error)
+	Quiescence func(context.Context) (Quiescence, error)
+	// Drain reads, begins and ends the daemon's drain (optional: without it
+	// the routes are unavailable).
+	Drain         DrainControl
 	RequestServed func()
 	CursorKey     []byte
 	// Doctor inputs, all optional: ingress state for reconcile lag and loss
@@ -554,6 +557,9 @@ var routes = []route{
 	{"GET", []string{"health"}, targetAny, false, false, (*Server).health},
 	{"GET", []string{"capacity"}, targetDaemon, false, false, (*Server).capacity},
 	{"GET", []string{"quiescence"}, targetDaemon, false, false, (*Server).quiescence},
+	{"GET", []string{"drain"}, targetDaemon, false, false, (*Server).drainStatus},
+	{"POST", []string{"drain"}, targetDaemon, true, false, (*Server).drainBegin},
+	{"DELETE", []string{"drain"}, targetDaemon, true, false, (*Server).drainEnd},
 	{"GET", []string{"schema"}, targetAny, false, false, (*Server).schema},
 	{"GET", []string{"scopes"}, targetList, false, false, (*Server).listScopes},
 	{"GET", []string{"scopes", "*"}, targetScope, false, false, (*Server).getScope},

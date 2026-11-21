@@ -1234,6 +1234,9 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if ready.State != domain.WorkReady {
 			return storage.ErrConflict
 		}
+		if e = refuseWhileDraining(tx); e != nil {
+			return e
+		}
 		inputs, e := PendingInputsInTx(tx, id)
 		if e != nil {
 			return e
@@ -1441,6 +1444,11 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 			if e = tx.PutExecution(x, 0); e != nil {
 				return e
 			}
+		}
+		// Checked again in the transaction that claims, so no attempt starts
+		// after a drain has committed.
+		if e := refuseWhileDraining(tx); e != nil {
+			return e
 		}
 		ref, e := tx.Claim(executionID, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {

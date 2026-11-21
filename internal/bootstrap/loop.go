@@ -222,6 +222,11 @@ func (d *daemon) startReady(ctx context.Context) {
 	}
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		ready, idle = nil, nil
+		// A drain starts nothing. Input stays queued for whichever daemon
+		// next runs on this state.
+		if _, draining, err := runtime.DrainInTx(tx); err != nil || draining {
+			return err
+		}
 		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State != domain.WorkReady {
@@ -621,6 +626,8 @@ func errorCode(err error) string {
 		return capacityCode(capacity)
 	case errors.Is(err, runtime.ErrCapacity):
 		return "capacity"
+	case errors.Is(err, runtime.ErrDraining):
+		return "draining"
 	case errors.Is(err, runtime.ErrNotAdmitted):
 		return "not_admitted"
 	case errors.Is(err, runtime.ErrBudgetHeld):

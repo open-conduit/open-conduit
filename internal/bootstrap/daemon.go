@@ -563,6 +563,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	reg := d.configRegistry()
 	d.defaultDoc = d.defaultConfig()
+	// A drain from another host or path has done its job: this is the
+	// daemon it was moving to.
+	if ended, err := runtime.EndMovedDrain(ctx, d.coord, d.now(), drainOrigin(o.StateDir)); err != nil {
+		return err
+	} else if ended != nil {
+		d.log.Info("drain ended: the state has moved", "from", ended.Origin, "to", drainOrigin(o.StateDir))
+	}
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
@@ -773,7 +780,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
-		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Quiescence: d.quiescence, RequestServed: d.requestServed, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
+		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Quiescence: d.quiescence, Drain: daemonDrain{d}, RequestServed: d.requestServed, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
 		return nil, err
 	}
 	return c, nil

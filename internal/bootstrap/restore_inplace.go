@@ -450,6 +450,10 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 	if err != nil {
 		return info, err
 	}
+	if err := endRestoredDrain(ctx, store); err != nil {
+		store.Close()
+		return info, err
+	}
 	removed, err := management.ForgetRuns(lock, stateDir, func(ids []domain.ID) (map[domain.ID]bool, error) {
 		return knownExecutions(ctx, store, ids)
 	})

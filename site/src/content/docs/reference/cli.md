@@ -133,6 +133,13 @@ health                     the daemon's state and components; exits 1 unless it 
 quiescence                 what is in flight, or when the daemon is next due; exits 1 unless it is quiescent
 ```
 
+### `open-conduit drain`
+
+```text
+drain [--reason TEXT] | drain status | drain end
+                           stop starting attempts so the state can be moved; exits 1 until it is safe to move
+```
+
 ### `open-conduit doctor`
 
 ```text

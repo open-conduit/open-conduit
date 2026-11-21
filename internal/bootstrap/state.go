@@ -202,6 +202,9 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 		return info, err
 	}
 	defer store.Close()
+	if err := endRestoredDrain(ctx, store); err != nil {
+		return info, err
+	}
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		return info, err
 	}
@@ -353,17 +356,16 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 			workScope[w.ID] = w.ScopeID
 			s := scope(w.ScopeID)
 			s.Works[string(w.State)]++
-			if w.State == domain.WorkRunning || w.State == domain.WorkWaiting {
-				s.DrainBlockedWork = append(s.DrainBlockedWork, string(w.ID))
-			}
 			xs, err := tx.ListExecutions(w.ID)
 			if err != nil {
 				return err
 			}
+			blocked := false
 			for _, x := range xs {
 				if !x.State.Terminal() {
 					s.LiveExecutions++
 				}
+				blocked = blocked || runtime.InFlight(x)
 				if ferr != nil {
 					continue
 				}
@@ -382,6 +384,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 					}
 					rc.Close()
 				}
+			}
+			if blocked {
+				s.DrainBlockedWork = append(s.DrainBlockedWork, string(w.ID))
 			}
 			ws, err := tx.ListWaits(w.ID)
 			if err != nil {
@@ -423,7 +428,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	for _, id := range ids {
 		s := scopes[id]
 		sort.Strings(s.DrainBlockedWork)
-		s.Drained = s.LiveExecutions == 0 && s.ActiveWaits == 0 && len(s.DrainBlockedWork) == 0
+		// A parked attempt and its Waits hold no process and travel with the
+		// state, so only an attempt in flight keeps a scope from being drained.
+		s.Drained = len(s.DrainBlockedWork) == 0
 		r.Scopes = append(r.Scopes, *s)
 	}
 	return r, nil
