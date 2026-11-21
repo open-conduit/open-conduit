@@ -620,6 +620,8 @@ func errorCode(err error) string {
 		return "not_admitted"
 	case errors.Is(err, runtime.ErrBudgetHeld):
 		return "over_budget"
+	case errors.Is(err, runtime.ErrContainerCapacity):
+		return "container_capacity"
 	case errors.Is(err, runtime.ErrResourceHeld):
 		return "resource_held"
 	case errors.Is(err, runtime.ErrNotEligible):

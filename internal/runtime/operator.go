@@ -34,7 +34,9 @@ type Hold struct {
 	// Kind says what placed a hold the runtime placed itself: "budget"
 	// (HoldKindBudget) for Work over a budget, "gate" (HoldKindGate) for
 	// Work a start gate held, "admission" (HoldKindAdmission) for Work
-	// beyond its scope's admission limit. "" is an operator's hold or a blocked wait's.
+	// beyond its scope's admission limit, "capacity" (HoldKindCapacity) for
+	// Work whose container provider had no room. "" is an operator's hold
+	// or a blocked wait's.
 	Kind string `json:"kind,omitempty"`
 	// Holder is the registration whose start gate placed a gate hold.
 	Holder string `json:"holder,omitempty"`

@@ -83,7 +83,10 @@ type Placement struct {
 //     yet). Prefer is the placement the Work last ran at, "" for none: a
 //     provider places there when it still can, so the Work's workspace is
 //     reused; when it can't (the machine is gone) it places elsewhere. A
-//     provider that can't place now refuses with ErrSandboxUnavailable.
+//     provider whose machines are all full refuses with ErrNoCapacity (or a
+//     NoCapacityError), which holds the Work without spending a retry; one
+//     that can't place for any other reason refuses with
+//     ErrSandboxUnavailable.
 //   - SiteRun runs a command at a placement Place gave, for any binding
 //     that uses the provider, after the execution too (a reconcile). A
 //     placement the provider can't name or reach is ErrSiteUnavailable.

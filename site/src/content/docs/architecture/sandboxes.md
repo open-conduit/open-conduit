@@ -319,6 +319,8 @@ With the workspace at the site, the launch's checks treat it as the site's:
 - a read-only need inside it is the site's to hold;
 - the plan's `Dir` puts the executor's wrapper in the run directory.
 
+A pool with no room refuses `Place`, `Plan` or `Create` with `ErrNoCapacity`. The Work then [waits for capacity](../execution-scheduling/#container-capacity) without spending a retry, and `CheckContainerCapacity` in the conformance suite checks the refusal, with a pool that reports full as unavailable as its negative control.
+
 The [SSH provider](#the-ssh-provider) places. Docker doesn't: it runs on the host's own engine. `CheckContainerPlacer` in the container conformance suite checks the contract, and each of its negative controls fails it: a failed command reported as an error, `prefer` ignored, a container created elsewhere than placed, a command run at a placement the provider never gave, and a command's directory ignored.
 
 ### Pinned per segment
@@ -547,3 +549,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#725** added collecting to the container contract (`ContainerCollector`, `container_provider.collect`, manifest `containers[].collect`): the host collects an exited container before adopting its exit and before removing it, and keeps one it can't collect. The SSH provider collects a run whose helper died, and `CheckContainerCollector` checks it.
 - **#727** let a binding's container config name a connection of a type its provider's package declares (`ContainerConfig.Connection`), counted it as naming the connection in the host's `secret.resolve` scope check, which had refused every package without an entry of its own type and so every package that provides only containers, and made the host refuse a launch whose placement, plan or container carries the connection's credential, which it resolves for each launch.
 - **#724** made the host label the installation's random ID, kept in the store, instead of a hash of the state directory's path, which two daemons at the same path on different machines shared, so each removed the other's live runs; an upgraded daemon keeps the hash as a former label.
+- **#702** added the typed "not now" for a full pool (`ErrNoCapacity`, `no_capacity`): the host returns the claim and holds the Work instead of failing the attempt.

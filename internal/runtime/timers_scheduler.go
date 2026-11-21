@@ -468,7 +468,7 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 			}
 			switch phase {
 			case "events":
-				events, e := tx.UnroutedOfType([]string{"core.retry.due", domain.TypeExecutionTimeout})
+				events, e := tx.UnroutedOfType([]string{"core.retry.due", typeCapacityDue, domain.TypeExecutionTimeout})
 				if e != nil {
 					return e
 				}
@@ -507,9 +507,12 @@ func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch 
 				var a domain.AcceptedEvent
 				itemErr = s.transact(ctx, nil, func(tx storage.Tx) error { var e error; a, e = tx.Event(id); return e })
 				if itemErr == nil {
-					if a.Event.Type == "core.retry.due" {
+					switch a.Event.Type {
+					case "core.retry.due":
 						itemErr = s.ProcessRetry(ctx, id)
-					} else {
+					case typeCapacityDue:
+						itemErr = s.ProcessCapacityDue(ctx, id)
+					default:
 						itemErr = s.ProcessExecutionTimeout(ctx, id)
 					}
 				}

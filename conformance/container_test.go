@@ -323,6 +323,34 @@ func (i ignoresDir) SiteRun(ctx context.Context, at string, cmd extension.SiteCo
 	return i.memPlacer.SiteRun(ctx, at, cmd)
 }
 
+// memPool is a placer with a fill switch; refuse is its answer when full.
+type memPool struct {
+	*memPlacer
+	full   bool
+	refuse error
+}
+
+func (m *memPool) Place(ctx context.Context, o extension.ResourceOwner, p extension.ContainerPolicy, prefer string) (extension.Placement, error) {
+	if m.full {
+		return extension.Placement{}, m.refuse
+	}
+	return m.memPlacer.Place(ctx, o, p, prefer)
+}
+
+func TestCheckContainerCapacity(t *testing.T) {
+	check := func(refuse error) error {
+		m := &memPool{memPlacer: newMemPlacer(), refuse: refuse}
+		return CheckContainerCapacity(CapacityFixture{Provider: m, Fill: func() { m.full = true }, Free: func() { m.full = false }})
+	}
+	if err := check(&extension.NoCapacityError{Reason: "all nodes full"}); err != nil {
+		t.Fatalf("a pool that keeps the contract fails: %v", err)
+	}
+	// Negative control: today's refusal, which fails the attempt.
+	if err := check(extension.ErrSandboxUnavailable); err == nil {
+		t.Error("the suite passed a pool that reports full as unavailable")
+	}
+}
+
 func TestCheckContainerPlacer(t *testing.T) {
 	dir, _ := filepath.EvalSymlinks(t.TempDir())
 	fixture := func(p placer) PlacerFixture { return PlacerFixture{Provider: p, Dir: dir} }

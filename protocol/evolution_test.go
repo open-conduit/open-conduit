@@ -106,6 +106,15 @@ func TestErrorCodesRoundTrip(t *testing.T) {
 			t.Errorf("%v crossed as %v", err, got)
 		}
 	}
+	// A pool's "not now" keeps its reason and time, and never reads as a
+	// retryable executor limit.
+	pool := protocol.Encode(&extension.NoCapacityError{Reason: "all nodes full", RetryAt: &reset})
+	var refusal *extension.NoCapacityError
+	got := protocol.Decode(pool.Code, pool.Message, pool.ResetAt)
+	var limit extension.RetryHintProvider
+	if pool.Code != protocol.CodeNoCapacity || !errors.As(got, &refusal) || refusal.Reason != "all nodes full" || refusal.RetryAt == nil || !refusal.RetryAt.Equal(reset) || errors.As(got, &limit) {
+		t.Errorf("a pool's refusal crossed as %+v, decoded %v", pool, got)
+	}
 	// A capacity refusal keeps the provider's advice across the boundary.
 	full := protocol.Encode(fmt.Errorf("%w: not enough disk space; free space, then retry", extension.ErrResourceExhausted))
 	if got := protocol.Decode(full.Code, full.Message, nil); full.Code != protocol.CodeResourceExhausted || !errors.Is(got, extension.ErrResourceExhausted) || !strings.Contains(got.Error(), "free space, then retry") {

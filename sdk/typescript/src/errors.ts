@@ -26,6 +26,7 @@ export const Code = {
   ContainerRunning: "container_running",
   ContainerUnconfirmed: "container_unconfirmed",
   SiteUnavailable: "site_unavailable",
+  NoCapacity: "no_capacity",
   RetryAfter: "retry_after",
   Reentrant: "reentrant_call",
   Overloaded: "overloaded",

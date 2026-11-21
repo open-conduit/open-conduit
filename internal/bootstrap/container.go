@@ -309,7 +309,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		d.segmentEnded(state.ExecutionID)
 		return b.Settle(r)
 	}
-	return runtime.ContainerBinding{Broker: b, Resources: b.Resources(resources), Settle: settle, Home: workHome}, nil
+	return runtime.ContainerBinding{Broker: b, Resources: b.Resources(resources), Settle: settle, Home: workHome, Refusal: b.Refusal}, nil
 }
 
 // homesDir holds each Work's container home, <key>/, beside <key>.work,
