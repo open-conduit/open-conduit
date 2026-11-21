@@ -137,7 +137,7 @@ Each entry of a scope's `bindings`.
 | `connection` | string |  |  | Connection the executor's tools act through. |
 | `container` | object |  |  | Container provider and its config, pinned to an image digest. |
 | `executor` | string | yes |  | The registered executor that runs attempts. |
-| `grants` | array of object |  |  | Named sets of extra operations and config a Work can opt into. |
+| `grants` | array of object |  |  | Named sets of extra operations, secrets and config a Work can opt into. |
 | `name` | string | yes |  | Name routes and Work refer to. |
 | `operations` | array of string |  |  | Narrows the scope's authorization.operations for this binding: operations, toolsets as `@<name>` and denials with a leading `!`, as there. A toolset is narrowed to what the scope grants. |
 | `pass_env` | array of string |  |  | Variables of the daemon's environment this binding's runs see (a proxy, CLAUDE_CONFIG_DIR). Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names. |

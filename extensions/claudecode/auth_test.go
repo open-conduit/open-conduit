@@ -153,6 +153,51 @@ func TestAuthCheck(t *testing.T) {
 	}
 }
 
+// TestAuthCheckGrantCredential: a grant that selects a credential can supply
+// the one a binding otherwise lacks. Not stored yet, it says nothing, because
+// a grant is optional. Refused, it is reported, because its Work would fail.
+func TestAuthCheckGrantCredential(t *testing.T) {
+	api := newFakeAPI(t, func(r *http.Request) bool { return r.Header.Get("x-api-key") == "sk-good" })
+	x := claudecode.NewExtension()
+	x.StubAuth(api.URL, api.Client(), func(_ context.Context, dir string) (string, error) {
+		if dir == "/nobody" {
+			return "", errors.New("no login")
+		}
+		return "login-token", nil
+	}, func(_ context.Context, _ domain.ID, binding string, _ []string) (map[string]string, error) {
+		switch binding {
+		case "granted":
+			return map[string]string{"ANTHROPIC_API_KEY": "sk-good"}, nil
+		case "refused":
+			return map[string]string{"ANTHROPIC_API_KEY": "sk-wrong-123"}, nil
+		}
+		return nil, errors.New("unresolved")
+	})
+	noLogin := map[string]any{"env": map[string]string{"CLAUDE_CONFIG_DIR": "/nobody"}}
+	with := func(name string) protocol.CheckBinding {
+		b := authBinding(name, noLogin)
+		b.Grants = []protocol.CheckBindingGrant{{Name: "model", Config: b.Config, SecretNames: []string{"ANTHROPIC_API_KEY"}}}
+		return b
+	}
+	got := x.Checks()[1].Run(context.Background(), protocol.CheckConfig{Scopes: []protocol.CheckScope{{ID: "eng", Bindings: []protocol.CheckBinding{
+		with("granted"), with("not-stored"), with("refused"),
+	}}}})
+	host := strings.TrimPrefix(api.URL, "http://")
+	want := []string{
+		"eng/granted: ok (with grant model: " + host + ", API key)",
+		"eng/not-stored: not_configured (no selected credential and no Claude login on the daemon's machine)",
+		"eng/refused: unauthorised (with grant model: " + host + ", API key)",
+	}
+	if !slices.Equal(got.Items, want) {
+		t.Errorf("items\n%q\nwant\n%q", got.Items, want)
+	}
+	for _, item := range got.Items {
+		if strings.Contains(item, "sk-") {
+			t.Errorf("item %q carries a value", item)
+		}
+	}
+}
+
 // TestAuthCheckNeedsSecrets: the credential check is the deep one, which
 // doctor runs only with --check-secrets; the plain check makes no request.
 func TestAuthCheckNeedsSecrets(t *testing.T) {

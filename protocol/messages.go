@@ -930,6 +930,17 @@ type CheckBinding struct {
 	// (containers[].probe), so the executor's own check need not look for
 	// its program on the host. Without it the executor checks as before.
 	Probed bool `json:"probed,omitempty"`
+	// Grants are the binding grants that select secrets, for an extension that
+	// owns the executor: each with the config and secrets of a run that took
+	// it alone.
+	Grants []CheckBindingGrant `json:"grants,omitempty"`
+}
+
+// CheckBindingGrant is a binding as a Work that took one grant runs it.
+type CheckBindingGrant struct {
+	Name        string          `json:"name"`
+	Config      json.RawMessage `json:"config,omitempty"`
+	SecretNames []string        `json:"secret_names,omitempty"`
 }
 
 // Probe is an executor's version probe: the argv to run and the variables

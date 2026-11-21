@@ -592,9 +592,10 @@ func (c *ConfigService) Grant(events func() []string, describe func(config.Effec
 	}
 }
 
-// Secrets resolves the attempt's pinned binding secret names that the current
-// generation still grants, using current references (rotation affects future
-// resolution). Nothing is cached across attempts or persisted.
+// Secrets resolves the attempt's pinned binding secret names, with those of
+// the binding grants its Work took, that the current generation still grants,
+// using current references (rotation affects future resolution). Nothing is
+// cached across attempts or persisted.
 func (c *ConfigService) Secrets(resolver *config.Resolver) func(context.Context, runtime.AttemptState) (map[string]string, error) {
 	return func(ctx context.Context, state runtime.AttemptState) (map[string]string, error) {
 		pinned := c.snapshotFor(state.Generation)
@@ -613,11 +614,10 @@ func (c *ConfigService) Secrets(resolver *config.Resolver) func(context.Context,
 			return nil, config.ErrDenied
 		}
 		var names []string
-		for _, name := range pb.SecretNames {
-			for _, still := range cb.SecretNames {
-				if name == still {
-					names = append(names, name)
-				}
+		still := cb.SecretNamesWith(state.Grants)
+		for _, name := range pb.SecretNamesWith(state.Grants) {
+			if slices.Contains(still, name) {
+				names = append(names, name)
 			}
 		}
 		if len(names) == 0 {

@@ -605,6 +605,11 @@ func checkConfig(s *config.Snapshot, x *installed, executors map[string]extensio
 			}
 			if own[b.Executor] {
 				cb.Config, cb.SecretNames = b.Config, b.SecretNames
+				for _, g := range b.Grants {
+					if len(g.SecretNames) > 0 {
+						cb.Grants = append(cb.Grants, protocol.CheckBindingGrant{Name: g.Name, Config: b.GrantedConfig(g.Name), SecretNames: b.SecretNamesWith([]string{g.Name})})
+					}
+				}
 			}
 			if b.Resource != nil {
 				cb.Resource = &protocol.CheckResource{Provider: b.Resource.Provider, Config: b.Resource.Config}

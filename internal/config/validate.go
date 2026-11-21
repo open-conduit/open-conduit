@@ -616,6 +616,11 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if !secrets(b.SecretNames) {
 			v.fail(p+"/secret_names", "unknown_secret", "selected secret name has no effective reference in this scope")
 		}
+		for k, g := range b.Grants {
+			if !secrets(g.SecretNames) {
+				v.fail(fmt.Sprintf("%s/grants/%d/secret_names", p, k), "unknown_secret", "selected secret name has no effective reference in this scope")
+			}
+		}
 		if b.Connection != "" && !slices.Contains(e.auth.Connections, b.Connection) {
 			v.fail(p+"/connection", "connection_denied", "connection is not granted by the scope authorization")
 		}
@@ -822,7 +827,7 @@ func (v *validator) registration(p string, b Binding) {
 		base := domain.Binding{Config: domain.Payload{Data: b.Config}, Grants: b.domainGrants()}
 		for k, g := range b.Grants {
 			granted, _ := base.Granted([]string{g.Name})
-			if err := owner.ValidateConfig(granted.Config.Data, b.SecretNames); err != nil {
+			if err := owner.ValidateConfig(granted.Config.Data, b.SecretNamesWith([]string{g.Name})); err != nil {
 				v.diags = append(v.diags, withGrant(p, k, g, err, fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))...)
 			}
 		}
@@ -1388,6 +1393,9 @@ func (v *validator) submittedScope(path string, sc ScopeConfig, allow IncludeAll
 			v.fail(p+"/executor", "not_allowed", "the include doesn't let its fragments define bindings for this executor; route to a binding the parent scope provides, or ask the config file's owner to add the executor to the include's executors")
 		}
 		secrets(p, b.SecretNames)
+		for j, g := range b.Grants {
+			secrets(fmt.Sprintf("%s/grants/%d", p, j), g.SecretNames)
+		}
 	}
 	for k, x := range sc.Extensions {
 		p := ptr(path+"/extensions", k)

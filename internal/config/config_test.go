@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1116,13 +1117,53 @@ func TestBindingGrants(t *testing.T) {
 		"outside the authorization": {[]any{map[string]any{"name": "waiting", "operations": []string{"wait"}}}, "operation_denied"},
 		"refused config":            {[]any{map[string]any{"name": "worse", "config": map[string]any{"bad": true}}}, "invalid_config"},
 		"repeated name":             {[]any{map[string]any{"name": "a"}, map[string]any{"name": "a"}}, "duplicate_name"},
-		"unknown field":             {[]any{map[string]any{"name": "a", "secret_names": []string{}}}, "unknown_field"},
+		"unknown field":             {[]any{map[string]any{"name": "a", "connection": "x"}}, "unknown_field"},
+		"unknown secret":            {[]any{map[string]any{"name": "a", "secret_names": []string{"nope"}}}, "unknown_secret"},
 		"no name":                   {[]any{map[string]any{"operations": []string{"emit"}}}, "missing_field"},
 	} {
 		_, err := with(c.grants)
 		if got := diagnostics(t, err); !slices.ContainsFunc(got, func(d Diagnostic) bool { return d.Code == c.code && strings.Contains(d.Path, "/grants") }) {
 			t.Errorf("%s: %v", name, got)
 		}
+	}
+}
+
+// A grant can select more of the scope's secrets. They count only for a Work
+// that takes it, and the executor checks the grant's config with them.
+func TestBindingGrantSecrets(t *testing.T) {
+	b := Binding{SecretNames: []string{"own"}, Config: json.RawMessage(`{"a":1,"b":2}`), Grants: []Grant{
+		{Name: "model", SecretNames: []string{"key", "own"}, Config: json.RawMessage(`{"b":3}`)},
+		{Name: "other", SecretNames: []string{"more"}},
+	}}
+	for _, c := range []struct {
+		grants, want []string
+	}{
+		{nil, []string{"own"}},
+		{[]string{"unoffered"}, []string{"own"}},
+		{[]string{"model"}, []string{"own", "key"}},
+		{[]string{"model", "other"}, []string{"own", "key", "more"}},
+	} {
+		if got := b.SecretNamesWith(c.grants); !slices.Equal(got, c.want) {
+			t.Errorf("with %v: %v, want %v", c.grants, got, c.want)
+		}
+	}
+	if got := b.OfferedSecretNames(); !slices.Equal(got, []string{"own", "key", "more"}) {
+		t.Errorf("offered: %v", got)
+	}
+	var cfg map[string]int
+	if err := json.Unmarshal(b.GrantedConfig("model"), &cfg); err != nil || cfg["a"] != 1 || cfg["b"] != 3 {
+		t.Errorf("granted config: %v %v", cfg, err)
+	}
+
+	m := generic(t, example(t, "git-scope"))
+	scope(m, 0)["secret_refs"] = map[string]any{"model_key": "stored:model_key"}
+	entry(m, 0, "bindings", 0)["grants"] = []any{map[string]any{"name": "model", "secret_names": []string{"model_key"}}}
+	snap, err := Validate(encode(t, m), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`"name":"model"[^}]*"secret_names":\[`).Match(snap.Redacted()) {
+		t.Fatalf("normalized config dropped the grant's secrets: %s", snap.Redacted())
 	}
 }
 

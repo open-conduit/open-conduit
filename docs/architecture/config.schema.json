@@ -764,6 +764,15 @@
                     },
                     "uniqueItems": true
                   },
+                  "secret_names": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                    },
+                    "uniqueItems": true,
+                    "description": "Scope secrets the runs of a Work that opts in also receive. Each needs a reference in the scope."
+                  },
                   "config": {
                     "type": "object"
                   }
@@ -773,7 +782,7 @@
                 ],
                 "additionalProperties": false
               },
-              "description": "Named sets of extra operations and config a Work can opt into."
+              "description": "Named sets of extra operations, secrets and config a Work can opt into."
             }
           },
           "required": [
