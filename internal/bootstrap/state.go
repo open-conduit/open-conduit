@@ -69,11 +69,6 @@ func BackupState(ctx context.Context, stateDir, destination, build string, o cli
 		return cli.BackupInfo{}, err
 	}
 	defer lock.Close()
-	c, store, err := openState(ctx, stateDir)
-	if err != nil {
-		return cli.BackupInfo{}, err
-	}
-	defer store.Close()
 	_, files, err := openArtifacts(ctx, stateDir)
 	if err != nil {
 		return cli.BackupInfo{}, err
@@ -82,6 +77,28 @@ func BackupState(ctx context.Context, stateDir, destination, build string, o cli
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
+	// A newer binary's bundle of a database it hasn't started on yet holds
+	// it as it stands, and leaves its format for the daemon's first start.
+	pending, err := coordinationOf(stateDir)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
+	prior, err := pending.backend.OpenPrior(ctx, pending.location)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
+	if prior != nil {
+		defer prior.Close()
+		if err := backup.CreatePrior(ctx, destination, key, pending.name, prior, files, build, retentionExpired, time.Now(), lastBuild); err != nil {
+			return cli.BackupInfo{}, err
+		}
+		return bundleInfo(destination)
+	}
+	c, store, err := openState(ctx, stateDir)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
+	defer store.Close()
 	if err := backup.Create(ctx, destination, key, c.name, store, files, build, retention(time.Now)); err != nil {
 		return cli.BackupInfo{}, err
 	}
@@ -107,7 +124,11 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	return cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}, nil
+	out := cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}
+	if p := info.PreUpgrade; p != nil {
+		out.PreUpgrade = &cli.PreUpgradeInfo{RecordFormat: p.Records, Schema: p.Schema, FromBuild: p.FromBuild}
+	}
+	return out, nil
 }
 
 // VerifyBundle restores a bundle into a private temporary directory, checks
@@ -226,6 +247,9 @@ func RecoverOperator(ctx context.Context, stateDir, tokenPath string) error {
 
 // recoverOperator is RecoverOperator for a caller holding the lock.
 func recoverOperator(ctx context.Context, stateDir, tokenPath string) error {
+	if err := refuseBeforeUpgrade(ctx, stateDir); err != nil {
+		return err
+	}
 	_, store, err := openState(ctx, stateDir)
 	if err != nil {
 		return err

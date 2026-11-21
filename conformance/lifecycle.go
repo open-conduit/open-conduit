@@ -42,6 +42,9 @@ type LifecycleHarness struct {
 	// Age makes the closed state at location claim to have been written
 	// by a newer binary, as NewerSchema or NewerRecords says.
 	Age func(t *testing.T, location string, newer Newer)
+	// Older makes the closed state at location claim to have been written
+	// by an older binary, at a lower record format.
+	Older func(t *testing.T, location string)
 	// Fingerprint changes whenever anything stored at location changes.
 	Fingerprint func(t *testing.T, location string) string
 	// Corrupt damages the closed state at location in a way that a full
@@ -75,6 +78,7 @@ func LifecycleCases() []LifecycleCase {
 		{"newer_schema_refused_before_any_change", func(t *testing.T, h LifecycleHarness) error { return refusesNewer(t, h, NewerSchema) }},
 		{"newer_records_refused_before_any_change", func(t *testing.T, h LifecycleHarness) error { return refusesNewer(t, h, NewerRecords) }},
 		{"inspect_reads_without_changing_state", inspectChangesNothing},
+		{"open_prior_preserves_older_state_unchanged", priorUnchanged},
 		{"snapshot_is_consistent_and_restores", snapshotConsistent},
 		{"restore_fences_every_lease", restoreFences},
 		{"fence_ends_live_lease_authority", fenceInPlace},
@@ -264,6 +268,72 @@ func inspectChangesNothing(t *testing.T, h LifecycleHarness) error {
 	if db, err := h.Backend.Inspect(context.Background(), absent); err == nil {
 		db.Close()
 		return fmt.Errorf("inspection of absent state created it")
+	}
+	return nil
+}
+
+// priorUnchanged: OpenPrior finds nothing to preserve in absent or current
+// state; in older state it owns the location, and snapshots it without
+// changing it, until Open raises it.
+func priorUnchanged(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	absent := h.Location(t, t.TempDir())
+	if p, err := h.Backend.OpenPrior(ctx, absent); err != nil || p != nil {
+		return fmt.Errorf("absent state has a prior: %v, %v", p, err)
+	}
+	if present, err := h.Backend.Present(ctx, absent); err != nil || present {
+		return fmt.Errorf("OpenPrior created absent state (%v)", err)
+	}
+	location, err := openSeeded(t, h)
+	if err != nil {
+		return err
+	}
+	if p, err := h.Backend.OpenPrior(ctx, location); err != nil || p != nil {
+		return fmt.Errorf("current state has a prior: %v, %v", p, err)
+	}
+	h.Older(t, location)
+	before := h.Fingerprint(t, location)
+	p, err := h.Backend.OpenPrior(ctx, location)
+	if err != nil {
+		return fmt.Errorf("open prior: %w", err)
+	}
+	if p == nil {
+		return fmt.Errorf("older state did not report a prior")
+	}
+	defer p.Close()
+	if db, err := h.Backend.Open(ctx, location); !errors.Is(err, storage.ErrInUse) {
+		if err == nil {
+			db.Close()
+		}
+		return fmt.Errorf("a second owner opened state a Prior holds: %v", err)
+	}
+	snapshot := filepath.Join(t.TempDir(), "snapshot")
+	var read bool
+	if err := p.Snapshot(ctx, snapshot, func(tx storage.Tx) (err error) { read, err = hasWork(tx, "work"); return err }); err != nil {
+		return fmt.Errorf("prior snapshot: %w", err)
+	}
+	if !read {
+		return fmt.Errorf("prior snapshot's read did not see the state")
+	}
+	if err := p.Close(); err != nil {
+		return err
+	}
+	if after := h.Fingerprint(t, location); after != before {
+		return fmt.Errorf("preserving older state changed it")
+	}
+	restored := h.Location(t, t.TempDir())
+	if err := h.Backend.Restore(ctx, snapshot, restored, lifecycleNow); err != nil {
+		return fmt.Errorf("restore prior snapshot: %w", err)
+	}
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	if again, err := h.Backend.OpenPrior(ctx, location); err != nil || again != nil {
+		return fmt.Errorf("state Open raised still has a prior: %v, %v", again, err)
 	}
 	return nil
 }

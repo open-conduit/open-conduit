@@ -48,6 +48,12 @@ type Backend interface {
 	// not even to record that this binary opened it. It refuses absent
 	// state, and newer state as Open does.
 	Inspect(ctx context.Context, location string) (Inspection, error)
+	// OpenPrior opens state an older binary wrote, which Open would raise to
+	// this binary's versions, without changing it, so it can be preserved
+	// first. It takes the same ownership as Open, until Close. It returns
+	// nil, and no error, when Open would raise nothing: the state is absent,
+	// current, or newer (which Open refuses).
+	OpenPrior(ctx context.Context, location string) (Prior, error)
 	// Restore publishes the snapshot at a previously absent destination,
 	// never over existing state. Every Execution lease in it is fenced (see
 	// Database.Fence) before the restored state can be opened, so no lease
@@ -80,6 +86,23 @@ type Inspection interface {
 	IntegrityCheck(ctx context.Context) error
 	// SchemaVersion is the schema of the stored state.
 	SchemaVersion() uint32
+	Close() error
+}
+
+// StoredVersion is the versions stored state was last written at.
+type StoredVersion struct {
+	// Schema is the stored schema, and Records the stored record format.
+	Schema, Records uint32
+}
+
+// Prior is state an older binary wrote, held as that binary left it.
+type Prior interface {
+	// Stored is the versions the state is at.
+	Stored() StoredVersion
+	// Snapshot publishes a complete, verified copy at a previously absent
+	// path, at the stored versions, and calls read once over exactly that
+	// copy, as Database.Snapshot does. It changes nothing in the state.
+	Snapshot(ctx context.Context, path string, read func(Tx) error) error
 	Close() error
 }
 

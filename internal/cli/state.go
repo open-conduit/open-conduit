@@ -23,6 +23,9 @@ type BackupInfo struct {
 	Build     string    `json:"build"`
 	CreatedAt time.Time `json:"created_at"`
 	Artifacts int       `json:"artifacts"`
+	// PreUpgrade is set on a bundle a daemon took before its first start on
+	// a newer record format: what the state was at, and the build it left.
+	PreUpgrade *PreUpgradeInfo `json:"pre_upgrade,omitempty"`
 	// OmittedArtifacts counts references whose content retention expired.
 	OmittedArtifacts int      `json:"omitted_artifacts,omitempty"`
 	Scopes           []string `json:"scopes,omitempty"`
@@ -46,6 +49,13 @@ type BackupInfo struct {
 	SigningKey   string `json:"signing_key,omitempty"`
 	// InPlace is what an in-place restore did to the state directory.
 	InPlace *InPlaceReport `json:"in_place,omitempty"`
+}
+
+// PreUpgradeInfo labels a pre-upgrade bundle.
+type PreUpgradeInfo struct {
+	RecordFormat uint32 `json:"record_format"`
+	Schema       uint32 `json:"schema"`
+	FromBuild    string `json:"from_build"`
 }
 
 // InPlaceReport is what `backup restore --in-place` (or `serve --restore`)
