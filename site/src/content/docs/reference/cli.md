@@ -78,7 +78,7 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       [--upgrade-bundles-kept 3] [--upgrade-bundles-max-age 0] [--no-upgrade-bundle]
                            (a first start on a newer record format takes a verified pre-upgrade-<time> bundle in the
                            backup directory and won't start without one; --no-upgrade-bundle skips it for this run)
-      [--restore BUNDLE [--restore-start-config FILE] [--restore-artifacts NAME --restore-artifacts-location LOC] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
+      [--restore BUNDLE [--restore-start-config FILE] [--restore-artifacts NAME --restore-artifacts-location LOC [--restore-artifacts-command PATH]] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
                            (restore BUNDLE in place before serving, as backup restore --in-place does, once:
                            a start that finds the directory restored from it already serves it as it is)
       [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
@@ -265,7 +265,7 @@ auth recover               (daemon stopped) revoke every operator credential and
 ### `open-conduit backup`
 
 ```text
-backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]   (create, verify and restore need the daemon stopped; list and fetch read a destination in settings.backup.destinations, and fetch needs a trust key or --accept-unsigned; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
+backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC [--artifacts-command PATH]] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]   (create, verify and restore need the daemon stopped; list and fetch read a destination in settings.backup.destinations, and fetch needs a trust key or --accept-unsigned; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
 ```
 
 ### `open-conduit state`
