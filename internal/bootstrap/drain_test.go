@@ -1,9 +1,12 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,7 +49,23 @@ func TestDrainSurvivesAStartAnywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.View(ctx, func(tx storage.Tx) error {
+	var logged bytes.Buffer
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"level=WARN", "drain end", "old daemon", "reason=moving", "origin=" + state, "state_dir=" + moved} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("the start log lacks %q: %s", want, logged.String())
+		}
+	}
+	logged.Reset()
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), state); err != nil {
+		t.Fatal(err)
+	}
+	if s := logged.String(); !strings.Contains(s, "drain end") || strings.Contains(s, "old daemon") {
+		t.Errorf("a start where the drain began logged: %s", s)
+	}
+	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		d, on, err := runtime.DrainInTx(tx)
 		if err == nil && (!on || d.Origin != state) {
 			t.Errorf("after the move: draining %v, origin %q", on, d.Origin)
@@ -54,5 +73,16 @@ func TestDrainSurvivesAStartAnywhere(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// The negative control: with no drain in force, a start says nothing.
+	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		_, err := runtime.EndDrainInTx(tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logged.Reset()
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved); err != nil || logged.Len() != 0 {
+		t.Errorf("no drain: %v, logged %q", err, logged.String())
 	}
 }
