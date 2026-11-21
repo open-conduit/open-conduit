@@ -203,6 +203,9 @@ type daemon struct {
 	workers workerState
 	// passTimes records how long each pass and its phases take.
 	passTimes *passTimes
+	// txTimes records how long write transactions wait for and hold the
+	// writer, when the store reports it.
+	txTimes *txTimes
 	// health is whether the daemon is alive and ready (health.go).
 	health healthState
 	// metricExports is how the metrics exporter packages' last exports
@@ -444,6 +447,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	if d.passTimes, err = newPassTimes(meter.Meter(telemetry.Scope)); err != nil {
 		return err
+	}
+	if timer, ok := store.(storage.TransactionTimer); ok {
+		if d.txTimes, err = newTxTimes(meter.Meter(telemetry.Scope)); err != nil {
+			return err
+		}
+		timer.TimeTransactions(d.txTimes.record)
+		defer timer.TimeTransactions(nil)
 	}
 	if err = d.openTelemetry(); err != nil {
 		return err
@@ -752,7 +762,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

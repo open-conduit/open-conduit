@@ -230,3 +230,40 @@ func TestLoopCheckSummarisesPasses(t *testing.T) {
 		t.Fatalf("empty check %+v", empty)
 	}
 }
+
+// TestTransactionsCheckSummarisesTimings: the transactions check reports
+// the spread of the latest write transactions' wait and hold, and says so
+// when the store reports none.
+func TestTransactionsCheckSummarisesTimings(t *testing.T) {
+	x, err := newTxTimes(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{txTimes: x}
+	if got := d.transactionsCheck(context.Background()); got.Detail != "no transaction yet" {
+		t.Fatalf("empty check %+v", got)
+	}
+	for i := 1; i <= 3; i++ {
+		x.record(storage.TransactionTiming{Wait: time.Duration(i) * time.Millisecond, Hold: time.Duration(i) * time.Microsecond, Began: true, Committed: true})
+	}
+	got := d.transactionsCheck(context.Background())
+	want := []string{"wait: median 2ms, p95 3ms, longest 3ms", "hold: median 2µs, p95 3µs, longest 3µs"}
+	if got.Status != runtime.CheckOK || got.Detail != "latest 3 of 3 write transactions" || strings.Join(got.Items, "|") != strings.Join(want, "|") {
+		t.Fatalf("check %+v", got)
+	}
+	// One that never got the writer counts towards the wait, not the hold.
+	x.record(storage.TransactionTiming{Wait: 9 * time.Millisecond})
+	got = d.transactionsCheck(context.Background())
+	want = []string{"wait: median 2ms, p95 9ms, longest 9ms", "hold: median 2µs, p95 3µs, longest 3µs"}
+	if got.Detail != "latest 4 of 4 write transactions, 1 since start never got the writer" || strings.Join(got.Items, "|") != strings.Join(want, "|") {
+		t.Fatalf("check with a transaction that never began %+v", got)
+	}
+	only, _ := newTxTimes(nil)
+	only.record(storage.TransactionTiming{Wait: time.Millisecond})
+	if c := (&daemon{txTimes: only}).transactionsCheck(context.Background()); len(c.Items) != 1 {
+		t.Fatalf("check with no hold yet %+v", c)
+	}
+	if none := (&daemon{}).transactionsCheck(context.Background()); none.Detail != "not timed by this store" {
+		t.Fatalf("untimed check %+v", none)
+	}
+}

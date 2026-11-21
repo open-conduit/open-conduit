@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-scaffold-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension load-ingress load-scheduler load-contention load-recovery load-idle load-soak protocol-prototype packages certify release-snapshot ts-deps ts-check ts-scaffold-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -32,6 +32,7 @@ fmt-check:
 vet:
 	$(GO) vet ./...
 	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
+	$(GO) vet -tags loadtest ./integration
 
 # staticcheck with the checks staticcheck.conf selects. It is pinned with a
 # go tool directive in tools/go.mod, a module of its own so staticcheck's
@@ -47,7 +48,8 @@ lint:
 		{ echo "lint skipped: staticcheck needs Go $(STATICCHECK_GO) or later, this is $$($(GO) env GOVERSION)"; exit 0; }; \
 		set -ex; \
 		$(STATICCHECK) ./...; \
-		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit
+		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit; \
+		$(STATICCHECK) -tags loadtest ./integration
 
 test: test-unit test-rerun test-integration
 
@@ -199,6 +201,25 @@ bench-history:
 # the state an outage leaves, on real SQLite. Not part of check.
 bench-backlog:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkBacklogDrain' -benchtime 3x -benchmem ./integration
+
+# #703 the load harness: the composed daemon on real SQLite, with fakes only.
+# Each target appends its tables to OC_LOAD_REPORT and is not part of check.
+# OC_LOAD_RATES, OC_LOAD_EVENTS, OC_LOAD_DELIVERIES, OC_LOAD_HISTORY,
+# OC_LOAD_DURATION, OC_RECOVERY_* and OC_SOAK_DURATION size the runs.
+LOAD_TIMEOUT ?= 12h
+load-ingress:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadIngress$$' ./integration
+load-scheduler:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadScheduler$$' ./integration
+load-contention:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadContention$$' ./integration
+	$(GO) test -timeout $(LOAD_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkTransactEmpty|BenchmarkAcceptEvent|BenchmarkListEvents' -benchmem ./internal/storage/sqlite
+load-recovery:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadRecovery$$' ./integration
+load-idle:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadIdle$$' ./integration
+load-soak:
+	$(GO) test -tags loadtest -timeout $(LOAD_TIMEOUT) -count=1 -v -run '^TestLoadSoak$$' ./integration
 
 # The in-transaction extension calls' performance budget (#428), without
 # -race so the numbers are the protocol's: make check runs the same test

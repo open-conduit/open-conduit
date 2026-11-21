@@ -37,7 +37,20 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
 - **Volume in correctness tests, untimed.** [`TestSlackPushReconcileOverlapOneWork`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) pushes and reconciles 300 replies in one thread (150 under `-race`) and checks they become 301 distinct Events on one Work, each queued once. It shows correctness at that volume, not speed.
 - **Informal observations.** Two code comments record timings that nobody measured systematically: the [Makefile](https://github.com/open-conduit/open-conduit/blob/main/Makefile) says the integration package takes about 8 minutes on hosted runners under `-race`, and [`slack_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) says the race-instrumented SQLite driver is about 30× slower per transaction.
 
-The history and backlog-drain benchmarks are the only Go benchmark functions in the repository. There is no load test. CI runs `make check` (split over parallel jobs), `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)). Apart from the in-transaction call budget, which `make check` enforces, all of them check correctness, and no CI job records a performance number.
+- **The load harness, with no published figures yet.** [`load_scenarios_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/load_scenarios_test.go) drives the composed daemon on real SQLite with fakes only, behind the `loadtest` build tag and outside `make check`. Each target appends its tables, headed with the host, Go version, commit and load average, to the file `OC_LOAD_REPORT` names:
+
+  | Target | Measures | Sized by |
+  | --- | --- | --- |
+  | `make load-ingress` | Signed GitHub and Slack deliveries at fixed rates: acknowledged per second, and 2xx to `route.decided` | `OC_LOAD_RATES`, `OC_LOAD_DELIVERIES` |
+  | `make load-scheduler` | Events at fixed rates over retained history: each lifecycle step, and the whole pass and its phases | `OC_LOAD_RATES`, `OC_LOAD_EVENTS`, `OC_LOAD_HISTORY` |
+  | `make load-contention` | The TUI's refresh, a list loop and webhook pushes together, then the SQLite benchmarks | `OC_LOAD_DURATION` |
+  | `make load-recovery` | A SIGKILL inside a route's transaction with attempts running, then an outage's backlog: time to first start, to drained and to every timer fired, and peak RSS | `OC_RECOVERY_EVENTS`, `_WORK`, `_TIMERS`, `_RUNNING` |
+  | `make load-idle` | Start-up on retained history, idle CPU, memory across processes and disk by part | `OC_LOAD_HISTORY`, `OC_LOAD_DURATION` |
+  | `make load-soak` | Full default capacity: RSS, processes, goroutines, open files, CPU and the database, WAL and artifact sizes, with peak and slope | `OC_SOAK_DURATION`, `OC_SOAK_INTERVAL` |
+
+  Run it on a quiet host: the figures describe the machine as much as the daemon, and a busy one measures its other work. `execution.queued` and `execution.started` are recorded by the same claim, so that step reads 0. The recovery drill crashes the daemon with the `faultinject` build and writes the outage's unrouted Events and due timers into the dead daemon's store. The harness doesn't time `collectArtifacts`, `backup.Create` or Slack's `activeThreads` on their own, and doesn't sample wake-ups, which macOS shows only to root.
+
+CI runs `make check` (split over parallel jobs), `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)). Apart from the in-transaction call budget, which `make check` enforces, all of them check correctness, and no CI job records a performance number.
 
 ## Event-ingress throughput
 
@@ -57,7 +70,7 @@ The history and backlog-drain benchmarks are the only Go benchmark functions in 
 
 ### Measurements
 
-Accepting and routing one Event that opens a new Work is flat against retained history: about 0.7 ms at 1,000, 10,000 and 50,000 Events. Before the unrouted index it took 31 ms, 283 ms and 1.35 s ([history growth](#history-growth)). Push throughput under load is not measured.
+Accepting and routing one Event that opens a new Work is flat against retained history: about 0.7 ms at 1,000, 10,000 and 50,000 Events. Before the unrouted index it took 31 ms, 283 ms and 1.35 s ([history growth](#history-growth)). Push throughput under load is not yet published (`make load-ingress`).
 
 ### To measure
 
@@ -108,12 +121,12 @@ The parts of an idle pass that read history are measured against retained histor
 
 ### Measurements
 
-Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store_test.go) (4 concurrent opens) and [`TestProductionSchedulerCapacityAcrossInstances`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) prove correctness under competing handles, not timing.
+No figures are published yet (`make load-contention`). [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store_test.go) (4 concurrent opens) and [`TestProductionSchedulerCapacityAcrossInstances`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) prove correctness under competing handles, not timing.
 
 ### To measure
 
 - Go benchmarks in `internal/storage/sqlite`: `BenchmarkTransactEmpty` (the floor: `BEGIN IMMEDIATE` and `COMMIT` at `synchronous=FULL`), `BenchmarkAcceptEvent`, and `BenchmarkListEvents` at 10,000 and 100,000 rows. Run with `b.RunParallel` to show queueing on the single connection. Record ns/op and the p99 wait for the connection.
-- In the daemon, time from requesting the connection to `BEGIN IMMEDIATE` succeeding, and from there to `COMMIT`, exported as histograms. A load test would drive the TUI's 2 s refresh, a management list loop and webhook pushes together, and report how long reads wait behind writes.
+- The daemon times each write transaction, from requesting the connection to `BEGIN IMMEDIATE` succeeding and from there to `COMMIT` or rollback: the `open_conduit.storage.transaction.wait` and `.hold` histograms, and doctor's `transactions` check over the latest 600. A load test would drive the TUI's 2 s refresh, a management list loop and webhook pushes together, and report how long reads wait behind writes.
 
 ## Large-queue recovery
 
@@ -148,7 +161,7 @@ Before, 10,000 Events took about 12 minutes, and 71 ms per Event on the daemon's
 make bench-backlog
 ```
 
-The timers, expired leases and peak RSS of a whole recovery are still not measured.
+The timers, expired leases and peak RSS of a whole recovery are not yet published (`make load-recovery`).
 
 ### To measure
 
@@ -172,7 +185,7 @@ The timers, expired leases and peak RSS of a whole recovery are still not measur
 
 ### Measurements
 
-Not measured.
+No figures are published yet (`make load-soak`, `make load-idle`).
 
 ### To measure
 
@@ -327,9 +340,7 @@ The trigger costs most because it carries the whole pending batch each way. Its 
 
 ## Gaps
 
-- No load or soak test exists. The timed figures are the extension transport prototype's, the history benchmarks and the in-transaction call budget.
-- Event-ingress throughput, end-to-end scheduler latency, SQLite transaction hold and wait times, recovery time with a large backlog, and daemon RSS, CPU and disk growth under load are all unmeasured.
-- Draining an unrouted backlog grows with the backlog's square.
-- Pass and phase durations are recorded, but no load test has yet published them ([scheduler latency](#scheduler-latency)).
+- The [load harness](#what-is-measured) exists, but no figures from it are published. Event-ingress throughput, end-to-end scheduler latency, SQLite transaction hold and wait times under load, whole-recovery time, and daemon RSS, CPU and disk growth stay unmeasured until it has run on a quiet host.
+- No CI job runs the harness, so nothing catches a regression in these figures.
 - The admission pass reads every open Work in one transaction on each pass, as the start pass does, so its cost follows the open set.
 - The SQLite file has no compaction or Event retention: Events and their acceptance and route records are kept for ever, and they are most of the file.

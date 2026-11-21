@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -176,6 +177,14 @@ var passes atomic.Uint64
 // must show something did not happen waits for passes that began after its
 // point of interest to complete, instead of sleeping.
 func (d *daemon) passed() {
+	// The load harness samples the daemon's goroutines, which no other
+	// surface reports, from OPEN_CONDUIT_STATS_FILE.
+	if stats := os.Getenv("OPEN_CONDUIT_STATS_FILE"); stats != "" {
+		tmp := stats + ".tmp"
+		if err := os.WriteFile(tmp, []byte(strconv.Itoa(goruntime.NumGoroutine())), 0o600); err == nil {
+			_ = os.Rename(tmp, stats)
+		}
+	}
 	path := os.Getenv("OPEN_CONDUIT_PASS_FILE")
 	if path == "" {
 		return
