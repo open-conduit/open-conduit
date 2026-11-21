@@ -294,7 +294,7 @@ func toWireIssuer(r issuerRecord) wireIssuer {
 	return wireIssuer{ID: r.ID, Type: r.Type, Config: r.Config, Groups: groups, Grants: grants, CreatedAt: ts(r.CreatedAt), UpdatedAt: ts(r.UpdatedAt)}
 }
 
-// listIssuersRoute is GET /auth/issuers: every trusted issuer, with its
+// listIssuersRoute is GET /auth/issuers (admin): every trusted issuer, with its
 // config and group table.
 func (s *Server) listIssuersRoute(c *call) (int, any, error) {
 	var out []wireIssuer

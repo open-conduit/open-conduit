@@ -1289,6 +1289,8 @@ func TestManagementOperatorRoles(t *testing.T) {
 	forbidden("view sending an Event", err)
 	_, err = viewer.Operators(ctx)
 	forbidden("view listing operators", err)
+	_, err = viewer.Issuers(ctx)
+	forbidden("view listing issuers", err)
 
 	// operate runs controls, but can't manage operators.
 	e, err := operator.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "olly-1"}, "k")
@@ -1299,6 +1301,8 @@ func TestManagementOperatorRoles(t *testing.T) {
 	forbidden("operate adding an operator", err)
 	_, err = operator.Operators(ctx)
 	forbidden("operate listing operators", err)
+	_, err = operator.Issuers(ctx)
+	forbidden("operate listing issuers", err)
 	_, err = operator.Revoke(ctx, viewerFile.TokenID, "", "rv-1")
 	forbidden("operate revoking another operator", err)
 	_, err = operator.ApplyConfigText(ctx, []byte(`{}`), "hash", "1", "ap-1")
