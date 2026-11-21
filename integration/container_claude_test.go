@@ -239,3 +239,79 @@ func runOnTerminal(argv, env []string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// TestDockerClaudeSessionSurvivesAMove: a contained Work's state directory
+// moves to a new path, which changes the workspace's path and so the key
+// claude files its transcript under. The next turn resumes the session from
+// the carried home, in a container at the new path, rather than falling back
+// to the handoff note.
+func TestDockerClaudeSessionSurvivesAMove(t *testing.T) {
+	l := newDockerLab(t)
+	ctx := context.Background()
+	bin, fake := filepath.Join(l.root, "bin"), filepath.Join(l.root, "fake")
+	for _, d := range []string{bin, fake, filepath.Join(l.state, "homes", "work")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fakeContainerClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := reference.New()
+	work := domain.Work{ID: "work", ScopeID: "scope"}
+	cfg, _ := json.Marshal(map[string]any{"binary": filepath.Join(bin, "claude"), "playbook": "-", "env": map[string]string{"FAKE_DIR": fake},
+		"secret_env": map[string]string{"claude": "CLAUDE_CODE_OAUTH_TOKEN"}})
+	turn := func(state, ws string, exec domain.ID) extension.Result {
+		t.Helper()
+		execState := filepath.Join(state, "executors", "claude-code")
+		home := filepath.Join(state, "homes", "work")
+		e, err := claudecode.New(claudecode.Options{StateDir: execState, Store: store, Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + l.home} },
+			Grace: 2 * time.Second, PollInterval: 20 * time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant := `{"image":"` + dockerTestImage + `","write":["{workspace}","` + fake + `"],"read":["` + bin + `"],"network":{"allow":["api.anthropic.com"]},"provider":{"context":"` + l.dctx + `"}}`
+		b := extension.BindContainer(extension.ContainerBinding{Provider: l.provider, Owner: extension.ResourceOwner{ScopeID: "scope", WorkID: "work", ExecutionID: exec},
+			Config: domain.Payload{Schema: extension.ContainerConfigSchema, Data: json.RawMessage(grant)}, Host: l.host, Segment: 1,
+			Protected: []string{state, l.config}, RunRoot: filepath.Join(execState, "runs"), Records: filepath.Join(state, "runs", string(exec), "container"),
+			Home: l.home, WorkHome: home,
+			Pin: func(c extension.ContainerPin) error {
+				l.mu.Lock()
+				l.pins = append(l.pins, c)
+				l.mu.Unlock()
+				return nil
+			}})
+		h, err := e.Run(ctx, extension.RunRequest{Work: work, Execution: domain.Execution{ID: exec, WorkID: work.ID, Attempt: 1, Lease: domain.Lease{Epoch: 1}},
+			Trigger: domain.Event{ID: domain.ID("ev-" + exec), Type: "note"},
+			Context: extension.ExecutionContext{Config: domain.Payload{Data: cfg}, Secrets: map[string]string{"claude": "sk-ant-oat-test-secret"},
+				Container: b, ContainerHome: home, Resources: b.Resources(dockerWorkspace{ws})},
+			PersistRecovery: func(domain.Payload) error { return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return waitResult(t, h)
+	}
+	invocations := func() []string {
+		raw, _ := os.ReadFile(filepath.Join(fake, "invocations"))
+		return strings.Split(strings.TrimSpace(string(raw)), "\n")
+	}
+
+	if res := turn(l.state, l.ws, "exec-1"); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("the first turn failed: %q\n%v", res.Outcome.Summary, invocations())
+	}
+	moved := filepath.Join(l.root, "elsewhere", "state")
+	if err := os.MkdirAll(filepath.Dir(moved), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(l.state, moved); err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(moved, "resources", "git", "workspaces", "mine")
+	if res := turn(moved, ws, "exec-2"); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("the turn after the move failed: %q\n%v", res.Outcome.Summary, invocations())
+	}
+	inv := invocations()
+	if len(inv) != 2 || !strings.Contains(inv[1], "resume=1 where=container home="+filepath.Join(moved, "homes", "work")) {
+		t.Fatalf("the turn after the move did not resume from the carried home: %v", inv)
+	}
+}

@@ -22,7 +22,7 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 		once             bool
 	}
 	var calls []call
-	var artifacts string
+	var artifacts, startConfig string
 	var served int
 	var result BackupInfo
 	var failure error
@@ -36,7 +36,7 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 		}, Cwd: root, Serve: func(ServeRequest) int { served++; return 0 },
 			State: &StateOps{RestoreInPlace: func(_ context.Context, bundle, stateDir string, o RestoreOptions) (BackupInfo, error) {
 				calls = append(calls, call{bundle, stateDir, o.Once})
-				artifacts = o.ArtifactBackend
+				artifacts, startConfig = o.ArtifactBackend, o.StartConfig
 				return result, failure
 			}},
 			Service: &ServiceHost{GOOS: "linux", Executable: "/opt/oc/open-conduit"}}
@@ -59,7 +59,7 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 
 	calls = nil
 	result = ok
-	if msg, code := run("serve", "--restore", "b", "--restore-artifacts", "files"); code != 0 || served != 1 || len(calls) != 1 || !calls[0].once || artifacts != "files" {
+	if msg, code := run("serve", "--restore", "b", "--restore-artifacts", "files", "--restore-start-config", "new.json"); code != 0 || served != 1 || len(calls) != 1 || !calls[0].once || artifacts != "files" || startConfig != filepath.Join(root, "new.json") {
 		t.Fatalf("serve --restore: %d %q served %d %+v", code, msg, served, calls)
 	}
 	failure = errors.New("bad bundle")
@@ -78,6 +78,9 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 
 	if msg, code := run("serve", "--restore-artifacts", "files"); code == 0 || !strings.Contains(msg, "go with --restore") || served != 2 {
 		t.Fatalf("--restore-artifacts alone: %d %q", code, msg)
+	}
+	if msg, code := run("serve", "--restore-start-config", "new.json"); code == 0 || !strings.Contains(msg, "goes with --restore") || served != 2 {
+		t.Fatalf("--restore-start-config alone: %d %q", code, msg)
 	}
 	if msg, code := run("service", "install", "--restore", "b"); code == 0 || !strings.Contains(msg, "takes no --restore") {
 		t.Fatalf("service install --restore: %d %q", code, msg)

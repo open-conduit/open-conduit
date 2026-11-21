@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -10,12 +11,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// drainOrigin is the state directory's real path. A drain records it, and a
-// daemon that starts with a different one has been moved. The hostname is
-// deliberately no part of it: a recreated container or rescheduled pod gets a
-// new one while it is the same daemon on the same state, and must stay
-// drained. A move that keeps the path stays drained until `drain end`, the
-// safe way to be wrong.
+// drainOrigin is the state directory's real path, which a drain records as
+// where it began. Nothing ends a drain for starting elsewhere.
 func drainOrigin(stateDir string) string {
 	if abs, err := filepath.Abs(stateDir); err == nil {
 		stateDir = abs
@@ -24,6 +21,28 @@ func drainOrigin(stateDir string) string {
 		stateDir = real
 	}
 	return filepath.Clean(stateDir)
+}
+
+// logDrainInForce says at start that this daemon will launch nothing, and why,
+// since a drain outlives a restart or a move and the daemon otherwise looks
+// idle. Started away from where the drain began, it names the step that's left.
+func logDrainInForce(ctx context.Context, store storage.Store, now time.Time, log *slog.Logger, stateDir string) error {
+	var drain runtime.Drain
+	var on bool
+	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		var err error
+		drain, on, err = runtime.DrainInTx(tx)
+		return err
+	}); err != nil || !on {
+		return err
+	}
+	attrs := []any{"since", drain.Since, "reason", drain.Reason, "origin", drain.Origin}
+	if here := drainOrigin(stateDir); drain.Origin != here {
+		log.Warn("draining: this state moved here while drained, and no attempt starts until you run `open-conduit drain end` once the old daemon is stopped", append(attrs, "state_dir", here)...)
+		return nil
+	}
+	log.Warn("draining: no attempt starts until you run `open-conduit drain end`", attrs...)
+	return nil
 }
 
 // daemonDrain serves the management API's drain routes.

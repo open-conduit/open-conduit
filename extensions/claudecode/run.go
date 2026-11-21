@@ -263,8 +263,14 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 			return e.preset(ctx, rn, cfg.StatusSchema, "sandbox_denied", err.Error(), nil)
 		}
 	}
+	if contained {
+		e.adoptMovedSession(ctx, r, configDir, workdir)
+	}
 	sessionExists := func(session string) bool { return transcriptExists(configDir, workdir, session) }
 	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.model(r.Work), PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: append(cfg.toolArgs(), cfg.ExtraArgs...), Container: contained}
+	if real, err := filepath.EvalSymlinks(workdir); err == nil {
+		attach.RealDir = real
+	}
 
 	// Decide resume or fresh and record the decision before launch, fenced by
 	// this attempt's lease, so a restart reuses the same decision.

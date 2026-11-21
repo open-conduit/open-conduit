@@ -69,24 +69,3 @@ func TestDrainStopsNewAttempts(t *testing.T) {
 		t.Fatalf("claim after the drain ended: %v", err)
 	}
 }
-
-// A daemon started at another origin ends the drain and records it; at the
-// same origin the drain stays.
-func TestMovedDaemonEndsTheDrain(t *testing.T) {
-	f, _, _ := admissionFixture(t, nil)
-	ctx := context.Background()
-	beginDrain(t, f, "/state")
-	if ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "/state"); err != nil || ended != nil {
-		t.Fatalf("same origin: %+v, %v", ended, err)
-	}
-	if !drainStatus(t, f).Draining {
-		t.Fatal("a restart in place ended the drain")
-	}
-	ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "/new")
-	if err != nil || ended == nil || ended.Origin != "/state" {
-		t.Fatalf("moved: %+v, %v", ended, err)
-	}
-	if drainStatus(t, f).Draining {
-		t.Fatal("the moved daemon is still draining")
-	}
-}

@@ -72,6 +72,9 @@ type ServeRequest struct {
 	// artifact store, as backup restore's --artifacts and
 	// --artifacts-location.
 	RestoreArtifacts, RestoreArtifactsLocation string
+	// RestoreStartConfig is --restore-start-config: the config to start on
+	// in place of the bundle's generation, published by the restore itself.
+	RestoreStartConfig string
 	// RestoreTrustKeys and RestoreAcceptUnsigned are --restore's
 	// --restore-trust-key and --restore-accept-unsigned.
 	RestoreTrustKeys      []string
@@ -126,7 +129,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
-	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
+	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, StartConfig: r.RestoreStartConfig, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
 	if err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", err)
 		return false
@@ -143,7 +146,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "restore-trust-key", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-artifacts", "restore-artifacts-location", "restore-start-config", "restore-trust-key", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -216,6 +219,12 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.RestoreArtifacts, r.RestoreArtifactsLocation = fs.get("restore-artifacts"), fs.get("restore-artifacts-location")
 	if r.Restore == "" && (r.RestoreArtifacts != "" || r.RestoreArtifactsLocation != "") {
 		return ServeRequest{}, usageError(o.errOut, "--restore-artifacts and --restore-artifacts-location go with --restore BUNDLE")
+	}
+	if v := fs.get("restore-start-config"); v != "" {
+		if r.Restore == "" {
+			return ServeRequest{}, usageError(o.errOut, "--restore-start-config goes with --restore BUNDLE")
+		}
+		r.RestoreStartConfig = o.abs(v)
 	}
 	r.RestoreTrustKeys, r.RestoreAcceptUnsigned = splitKeys(fs.get("restore-trust-key")), *restoreAcceptUnsigned
 	if r.Restore == "" && (len(r.RestoreTrustKeys) > 0 || r.RestoreAcceptUnsigned) {
