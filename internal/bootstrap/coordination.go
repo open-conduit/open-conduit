@@ -200,30 +200,31 @@ func openArtifacts(ctx context.Context, stateDir string) (artifactStorage, stora
 	return a, s, err
 }
 
-// restoreTarget is where a restore puts a bundle's artifacts: the file
-// store in the restored directory by default, or the backend and location
-// the operator names (cli.RestoreOptions). The backend is looked up before
-// anything is restored, so an unknown one refuses the restore.
-func restoreTarget(o cli.RestoreOptions) (backup.ArtifactTarget, *artifactsChoice, error) {
+// restoreTarget is where a restore puts a bundle: its database at the
+// location the operator names, or in the restored directory, and its
+// artifacts in the file store there, or the backend and location the
+// operator names (cli.RestoreOptions). The artifact backend is looked up
+// before anything is restored, so an unknown one refuses the restore.
+func restoreTarget(o cli.RestoreOptions) (backup.Target, *artifactsChoice, error) {
 	if o.ArtifactBackend == "" {
 		if o.ArtifactLocation != "" || o.ArtifactCommand != "" {
-			return backup.ArtifactTarget{}, nil, fmt.Errorf("an artifact location or command needs its backend (--artifacts NAME)")
+			return backup.Target{}, nil, fmt.Errorf("an artifact location or command needs its backend (--artifacts NAME)")
 		}
-		return backup.ArtifactTarget{Backend: artifacts.Backend}, nil, nil
+		return backup.Target{Database: o.DatabaseLocation, Artifacts: artifacts.Backend}, nil, nil
 	}
 	choice := &artifactsChoice{Backend: o.ArtifactBackend, Location: o.ArtifactLocation, Command: o.ArtifactCommand}
 	if o.ArtifactLocation == "" && o.ArtifactBackend != artifacts.BackendName {
-		return backup.ArtifactTarget{}, nil, fmt.Errorf("artifact backend %q needs a location (--artifacts-location)", o.ArtifactBackend)
+		return backup.Target{}, nil, fmt.Errorf("artifact backend %q needs a location (--artifacts-location)", o.ArtifactBackend)
 	}
 	b, err := choice.resolve()
 	if err != nil {
-		return backup.ArtifactTarget{}, nil, err
+		return backup.Target{}, nil, err
 	}
 	if o.ArtifactBackend == artifacts.BackendName && o.ArtifactLocation == "" {
 		// The default store: nothing to record.
 		choice = nil
 	}
-	return backup.ArtifactTarget{Backend: b, Location: o.ArtifactLocation}, choice, nil
+	return backup.Target{Database: o.DatabaseLocation, Artifacts: b, ArtifactLocation: o.ArtifactLocation}, choice, nil
 }
 
 // recordChoice writes a restored directory's storage choice when its
@@ -232,20 +233,21 @@ func restoreTarget(o cli.RestoreOptions) (backup.ArtifactTarget, *artifactsChoic
 // directory, before publishing, so the location is left to its default
 // (<state>/conduit.db, where the snapshot was restored).
 func recordChoice(stateDir, backendName string) error {
-	return recordChoiceWith(nil)(stateDir, backendName)
+	return recordChoiceWith("", nil)(stateDir, backendName)
 }
 
-// recordChoiceWith is recordChoice that also records the artifact backend
-// a restore imported into, when it is not the default.
-func recordChoiceWith(art *artifactsChoice) backup.Record {
+// recordChoiceWith is recordChoice that also records the database location
+// a restore wrote to and the artifact backend it imported into, when they
+// are not the defaults.
+func recordChoiceWith(location string, art *artifactsChoice) backup.Record {
 	return func(stateDir, backendName string) error {
 		if backendName == "" {
 			backendName = sqlite.Name
 		}
-		if backendName == sqlite.Name && art == nil {
+		if backendName == sqlite.Name && location == "" && art == nil {
 			return nil
 		}
-		data, err := json.Marshal(storageChoice{Backend: backendName, Artifacts: art})
+		data, err := json.Marshal(storageChoice{Backend: backendName, Location: location, Artifacts: art})
 		if err != nil {
 			return err
 		}

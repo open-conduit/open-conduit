@@ -36,6 +36,9 @@ const (
 	// restoredFile records the bundle the directory was last restored
 	// from, so serve --restore restores a bundle once.
 	restoredFile = "restored.json"
+	// restoreIntent records a named database a restore is about to write,
+	// until the swap has made it the directory's own.
+	restoreIntent = "restore-database.json"
 	// stagedToken is the operator token's path in a state directory.
 	stagedToken = "private/operator.token"
 )
@@ -63,6 +66,89 @@ type restoredRecord struct {
 	BundleCreatedAt time.Time `json:"bundle_created_at"`
 	Bundle          string    `json:"bundle"`
 	RestoredAt      time.Time `json:"restored_at"`
+}
+
+// databaseIntent is restoreIntent. A restore can't take a database back
+// from a location outside the directory, so what it wrote there before
+// stopping has to be told apart from state that was already there.
+type databaseIntent struct {
+	Location       string `json:"location"`
+	DatabaseSHA256 string `json:"database_sha256"`
+	Bundle         string `json:"bundle"`
+}
+
+func readIntent(stateDir string) (databaseIntent, bool, error) {
+	var intent databaseIntent
+	data, err := os.ReadFile(filepath.Join(stateDir, restoreIntent))
+	if errors.Is(err, os.ErrNotExist) {
+		return intent, false, nil
+	}
+	if err != nil {
+		return intent, false, err
+	}
+	if err := json.Unmarshal(data, &intent); err != nil {
+		return intent, false, fmt.Errorf("%s: %w", restoreIntent, err)
+	}
+	return intent, true, nil
+}
+
+// settleIntent drops the intent once the directory's storage choice names
+// its location: that database is now the live one, and must never again be
+// described as a leftover.
+func settleIntent(stateDir string) error {
+	intent, ok, err := readIntent(stateDir)
+	if err != nil || !ok {
+		return err
+	}
+	choice, err := readChoice(stateDir)
+	if err != nil || choice.Location != intent.Location {
+		return err
+	}
+	return os.Remove(filepath.Join(stateDir, restoreIntent))
+}
+
+// claimDatabase records that this restore is about to write location, which
+// must be empty. When an earlier restore recorded the same location and
+// state is there, that state is what the earlier restore left, so it
+// refuses and says so; any other state there is refused with no record. It
+// isn't carried on from: the leftover may hold part of the steps after the
+// write, and a restore doesn't delete a database. A leftover at another
+// location is reported.
+func claimDatabase(ctx context.Context, stateDir, location, digest, bundle, backendName string, report *cli.InPlaceReport) error {
+	backend, err := restoreBackends(backendName)
+	if err != nil {
+		return err
+	}
+	prior, ok, err := readIntent(stateDir)
+	if err != nil {
+		return err
+	}
+	present, err := backend.Present(ctx, location)
+	if err != nil {
+		return err
+	}
+	if present {
+		if ok && prior.Location == location {
+			return fmt.Errorf("%s holds the database an earlier restore of %s wrote before it stopped. Nothing uses it, so unless you have put state there since, it is safe to clear: clear it and run the restore again", location, prior.Bundle)
+		}
+		// Only a record written while the location was empty can vouch
+		// for what is there, so this state gets none.
+		return fmt.Errorf("%s already holds state: restore into an empty location: %w", location, os.ErrExist)
+	}
+	if ok && prior.Location != location {
+		left, err := backend.Present(ctx, prior.Location)
+		if err != nil {
+			return err
+		}
+		if left {
+			report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: prior.Location, Note: "the database an earlier restore wrote before it stopped: nothing uses it, so unless you have put state there since, it is safe to clear"})
+		}
+	}
+	data, err := json.Marshal(databaseIntent{Location: location, DatabaseSHA256: digest, Bundle: bundle})
+	if err != nil {
+		return err
+	}
+	return writeFileDurable(filepath.Join(stateDir, restoreIntent), append(data, '\n'))
 }
 
 // restoreInterrupted refuses a state directory an in-place restore left
@@ -121,6 +207,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if resumed != nil {
 		report.MovedAside, report.MovedItems = filepath.Join(stateDir, resumed.Aside), resumed.Moved
 	}
+	if err := settleIntent(stateDir); err != nil {
+		return info, err
+	}
 	// A stage no journal names is from a restore that stopped before its
 	// swap began: nothing else makes one, and the lock is held.
 	if report.RemovedStages, err = removeStaleStages(stateDir); err != nil {
@@ -152,24 +241,50 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		return info, err
 	}
 
+	if o.DatabaseLocation != "" {
+		if err := claimDatabase(ctx, stateDir, o.DatabaseLocation, digest, bundle, info.Backend, report); err != nil {
+			return info, err
+		}
+	}
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
-	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
+	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
+		// Refused before the write: the record must not outlive it, or
+		// whatever is put at the location later would pass for a leftover.
+		if o.DatabaseLocation != "" {
+			if backend, lookup := restoreBackends(info.Backend); lookup == nil {
+				if present, perr := backend.Present(ctx, o.DatabaseLocation); perr == nil && !present {
+					_ = os.Remove(filepath.Join(stateDir, restoreIntent))
+				}
+			}
+		}
+		return info, err
+	}
+	if err := restoreStopped(); err != nil {
 		return info, err
 	}
 	swap, err := prepareSwap(ctx, stateDir, stage, stamp, restoredRecord{DatabaseSHA256: digest, BundleCreatedAt: info.CreatedAt, Bundle: bundle, RestoredAt: now})
 	if err != nil {
 		_ = os.RemoveAll(stage)
+		if o.DatabaseLocation != "" {
+			return info, fmt.Errorf("%s now holds the restored database but the restore stopped before using it, so clear it before restoring there again: %w", o.DatabaseLocation, err)
+		}
 		return info, err
 	}
 	if err := runSwap(stateDir, swap); err != nil {
 		return info, fmt.Errorf("the in-place restore stopped part way: %w (run it again to finish)", err)
 	}
+	if err := settleIntent(stateDir); err != nil {
+		return info, err
+	}
 	report.MovedAside, report.MovedItems = filepath.Join(stateDir, swap.Aside), swap.Moved
 	aside := filepath.Join(stateDir, swap.Aside, storageFile)
 	// The operator chose a new store (keepsStorage): the replaced one
 	// stays where it is, named by the storage.json moved aside.
+	if l := previous.Location; o.DatabaseLocation != "" && l != "" && filepath.Clean(l) != filepath.Join(stateDir, "conduit.db") {
+		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: l, Note: "the replaced database, which " + aside + " names: left where it is"})
+	}
 	if a := previous.Artifacts; a != nil && a.Location != "" && a.Location != filepath.Join(stateDir, "artifacts") {
 		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: a.Location, Note: "the replaced artifact store, which " + aside + " names: left where it is"})
 	}
@@ -178,13 +293,13 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 
 // keepsStorage refuses an in-place restore that would move the daemon off
 // a store its storage.json names outside the state directory without
-// being asked. The restored database always goes into the directory, so
-// an external database refuses; an external or non-default artifact store
+// being asked. An external database needs the operator to name the empty
+// location the bundle's database goes to; an external or non-default artifact store
 // needs the operator to name the store the bundle's artifacts go to (an
 // empty one), or --artifacts files to move to the directory's own.
 func keepsStorage(stateDir string, previous storageChoice, o cli.RestoreOptions) error {
-	if previous.Location != "" && filepath.Clean(previous.Location) != filepath.Join(stateDir, "conduit.db") {
-		return fmt.Errorf("%s names a database outside the state directory (%s), and an in-place restore puts the bundle's database in the directory: restore with --to DIR and move it where the daemon expects it instead", storageFile, previous.Location)
+	if o.DatabaseLocation == "" && previous.Location != "" && filepath.Clean(previous.Location) != filepath.Join(stateDir, "conduit.db") {
+		return fmt.Errorf("%s names a database outside the state directory (%s): name the empty location the bundle's database goes to (--database-location LOC)", storageFile, previous.Location)
 	}
 	a := previous.Artifacts
 	if a == nil || o.ArtifactBackend != "" {
@@ -289,6 +404,10 @@ func runSwap(stateDir string, swap swapJournal) error {
 	}
 	return continueSwap(stateDir, swap)
 }
+
+// restoreStopped is a test seam: an error stops the restore where a crash
+// would leave a named database written and no swap journal.
+var restoreStopped = func() error { return nil }
 
 // swapInterrupted is a test seam: an error stops the swap after it moved
 // the replaced item at index i aside.

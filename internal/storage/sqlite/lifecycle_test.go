@@ -141,6 +141,39 @@ type eager struct{ storage.Backend }
 // Present says yes to anything.
 func (eager) Present(context.Context, string) (bool, error) { return true, nil }
 
+// blindRead reads an empty database instead of the snapshot.
+type blindRead struct{ storage.Backend }
+
+func (b blindRead) ReadSnapshot(ctx context.Context, _ string, _ time.Time, read func(storage.Tx) error) error {
+	dir, err := os.MkdirTemp("", "oc-blind-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	s, err := sqlite.Open(ctx, filepath.Join(dir, "conduit.db"))
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.View(ctx, read)
+}
+
+// touchingRead reads the snapshot and then writes to it.
+type touchingRead struct{ storage.Backend }
+
+func (b touchingRead) ReadSnapshot(ctx context.Context, snapshot string, now time.Time, read func(storage.Tx) error) error {
+	if err := b.Backend.ReadSnapshot(ctx, snapshot, now, read); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(snapshot, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write([]byte{0})
+	return err
+}
+
 type unfenced struct{ storage.Database }
 
 func (unfenced) Fence(_ context.Context, now time.Time) error {
@@ -231,6 +264,14 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// OpenPrior raises the format before it looks.
 		name: "open_prior_raises_the_format", failing: "open_prior_preserves_older_state_unchanged", want: "did not report a prior",
 		backend: raising{sqlite.Backend},
+	}, {
+		// ReadSnapshot reads some other state.
+		name: "read_snapshot_reads_other_state", failing: "read_snapshot_sees_state_and_publishes_nothing", want: "was not there",
+		backend: blindRead{sqlite.Backend},
+	}, {
+		// ReadSnapshot changes the snapshot it reads.
+		name: "read_snapshot_changes_the_snapshot", failing: "read_snapshot_sees_state_and_publishes_nothing", want: "changed the snapshot",
+		backend: touchingRead{sqlite.Backend},
 	}, {
 		// Fence does nothing.
 		name: "fence_leaves_a_lease_live", failing: "fence_ends_live_lease_authority", want: "still held",

@@ -38,6 +38,8 @@ open-conduit backup restore BUNDLE --in-place --artifacts files --artifacts-loca
 
 When `storage.json` names an artifact store outside the state directory, `--in-place` refuses until you name one of these: it never moves the daemon onto the directory's own store unasked. Name `--artifacts files` alone to move the artifacts into the state directory on purpose.
 
+When `storage.json` names a database outside the state directory, such as one on a database server, name an empty location for the restore with `--database-location LOC`, in the backend's own terms. The restored `storage.json` records it. A location that already holds state is refused, and a bundle that fails its checks writes nothing there.
+
 `backup restore BUNDLE --to DIR` writes a new directory instead, never over an existing one, to inspect a bundle or to restore on a new host (below). To move an install to another machine, follow [Moving a daemon](../../architecture/recovery/#moving-a-daemon-to-another-machine), which drains it first and starts it on a config for the new machine (`--start-config FILE`).
 
 ## Sign your bundles

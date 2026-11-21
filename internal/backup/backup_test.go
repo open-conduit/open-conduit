@@ -86,7 +86,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// What the caller records goes into the staged directory: a failure
 	// publishes nothing, and success publishes it with the state.
 	refused := filepath.Join(root, "refused")
-	if err := Restore(ctx, bundle, refused, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil {
+	if err := Restore(ctx, bundle, refused, Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore published despite a failed record")
 	}
 	if _, err := os.Lstat(refused); !os.IsNotExist(err) {
@@ -99,7 +99,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(dir, "recorded"), []byte(backend), 0o600)
 	}
-	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, record); err != nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend}, record); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "recorded")); err != nil {
@@ -110,7 +110,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// leaves the content in it, and a store that already holds content is
 	// refused rather than mixed with the bundle's.
 	elsewhere := filepath.Join(root, "chosen-artifacts")
-	chosen := ArtifactTarget{Backend: artifacts.Backend, Location: elsewhere}
+	chosen := Target{Artifacts: artifacts.Backend, ArtifactLocation: elsewhere}
 	if err := Restore(ctx, bundle, filepath.Join(root, "refused-chosen"), Trust{}, now, nil, storage.LookupBackend, chosen, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore into a chosen store published despite a failed record")
 	}
@@ -132,11 +132,55 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "restored-again")); !os.IsNotExist(err) {
 		t.Fatalf("a refused restore published a directory: %v", err)
 	}
+	// A database location outside the directory: the restored directory
+	// holds no database of its own, what was restored is at the location
+	// with its leases fenced, a location holding state is refused before
+	// anything is imported, and a failure before the write leaves it absent.
+	external := filepath.Join(root, "server", "conduit.db")
+	toServer := Target{Database: external, Artifacts: artifacts.Backend}
+	refusing := func(string) (storage.Backend, error) { return refusingRead{sqlite.Backend}, nil }
+	if err := Restore(ctx, bundle, filepath.Join(root, "refused-server"), Trust{}, now, nil, refusing, toServer, nil); err == nil || !strings.Contains(err.Error(), "refused by check") {
+		t.Fatalf("restore past a failed snapshot check: %v", err)
+	}
+	if _, err := os.Lstat(external); !os.IsNotExist(err) {
+		t.Fatalf("a failed check wrote to the named location: %v", err)
+	}
+	// A failure after the write says the location now needs clearing.
+	late := filepath.Join(root, "server-late", "conduit.db")
+	if err := Restore(ctx, bundle, filepath.Join(root, "refused-late"), Trust{}, now, nil, storage.LookupBackend, Target{Database: late, Artifacts: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil || !strings.Contains(err.Error(), late) || !strings.Contains(err.Error(), "clear it") {
+		t.Fatalf("a failure after writing the location: %v", err)
+	}
+	if err := Restore(ctx, bundle, filepath.Join(root, "restored-server"), Trust{}, now, nil, storage.LookupBackend, toServer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "restored-server", snapshotName)); !os.IsNotExist(err) {
+		t.Fatalf("a restore to a location also wrote the directory's own database: %v", err)
+	}
+	onServer, err := sqlite.Backend.Open(ctx, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = onServer.View(ctx, func(tx storage.Tx) error {
+		x, err := tx.Execution("run")
+		if err == nil && x.Lease.Owner != "" {
+			return fmt.Errorf("lease still held by %q", x.Lease.Owner)
+		}
+		return err
+	})
+	if closeErr := onServer.Close(); err != nil || closeErr != nil {
+		t.Fatalf("restored location: %v, %v", err, closeErr)
+	}
+	if err := Restore(ctx, bundle, filepath.Join(root, "refused-occupied"), Trust{}, now, nil, storage.LookupBackend, Target{Database: external, Artifacts: artifacts.Backend, ArtifactLocation: filepath.Join(root, "unused-artifacts")}, nil); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("restore over a location holding state: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "unused-artifacts")); !os.IsNotExist(err) {
+		t.Fatalf("a refused location still opened the artifact store: %v", err)
+	}
 	// A failure after the directory is published (syncing its parent) leaves
 	// the content in the store the published storage.json names.
 	afterRename := filepath.Join(root, "chosen-after-rename")
 	syncParent = func(string) error { return errors.New("parent sync failed") }
-	err = Restore(ctx, bundle, filepath.Join(root, "restored-after-rename"), Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend, Location: afterRename}, nil)
+	err = Restore(ctx, bundle, filepath.Join(root, "restored-after-rename"), Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend, ArtifactLocation: afterRename}, nil)
 	syncParent = syncDirectory
 	if err == nil {
 		t.Fatal("restore hid a failed parent sync")
@@ -187,7 +231,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend}, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -227,7 +271,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
+			if err := Restore(ctx, bundle, target, Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend}, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -332,7 +376,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 	}
 	before := treeOf(t, bundle)
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err != nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, Target{Artifacts: artifacts.Backend}, nil); err != nil {
 		t.Fatal(err)
 	}
 	after := treeOf(t, bundle)
@@ -614,4 +658,11 @@ func listAll(t *testing.T, dir string) []storage.StoredArtifact {
 		t.Fatal(err)
 	}
 	return held
+}
+
+// refusingRead fails the check a restore makes before it writes.
+type refusingRead struct{ storage.Backend }
+
+func (refusingRead) ReadSnapshot(context.Context, string, time.Time, func(storage.Tx) error) error {
+	return errors.New("refused by check")
 }

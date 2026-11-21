@@ -21,7 +21,7 @@ const signingBackend = sqlite.Name
 
 var signingBackends = Backends(storage.LookupBackend)
 
-func signingTarget() ArtifactTarget { return ArtifactTarget{Backend: artifacts.Backend} }
+func signingTarget() Target { return Target{Artifacts: artifacts.Backend} }
 
 func signingFixture(t *testing.T, root string) (storage.Database, storage.ArtifactStore, time.Time) {
 	t.Helper()
