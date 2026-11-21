@@ -132,7 +132,7 @@ To give a group a role in some scopes only, add `--grants` rows to the issuer. M
 open-conduit auth issuer set corp --type oidc --config '…'   --groups '{"platform-admins": "admin"}'   --grants '[{"group": "support-oncall", "scope": "support", "role": "operate"}]'
 ```
 
-Only an admin can trust an issuer or change its groups (`auth issuers` lists them, `auth issuer remove corp` stops trusting it), and each change is recorded in the daemon's log. The table lives in the daemon's own store, not in the config file, so applying a config can't grant anyone a role. To let someone answer an agent's questions, add `operator:corp:<subject>` to the `human` entry's `responders`.
+Only an admin can list or trust issuers or change their groups (`auth issuers` lists them, `auth issuer remove corp` stops trusting it), and each change is recorded in the daemon's log. The table lives in the daemon's own store, not in the config file, so applying a config can't grant anyone a role. To let someone answer an agent's questions, add `operator:corp:<subject>` to the `human` entry's `responders`.
 
 ## 4. The web view behind your own sign-in
 
