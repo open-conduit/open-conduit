@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -565,5 +567,28 @@ func inputTable(b *strings.Builder, schema map[string]any) {
 			r = "yes"
 		}
 		fmt.Fprintf(b, "| `%s` | %s | %s | %s |\n", k, cell(p.describe(nil)), r, cell(desc))
+	}
+}
+
+// TestConfigSchemaKnowsEveryBuiltinSecretForm keeps the published schema's
+// reference patterns in step with the host: a built-in form the lookahead
+// doesn't exclude would pass as a provider reference, so an editor would
+// accept what the daemon refuses.
+func TestConfigSchemaKnowsEveryBuiltinSecretForm(t *testing.T) {
+	data, err := os.ReadFile("../docs/architecture/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile(`\(\?!\(([a-z|]+)\):\)`).FindAllSubmatch(data, -1)
+	if len(found) == 0 {
+		t.Fatal("no secret reference pattern in the schema")
+	}
+	want := slices.Sorted(slices.Values(protocol.BuiltinSecretSchemes))
+	for _, m := range found {
+		got := strings.Split(string(m[1]), "|")
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("schema excludes %v from provider references, the host's built-in forms are %v", got, want)
+		}
 	}
 }

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -41,7 +43,10 @@ func (d *daemon) portability(ctx context.Context) (management.Portability, error
 		return out, err
 	}
 	snapshot, _ := d.configs.Current()
-	out.Secrets, out.Paths = machineConfig(snapshot.Normalized)
+	// A stored: reference travels when the secrets file, which moves with the
+	// daemon, is what holds its value. A name it can't confirm is reported.
+	inFile, _ := (&config.SecretStore{File: config.SecretsPath(d.o.ConfigPath)}).FileNames()
+	out.Secrets, out.Paths = machineConfig(snapshot.Normalized, inFile)
 	providers := d.resources.providers.all()
 	for _, name := range providerNames(providers) {
 		r, ok := providers[name].(extension.ResourceUnsavedReporter)
@@ -86,9 +91,9 @@ func presentDirs(stateDir string) []management.PortableDirectory {
 }
 
 // machineConfig walks a config document for what is tied to this machine:
-// secret references that aren't file: (by location and scheme, never their
-// text) and absolute paths.
-func machineConfig(doc []byte) ([]management.PortableSecret, []management.PortablePath) {
+// secret references that aren't file: or a stored: one whose name is in
+// inFile (by location and scheme, never their text) and absolute paths.
+func machineConfig(doc []byte, inFile []string) ([]management.PortableSecret, []management.PortablePath) {
 	secrets, paths := []management.PortableSecret{}, []management.PortablePath{}
 	var root any
 	if json.Unmarshal(doc, &root) != nil {
@@ -102,8 +107,9 @@ func machineConfig(doc []byte) ([]management.PortableSecret, []management.Portab
 				if refs, ok := c.(map[string]any); ok && k == "secret_refs" {
 					for name, ref := range refs {
 						text, _ := ref.(string)
-						scheme, _, found := strings.Cut(text, ":")
-						if !found || scheme != "file" {
+						scheme, rest, found := strings.Cut(text, ":")
+						travels := scheme == config.StoreFile || scheme == config.StoredScheme && slices.Contains(inFile, rest)
+						if !found || !travels {
 							secrets = append(secrets, management.PortableSecret{Path: at + "/secret_refs/" + name, Scheme: scheme})
 						}
 					}

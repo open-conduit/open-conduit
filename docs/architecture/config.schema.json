@@ -321,7 +321,7 @@
                 "secret": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "Secret reference (keyring:, file:, env:, cmd: or a package's scheme) of the key the forwarder signs each request with."
+                  "description": "Secret reference (stored:, keyring:, file:, env:, cmd: or a package's scheme) of the key the forwarder signs each request with."
                 },
                 "max_age_seconds": {
                   "type": "integer",
@@ -534,12 +534,12 @@
           },
           "additionalProperties": {
             "type": "string",
-            "pattern": "^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+|(?!(keyring|file|env|cmd):)[a-z][a-z0-9_-]{0,62}:[^\\s\\x00-\\x1f\\x7f]{1,1024})$",
+            "pattern": "^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+|(?!(stored|keyring|file|env|cmd):)[a-z][a-z0-9_-]{0,62}:[^\\s\\x00-\\x1f\\x7f]{1,1024})$",
             "not": {
               "pattern": "[\\r\\n]"
             }
           },
-          "description": "Secret name to reference (keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config."
+          "description": "Secret name to reference (stored:NAME, keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config."
         }
       },
       "required": [
@@ -1017,7 +1017,7 @@
             "oneOf": [
               {
                 "type": "string",
-                "pattern": "^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+|(?!(keyring|file|env|cmd):)[a-z][a-z0-9_-]{0,62}:[^\\s\\x00-\\x1f\\x7f]{1,1024})$",
+                "pattern": "^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+|(?!(stored|keyring|file|env|cmd):)[a-z][a-z0-9_-]{0,62}:[^\\s\\x00-\\x1f\\x7f]{1,1024})$",
                 "not": {
                   "pattern": "[\\r\\n]"
                 }

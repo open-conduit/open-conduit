@@ -75,7 +75,7 @@ func ValidSecretRef(ref string) bool {
 	switch {
 	case !ok:
 		return false
-	case scheme == "keyring", scheme == "file":
+	case scheme == StoredScheme, scheme == "keyring", scheme == "file":
 		return idPattern.MatchString(rest)
 	case scheme == "env":
 		return envPattern.MatchString(rest)
@@ -106,14 +106,14 @@ func validProviderReference(rest string) bool {
 }
 
 // ProviderScheme returns the scheme of a valid reference that a package
-// resolves (not keyring:, file:, env: or cmd:), or "".
+// resolves (not stored:, keyring:, file:, env: or cmd:), or "".
 func ProviderScheme(ref string) string {
 	if !ValidSecretRef(ref) {
 		return ""
 	}
 	scheme, _, _ := strings.Cut(ref, ":")
 	switch scheme {
-	case "keyring", "file", "env", "cmd":
+	case StoredScheme, "keyring", "file", "env", "cmd":
 		return ""
 	}
 	return scheme
@@ -683,7 +683,7 @@ func (c *checker) backupSettings(n *node) BackupSettings {
 			// The key's own text has the shape of a provider reference, and
 			// a config generation goes into every bundle.
 			if !ValidSecretRef(v) || strings.HasPrefix(v, "ed25519-private:") {
-				c.fail(path+"/signing_key", "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
+				c.fail(path+"/signing_key", "invalid_value", "use stored:name, keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
 				return b
 			}
 			b.SigningKey = v
@@ -907,7 +907,7 @@ func (c *checker) webhooks(n *node) Webhooks {
 		w.Forwarder.Name, _ = c.str(f.field("name"), path+"/forwarder/name", idPattern)
 		if v, ok := c.str(f.field("secret"), path+"/forwarder/secret", nil); ok {
 			if !ValidSecretRef(v) {
-				c.fail(path+"/forwarder/secret", "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
+				c.fail(path+"/forwarder/secret", "invalid_value", "use stored:name, keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
 			}
 			w.Forwarder.Secret = v
 		}
@@ -975,7 +975,7 @@ func (c *checker) secretRefs(n *node, path string, overlay bool) map[string]stri
 		case v.kind == kString && ValidSecretRef(v.str):
 			refs[k] = v.str
 		case v.kind == kString || v.kind == kBool:
-			c.fail(p, "invalid_value", "use keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
+			c.fail(p, "invalid_value", "use stored:name, keyring:name, file:name, env:NAME, cmd:command or <scheme>:<reference> for a scheme an installed package provides (no literals, spaces or line breaks)")
 		case v.kind != kNull:
 			c.fail(p, "invalid_type", "expected secret reference string")
 		}

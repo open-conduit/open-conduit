@@ -40,7 +40,7 @@ const Playbook = "work-issue"
 var (
 	remotePattern = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
 	// RefPattern is a secret reference (never a secret value).
-	RefPattern = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
+	RefPattern = regexp.MustCompile(`^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
 )
 
 // GitHubRepo reads a checkout's GitHub repository from its origin remote
@@ -291,7 +291,7 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 		return extension.SetupResult{}, usage("--scope and --connection must match [a-z][a-z0-9_-]*")
 	}
 	if g.Broker == "" && !RefPattern.MatchString(g.Token) {
-		return extension.SetupResult{}, usage("--token takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a token")
+		return extension.SetupResult{}, usage("--token takes a reference (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a token")
 	}
 	return g.Result()
 }
@@ -306,7 +306,7 @@ func (g GitHubScope) checkBroker() error {
 		return usage("a brokered App needs --broker URL, --broker-id ID and --broker-key REF")
 	}
 	if !RefPattern.MatchString(g.BrokerKey) {
-		return usage("--broker-key takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a key")
+		return usage("--broker-key takes a reference (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a key")
 	}
 	data, err := json.Marshal(g.ConnectionConfig()["config"])
 	if err != nil {

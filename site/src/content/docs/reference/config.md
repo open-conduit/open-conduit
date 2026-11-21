@@ -85,7 +85,7 @@ Each entry of `connections`.
 | --- | --- | --- | --- | --- |
 | `config` | object | yes |  | The integration's connection fields (open-conduit adapters TYPE). |
 | `id` | string | yes |  | Stable ID that scopes, bindings and extension entries name. |
-| `secret_refs` | object |  |  | Secret name to reference (keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config. |
+| `secret_refs` | object |  |  | Secret name to reference (stored:NAME, keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config. |
 | `type` | string | yes |  | The integration that owns it (open-conduit adapters lists them). |
 
 ## scopes

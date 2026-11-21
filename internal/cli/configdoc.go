@@ -159,7 +159,7 @@ func setting(ptr, value string) ([]string, *node, error) {
 		return nil, nil, errors.New("the value must be JSON (quote strings: \"text\")")
 	}
 	if len(parts) >= 2 && parts[len(parts)-2] == "secret_refs" && (v.kind != 's' || !refPattern.MatchString(strings.Trim(string(v.scalar), `"`))) {
-		return nil, nil, errors.New("a secret_refs value is a reference (keyring:, file:, env:, cmd:); store values with open-conduit secret set")
+		return nil, nil, errors.New("a secret_refs value is a reference (stored:, keyring:, file:, env:, cmd:); store values with open-conduit secret set")
 	}
 	return parts, v, nil
 }

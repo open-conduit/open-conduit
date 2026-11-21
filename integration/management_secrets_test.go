@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -216,6 +217,56 @@ func TestManagementSecrets(t *testing.T) {
 // so doctor with check_secrets=true needs admin, as the secrets routes do:
 // view and operate are refused before anything is resolved. Without it,
 // doctor stays a read for view.
+// TestManagementStoredReference covers a reference that doesn't name a store:
+// it can be applied before the value exists, is listed against the entry it
+// reads, and holds that entry against removal.
+func TestManagementStoredReference(t *testing.T) {
+	ctx := context.Background()
+	h := newManagementHarness(t)
+	admin := h.operatorClient()
+	h.applyText(strings.Replace(managementConfig, `"other": "env:SECRET_FIXTURE_TOKEN"`, `"other": "stored:model-key"`, 1))
+	const pointer = "/scopes/0/secret_refs/other"
+	row := func(reference string) client.Secret {
+		t.Helper()
+		list, err := admin.Secrets(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range list {
+			if s.Reference == reference {
+				return s
+			}
+		}
+		t.Fatalf("no row for %s in %+v", reference, list)
+		return client.Secret{}
+	}
+	if s := row("stored:model-key"); s.Resolves || s.Failure != "stored_missing" || !slices.Equal(s.ReferencedBy, []string{pointer}) {
+		t.Fatalf("before it is stored: %+v", s)
+	}
+	if _, err := admin.SetSecret(ctx, "model-key", "in-keyring", ""); err != nil {
+		t.Fatal(err)
+	}
+	if s := row("keyring:model-key"); !s.Resolves || !slices.Equal(s.ReferencedBy, []string{pointer}) {
+		t.Fatalf("stored in the keyring: %+v", s)
+	}
+	var api *client.Error
+	if err := admin.DeleteSecret(ctx, "model-key"); !errors.As(err, &api) || api.Code != "secret_in_use" {
+		t.Fatalf("removing a name a stored: reference reads: %v", err)
+	}
+	if _, err := admin.SetSecret(ctx, "model-key", "in-file", "file"); err != nil {
+		t.Fatal(err)
+	}
+	if s := row("file:model-key"); !s.Resolves || !slices.Equal(s.ReferencedBy, []string{pointer}) {
+		t.Fatalf("the file's copy is the one read: %+v", s)
+	}
+	if s := row("keyring:model-key"); len(s.ReferencedBy) != 0 {
+		t.Fatalf("the keyring's copy isn't read: %+v", s)
+	}
+	if _, err := admin.SetSecret(ctx, "model-key", "shadowed", "keyring"); !errors.As(err, &api) || api.Code != "secret_in_file" {
+		t.Fatalf("a keyring write the file would shadow: %v", err)
+	}
+}
+
 func TestManagementDoctorCheckSecretsNeedsAdmin(t *testing.T) {
 	ctx := context.Background()
 	h := newManagementHarness(t)

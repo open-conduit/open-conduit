@@ -292,6 +292,29 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 	}
 }
 
+// secret set keeps a name the secrets file holds in the file, as the daemon's
+// store does, so a stored: reference never reads a stale keyring copy.
+func TestSecretSetKeepsANameInTheFile(t *testing.T) {
+	root := t.TempDir()
+	s := &setupEnv{root: root, env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}}
+	wrote := 0
+	restore := keyringStore
+	keyringStore = func(string, string) error { wrote++; return nil }
+	defer func() { keyringStore = restore }()
+	s.stdin = "one\n"
+	if out, errOut, code := s.run("secret", "set", "api", "--store", "file"); code != 0 || !strings.Contains(out, "file:api") {
+		t.Fatalf("file: %d %s %s", code, out, errOut)
+	}
+	s.stdin = "two\n"
+	if out, errOut, code := s.run("secret", "set", "api"); code != 0 || !strings.Contains(out, "file:api") || wrote != 0 {
+		t.Fatalf("default write of a name in the file: %d %s %s, keyring writes %d", code, out, errOut, wrote)
+	}
+	s.stdin = "three\n"
+	if _, errOut, code := s.run("secret", "set", "api", "--store", "keyring"); code == 0 || !strings.Contains(errOut, "already holds") || wrote != 0 {
+		t.Fatalf("keyring write the file would shadow: %d %s, keyring writes %d", code, errOut, wrote)
+	}
+}
+
 // config check prints the entrypoint's cmd: warnings without failing.
 func TestConfigCheckWarnsMissingCommand(t *testing.T) {
 	root := t.TempDir()

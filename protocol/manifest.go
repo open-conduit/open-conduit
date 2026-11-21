@@ -887,7 +887,7 @@ type SecretSchemeDecl struct {
 
 // BuiltinSecretSchemes are the reference forms the host resolves itself. A
 // package can't declare one.
-var BuiltinSecretSchemes = []string{"keyring", "file", "env", "cmd"}
+var BuiltinSecretSchemes = []string{"stored", "keyring", "file", "env", "cmd"}
 
 type TaskDecl struct {
 	Name            string `json:"name"`

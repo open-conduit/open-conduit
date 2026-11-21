@@ -36,7 +36,7 @@ type SetupRequest struct {
 
 var (
 	scopeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-	refPattern     = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
+	refPattern     = regexp.MustCompile(`^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
 )
 
 func (o *operator) configPath(flag string) string {
@@ -618,7 +618,7 @@ func (o *operator) localConfig(args []string) (int, bool) {
 			return usageError(o.errOut, "the value must be JSON (quote strings: '\"text\"')"), true
 		}
 		if len(parts) >= 2 && parts[len(parts)-2] == "secret_refs" && (value.kind != 's' || !refPattern.MatchString(strings.Trim(string(value.scalar), `"`))) {
-			return usageError(o.errOut, "a secret_refs value is a reference (keyring:, file:, env:, cmd:); store values with open-conduit secret set"), true
+			return usageError(o.errOut, "a secret_refs value is a reference (stored:, keyring:, file:, env:, cmd:); store values with open-conduit secret set"), true
 		}
 		err = root.set(parts, value)
 		if err != nil {
@@ -768,8 +768,23 @@ func (o *operator) submittedInclude(args []string, usage string) int {
 // owner-only secrets.json beside the config, and returns its reference. The
 // value is never echoed or logged.
 func (o *operator) storeSecret(name, value, store, configFlag string) (string, error) {
+	path := o.secretsPath(configFlag)
+	values := map[string]string{}
+	if data, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(data, &values) != nil {
+			return "", fmt.Errorf("%s is not a JSON object of strings; fix it by hand", path)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", errors.New("secrets file unreadable")
+	}
+	// A name the file holds stays there, as the daemon's store keeps it, so
+	// a stored: reference never reads a stale copy.
+	_, held := values[name]
+	if held && store == "keyring" {
+		return "", fmt.Errorf("%s already holds %s; store it there (omit --store, or --store file)", path, name)
+	}
 	ref := ""
-	if store != "file" {
+	if store != "file" && !held {
 		if err := keyringStore(name, value); err == nil {
 			ref = "keyring:" + name
 		} else if store == "keyring" {
@@ -779,15 +794,6 @@ func (o *operator) storeSecret(name, value, store, configFlag string) (string, e
 		}
 	}
 	if ref == "" {
-		path := o.secretsPath(configFlag)
-		values := map[string]string{}
-		if data, err := os.ReadFile(path); err == nil {
-			if json.Unmarshal(data, &values) != nil {
-				return "", fmt.Errorf("%s is not a JSON object of strings; fix it by hand", path)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", errors.New("secrets file unreadable")
-		}
 		values[name] = value
 		names := make([]string, 0, len(values))
 		for k := range values {
