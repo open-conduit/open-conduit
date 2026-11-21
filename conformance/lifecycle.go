@@ -291,6 +291,20 @@ func priorUnchanged(t *testing.T, h LifecycleHarness) error {
 	if p, err := h.Backend.OpenPrior(ctx, location); err != nil || p != nil {
 		return fmt.Errorf("current state has a prior: %v, %v", p, err)
 	}
+	current, err := h.Backend.Inspect(ctx, location)
+	if err != nil {
+		return fmt.Errorf("inspect current state: %w", err)
+	}
+	stored, err := current.Stored(ctx)
+	if cerr := current.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("stored versions: %w", err)
+	}
+	if writes := h.Backend.Writes(); stored != writes || writes.Records == 0 {
+		return fmt.Errorf("current state is stored at %+v, and the backend writes %+v", stored, writes)
+	}
 	h.Older(t, location)
 	before := h.Fingerprint(t, location)
 	p, err := h.Backend.OpenPrior(ctx, location)

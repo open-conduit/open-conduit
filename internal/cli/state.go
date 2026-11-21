@@ -18,11 +18,14 @@ import (
 type BackupInfo struct {
 	Path string `json:"path"`
 	// Backend names the storage backend the bundle's snapshot is for.
-	Backend   string    `json:"backend,omitempty"`
-	Schema    uint32    `json:"schema"`
-	Build     string    `json:"build"`
-	CreatedAt time.Time `json:"created_at"`
-	Artifacts int       `json:"artifacts"`
+	Backend string `json:"backend,omitempty"`
+	Schema  uint32 `json:"schema"`
+	// RecordFormat is the record format the bundle holds, left out for a
+	// bundle from before bundles recorded one.
+	RecordFormat uint32    `json:"record_format,omitempty"`
+	Build        string    `json:"build"`
+	CreatedAt    time.Time `json:"created_at"`
+	Artifacts    int       `json:"artifacts"`
 	// PreUpgrade is set on a bundle a daemon took before its first start on
 	// a newer record format: what the state was at, and the build it left.
 	PreUpgrade *PreUpgradeInfo `json:"pre_upgrade,omitempty"`

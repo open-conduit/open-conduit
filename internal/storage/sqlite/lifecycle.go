@@ -169,6 +169,9 @@ func (i inspection) View(ctx context.Context, fn func(storage.Tx) error) error {
 }
 func (i inspection) IntegrityCheck(ctx context.Context) error { return i.s.IntegrityCheck(ctx) }
 func (i inspection) SchemaVersion() uint32                    { return i.s.SchemaVersion() }
+func (i inspection) Stored(ctx context.Context) (storage.StoredVersion, error) {
+	return i.s.Stored(ctx)
+}
 func (i inspection) Close() error {
 	return errors.Join(i.s.Close(), os.RemoveAll(i.dir), i.lock.Close())
 }
@@ -189,6 +192,11 @@ func copyPrivate(src, dst string) error {
 
 // OpenPrior reads the stored versions over a query_only connection, which
 // never runs Open's raise of the format, its indexes or its rewrites.
+// Writes is the versions this binary writes.
+func (backend) Writes() storage.StoredVersion {
+	return storage.StoredVersion{Schema: SchemaVersion, Records: recordFormat}
+}
+
 func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
 	switch present, err := b.Present(ctx, location); {
 	case err != nil:

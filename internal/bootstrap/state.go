@@ -124,7 +124,7 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	out := cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}
+	out := cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, RecordFormat: info.Records, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}
 	if p := info.PreUpgrade; p != nil {
 		out.PreUpgrade = &cli.PreUpgradeInfo{RecordFormat: p.Records, Schema: p.Schema, FromBuild: p.FromBuild}
 	}
@@ -505,5 +505,10 @@ func authenticated(bundle string, o cli.RestoreOptions) (cli.BackupInfo, backup.
 		return info, trust, err
 	}
 	info.Authenticity, info.SigningKey = found.Status, found.KeyID
+	// Once the manifest is trusted, a bundle a newer binary wrote is refused
+	// from it, before a stage is made or a byte is copied.
+	if err := backup.CheckFormat(bundle, restoreBackends); err != nil {
+		return info, trust, err
+	}
 	return info, trust, nil
 }
