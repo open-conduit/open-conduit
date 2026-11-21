@@ -530,6 +530,17 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			if probe.Name != p.Name {
 				continue
 			}
+			if c := p.Connection; c != nil {
+				ctx = extension.WithProbeConnection(ctx, extension.ProbeConnection{ID: c.ID, Type: c.Type, Config: c.Config, Secrets: c.Secrets,
+					Secret: func(ctx context.Context, name string) (string, error) {
+						var out protocol.SecretResolveResult
+						err := s.conn.Call(ctx, "secret.resolve", protocol.SecretResolveParams{ScopeID: p.ScopeID, Connection: c.ID, ProbeGrant: p.Grant, Names: []string{name}}, &out)
+						if err != nil {
+							return "", err
+						}
+						return out.Values[name], nil
+					}})
+			}
 			res, err := probe.Run(ctx, p.Args)
 			if err != nil {
 				// A probe that ran and failed answers its reason, which

@@ -338,6 +338,117 @@ func (c *Client) RevokeToken(ctx context.Context, token string) error {
 	return err
 }
 
+// maxRepoPages bounds how far OwnerRepos reads a token's repositories.
+const maxRepoPages = 20
+
+// ErrBrokeredRepos is OwnerRepos's refusal for an App behind a broker: the
+// broker mints tokens only for a repository named up front.
+var ErrBrokeredRepos = errors.New("github: an App behind a broker can't list repositories")
+
+// Identity is who the connection signs in as: a user's login, or an App's
+// bot login.
+func (c *Client) Identity(ctx context.Context) (string, error) {
+	if a, ok := c.who.Load().read.(*appToken); ok {
+		jwt, err := a.jwt(ctx)
+		if err != nil {
+			return "", err
+		}
+		var app struct {
+			Slug string `json:"slug"`
+		}
+		if err := a.appCall(ctx, jwt, http.MethodGet, "/app", nil, &app); err != nil {
+			return "", err
+		}
+		return app.Slug + "[bot]", nil
+	}
+	var u rawUser
+	if _, err := c.call(ctx, false, "", http.MethodGet, "/user", nil, &u); err != nil {
+		return "", err
+	}
+	return u.Login, nil
+}
+
+// OwnerRepos lists owner's repositories the connection can reach, by full
+// name, up to limit, and reports whether more were left out.
+func (c *Client) OwnerRepos(ctx context.Context, owner string, limit int) ([]string, bool, error) {
+	if a, ok := c.who.Load().read.(*appToken); ok {
+		return a.ownerRepos(ctx, owner, limit)
+	}
+	out := []string{}
+	for n := 1; n <= maxRepoPages; n++ {
+		items, more, err := page[rawRepoName](ctx, c, "", "/user/repos?sort=full_name", n, 100)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, r := range items {
+			if o, _, _ := strings.Cut(r.FullName, "/"); strings.EqualFold(o, owner) {
+				if len(out) == limit {
+					return out, true, nil
+				}
+				out = append(out, r.FullName)
+			}
+		}
+		if !more {
+			return out, false, nil
+		}
+	}
+	return out, true, nil
+}
+
+type rawRepoName struct {
+	FullName string `json:"full_name"`
+}
+
+// ownerRepos lists the repositories an App's installation on owner covers,
+// with a token that can read metadata alone and is revoked afterwards.
+func (a *appToken) ownerRepos(ctx context.Context, owner string, limit int) ([]string, bool, error) {
+	if a.brokered() {
+		return nil, false, ErrBrokeredRepos
+	}
+	jwt, err := a.jwt(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	var inst struct {
+		ID int64 `json:"id"`
+	}
+	if err = a.appCall(ctx, jwt, http.MethodGet, "/users/"+url.PathEscape(owner)+"/installation", nil, &inst); err != nil {
+		return nil, false, err
+	}
+	var t struct {
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	body := map[string]any{"permissions": map[string]string{"metadata": "read"}}
+	if err = a.appCall(ctx, jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", inst.ID), body, &t); err != nil {
+		return nil, false, err
+	}
+	if t.Token == "" {
+		return nil, false, ErrCredential
+	}
+	a.c.tr.budgets.installation(t.Token, a.c.api, inst.ID, t.ExpiresAt, a.c.now())
+	defer func() { _ = a.c.RevokeToken(context.WithoutCancel(ctx), t.Token) }()
+	out := []string{}
+	for n := 1; n <= maxRepoPages; n++ {
+		var res struct {
+			Repositories []rawRepoName `json:"repositories"`
+		}
+		if _, err = a.c.raw(ctx, "Bearer "+t.Token, http.MethodGet, fmt.Sprintf("/installation/repositories?per_page=100&page=%d", n), nil, &res); err != nil {
+			return nil, false, err
+		}
+		for _, r := range res.Repositories {
+			if len(out) == limit {
+				return out, true, nil
+			}
+			out = append(out, r.FullName)
+		}
+		if len(res.Repositories) < 100 {
+			return out, false, nil
+		}
+	}
+	return out, true, nil
+}
+
 // hasBot reports whether writes go out as a bot App rather than the reader.
 func (c *Client) hasBot() bool {
 	who := c.who.Load()

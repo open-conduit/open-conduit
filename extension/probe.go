@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 )
 
@@ -20,9 +21,42 @@ type SetupProbe struct {
 }
 
 // ProbeArg is one argument a probe takes.
+//
+// Connection marks an argument whose value is a connection ID. The host then
+// runs the probe only for a session in a scope whose authorization grants
+// that connection, when the connection is of a type the probe's owner
+// declares, and hands the probe the connection for that one run
+// (ProbeConnectionFrom). The agent names the connection and never sees its
+// credential. Only an applied connection qualifies: one still in a change
+// set could point a stored credential at a URL the agent chose.
 type ProbeArg struct {
 	Name, Summary string
 	Required      bool
+	Connection    bool
+}
+
+// ProbeConnection is the connection a probe was run through: its nonsecret
+// config, the names of its secrets, and a resolver that works only while
+// this run lasts.
+type ProbeConnection struct {
+	ID, Type string
+	Config   json.RawMessage
+	Secrets  []string
+	Secret   func(ctx context.Context, name string) (string, error)
+}
+
+type probeConnectionKey struct{}
+
+// WithProbeConnection is ctx carrying the connection a probe runs through.
+func WithProbeConnection(ctx context.Context, c ProbeConnection) context.Context {
+	return context.WithValue(ctx, probeConnectionKey{}, c)
+}
+
+// ProbeConnectionFrom is the connection the host granted this probe run, if
+// the run named one through a Connection argument.
+func ProbeConnectionFrom(ctx context.Context) (ProbeConnection, bool) {
+	c, ok := ctx.Value(probeConnectionKey{}).(ProbeConnection)
+	return c, ok
 }
 
 // ProbeResult is a probe's output and the command it stands for, shown to
