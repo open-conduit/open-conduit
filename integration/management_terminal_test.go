@@ -3,12 +3,15 @@ package integration_test
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,20 +68,18 @@ func readUntil(t *testing.T, r *bufio.Reader, want string) {
 
 func heldUntil(t *testing.T, c *client.Client, id string, held bool) client.Work {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		w, err := c.Work(context.Background(), id)
+	var w client.Work
+	if !eventually(10*time.Second, func() bool {
+		var err error
+		w, err = c.Work(context.Background(), id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if (w.Hold != nil) == held {
-			return w
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("hold is %v, want held=%v", w.Hold, held)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return (w.Hold != nil) == held
+	}) {
+		t.Fatalf("hold is %v, want held=%v", w.Hold, held)
 	}
+	return w
 }
 
 // From another machine, a terminal opens the session, input reaches it, the
@@ -95,7 +96,7 @@ func TestTerminalOverTheNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close()
+	defer term.Detach()
 	r := bufio.NewReader(term)
 	readUntil(t, r, "ready")
 	w := heldUntil(t, c, id, true)
@@ -197,9 +198,8 @@ func TestTerminalLeavesAnEarlierHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = bufio.NewReader(term).ReadByte()
-	_ = term.Close()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	_ = term.Detach()
+	if !eventually(10*time.Second, func() bool {
 		var open bool
 		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
 			_, found, e := runtime.TerminalInTx(tx, domain.ID(id))
@@ -208,13 +208,9 @@ func TestTerminalLeavesAnEarlierHold(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if !open {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the terminal stayed open")
-		}
-		time.Sleep(10 * time.Millisecond)
+		return !open
+	}) {
+		t.Fatal("the terminal stayed open")
 	}
 	if got := heldUntil(t, c, id, true); got.Hold == nil {
 		t.Fatal("the earlier hold was removed")
@@ -262,7 +258,7 @@ func TestTerminalInContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close()
+	defer term.Detach()
 	readUntil(t, bufio.NewReader(term), "in:yes")
 	select {
 	case ref := <-detached:
@@ -315,7 +311,7 @@ func TestTerminalThirdPartyContainerProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, d.Log())
 	}
-	defer term.Close()
+	defer term.Detach()
 	r := bufio.NewReader(term)
 	readUntil(t, r, "pod-tty")
 	if _, err = term.Write([]byte("hi\n")); err != nil {
@@ -435,22 +431,27 @@ func TestTerminalBlocksDispatchWithoutItsHold(t *testing.T) {
 	}
 }
 
-// The listener's read and write timeouts don't end a terminal.
-func TestTerminalOutlivesListenerTimeouts(t *testing.T) {
+// A terminal's connection carries none of the listener's read and write
+// deadlines once it is upgraded, so they can't end it.
+func TestTerminalClearsListenerDeadlines(t *testing.T) {
 	h := newManagementHarness(t)
 	id, _ := terminalWork(t, h, "terminal-timeouts")
 	dir := t.TempDir()
 	networkCerts(t, dir)
-	cfg := management.NetworkConfig{Addr: "127.0.0.1:0", CertFile: filepath.Join(dir, "server.pem"), KeyFile: filepath.Join(dir, "server.key")}
-	ln, err := management.ListenNetwork(cfg)
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "server.pem"), filepath.Join(dir, "server.key"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := management.NetworkServer(management.NewNetwork(cfg, h.clock.Now).Handler(h.server))
-	srv.ReadTimeout, srv.WriteTimeout = 200*time.Millisecond, 200*time.Millisecond
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := &deadlineListener{Listener: tcp}
+	ln := tls.NewListener(seen, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"http/1.1"}})
+	srv := management.NetworkServer(management.NewNetwork(management.NetworkConfig{}, h.clock.Now).Handler(h.server))
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
-	c, err := client.NewWithOptions("https://"+ln.Addr().String(), ownerToken(t, h), client.Options{CAFile: filepath.Join(dir, "ca.pem")})
+	c, err := client.NewWithOptions("https://"+tcp.Addr().String(), ownerToken(t, h), client.Options{CAFile: filepath.Join(dir, "ca.pem")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,12 +462,79 @@ func TestTerminalOutlivesListenerTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer term.Close()
+	defer term.Detach()
 	r := bufio.NewReader(term)
 	readUntil(t, r, "ready")
-	time.Sleep(600 * time.Millisecond)
+	if !seen.armed() {
+		t.Fatal("the listener set no deadline, so this proves nothing")
+	}
+	if read, write := seen.current(); !read.IsZero() || !write.IsZero() {
+		t.Fatalf("the upgraded connection keeps deadlines: read %v, write %v", read, write)
+	}
 	if _, err = term.Write([]byte("late\n")); err != nil {
 		t.Fatal(err)
 	}
 	readUntil(t, r, "got:late")
+}
+
+// deadlineListener records the deadlines last set on its one connection
+// that served a request.
+type deadlineListener struct {
+	net.Listener
+	mu          sync.Mutex
+	read, write time.Time
+	set         bool
+}
+
+func (l *deadlineListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &deadlineConn{Conn: c, l: l}, nil
+}
+
+func (l *deadlineListener) note(read, write *time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if read != nil {
+		l.read = *read
+		l.set = l.set || !read.IsZero()
+	}
+	if write != nil {
+		l.write = *write
+		l.set = l.set || !write.IsZero()
+	}
+}
+
+func (l *deadlineListener) armed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.set
+}
+
+func (l *deadlineListener) current() (time.Time, time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.read, l.write
+}
+
+type deadlineConn struct {
+	net.Conn
+	l *deadlineListener
+}
+
+func (c *deadlineConn) SetDeadline(at time.Time) error {
+	c.l.note(&at, &at)
+	return c.Conn.SetDeadline(at)
+}
+
+func (c *deadlineConn) SetReadDeadline(at time.Time) error {
+	c.l.note(&at, nil)
+	return c.Conn.SetReadDeadline(at)
+}
+
+func (c *deadlineConn) SetWriteDeadline(at time.Time) error {
+	c.l.note(nil, &at)
+	return c.Conn.SetWriteDeadline(at)
 }
