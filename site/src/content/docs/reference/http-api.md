@@ -77,6 +77,7 @@ A list returns `{"items": […], "next_cursor": …}` (the Work list adds `total
 | `GET` | `/v1/work/{id}/actions` | view | work | – | – |
 | `GET` | `/v1/scopes/{id}/actions` | view | scope | – | – |
 | `GET` | `/v1/work/{id}/panels` | view | work | – | – |
+| `GET` | `/v1/work/{id}/terminal` | operate | work | – | – |
 | `GET` | `/v1/work/{id}/config-candidate` | view | daemon | – | – |
 | `GET` | `/v1/pages` | view | daemon | – | – |
 | `GET` | `/v1/extensions` | view | any | – | – |

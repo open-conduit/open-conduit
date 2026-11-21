@@ -46,7 +46,13 @@ var eventAudited = map[string]bool{
 // nothing, and never the toolbelt (an execution's calls, which
 // toolbelt.called records).
 func audited(rt *route) bool {
-	if rt == nil || !rt.mutation || rt.pattern[0] == "toolbelt" {
+	if rt == nil {
+		return false
+	}
+	if strings.Join(rt.pattern, "/") == "work/*/terminal" {
+		return true
+	}
+	if !rt.mutation || rt.pattern[0] == "toolbelt" {
 		return false
 	}
 	switch strings.Join(rt.pattern, "/") {

@@ -89,6 +89,10 @@ type Options struct {
 	// ContainerDetach removes one of the Work's attach containers.
 	ContainerAttach func(ctx context.Context, executor string, work domain.Work, execution domain.ID) (ContainerAttachment, error)
 	ContainerDetach func(ctx context.Context, work domain.Work, ref string) error
+	// StartTerminal runs an attach process on the host under a
+	// pseudo-terminal, for GET /work/{id}/terminal (optional: without it
+	// the route answers attach_unsupported).
+	StartTerminal func(ctx context.Context, spec TerminalSpec) (TerminalProcess, error)
 	// Live returns a running attempt's output so far from its executor
 	// registration (ErrLiveUnsupported, ErrNotLive).
 	Live func(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error)
@@ -229,6 +233,8 @@ func mapError(err error) *apiError {
 		return fail(422, "interrupt_unsupported", "the running attempt's executor does not support interrupt; cancel the turn instead")
 	case errors.Is(err, runtime.ErrHeld):
 		return fail(409, "hold_conflict", "the Work is already held, or not held")
+	case errors.Is(err, runtime.ErrTerminalOpen):
+		return fail(409, "terminal_open", "a terminal is open on this Work; it releases the Work when it ends")
 	case errors.Is(err, ErrNothingToAttach):
 		return fail(409, "nothing_to_attach", "the Work's executor has nothing to attach to yet")
 	case errors.Is(err, ErrAttachUnsupported):
@@ -544,6 +550,9 @@ var routes = []route{
 	{"GET", []string{"work", "*", "actions"}, targetWork, false, false, (*Server).listWorkActions},
 	{"GET", []string{"scopes", "*", "actions"}, targetScope, false, false, (*Server).listScopeActions},
 	{"GET", []string{"work", "*", "panels"}, targetWork, false, false, (*Server).listWorkPanels},
+	// A WebSocket opens with a GET, but this acts on the Work: requiredRole
+	// and audited treat it as the control it is.
+	{"GET", []string{"work", "*", "terminal"}, targetWork, false, false, (*Server).openTerminal},
 	// A candidate's text is the whole daemon's config, so it is read
 	// daemon-wide, as GET /config is.
 	{"GET", []string{"work", "*", "config-candidate"}, targetDaemon, false, false, (*Server).configCandidate},
@@ -709,6 +718,9 @@ func requiredRole(rt *route, parts []string, query url.Values) string {
 	}
 	if path == "doctor" && slices.Contains(query["check_secrets"], "true") {
 		return RoleAdmin
+	}
+	if path == "work/*/terminal" {
+		return RoleOperate
 	}
 	if !rt.mutation {
 		return RoleView

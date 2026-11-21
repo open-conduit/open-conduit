@@ -184,13 +184,20 @@ func (o *operator) workControl(sub string, args []string) int {
 	case "attach":
 		f := newFlags("attach")
 		keep := f.fs.Bool("keep-held", false, "")
+		stream := f.fs.Bool("stream", false, "")
 		pos, err := f.parse(args)
 		if err != nil || len(pos) != 1 {
-			return usageError(o.errOut, "expected work attach ID [--keep-held]")
+			return usageError(o.errOut, "expected work attach ID [--keep-held] [--stream]")
 		}
 		c, _, err := o.client()
 		if err != nil {
 			return o.emit(nil, err)
+		}
+		if *stream || c.Remote() {
+			if err := o.streamTerminal(c, pos[0], *keep); err != nil {
+				return o.emit(nil, err)
+			}
+			return 0
 		}
 		run := o.env.Attach
 		if run == nil {
@@ -212,16 +219,23 @@ func (o *operator) workControl(sub string, args []string) int {
 // binary's own, never reached here).
 func (o *operator) container(args []string) int {
 	if len(args) == 0 || args[0] != "attach" {
-		return usageError(o.errOut, "expected container attach ID")
+		return usageError(o.errOut, "expected container attach ID [--stream]")
 	}
 	f := newFlags("container attach")
+	stream := f.fs.Bool("stream", false, "")
 	pos, err := f.parse(args[1:])
 	if err != nil || len(pos) != 1 {
-		return usageError(o.errOut, "expected container attach ID")
+		return usageError(o.errOut, "expected container attach ID [--stream]")
 	}
 	c, _, err := o.client()
 	if err != nil {
 		return o.emit(nil, err)
+	}
+	if *stream || c.Remote() {
+		if err := o.streamTerminal(c, pos[0], false); err != nil {
+			return o.emit(nil, err)
+		}
+		return 0
 	}
 	run := o.env.Attach
 	if run == nil {

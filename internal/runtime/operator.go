@@ -60,6 +60,13 @@ func heldInTx(tx storage.Tx, work domain.ID) error {
 	if held {
 		return ErrNotEligible
 	}
+	// An open terminal keeps the session to itself whichever hold is on the
+	// Work, and whatever released it.
+	if _, open, err := TerminalInTx(tx, work); err != nil {
+		return err
+	} else if open {
+		return ErrNotEligible
+	}
 	return nil
 }
 
@@ -263,6 +270,13 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 			return ErrHeld
 		} else if h.Kind == HoldKindGate {
 			return ErrGateHold
+		}
+		// A release under an open terminal would start an attempt on the
+		// session the operator is typing into.
+		if _, open, e := TerminalInTx(tx, w.ID); e != nil {
+			return e
+		} else if open {
+			return ErrTerminalOpen
 		}
 		event, e = c.controlEvent(ctx, tx, w, delivery, domain.EventManualRelease, operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: acted}))
 		if e != nil {

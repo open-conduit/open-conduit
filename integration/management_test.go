@@ -20,6 +20,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -48,6 +49,7 @@ type managementHarness struct {
 	state      string
 	configPath string
 	store      storage.Store
+	control    *runtime.Control
 	clock      *conformance.Clock
 	scheduler  *runtime.Scheduler
 	router     *runtime.Router
@@ -212,6 +214,7 @@ func newHarness(t testing.TB, cfg string, register func(*config.Registry), wrap 
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.control = control
 	var served storage.Store = db
 	if wrap != nil {
 		served = wrap(db)
@@ -255,6 +258,7 @@ func newHarness(t testing.TB, cfg string, register func(*config.Registry), wrap 
 			}
 			return h.containerDetach(ctx, w, ref)
 		},
+		StartTerminal: bootstrap.StartTerminal,
 		ProviderTimeout: func(p string) <-chan time.Time {
 			if h.providerTimeout != nil {
 				return h.providerTimeout(p)
