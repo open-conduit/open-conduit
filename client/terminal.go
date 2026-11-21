@@ -171,8 +171,8 @@ func (t *Terminal) Abort() error {
 	return t.conn.CloseNow()
 }
 
-// Close detaches: the daemon ends the session and releases the hold.
-func (t *Terminal) Close() error {
+// Detach leaves the session: the daemon ends it and releases the hold.
+func (t *Terminal) Detach() error {
 	defer t.cancel()
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }

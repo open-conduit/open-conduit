@@ -37,7 +37,7 @@ func (o *operator) streamTerminal(c *client.Client, id string, keep bool) error 
 	if err != nil {
 		return err
 	}
-	defer t.Close()
+	defer t.Detach()
 	fmt.Fprintf(o.errOut, "open-conduit: attached to %s through the daemon; new events queue until you exit\r\n", id)
 	if raw {
 		state, err := term.MakeRaw(file.Fd())
@@ -52,7 +52,7 @@ func (o *operator) streamTerminal(c *client.Client, id string, keep bool) error 
 	go func() {
 		for s := range sigs {
 			if s != syscall.SIGWINCH {
-				_ = t.Close()
+				_ = t.Detach()
 				return
 			}
 			if raw {
