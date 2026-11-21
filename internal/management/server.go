@@ -715,7 +715,7 @@ func routePath(rt *route) string {
 // applying a submitted include's fragment needs configure; applying the
 // whole config, exporting it (it carries secret reference text), reading
 // the audit ledger,
-// issuing operators' credentials, trusting an issuer or changing its group
+// listing or issuing operators' credentials, trusting an issuer or changing its group
 // table, installing a release of the daemon's binary, and every secrets
 // route, listing included, need admin; every other control needs operate. Revoking another
 // operator's credential needs admin too, which revoke checks itself.
@@ -726,7 +726,7 @@ func routePath(rt *route) string {
 // admin.
 func requiredRole(rt *route, parts []string, query url.Values) string {
 	path := strings.Join(rt.pattern, "/")
-	if path == "config/export" || path == "audit" || rt.pattern[0] == "secrets" {
+	if path == "config/export" || path == "audit" || path == "auth/operators" || rt.pattern[0] == "secrets" {
 		return RoleAdmin
 	}
 	if path == "doctor" && slices.Contains(query["check_secrets"], "true") {
@@ -741,7 +741,7 @@ func requiredRole(rt *route, parts []string, query url.Values) string {
 	switch path {
 	case "scopes/*/route/trace", "config/validate":
 		return RoleView
-	case "config/apply", "auth/operators", "auth/issuers/*", "releases/install":
+	case "config/apply", "auth/issuers/*", "releases/install":
 		return RoleAdmin
 	case "config/includes/*/apply":
 		return RoleConfigure
