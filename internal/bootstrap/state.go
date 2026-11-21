@@ -124,7 +124,7 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	out := cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}
+	out := cli.BackupInfo{Path: bundle, Backend: info.Backend, Schema: info.Schema, RecordFormat: info.Records, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}
 	if p := info.PreUpgrade; p != nil {
 		out.PreUpgrade = &cli.PreUpgradeInfo{RecordFormat: p.Records, Schema: p.Schema, FromBuild: p.FromBuild}
 	}
@@ -186,7 +186,7 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -202,11 +202,69 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 		return info, err
 	}
 	defer store.Close()
+	if err := endRestoredDrain(ctx, store); err != nil {
+		return info, err
+	}
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		return info, err
 	}
-	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, o.ConfigPath)
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o))
+	info.StartConfig = o.StartConfig
 	return info, err
+}
+
+// restoreConfigPath is the config file whose packages the restored
+// generation is checked against.
+func restoreConfigPath(o cli.RestoreOptions) string {
+	if o.StartConfig != "" {
+		return o.StartConfig
+	}
+	return o.ConfigPath
+}
+
+// withStartConfig publishes the operator's start config into a restore's
+// stage, after the storage choice is recorded and before the directory is
+// published: a config that is refused leaves nothing published, so a daemon
+// can't start on the old machine's generation by accident.
+func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOptions) backup.Record {
+	if o.StartConfig == "" {
+		return record
+	}
+	return func(dir, backend string) error {
+		if record != nil {
+			if err := record(dir, backend); err != nil {
+				return err
+			}
+		}
+		_, store, err := openState(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		data, err := config.ReadFile(o.StartConfig)
+		if err != nil {
+			return fmt.Errorf("reading the start config: %w", err)
+		}
+		var published error
+		diags, _, err := checkAgainstPackages(o.StartConfig, "", data, func(reg config.Registry) (*config.Snapshot, error) {
+			s, err := management.PublishStartConfig(ctx, store, func() time.Time { return time.Now().UTC() }, reg, o.StartConfig)
+			var invalid *config.ValidationError
+			if err != nil && !errors.As(err, &invalid) {
+				published = err // A refusal, not a diagnostic: say it as it is.
+			}
+			return s, err
+		})
+		if published != nil {
+			return fmt.Errorf("the start config can't be published over the bundle's state: %w", published)
+		}
+		if err != nil {
+			return fmt.Errorf("checking the start config: %w", err)
+		}
+		if len(diags) > 0 {
+			return fmt.Errorf("the start config %s doesn't validate here: %s: %s (%s)", o.StartConfig, diags[0].Path, diags[0].Message, diags[0].Code)
+		}
+		return nil
+	}
 }
 
 // restoredConfig reads the committed config generation a restore brought
@@ -353,17 +411,16 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 			workScope[w.ID] = w.ScopeID
 			s := scope(w.ScopeID)
 			s.Works[string(w.State)]++
-			if w.State == domain.WorkRunning || w.State == domain.WorkWaiting {
-				s.DrainBlockedWork = append(s.DrainBlockedWork, string(w.ID))
-			}
 			xs, err := tx.ListExecutions(w.ID)
 			if err != nil {
 				return err
 			}
+			blocked := false
 			for _, x := range xs {
 				if !x.State.Terminal() {
 					s.LiveExecutions++
 				}
+				blocked = blocked || runtime.InFlight(x)
 				if ferr != nil {
 					continue
 				}
@@ -382,6 +439,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 					}
 					rc.Close()
 				}
+			}
+			if blocked {
+				s.DrainBlockedWork = append(s.DrainBlockedWork, string(w.ID))
 			}
 			ws, err := tx.ListWaits(w.ID)
 			if err != nil {
@@ -423,7 +483,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	for _, id := range ids {
 		s := scopes[id]
 		sort.Strings(s.DrainBlockedWork)
-		s.Drained = s.LiveExecutions == 0 && s.ActiveWaits == 0 && len(s.DrainBlockedWork) == 0
+		// A parked attempt and its Waits hold no process and travel with the
+		// state, so only an attempt in flight keeps a scope from being drained.
+		s.Drained = len(s.DrainBlockedWork) == 0
 		r.Scopes = append(r.Scopes, *s)
 	}
 	return r, nil
@@ -505,5 +567,10 @@ func authenticated(bundle string, o cli.RestoreOptions) (cli.BackupInfo, backup.
 		return info, trust, err
 	}
 	info.Authenticity, info.SigningKey = found.Status, found.KeyID
+	// Once the manifest is trusted, a bundle a newer binary wrote is refused
+	// from it, before a stage is made or a byte is copied.
+	if err := backup.CheckFormat(bundle, restoreBackends); err != nil {
+		return info, trust, err
+	}
 	return info, trust, nil
 }

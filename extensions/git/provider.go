@@ -138,8 +138,11 @@ type lease struct {
 	DotEnv        bool     `json:"dotenv,omitempty"`
 	Copy          []string `json:"copy,omitempty"`
 	RetainSeconds int64    `json:"retain_seconds"`
-	Code          string   `json:"code,omitempty"`
-	Attempts      int      `json:"cleanup_attempts,omitempty"`
+	// moved is set by load on a lease whose workspace came with a moved
+	// state directory. It isn't stored: saving records the new Path.
+	moved    bool
+	Code     string `json:"code,omitempty"`
+	Attempts int    `json:"cleanup_attempts,omitempty"`
 	// NextAttempt is when a site lease whose cleanup failed is tried
 	// again (siteBackoff), and RetentionOver that its removal is retention
 	// ending, so it goes whatever it holds.
@@ -192,7 +195,46 @@ func (p *Provider) load(ref string) (lease, bool, error) {
 	if err = json.Unmarshal(b, &l); err != nil || l.Ref != ref {
 		return l, false, fmt.Errorf("git provider: unreadable lease %s", ref)
 	}
+	// A state directory that was moved carries its workspaces, while the
+	// ledger still names where they were.
+	if l.Site == "" && l.Path != "" && l.Mode != extension.ResourceShared && !p.owned(l.Path) {
+		if here := filepath.Join(p.o.StateDir, "workspaces", ref); exists(here) {
+			l.Path, l.moved = here, true
+		}
+	}
 	return l, true, nil
+}
+
+// reattach makes a moved workspace usable where it now is. A clone stands
+// alone. A worktree's links to its checkout hold absolute paths, which git
+// repairs while the checkout still has the worktree's record.
+func (p *Provider) reattach(ctx context.Context, checkout string, l *lease) bool {
+	if p.valid(ctx, l.Mode, checkout, l.Path) {
+		return true
+	}
+	if l.Mode == ModeClone || !exists(checkout) {
+		return false
+	}
+	if _, err := p.git(ctx, checkout, "worktree", "repair", l.Path); err != nil {
+		return false
+	}
+	return p.valid(ctx, l.Mode, checkout, l.Path)
+}
+
+// keepMoved sets aside a moved workspace that can't be reattached, so making
+// a new one at its path can't destroy what it holds. It is never deleted: the
+// operator recovers from it by hand.
+func (p *Provider) keepMoved(l *lease, log io.Writer) error {
+	dir := filepath.Join(p.o.StateDir, "moved")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	aside := filepath.Join(dir, fmt.Sprintf("%s-%d", l.Ref, p.o.Now().UnixNano()))
+	if err := os.Rename(l.Path, aside); err != nil {
+		return err
+	}
+	logf(log, "the workspace moved with the state directory but can't be reattached to its checkout; kept at %s", aside)
+	return nil
 }
 
 // save writes a lease atomically and durably.
@@ -474,6 +516,11 @@ func (p *Provider) fresh(ctx context.Context, cfg Config, checkout string, a ext
 		return extension.Resource{}, err
 	}
 	var w workspace
+	if ok && l.moved && !p.reattach(ctx, checkout, &l) {
+		if err = p.keepMoved(&l, log); err != nil {
+			return extension.Resource{}, err
+		}
+	}
 	if ok && l.Path != "" && p.validWorktree(ctx, checkout, l.Path) {
 		w.Reused = true
 		logf(log, "reusing %s", l.Path)
@@ -523,6 +570,11 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout, mode string, 
 		branch = strings.NewReplacer("{work}", sanitize(string(a.Owner.WorkID)), "{scope}", sanitize(string(a.Owner.ScopeID))).Replace(cfg.BranchTemplate)
 	}
 	var w workspace
+	if ok && l.moved && !p.reattach(ctx, checkout, &l) {
+		if err = p.keepMoved(&l, log); err != nil {
+			return extension.Resource{}, err
+		}
+	}
 	if ok && l.Path != "" && p.valid(ctx, mode, checkout, l.Path) {
 		w.Reused = true
 		if branch != l.Branch {
@@ -775,6 +827,15 @@ func (p *Provider) Lookup(ctx context.Context, o extension.ResourceOwner, ref st
 	if !owned || (l.State != stateActive && l.State != stateSetupFailed) || (l.Site == "" && !exists(l.Path)) {
 		return extension.Resource{}, extension.ErrResourceNotFound
 	}
+	// One that can't be reattached is for Acquire, which sets it aside.
+	if l.moved {
+		if !p.reattach(ctx, l.Checkout, &l) {
+			return extension.Resource{}, extension.ErrResourceNotFound
+		}
+		if err = p.save(&l); err != nil {
+			return extension.Resource{}, err
+		}
+	}
 	w := workspace{Reused: true}
 	if l.Site == "" {
 		w.Head = p.head(ctx, l.Path)
@@ -816,6 +877,17 @@ func (p *Provider) reconcileOne(ctx context.Context, ref string, status extensio
 	l, ok, err := p.load(ref)
 	if err != nil || !ok {
 		return err
+	}
+	// A moved workspace that can't be reattached may hold the only copy of
+	// its work, so nothing here removes it: an operator decides.
+	if l.moved {
+		if !p.reattach(ctx, l.Checkout, &l) {
+			report.Attention = append(report.Attention, extension.ResourceLeaseReport{Ref: l.Ref, Mode: l.Mode, State: l.State, Code: "moved_unattached"})
+			return nil
+		}
+		if err := p.save(&l); err != nil {
+			return err
+		}
 	}
 	now := p.o.Now()
 	retain := func(code string) error {

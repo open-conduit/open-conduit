@@ -157,7 +157,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "quiescence": o.quiescence, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
+	commands := map[string]func([]string) int{"health": o.health, "quiescence": o.quiescence, "drain": o.drain, "portability": o.portability, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -433,6 +433,61 @@ func (o *operator) quiescence(args []string) int {
 	defer cancel()
 	q, err := c.Quiescence(cx)
 	if code := o.emit(q, err); code != 0 || q.Quiescent {
+		return code
+	}
+	return 1
+}
+
+// drain begins a drain, or with status reads it and with end ends it. It
+// exits 0 only once the state is safe to move, so a script can rerun it until
+// then; ending a drain exits 0.
+func (o *operator) drain(args []string) int {
+	const usage = "expected drain [--reason TEXT] | drain status | drain end"
+	action := ""
+	if len(args) > 0 && (args[0] == "status" || args[0] == "end") {
+		action, args = args[0], args[1:]
+	}
+	f := newFlags("drain", "reason")
+	pos, err := f.parse(args)
+	if err != nil || len(pos) != 0 || action != "" && f.get("reason") != "" {
+		return usageError(o.errOut, usage)
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	var status client.DrainStatus
+	switch action {
+	case "status":
+		status, err = c.DrainStatus(cx)
+	case "end":
+		status, err = c.EndDrain(cx)
+		return o.emit(status, err)
+	default:
+		status, err = c.BeginDrain(cx, f.get("reason"))
+	}
+	if code := o.emit(status, err); code != 0 || status.Safe {
+		return code
+	}
+	return 1
+}
+
+// portability prints what is tied to this machine; it exits 0 only when
+// nothing is and the daemon is drained.
+func (o *operator) portability(args []string) int {
+	if len(args) != 0 {
+		return usageError(o.errOut, "portability takes no arguments")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	p, err := c.Portability(cx)
+	if code := o.emit(p, err); code != 0 || p.Portable {
 		return code
 	}
 	return 1

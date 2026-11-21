@@ -155,7 +155,7 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
-	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
+	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
 		return info, err
 	}
 	swap, err := prepareSwap(ctx, stateDir, stage, stamp, restoredRecord{DatabaseSHA256: digest, BundleCreatedAt: info.CreatedAt, Bundle: bundle, RestoredAt: now})
@@ -450,6 +450,10 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 	if err != nil {
 		return info, err
 	}
+	if err := endRestoredDrain(ctx, store); err != nil {
+		store.Close()
+		return info, err
+	}
 	removed, err := management.ForgetRuns(lock, stateDir, func(ids []domain.ID) (map[domain.ID]bool, error) {
 		return knownExecutions(ctx, store, ids)
 	})
@@ -465,7 +469,8 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 		store.Close()
 		return info, err
 	}
-	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, o.ConfigPath)
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o))
+	info.StartConfig = o.StartConfig
 	store.Close()
 	if err != nil {
 		return info, err

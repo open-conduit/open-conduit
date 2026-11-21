@@ -162,6 +162,20 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromSweepReport(rep), nil
+	case "provider.unsaved":
+		var p protocol.ProviderUnsavedParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Providers[p.Type].(extension.ResourceUnsavedReporter)
+		if !ok {
+			return nil, notFound(method)
+		}
+		found, err := prov.Unsaved(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromUnsaved(found), nil
 	case "sandbox_provider.plan":
 		var p protocol.SandboxProviderPlanParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

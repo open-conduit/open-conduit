@@ -59,6 +59,10 @@ type Backend interface {
 	// Database.Fence) before the restored state can be opened, so no lease
 	// holder from before the snapshot can commit to it.
 	Restore(ctx context.Context, snapshot, destination string, now time.Time) error
+	// Writes is the versions this binary writes. State stored at a higher
+	// version is what Open and Inspect refuse, so a bundle that records a
+	// higher one can be refused from its manifest, before anything is copied.
+	Writes() StoredVersion
 }
 
 // Database is open coordination state.
@@ -86,6 +90,8 @@ type Inspection interface {
 	IntegrityCheck(ctx context.Context) error
 	// SchemaVersion is the schema of the stored state.
 	SchemaVersion() uint32
+	// Stored is the versions the state is stored at.
+	Stored(ctx context.Context) (StoredVersion, error)
 	Close() error
 }
 

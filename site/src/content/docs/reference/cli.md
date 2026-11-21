@@ -133,6 +133,19 @@ health                     the daemon's state and components; exits 1 unless it 
 quiescence                 what is in flight, or when the daemon is next due; exits 1 unless it is quiescent
 ```
 
+### `open-conduit drain`
+
+```text
+drain [--reason TEXT] | drain status | drain end
+                           stop starting attempts so the state can be moved; exits 1 until it is safe to move
+```
+
+### `open-conduit portability`
+
+```text
+portability                what is tied to this machine, before a move; exits 1 unless nothing is and it is drained
+```
+
 ### `open-conduit doctor`
 
 ```text
@@ -252,7 +265,7 @@ auth recover               (daemon stopped) revoke every operator credential and
 ### `open-conduit backup`
 
 ```text
-backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]   (create, verify and restore need the daemon stopped; list and fetch read a destination in settings.backup.destinations, and fetch needs a trust key or --accept-unsigned; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
+backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]   (create, verify and restore need the daemon stopped; list and fetch read a destination in settings.backup.destinations, and fetch needs a trust key or --accept-unsigned; a bundle is signed with settings.backup.signing_key and checked against settings.backup.trust_keys or --trust-key; --to writes a new state directory, --in-place replaces the daemon's own and moves what it replaces to before-restore-*; both put the artifacts into an empty store, write a fresh operator token and report why the config generation would not validate against the installed packages)
 ```
 
 ### `open-conduit state`

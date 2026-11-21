@@ -22,6 +22,7 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, an optional `Log` writer for human-readable progress, and `Files`: paths relative to the resource's directory that the executor wants read at acquisition. The host sets `Sandboxed` itself. |
 | `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). `Site` names the site `Dir` is at, empty for the host, and `Files` holds the requested files read there. |
 | `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept. |
+| `ResourceUnsavedReporter` | Optional `Unsaved()`: lists the resources holding work that exists only there, for the [portability report](../recovery/#moving-a-daemon-to-another-machine). It changes nothing. |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
 
 These are the guarantees a provider must meet:
@@ -106,6 +107,10 @@ The provider keeps a private ledger (`<state>/resources/git/leases/<ref>.json`, 
 - **Failed cleanup.** A failed removal becomes `cleanup_failed`, is reported in the reconcile result and the doctor `resources` check (`warn`), and is retried on every pass, including after a restart.
 
 The daemon reconciles every `ResourceInterval` (default 5s) in the background. Doctor shows `ok`, `info retained` with each retained lease and its expiry, or `warn cleanup_failed/reconcile_failed`.
+
+### A workspace that moved with its state directory
+
+A lease records its workspace's absolute path. When the state directory has moved, the provider finds the workspace under its own `workspaces/` by the lease's ref and uses it there. A clone needs nothing more. A worktree's links to its checkout are absolute, so the provider runs `git worktree repair` while the checkout still has the worktree's record. A worktree that can't be reattached (the checkout is a new clone on another machine, say) is never treated as a crash's leftover: the next acquire moves it whole to `moved/<ref>-<time>` in the provider's state directory and makes a new workspace, and `Reconcile` leaves it alone and reports `moved_unattached`.
 
 ## Disk safety and the spare-workspace sweep
 

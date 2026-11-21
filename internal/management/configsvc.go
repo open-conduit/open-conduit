@@ -185,6 +185,38 @@ func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []b
 	return c, nil
 }
 
+// PublishStartConfig makes the config file at path the active generation of
+// a stopped, just-restored store, in place of the generation the bundle was
+// taken on, whose paths may belong to another machine. The file is validated
+// as a config file (its includes must exist here), and publishing it follows
+// the rules of any apply, so one that drops a scope with open Work is
+// refused. The ledger records it.
+func PublishStartConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string) (*config.Snapshot, error) {
+	data, err := config.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
+	snapshot, err := config.ValidateFile(data, registry, c.includes(nil))
+	if err != nil {
+		return nil, err
+	}
+	stored, _, err := StoredGeneration(ctx, store, now)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err = c.publishLocked(ctx, snapshot, stored, func(tx storage.Tx, generation uint64, hash string) error {
+		_, err := tx.AppendAudit(domain.AuditRecord{Actor: "system:restore", Action: "core.config.start_config", Outcome: domain.AuditOK, Detail: map[string]string{"replaced_generation": u64(stored), "generation": u64(generation), "hash": hash}})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
 func (c *ConfigService) Current() (*config.Snapshot, uint64) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

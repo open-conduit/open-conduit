@@ -49,7 +49,7 @@ func Manifest() protocol.Manifest {
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Resources: []protocol.ResourceDecl{{Type: git.Type,
 			Modes:       []string{extension.ResourceShared, extension.ResourceWork, extension.ResourceFresh},
-			ModeDefault: true, Sandbox: true, Sweep: true, Sites: true,
+			ModeDefault: true, Sandbox: true, Sweep: true, Unsaved: true, Sites: true,
 			Settings: []protocol.SettingDecl{
 				setting("checkout", protocol.SettingString, ""),
 				setting("repository", protocol.SettingString, ""),
@@ -125,6 +125,14 @@ func (x *provider) Sweep(ctx context.Context, status extension.ResourceStatusFun
 	return p.Sweep(ctx, status)
 }
 
+func (x *provider) Unsaved(ctx context.Context) ([]extension.ResourceUnsaved, error) {
+	p, err := x.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return p.Unsaved(ctx)
+}
+
 func (*provider) ModeDefault(raw json.RawMessage) string { return git.ModeDefault(raw) }
 
 // UseSites keeps the host's site resolver for the provider, made on first
@@ -146,6 +154,7 @@ func (*provider) SandboxWorkspace(raw json.RawMessage, mode string) error {
 var _ interface {
 	extension.ResourceProvider
 	extension.ResourceSweeper
+	extension.ResourceUnsavedReporter
 	extension.ResourceModeDefaulter
 	extension.ResourceSandboxChecker
 	extension.ResourceSiteUser

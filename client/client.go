@@ -643,6 +643,92 @@ func (c *Client) Quiescence(ctx context.Context) (out Quiescence, err error) {
 	err = c.Do(ctx, "GET", "quiescence", nil, nil, "", &out)
 	return
 }
+
+// DrainReason is one kind of state a drain is waiting on or carrying.
+type DrainReason struct {
+	Code  string `json:"code"`
+	Count int    `json:"count"`
+}
+
+// DrainScope is one scope's attempts and Waits during a drain.
+type DrainScope struct {
+	ID          string   `json:"id"`
+	InFlight    int      `json:"in_flight"`
+	Parked      int      `json:"parked"`
+	ActiveWaits int      `json:"active_waits"`
+	Blocking    []string `json:"blocking_work,omitempty"`
+}
+
+// DrainStatus is /v1/drain: whether the daemon is draining and whether its
+// state can be moved yet.
+type DrainStatus struct {
+	Draining bool          `json:"draining"`
+	Since    *time.Time    `json:"since,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
+	Safe     bool          `json:"safe_to_move"`
+	Blocking []DrainReason `json:"blocking"`
+	Carried  []DrainReason `json:"carried"`
+	Scopes   []DrainScope  `json:"scopes"`
+}
+
+// DrainStatus reads the drain.
+func (c *Client) DrainStatus(ctx context.Context) (out DrainStatus, err error) {
+	err = c.Do(ctx, "GET", "drain", nil, nil, "", &out)
+	return
+}
+
+// BeginDrain stops new attempts. Beginning one already in force keeps it.
+func (c *Client) BeginDrain(ctx context.Context, reason string) (out DrainStatus, err error) {
+	body := struct {
+		Reason string `json:"reason,omitempty"`
+	}{reason}
+	err = c.Do(ctx, "POST", "drain", nil, body, "", &out)
+	return
+}
+
+// EndDrain lets the daemon start attempts again.
+func (c *Client) EndDrain(ctx context.Context) (out DrainStatus, err error) {
+	err = c.Do(ctx, "DELETE", "drain", nil, nil, "", &out)
+	return
+}
+
+// Portability is GET /v1/portability: everything tied to this machine.
+type Portability struct {
+	Portable bool        `json:"portable"`
+	Drain    DrainStatus `json:"drain"`
+	Secrets  []struct {
+		Path   string `json:"path"`
+		Scheme string `json:"scheme"`
+	} `json:"secrets"`
+	Paths []struct {
+		Path  string `json:"path"`
+		Value string `json:"value"`
+	} `json:"paths"`
+	Workspaces []struct {
+		Provider string `json:"provider"`
+		Ref      string `json:"ref"`
+		Mode     string `json:"mode,omitempty"`
+		Path     string `json:"path,omitempty"`
+		Site     string `json:"site,omitempty"`
+		Kept     string `json:"kept"`
+	} `json:"workspaces"`
+	Packages []struct {
+		Name    string `json:"name"`
+		Version string `json:"version,omitempty"`
+	} `json:"packages"`
+	Directories []struct {
+		Name string `json:"name"`
+		Why  string `json:"why"`
+	} `json:"directories"`
+	Unchecked []string `json:"unchecked,omitempty"`
+}
+
+// Portability reads what is tied to this machine.
+func (c *Client) Portability(ctx context.Context) (out Portability, err error) {
+	err = c.Do(ctx, "GET", "portability", nil, nil, "", &out)
+	return
+}
+
 func get[T any](c *Client, ctx context.Context, path string) (out T, err error) {
 	err = c.Do(ctx, "GET", path, nil, nil, "", &out)
 	return

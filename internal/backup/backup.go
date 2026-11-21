@@ -184,7 +184,11 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 			}
 			release()
 		}()
-		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return build, nil })
+		stored, err := db.Stored(ctx)
+		if err != nil {
+			return err
+		}
+		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return recordsBuild(build, stored.Records), nil })
 	})
 	return err
 }
@@ -315,6 +319,30 @@ func preUpgradeBuild(build string, stored storage.StoredVersion, from string) st
 	return fmt.Sprintf("%s pre-upgrade records=%d schema=%d from=%s", build, stored.Records, stored.Schema, from)
 }
 
+// recordsLabel is how an ordinary bundle's Build names its record format,
+// for the same reason a pre-upgrade bundle's label lives there: an older
+// binary refuses a manifest with a field it doesn't know, and would then
+// refuse every bundle, not only those it can't read.
+var recordsLabel = regexp.MustCompile(`^(.*) records=([0-9]+)$`)
+
+func recordsBuild(build string, records uint32) string {
+	return fmt.Sprintf("%s records=%d", build, records)
+}
+
+// parseRecords splits a Build into the build and the record format it names
+// (0 for a bundle from before bundles recorded one).
+func parseRecords(build string) (string, uint32) {
+	g := recordsLabel.FindStringSubmatch(build)
+	if g == nil {
+		return build, 0
+	}
+	records, err := strconv.ParseUint(g[2], 10, 32)
+	if err != nil {
+		return build, 0
+	}
+	return g[1], uint32(records)
+}
+
 // PreUpgrade is what a bundle taken before an upgrade says it holds.
 type PreUpgrade struct {
 	// Records and Schema are the versions the state was at.
@@ -384,6 +412,9 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	}
 	backend, err := backends(m.backend())
 	if err != nil {
+		return err
+	}
+	if err := refuseNewer(m, backend); err != nil {
 		return err
 	}
 	// The bundle may be somewhere others can write, so its database is read
@@ -532,6 +563,39 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		})
 	})
 	return err
+}
+
+// records is the record format the manifest names, 0 when it names none.
+func (m manifest) records() uint32 {
+	if _, p := parsePreUpgrade(m.Build); p != nil {
+		return p.Records
+	}
+	_, records := parseRecords(m.Build)
+	return records
+}
+
+// refuseNewer refuses a bundle whose manifest names a record format this
+// binary doesn't write, before any of it is copied. A bundle that names none
+// is left to the backend's own check when it is opened.
+func refuseNewer(m manifest, backend storage.Backend) error {
+	writes := backend.Writes().Records
+	if records := m.records(); records > writes {
+		return fmt.Errorf("backup: %w (the bundle is at record format %d; this binary writes %d): restore it with the newer binary that made it", storage.ErrRecordsNewer, records, writes)
+	}
+	return nil
+}
+
+// CheckFormat refuses a bundle a newer binary wrote, from its manifest alone.
+func CheckFormat(bundle string, backends Backends) error {
+	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
+	if err != nil {
+		return err
+	}
+	backend, err := backends(m.backend())
+	if err != nil {
+		return err
+	}
+	return refuseNewer(m, backend)
 }
 
 func (m manifest) backend() string {
@@ -723,9 +787,12 @@ func syncDirectory(path string) error {
 // Info summarizes a bundle's manifest.
 type Info struct {
 	// Backend names the storage backend the snapshot is for.
-	Backend   string
-	Schema    uint32
-	Build     string
+	Backend string
+	Schema  uint32
+	Build   string
+	// Records is the record format the bundle holds, 0 for a bundle from
+	// before bundles recorded one.
+	Records   uint32
 	CreatedAt time.Time
 	Artifacts int
 	// Omitted counts references whose expired content the bundle leaves out.
@@ -747,7 +814,10 @@ func Inspect(bundle string) (Info, error) {
 		return Info{}, err
 	}
 	build, preUpgrade := parsePreUpgrade(m.Build)
-	return Info{PreUpgrade: preUpgrade, Backend: m.backend(), Schema: m.Schema, Build: build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
+	if preUpgrade == nil {
+		build, _ = parseRecords(build)
+	}
+	return Info{PreUpgrade: preUpgrade, Records: m.records(), Backend: m.backend(), Schema: m.Schema, Build: build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
 }
 
 // openEmpty opens the store a restore imports into and refuses one that

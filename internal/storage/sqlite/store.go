@@ -255,6 +255,15 @@ func (s *Store) Close() error {
 }
 func (s *Store) SchemaVersion() uint32 { return SchemaVersion }
 
+// Stored is the versions the database is stored at.
+func (s *Store) Stored(ctx context.Context) (storage.StoredVersion, error) {
+	records, err := storedRecordFormat(ctx, s.readers)
+	if err != nil {
+		return storage.StoredVersion{}, err
+	}
+	return storage.StoredVersion{Schema: SchemaVersion, Records: records}, nil
+}
+
 // IntegrityCheck runs SQLite's full integrity_check and the foreign key
 // check. Its cost grows with the database, so Open runs the quicker
 // quick_check, which skips matching each index against its table; recovery

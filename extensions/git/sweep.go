@@ -73,6 +73,44 @@ func (p *Provider) Sweep(ctx context.Context, status extension.ResourceStatusFun
 	return report, errors.Join(errs...)
 }
 
+// keptAtSite is a workspace at a remote site, which a move of this host
+// doesn't carry and this report doesn't inspect.
+const keptAtSite = "at_site"
+
+// Unsaved lists the workspaces holding work that exists only there, for a
+// move of this host. It changes nothing. A shared lease is the operator's own
+// checkout, which isn't this provider's to report.
+func (p *Provider) Unsaved(ctx context.Context) ([]extension.ResourceUnsaved, error) {
+	all, err := p.leases()
+	if err != nil {
+		return nil, err
+	}
+	var out []extension.ResourceUnsaved
+	for _, l := range all {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		if l.Mode == extension.ResourceShared {
+			continue
+		}
+		item := extension.ResourceUnsaved{Ref: l.Ref, Mode: l.Mode, Path: l.Path, Site: l.Site}
+		if l.Site != "" {
+			item.Kept = keptAtSite
+			out = append(out, item)
+			continue
+		}
+		if !exists(l.Path) {
+			continue
+		}
+		// A process in it doesn't make its work unsaved: the drain report
+		// covers what is still running.
+		if item.Kept = p.keep(ctx, l.Path, l.Copy, nil); item.Kept != "" && item.Kept != keptInUse {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
 func (p *Provider) sweepLease(ctx context.Context, ref string, status extension.ResourceStatusFunc, report *extension.ResourceSweepReport) error {
 	defer p.lock(ref)()
 	l, ok, err := p.load(ref)

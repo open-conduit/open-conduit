@@ -171,6 +171,7 @@ func (fakeBackend) OpenPrior(context.Context, string) (storage.Prior, error) {
 func (fakeBackend) Restore(context.Context, string, string, time.Time) error {
 	return storage.ErrInvalid
 }
+func (fakeBackend) Writes() storage.StoredVersion { return storage.StoredVersion{} }
 
 // Without an artifact choice a state directory's artifacts are the file
 // store at <state>/artifacts.

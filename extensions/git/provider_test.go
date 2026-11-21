@@ -885,3 +885,40 @@ func TestAuthHint(t *testing.T) {
 		t.Fatalf("another failure: %q", h)
 	}
 }
+
+// Unsaved names a workspace with a commit no remote has or an uncommitted
+// edit. A clean workspace and the shared checkout are the negative controls.
+func TestUnsavedNamesWorkThatExistsOnlyHere(t *testing.T) {
+	f := newFixture(t)
+	work := cfg(map[string]any{"mode": "work", "branch_template": "agent/issue-{work}"})
+	clean, err := f.acquire(owner("clean", "x1"), work, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed, err := f.acquire(owner("committed", "x2"), work, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, committed.Dir, "work.txt", "committed")
+	runGit(t, committed.Dir, "add", "work.txt")
+	runGit(t, committed.Dir, "commit", "-qm", "work")
+	edited, err := f.acquire(owner("edited", "x3"), work, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, edited.Dir, "a.txt", "editing")
+	if _, err := f.acquire(owner("shared", "x4"), cfg(map[string]any{"mode": "shared"}), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	found, err := f.provider.Unsaved(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range found {
+		got[r.Ref] = r.Kept
+	}
+	if len(got) != 2 || got[committed.Ref] != keptUnpushed || got[edited.Ref] != keptUncommitted {
+		t.Fatalf("unsaved %+v (clean is %s)", found, clean.Ref)
+	}
+}

@@ -440,6 +440,12 @@ func (r *Remote) Provider(typ string) (extension.ResourceProvider, bool) {
 	for _, d := range r.m.Provides.Resources {
 		if d.Type == typ {
 			p := &remoteProvider{r: r, typ: typ}
+			if d.Sweep && d.Unsaved {
+				return reportingProvider{sweepingProvider{p}}, true
+			}
+			if d.Unsaved {
+				return unsavedProvider{p}, true
+			}
 			if d.Sweep {
 				return sweepingProvider{p}, true
 			}
@@ -464,6 +470,29 @@ func (p sweepingProvider) Sweep(ctx context.Context, status extension.ResourceSt
 		return extension.ResourceSweepReport{}, err
 	}
 	return out.Extension(), nil
+}
+
+func (p *remoteProvider) unsaved(ctx context.Context) ([]extension.ResourceUnsaved, error) {
+	var out protocol.ProviderUnsavedResult
+	if err := p.r.p.Call(ctx, "provider.unsaved", protocol.ProviderUnsavedParams{Type: p.typ}, &out); err != nil {
+		return nil, err
+	}
+	return out.Extension(), nil
+}
+
+// unsavedProvider is a remote provider declared with unsaved
+// (extension.ResourceUnsavedReporter).
+type unsavedProvider struct{ *remoteProvider }
+
+func (p unsavedProvider) Unsaved(ctx context.Context) ([]extension.ResourceUnsaved, error) {
+	return p.unsaved(ctx)
+}
+
+// reportingProvider is a remote provider declared with sweep and unsaved.
+type reportingProvider struct{ sweepingProvider }
+
+func (p reportingProvider) Unsaved(ctx context.Context) ([]extension.ResourceUnsaved, error) {
+	return p.unsaved(ctx)
 }
 
 // ownerStatus registers status under a fresh ID, which
