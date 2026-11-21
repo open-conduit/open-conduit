@@ -263,6 +263,30 @@ type ContainerPin struct {
 	Workspace, Site                                   string `json:",omitempty"`
 }
 
+// ContainerEgress is how a provider holds a binding's network.allow. Every
+// provider says which in the same words (Describe), in its plan's summary
+// and in doctor, so an operator reads the same guarantee whichever
+// provider runs the launch.
+type ContainerEgress string
+
+const (
+	// EgressEnforced: the run's only way out is the egress gateway (the
+	// gateway package or its released image), which reaches only the hosts
+	// network.allow lists and refuses a name that resolves inward.
+	EgressEnforced ContainerEgress = "enforced"
+	// EgressAdvisory: network.allow is checked against the hosts the
+	// executor declares (ContainerBinding), but the run reaches whatever
+	// its own network lets it.
+	EgressAdvisory ContainerEgress = "advisory"
+)
+
+// Describe is the egress as an operator reads it: "network.allow
+// enforced: <how>" or "network.allow advisory: <how>", how being the
+// provider's own account of the run's way out.
+func (e ContainerEgress) Describe(how string) string {
+	return "network.allow " + string(e) + ": " + how
+}
+
 // ContainerConfigSchema labels a binding's container config.
 const ContainerConfigSchema = "core.config.container.v1"
 

@@ -16,10 +16,10 @@ The remote is a [container provider](../sandboxes/#containers), `ssh`, so it wor
 | Files | the run's workspace, its run directory, the Work's own home, and what you list in `read` and `write`, at the same paths as on your machine; nothing else of yours |
 | Back on your machine | what the run changed under `write`, the run directory and the Work's home; never `.git/config`, `.git/hooks` or `.git/info` |
 | Credentials | the run's toolbelt token, the secrets the binding selects (such as Claude's sign-in), and through the toolbelt a GitHub token for the Work's one repository, revoked when the run ends; never your SSH key or Open Conduit's own token |
-| Network | whatever the remote's own firewall allows |
+| Network | with `"network": "gateway"`, only `network.allow`, through the gateway; with `"host"`, whatever the remote's own firewall allows |
 | Machine | pinned by its host key: a different key refuses every run |
 
-**Open Conduit can't limit the remote's network or its resources.** It still checks the hosts an executor says it needs against `network.allow`, but nothing on the remote enforces that list. Give the remote a firewall that does, and use a machine whose size is the limit.
+**Open Conduit can't firewall the remote or limit its resources.** To enforce `network.allow`, block the remote's outbound traffic and set `"network": "gateway"`: the run then gets out only through a gateway on this host, over its SSH connection, and a remote that can still connect out directly is refused. The remote needs `nc` for that check. With `"network": "host"` the list is advisory. `open-conduit doctor` says which each binding has. Use a machine whose size is the limit.
 
 ## Set up the remote
 
@@ -117,11 +117,11 @@ A remote binding declares a `container` with the `ssh` provider:
 | `image` | Pins the machine: `<host>@sha256:` and the SHA-256 of its host key. Leave it as above and run `open-conduit config check`, which gives the value to set. |
 | `write` | Paths copied to the remote and back. `{workspace}` is the run's workspace. The run directory and the Work's home always are. |
 | `read` | Paths only copied to the remote, such as `~/.gitconfig`. Each run copies them again, so keep them small. |
-| `network.allow` | The hosts the executor may say it needs. It isn't enforced on the remote. |
+| `network.allow` | The hosts the run may reach. Enforced with `provider.network` `gateway`, advisory with `host`. |
 | `provider.host`, `user`, `port` | Where to connect (port 22 unless you set one). |
 | `provider.host_key` | The remote's host key, `<type> <base64>`. |
 | `provider.identity` | The key to sign in with. Without it, ssh uses your `~/.ssh/config` and, if you grant it, your agent (below). |
-| `provider.network` | Must be `host`: you accept that the remote's own network applies. |
+| `provider.network` | `gateway` to enforce `network.allow` on a firewalled remote, or `host` to accept the remote's own network. |
 
 Leave `limits` out: the provider can't enforce them and refuses a config with them. Your `~/.ssh/config` still applies, so a `ProxyJump` to reach the remote works. Nothing there can change the host key Open Conduit checks.
 

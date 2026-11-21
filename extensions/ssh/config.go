@@ -31,15 +31,36 @@ type Settings struct {
 	// Identity is the private key ssh signs in with (ssh's own choice,
 	// its agent or config, when empty). ~ expands.
 	Identity string `json:"identity,omitempty"`
-	// Network acknowledges what the provider can't hold: the remote's own
-	// network. It must be "host": network.allow is checked against the
-	// executor's needs, but the remote reaches whatever its own firewall
-	// lets it.
+	// Network is how the run reaches out, and so whether network.allow is
+	// enforced (Egress). It must be set:
+	//
+	//   - "host": the remote's own network. network.allow is checked
+	//     against the executor's needs, but the run reaches whatever the
+	//     remote's firewall lets it: the allowlist is advisory;
+	//   - "gateway": the run's proxy is the egress gateway, run on this
+	//     host for each run and carried to the remote over the run's SSH
+	//     connection, which reaches only the hosts network.allow lists. The
+	//     operator firewalls the remote so that is its only way out, and
+	//     the provider checks it can't connect out directly before a run
+	//     (Health): the allowlist is enforced.
 	Network string `json:"network"`
 }
 
-// NetworkHost is the one Settings.Network: the remote host's own network.
-const NetworkHost = "host"
+// NetworkHost and NetworkGateway are the Settings.Network values: the
+// remote host's own network, and the egress gateway over SSH.
+const (
+	NetworkHost    = "host"
+	NetworkGateway = "gateway"
+)
+
+// Egress is how a binding on these settings holds its network.allow, and
+// the provider's account of the run's way out.
+func (s Settings) Egress() (extension.ContainerEgress, string) {
+	if s.Network == NetworkGateway {
+		return extension.EgressEnforced, "the remote's only way out is the gateway, over its ssh connection"
+	}
+	return extension.EgressAdvisory, "the remote's own network"
+}
 
 var (
 	hostPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*$`)
@@ -56,7 +77,7 @@ func ParseConfig(raw json.RawMessage) (extension.ContainerConfig, Settings, erro
 	if err != nil {
 		return extension.ContainerConfig{}, Settings{}, err
 	}
-	const shape = `the ssh provider's settings are {"host": "<host>", "user": "<user>", "port": 22, "host_key": "<type> <base64>", "identity": "<key file>", "network": "host"}`
+	const shape = `the ssh provider's settings are {"host": "<host>", "user": "<user>", "port": 22, "host_key": "<type> <base64>", "identity": "<key file>", "network": "host" or "gateway"}`
 	if len(bytes.TrimSpace(cfg.Provider)) == 0 {
 		return extension.ContainerConfig{}, Settings{}, errors.New(shape)
 	}
@@ -75,8 +96,8 @@ func ParseConfig(raw json.RawMessage) (extension.ContainerConfig, Settings, erro
 		return extension.ContainerConfig{}, Settings{}, fmt.Errorf("ssh port %d is out of range", s.Port)
 	case s.Identity != "" && !strings.HasPrefix(s.Identity, "/") && !strings.HasPrefix(s.Identity, "~/"):
 		return extension.ContainerConfig{}, Settings{}, fmt.Errorf("ssh identity %q must be absolute or under ~", s.Identity)
-	case s.Network != NetworkHost:
-		return extension.ContainerConfig{}, Settings{}, errors.New(`the ssh provider can't limit the remote's network: set "network": "host" to run with the remote's own (network.allow is still checked against what the executor declares)`)
+	case s.Network != NetworkHost && s.Network != NetworkGateway:
+		return extension.ContainerConfig{}, Settings{}, errors.New(`set the ssh provider's "network": "gateway" to enforce network.allow with the egress gateway (the remote firewalled so the gateway is its only way out), or "host" to run with the remote's own network, where network.allow is only checked against what the executor declares`)
 	case cfg.Limits.CPUs != 0 || cfg.Limits.Memory != "" || cfg.Limits.PIDs != 0:
 		return extension.ContainerConfig{}, Settings{}, errors.New("the ssh provider can't enforce limits: leave them out")
 	}

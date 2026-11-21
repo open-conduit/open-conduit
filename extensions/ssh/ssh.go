@@ -83,8 +83,16 @@ type Options struct {
 	// Root prefixes every path on the remote. It is empty but for a fake
 	// remote that shares the host's filesystem.
 	Root string
-	Now  func() time.Time
+	// EgressProbe are the outside addresses (host:port) a remote behind
+	// the gateway must not connect to directly (DefaultEgressProbe when
+	// nil).
+	EgressProbe []string
+	Now         func() time.Time
 }
+
+// DefaultEgressProbe are well-known public addresses: a remote that
+// connects to one has a way out other than its gateway.
+var DefaultEgressProbe = []string{"1.1.1.1:443", "8.8.8.8:443"}
 
 // Provider implements extension.ContainerProvider.
 type Provider struct {
@@ -115,6 +123,9 @@ func New(o Options) *Provider {
 	if o.Remotes == nil {
 		o.Remotes = func() []Settings { return nil }
 	}
+	if o.EgressProbe == nil {
+		o.EgressProbe = DefaultEgressProbe
+	}
 	return &Provider{o: o, health: map[string]time.Time{}}
 }
 
@@ -143,7 +154,10 @@ type Plan struct {
 	Secrets    string   `json:"secrets,omitempty"`
 	SecretKeys []string `json:"secret_keys,omitempty"`
 	Network    string   `json:"network"`
-	TTY        bool     `json:"tty,omitempty"`
+	// Allow are the hosts the run's gateway reaches, with Network
+	// "gateway".
+	Allow []string `json:"allow,omitempty"`
+	TTY   bool     `json:"tty,omitempty"`
 }
 
 var secretKey = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
@@ -198,6 +212,9 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	d.Remote, d.Daemon, d.Workdir, d.Argv, d.Records = s, s.Daemon(), l.Dir, l.Argv, paths.Records
 	d.Marker = filepath.Join(paths.Run, extension.ContainerTermMarker)
 	d.SecretKeys, d.Network, d.TTY = secretKeys, s.Network, l.TTY
+	if s.Network == NetworkGateway {
+		d.Allow = append([]string{}, cfg.Network.Allow...)
+	}
 	if len(needs.Sockets) > 0 {
 		d.Toolbelt = extension.CanonicalPath(paths.Toolbelt)
 	}
@@ -223,10 +240,12 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 		}
 	}
 	data, _ := json.Marshal(d)
-	summary := fmt.Sprintf("ssh %s: %d paths copied, %d copied back, the remote's own network", s.Endpoint(), len(d.Write)+len(d.Read), len(d.Write))
+	summary := fmt.Sprintf("ssh %s: %d paths copied, %d copied back", s.Endpoint(), len(d.Write)+len(d.Read), len(d.Write))
 	if d.Toolbelt != "" {
 		summary += ", toolbelt forwarded"
 	}
+	egress, how := s.Egress()
+	summary += ", " + egress.Describe(how)
 	return extension.ContainerPlan{Image: cfg.Image, Summary: summary, Data: domain.Payload{Schema: PlanSchema, Data: data}}, nil
 }
 
@@ -368,14 +387,19 @@ type record struct {
 // for the helper: how to reach the remote, what to forward and what comes
 // back.
 type Run struct {
-	ID       string           `json:"id"`
-	Ref      string           `json:"ref"`
-	SSH      []string         `json:"ssh"`
-	Host     string           `json:"host"`
-	Root     string           `json:"root,omitempty"`
-	Write    []string         `json:"write"`
-	Keep     []string         `json:"keep,omitempty"`
-	Toolbelt string           `json:"toolbelt,omitempty"`
+	ID       string   `json:"id"`
+	Ref      string   `json:"ref"`
+	SSH      []string `json:"ssh"`
+	Host     string   `json:"host"`
+	Root     string   `json:"root,omitempty"`
+	Write    []string `json:"write"`
+	Keep     []string `json:"keep,omitempty"`
+	Toolbelt string   `json:"toolbelt,omitempty"`
+	// Gateway runs the egress gateway for the run, allowing Allow, and
+	// carries its proxy to the remote; the run's stub refuses to start
+	// without it.
+	Gateway  bool             `json:"gateway,omitempty"`
+	Allow    []string         `json:"allow,omitempty"`
 	TTY      bool             `json:"tty,omitempty"`
 	Manifest map[string]Entry `json:"manifest"`
 }
@@ -440,7 +464,7 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	rec, _ := json.Marshal(record{Labels: labels, Image: plan.Image, Write: d.Write, Read: d.Read})
 	files := []tarFile{
 		{"record.json", rec, 0o600},
-		{"start", []byte(stub(p.o.Root, env, d.Workdir, d.Marker, d.Argv)), 0o700},
+		{"start", []byte(stub(p.o.Root, env, d.Workdir, d.Marker, d.Argv, d.Network == NetworkGateway)), 0o700},
 	}
 	if len(secrets) > 0 {
 		files = append(files, tarFile{SecretsFile, secrets, 0o600})
@@ -469,7 +493,8 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	if err != nil {
 		return extension.ContainerCreated{}, fmt.Errorf("could not copy the launch's paths to %s: %v", d.Remote.Endpoint(), err)
 	}
-	run := Run{ID: id, Ref: ref, SSH: p.sshArgv(d.Remote), Host: d.Remote.Host, Root: p.o.Root, Write: d.Write, Keep: append(append([]string{}, d.Keep...), d.Toolbelt), Toolbelt: d.Toolbelt, TTY: d.TTY, Manifest: manifest}
+	run := Run{ID: id, Ref: ref, SSH: p.sshArgv(d.Remote), Host: d.Remote.Host, Root: p.o.Root, Write: d.Write, Keep: append(append([]string{}, d.Keep...), d.Toolbelt), Toolbelt: d.Toolbelt, TTY: d.TTY, Manifest: manifest,
+		Gateway: d.Network == NetworkGateway, Allow: d.Allow}
 	raw, _ = json.Marshal(run)
 	if err := writeFresh(RunFile(d.Records, id), raw); err != nil {
 		return extension.ContainerCreated{}, err

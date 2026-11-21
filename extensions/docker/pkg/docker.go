@@ -280,6 +280,7 @@ func (x *provider) check(ctx context.Context, cfg protocol.CheckConfig) protocol
 	var details, names []string
 	for _, u := range uses {
 		names = append(names, u.name)
+		out.Items = append(out.Items, u.name+": "+docker.Egress())
 		if seen[u.context+"\x00"+u.image] {
 			continue
 		}

@@ -7,16 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/gateway"
 )
 
 // HelperOptions are the helper's streams and timings.
@@ -30,7 +33,15 @@ type HelperOptions struct {
 	// when zero), checked every Interval (100ms when zero).
 	SignalRetry, Interval time.Duration
 	Now                   func() time.Time
+	// Gateway are the egress gateway's settings for a run behind one; the
+	// helper sets its address and allowlist from the host's record. Tests
+	// set its Resolve and Dial, so they reach no real service.
+	Gateway gateway.Options
 }
+
+// gatewayAttempts is how many remote ports a run behind a gateway tries:
+// the port is free on this host and may be taken on the remote.
+const gatewayAttempts = 3
 
 // RunHelper is `open-conduit extension-run ssh run --records <dir> <ref>`
 // (and the older `open-conduit remote run`): what an
@@ -78,51 +89,43 @@ func RunHelper(args []string, o HelperOptions) int {
 	if err != nil || run.Ref != ref || run.ID != id || len(run.SSH) == 0 || run.Host == "" {
 		return fail("no record of run %s", ref)
 	}
+	// The gateway's refusals share stderr with ssh. A file is safe to share
+	// and stays ssh's own descriptor, so an attach keeps its terminal.
+	if _, isFile := o.Stderr.(*os.File); run.Gateway && !isFile {
+		o.Stderr = &syncWriter{w: o.Stderr}
+	}
 	h := &helper{run: run, records: records, o: o}
 
-	start := append([]string{}, run.SSH...)
-	if run.Toolbelt != "" {
-		start = append(start, "-R", run.Root+run.Toolbelt+":"+run.Toolbelt, "-o", "ExitOnForwardFailure=yes", "-o", "StreamLocalBindUnlink=yes")
-	}
-	tty := "-T"
-	if run.TTY {
-		tty = "-t"
-	}
-	start = append(start, tty, run.Host, command(run.Root, scriptRun, id, strconv.FormatInt(o.Now().UnixNano(), 10)))
 	sigs := make(chan os.Signal, 8)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(sigs)
-	cli := exec.Command(start[0], start[1:]...)
-	cli.Stdin, cli.Stdout, cli.Stderr = o.Stdin, o.Stdout, o.Stderr
-	// An operator's attach runs ssh on their terminal, which carries their
-	// keys and signals itself; a segment's runs off the group.
-	if !run.TTY {
-		cli.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	if err := cli.Start(); err != nil {
-		return fail("%v", err)
-	}
-	done := make(chan struct{})
-	go func() { _ = cli.Wait(); close(done) }()
-	names := map[os.Signal]string{syscall.SIGTERM: "TERM", syscall.SIGINT: "INT", syscall.SIGHUP: "HUP"}
-	relayed := make(chan struct{})
-	go func() {
-		defer close(relayed)
-		for {
-			select {
-			case s := <-sigs:
-				if run.TTY {
-					continue
-				}
-				_ = extension.RecordContainerSignal(records, ref, strings.ToLower(names[s]))
-				h.relay(names[s])
-			case <-done:
-				return
+	for attempt := 1; ; attempt++ {
+		var gw *gateway.Gateway
+		port := ""
+		if run.Gateway {
+			if gw, port, err = h.startGateway(); err != nil {
+				return fail("could not start the egress gateway: %v", err)
 			}
 		}
-	}()
-	<-done
-	<-relayed
+		code, err := h.attach(port, sigs)
+		if gw != nil {
+			gw.Close()
+		}
+		if err != nil {
+			return fail("%v", err)
+		}
+		// ssh's own failure before the run started, most likely the
+		// forward's port being taken on the remote: try another.
+		if !run.Gateway || code != 255 || attempt >= gatewayAttempts {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		st, err := h.state(ctx)
+		cancel()
+		if err != nil || !st.StartedAt.IsZero() {
+			break
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -153,12 +156,115 @@ func RunHelper(args []string, o HelperOptions) int {
 	return code
 }
 
+// syncWriter is a writer two sources share.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
 type helper struct {
 	run     Run
 	records string
 	o       HelperOptions
 	// env is ssh's environment; nil inherits this process's.
 	env []string
+}
+
+// startGateway serves the run's egress gateway on this host's loopback and
+// returns its port, which the run's forward uses on the remote's loopback
+// too. Beyond the classes every gateway refuses, a name may not resolve to
+// an address of this host: the gateway runs here, not beside the run.
+func (h *helper) startGateway() (*gateway.Gateway, string, error) {
+	o := h.o.Gateway
+	o.Listen, o.Allow = "127.0.0.1:0", h.run.Allow
+	o.Socket, o.Forward = "", ""
+	if o.Log == nil {
+		o.Log = h.o.Stderr
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, "", fmt.Errorf("this host's addresses: %v", err)
+	}
+	o.Deny = append([]net.IP{}, o.Deny...)
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			o.Deny = append(o.Deny, n.IP)
+		}
+	}
+	g, err := gateway.Start(o)
+	if err != nil {
+		return nil, "", err
+	}
+	_, port, err := net.SplitHostPort(g.ProxyAddr())
+	if err != nil {
+		g.Close()
+		return nil, "", err
+	}
+	return g, port, nil
+}
+
+// attach runs ssh for the run until it ends, relaying signals, and returns
+// ssh's exit code. port is the gateway's, forwarded to the same port on
+// the remote's loopback; "" for a run with no gateway.
+func (h *helper) attach(port string, sigs <-chan os.Signal) (int, error) {
+	run, o := h.run, h.o
+	start := append([]string{}, run.SSH...)
+	if run.Toolbelt != "" {
+		start = append(start, "-R", run.Root+run.Toolbelt+":"+run.Toolbelt, "-o", "StreamLocalBindUnlink=yes")
+	}
+	if port != "" {
+		start = append(start, "-R", "127.0.0.1:"+port+":127.0.0.1:"+port)
+	}
+	if run.Toolbelt != "" || port != "" {
+		start = append(start, "-o", "ExitOnForwardFailure=yes")
+	}
+	tty := "-T"
+	if run.TTY {
+		tty = "-t"
+	}
+	args := []string{run.ID, strconv.FormatInt(o.Now().UnixNano(), 10)}
+	if port != "" {
+		args = append(args, port)
+	}
+	start = append(start, tty, run.Host, command(run.Root, scriptRun, args...))
+	cli := exec.Command(start[0], start[1:]...)
+	cli.Stdin, cli.Stdout, cli.Stderr = o.Stdin, o.Stdout, o.Stderr
+	// An operator's attach runs ssh on their terminal, which carries their
+	// keys and signals itself; a segment's runs off the group.
+	if !run.TTY {
+		cli.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	if err := cli.Start(); err != nil {
+		return 0, err
+	}
+	done := make(chan struct{})
+	go func() { _ = cli.Wait(); close(done) }()
+	names := map[os.Signal]string{syscall.SIGTERM: "TERM", syscall.SIGINT: "INT", syscall.SIGHUP: "HUP"}
+	relayed := make(chan struct{})
+	go func() {
+		defer close(relayed)
+		for {
+			select {
+			case s := <-sigs:
+				if run.TTY {
+					continue
+				}
+				_ = extension.RecordContainerSignal(h.records, run.Ref, strings.ToLower(names[s]))
+				h.relay(names[s])
+			case <-done:
+				return
+			}
+		}
+	}()
+	<-done
+	<-relayed
+	return cli.ProcessState.ExitCode(), nil
 }
 
 // collect copies the run's changes back once: a run already collected,
