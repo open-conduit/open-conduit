@@ -43,6 +43,38 @@ func (b brokenDedupTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	return b.Tx.AcceptEvent(e)
 }
 
+// forgetsRetired treats a tombstone as no record of the delivery, so a
+// redelivery of a retired Event is accepted again.
+type forgetsRetired struct{ storage.Store }
+type forgetsRetiredTx struct{ storage.Tx }
+
+func (b forgetsRetired) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(forgetsRetiredTx{tx}) })
+}
+func (b forgetsRetiredTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
+	a, added, err := b.Tx.AcceptEvent(e)
+	if err == nil && !added && a.Retired {
+		return domain.AcceptedEvent{Event: e, Sequence: a.Sequence + 1}, true, nil
+	}
+	return a, added, err
+}
+
+// liveMaxSequence answers LatestSequence from the live rows, so retiring
+// the newest Event moves it backwards.
+type liveMaxSequence struct{ storage.Store }
+type liveMaxSequenceTx struct{ storage.Tx }
+
+func (b liveMaxSequence) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(liveMaxSequenceTx{tx}) })
+}
+func (b liveMaxSequenceTx) LatestSequence() (uint64, error) {
+	rows, err := b.Tx.Events(0, 0)
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	return rows[len(rows)-1].Sequence, nil
+}
+
 // brokenStepBack renews the way backends did before a stepped-back clock
 // was tolerated: it refuses a renewal whose new expiry is earlier than the
 // stored one.
@@ -618,6 +650,8 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		factory          func() storage.Store
 	}{
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
+		{"retired_event_keeps_identity_and_sequence", "redelivery accepted again", func() storage.Store { return forgetsRetired{reference.New()} }},
+		{"retired_event_keeps_identity_and_sequence", "sequence went backwards", func() storage.Store { return liveMaxSequence{reference.New()} }},
 		{"event_actor_round_trip", "event actor lost", func() storage.Store { return brokenActor{reference.New()} }},
 		{"event_actor_round_trip", "event via lost", func() storage.Store { return brokenVia{reference.New()} }},
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},

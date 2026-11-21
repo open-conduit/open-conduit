@@ -66,6 +66,9 @@ export const AcceptedEvent = t.object(
     routed_work_id: t.optional(t.string()),
     disposition: t.optional(t.string()),
     scope_id: t.optional(t.string()),
+    // A tombstone: the Event's payload has left the live log, so empty data
+    // says nothing about what it carried.
+    retired: t.optional(t.boolean()),
   },
   open,
 );

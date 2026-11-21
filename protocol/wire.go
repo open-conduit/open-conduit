@@ -128,13 +128,17 @@ type AcceptedEvent struct {
 	// (domain.AcceptedEvent.ScopeID). The host always sets it on the events
 	// state.event, state.events and state.work_events return.
 	ScopeID string `json:"scope_id,omitempty"`
+	// Retired marks a tombstone (domain.AcceptedEvent.Retired): the Event's
+	// payload has left the live log, so an empty Data says nothing about
+	// what it carried.
+	Retired bool `json:"retired,omitempty"`
 }
 
 func FromAccepted(a domain.AcceptedEvent) AcceptedEvent {
-	return AcceptedEvent{Event: FromEvent(a.Event), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: string(a.ScopeID)}
+	return AcceptedEvent{Event: FromEvent(a.Event), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: string(a.ScopeID), Retired: a.Retired}
 }
 func (a AcceptedEvent) Domain() domain.AcceptedEvent {
-	return domain.AcceptedEvent{Event: a.Event.Domain(), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: domain.ID(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: domain.ID(a.ScopeID)}
+	return domain.AcceptedEvent{Event: a.Event.Domain(), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: domain.ID(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: domain.ID(a.ScopeID), Retired: a.Retired}
 }
 func FromAcceptedList(as []domain.AcceptedEvent) []AcceptedEvent {
 	out := make([]AcceptedEvent, len(as))

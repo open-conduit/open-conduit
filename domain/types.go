@@ -102,7 +102,9 @@ type Event struct {
 // ScopeID is the Scope the runtime accepted the Event into, recorded once
 // (storage.Tx.SetEventScope) and fixed from then on. It is empty until
 // recorded: for an Event storage accepted on its own, or one accepted before
-// scopes were recorded and not yet backfilled.
+// scopes were recorded and not yet backfilled. Retired marks the tombstone of
+// an Event moved out of the live log (storage.Tx.RetireEvent): its envelope
+// and routing metadata without its payload.
 type AcceptedEvent struct {
 	Event        Event
 	Sequence     uint64
@@ -110,6 +112,7 @@ type AcceptedEvent struct {
 	RoutedWorkID ID
 	Disposition  string
 	ScopeID      ID
+	Retired      bool `json:",omitempty"`
 }
 type ExecutionState string
 

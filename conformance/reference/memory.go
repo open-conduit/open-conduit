@@ -21,6 +21,7 @@ import (
 type state struct {
 	TimerVersions map[domain.ID]domain.Revision
 	Events        map[domain.ID]domain.AcceptedEvent
+	Retired       map[domain.ID]domain.AcceptedEvent
 	Works         map[domain.ID]domain.Work
 	Executions    map[domain.ID]domain.Execution
 	Timers        map[domain.ID]domain.Timer
@@ -162,11 +163,16 @@ func (t *transaction) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, e
 			return copyOf(old), false, nil
 		}
 	}
-	if _, ok := t.data.Events[e.ID]; ok {
+	for _, old := range t.data.Retired {
+		if old.Event.Source == e.Source && old.Event.DeliveryID == e.DeliveryID {
+			return copyOf(old), false, nil
+		}
+	}
+	if _, err := t.Event(e.ID); err == nil {
 		return domain.AcceptedEvent{}, false, storage.ErrConflict
 	}
 	if e.CausationID != "" {
-		if _, ok := t.data.Events[e.CausationID]; !ok {
+		if _, err := t.Event(e.CausationID); err != nil {
 			return domain.AcceptedEvent{}, false, storage.ErrNotFound
 		}
 	}
@@ -189,9 +195,32 @@ func (t *transaction) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, e
 func (t *transaction) Event(id domain.ID) (domain.AcceptedEvent, error) {
 	v, ok := t.data.Events[id]
 	if !ok {
-		return v, storage.ErrNotFound
+		if v, ok = t.data.Retired[id]; !ok {
+			return v, storage.ErrNotFound
+		}
 	}
 	return copyOf(v), nil
+}
+
+// RetireEvent implements storage.Tx.
+func (t *transaction) RetireEvent(id domain.ID) error {
+	a, err := t.Event(id)
+	if err != nil {
+		return err
+	}
+	if a.Retired {
+		return nil
+	}
+	if !a.Routed {
+		return storage.ErrInvalid
+	}
+	a.Retired, a.Event.Data = true, domain.Payload{}
+	if t.data.Retired == nil {
+		t.data.Retired = map[domain.ID]domain.AcceptedEvent{}
+	}
+	t.data.Retired[id] = a
+	delete(t.data.Events, id)
+	return nil
 }
 func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	out := []domain.AcceptedEvent{}
@@ -284,9 +313,9 @@ func (t *transaction) TypeEvents(eventType string, scopes []domain.ID, after uin
 	return out, nil
 }
 func (t *transaction) SetEventScope(id, scope domain.ID) error {
-	a, ok := t.data.Events[id]
-	if !ok {
-		return storage.ErrNotFound
+	a, err := t.Event(id)
+	if err != nil {
+		return err
 	}
 	if scope == "" {
 		return storage.ErrInvalid
@@ -297,6 +326,9 @@ func (t *transaction) SetEventScope(id, scope domain.ID) error {
 		}
 		return storage.ErrConflict
 	}
+	if a.Retired {
+		return storage.ErrConflict
+	}
 	if _, ok := t.data.Scopes[scope]; !ok {
 		return storage.ErrNotFound
 	}
@@ -305,11 +337,7 @@ func (t *transaction) SetEventScope(id, scope domain.ID) error {
 	return nil
 }
 func (t *transaction) LatestSequence() (uint64, error) {
-	var latest uint64
-	for _, v := range t.data.Events {
-		latest = max(latest, v.Sequence)
-	}
-	return latest, nil
+	return t.data.Sequence, nil
 }
 func (t *transaction) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
 	for _, v := range t.data.Events {
@@ -317,12 +345,17 @@ func (t *transaction) EventByDelivery(source, deliveryID string) (domain.Accepte
 			return copyOf(v), nil
 		}
 	}
+	for _, v := range t.data.Retired {
+		if v.Event.Source == source && v.Event.DeliveryID == deliveryID {
+			return copyOf(v), nil
+		}
+	}
 	return domain.AcceptedEvent{}, storage.ErrNotFound
 }
 func (t *transaction) MarkRouted(id, work domain.ID, disposition string) error {
-	a, ok := t.data.Events[id]
-	if !ok {
-		return storage.ErrNotFound
+	a, err := t.Event(id)
+	if err != nil {
+		return err
 	}
 	if disposition == "" {
 		return storage.ErrInvalid

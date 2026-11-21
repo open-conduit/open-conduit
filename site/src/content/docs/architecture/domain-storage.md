@@ -45,6 +45,10 @@ Handoff terminates an attempt and returns Work to ready under policy; it does no
 
 Claim assigns first-start time; terminal Execution writes assign finish time. Parked/resumed execution keeps its original start and no finish until terminal. All executor types use the same attempt record, trace ID, outcome and artifact references. Retention selection is generic runtime policy ([retention](../observability-history/#retention)).
 
+## Retired Events
+
+`Tx.RetireEvent` moves a routed Event out of the live log and leaves a tombstone: its envelope and routing metadata without its payload, marked `Retired`. It is the storage primitive the history archive builds on, and nothing calls it in production yet. `Event` and `EventByDelivery` answer with the tombstone, so a redelivery stays a duplicate, the Event ID stays taken and a new Event can still cite it as its cause. The list reads omit it, as a gap in the sequence, and `LatestSequence` never goes back past it, so Wait boundaries and extension cursors hold when the newest Event is the one retired. Its routing and scope stay fixed. An unrouted Event can't be retired. Over the extension protocol a tombstone carries `retired: true`, so an extension can tell a released payload from an empty one. The shared case `retired_event_keeps_identity_and_sequence` proves this, with a store that forgets the tombstone on redelivery and one that reads the latest sequence from live rows as negative controls.
+
 ## Transactions and checkpoints
 
 `Store.Transact(ctx, Guard, callback)` is the only coordination mutation boundary. It is serializable and a backend invokes the callback once, without transparent callback retries. Callback error, panic (propagated) or context cancellation before commit leaves no writes. All callback operations are short local computations; no external writes, network calls or executor launch inside a transaction. Commit cannot roll back a service side effect.
