@@ -75,6 +75,68 @@ func (b liveMaxSequenceTx) LatestSequence() (uint64, error) {
 	return rows[len(rows)-1].Sequence, nil
 }
 
+// liveOnlyReferences checks one kind of reference against the live rows
+// alone, as a backend does that updated AcceptEvent for tombstones and
+// nothing else.
+type liveOnlyReferences struct {
+	storage.Store
+	mode string
+}
+type liveOnlyReferencesTx struct {
+	storage.Tx
+	mode string
+}
+
+func (b liveOnlyReferences) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(liveOnlyReferencesTx{tx, b.mode}) })
+}
+
+func (b liveOnlyReferencesTx) retired(id domain.ID) bool {
+	a, err := b.Tx.Event(id)
+	return err == nil && a.Retired
+}
+
+func (b liveOnlyReferencesTx) PutTimer(v domain.Timer, expected domain.Revision) error {
+	switch b.mode {
+	case "cause":
+		if b.retired(v.Event.CausationID) {
+			return storage.ErrNotFound
+		}
+	case "id":
+		if b.retired(v.Event.ID) {
+			v.Event.ID += "-armed"
+		}
+	case "delivery":
+		if a, err := b.Tx.EventByDelivery(v.Event.Source, v.Event.DeliveryID); err == nil && a.Retired {
+			v.Event.DeliveryID += "-armed"
+		}
+	}
+	return b.Tx.PutTimer(v, expected)
+}
+
+func (b liveOnlyReferencesTx) PutExecution(x domain.Execution, expected domain.Revision) error {
+	if b.mode == "trigger" && b.retired(x.TriggerID) {
+		return storage.ErrNotFound
+	}
+	return b.Tx.PutExecution(x, expected)
+}
+
+func (b liveOnlyReferencesTx) PutWait(v domain.Wait, expected domain.Revision) error {
+	if b.mode == "wake" && b.retired(v.WakeEventID) {
+		return storage.ErrNotFound
+	}
+	if b.mode == "boundary" {
+		rows, err := b.Tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 || v.AfterSequence > rows[len(rows)-1].Sequence {
+			return storage.ErrInvalid
+		}
+	}
+	return b.Tx.PutWait(v, expected)
+}
+
 // brokenStepBack renews the way backends did before a stepped-back clock
 // was tolerated: it refuses a renewal whose new expiry is earlier than the
 // stored one.
@@ -652,6 +714,12 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
 		{"retired_event_keeps_identity_and_sequence", "redelivery accepted again", func() storage.Store { return forgetsRetired{reference.New()} }},
 		{"retired_event_keeps_identity_and_sequence", "sequence went backwards", func() storage.Store { return liveMaxSequence{reference.New()} }},
+		{"retired_event_keeps_identity_and_sequence", "timer citing a retired cause", func() storage.Store { return liveOnlyReferences{reference.New(), "cause"} }},
+		{"retired_event_keeps_identity_and_sequence", "timer reused a retired event ID", func() storage.Store { return liveOnlyReferences{reference.New(), "id"} }},
+		{"retired_event_keeps_identity_and_sequence", "timer reused a retired delivery", func() storage.Store { return liveOnlyReferences{reference.New(), "delivery"} }},
+		{"retired_event_keeps_identity_and_sequence", "attempt whose trigger was retired", func() storage.Store { return liveOnlyReferences{reference.New(), "trigger"} }},
+		{"retired_event_keeps_identity_and_sequence", "wait at the boundary of a retired event", func() storage.Store { return liveOnlyReferences{reference.New(), "boundary"} }},
+		{"retired_event_keeps_identity_and_sequence", "wait woken by a retired event", func() storage.Store { return liveOnlyReferences{reference.New(), "wake"} }},
 		{"event_actor_round_trip", "event actor lost", func() storage.Store { return brokenActor{reference.New()} }},
 		{"event_actor_round_trip", "event via lost", func() storage.Store { return brokenVia{reference.New()} }},
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},

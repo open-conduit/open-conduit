@@ -159,8 +159,9 @@ type Tx interface {
 	// RetireEvent moves a routed Event out of the live log, leaving a
 	// tombstone: its envelope and routing metadata without its payload,
 	// marked Retired. Event and EventByDelivery answer with the tombstone, so
-	// a redelivery is still a duplicate, the ID stays taken and a new Event
-	// can still cite it as its cause. The list reads (Events, WorkEvents,
+	// a redelivery is still a duplicate, its ID and delivery stay taken (by
+	// a new Event or a Timer's), and a new Event, a Timer, an attempt's
+	// trigger or a Wait's wake can still cite it. The list reads (Events, WorkEvents,
 	// ScopeEvents, TypeEvents and the unrouted reads) omit it, as a gap in
 	// the sequence, and LatestSequence and later sequences never go back
 	// past it. Its routing and scope stay fixed: the same MarkRouted again

@@ -249,7 +249,7 @@ func retiredEvents(s storage.Store) error {
 	}); !errors.Is(err, rollback) {
 		return fmt.Errorf("retire in a failed transaction: %v", err)
 	}
-	return transact(s, c, func(tx storage.Tx) error {
+	if err := transact(s, c, func(tx storage.Tx) error {
 		got, err := tx.Event("kept")
 		if err != nil {
 			return err
@@ -267,6 +267,86 @@ func retiredEvents(s storage.Store) error {
 			}
 		}
 		return fmt.Errorf("a rolled back retire left the live log")
+	}); err != nil {
+		return err
+	}
+	return retiredReferences(s, c)
+}
+
+// retiredReferences: the records that name an Event hold when it is retired.
+// A Timer can cite a retired cause but can't take its ID or delivery, an
+// attempt whose trigger was retired can still be updated, a Wait can start at
+// a boundary that is a retired Event's sequence, and one can be woken by a
+// retired Event. It runs on retiredEvents' store, whose Event "gone" is
+// retired and whose Scope "scope" exists.
+func retiredReferences(s storage.Store, c *Clock) error {
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "work", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{{Source: "test", ExternalID: "thread"}}}, 0); err != nil {
+			return err
+		}
+		if _, _, err := tx.AcceptEvent(event("trigger", c.Now())); err != nil {
+			return err
+		}
+		if err := tx.PutExecution(domain.Execution{ID: "execution", WorkID: "work", ExecutorBinding: "shell", Attempt: 1, State: domain.ExecutionPending, TriggerID: "trigger"}, 0); err != nil {
+			return err
+		}
+		if _, _, err := tx.AcceptEvent(event("wake", c.Now())); err != nil {
+			return err
+		}
+		for _, id := range []domain.ID{"trigger", "wake"} {
+			if err := tx.MarkRouted(id, "", "unmatched"); err != nil {
+				return err
+			}
+			if err := tx.RetireEvent(id); err != nil {
+				return err
+			}
+		}
+		fire := c.Now().Add(time.Hour)
+		cited := event("timer-cited", c.Now())
+		cited.CausationID = "gone"
+		if err := tx.PutTimer(domain.Timer{ID: "cites", FireAt: fire, Event: cited}, 0); err != nil {
+			return fmt.Errorf("timer citing a retired cause: %w", err)
+		}
+		sameID := event("gone", c.Now())
+		sameID.DeliveryID = "timer-elsewhere"
+		if err := wantError(tx.PutTimer(domain.Timer{ID: "same-id", FireAt: fire, Event: sameID}, 0), storage.ErrConflict); err != nil {
+			return fmt.Errorf("timer reused a retired event ID: %w", err)
+		}
+		sameDelivery := event("timer-new", c.Now())
+		sameDelivery.DeliveryID = "gone"
+		if err := wantError(tx.PutTimer(domain.Timer{ID: "same-delivery", FireAt: fire, Event: sameDelivery}, 0), storage.ErrConflict); err != nil {
+			return fmt.Errorf("timer reused a retired delivery: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	ref, err := claim(s, c)
+	if err != nil {
+		return fmt.Errorf("claiming an attempt whose trigger was retired: %w", err)
+	}
+	if err = s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, park); err != nil {
+		return fmt.Errorf("updating an attempt whose trigger was retired: %w", err)
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		latest, err := tx.LatestSequence()
+		if err != nil {
+			return err
+		}
+		v, err := tx.Wait("wait")
+		if err != nil {
+			return err
+		}
+		boundary := v
+		boundary.ID, boundary.AfterSequence = "boundary", latest
+		if err = tx.PutWait(boundary, 0); err != nil {
+			return fmt.Errorf("wait at the boundary of a retired event: %w", err)
+		}
+		v.State, v.WakeEventID = domain.WaitWoken, "wake"
+		if err = tx.PutWait(v, v.Revision); err != nil {
+			return fmt.Errorf("wait woken by a retired event: %w", err)
+		}
+		return nil
 	})
 }
 

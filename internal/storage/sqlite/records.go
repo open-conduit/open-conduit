@@ -592,8 +592,8 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 		}
 		return err
 	}
-	var sequence uint64
-	if err = t.queryRow("SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&sequence); err != nil {
+	sequence, err := t.LatestSequence()
+	if err != nil {
 		return err
 	}
 	if v.ID == "" || x.WorkID != w.ID || w.State != domain.WorkWaiting || x.State != domain.ExecutionParked && x.State != domain.ExecutionWaiting || len(v.Match.Keys) == 0 || v.AfterSequence > sequence {

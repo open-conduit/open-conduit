@@ -506,8 +506,8 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 	if x.ID == "" || w.State.Terminal() || x.ExecutorBinding == "" || x.Attempt == 0 || !expectedOutcome(x) {
 		return storage.ErrInvalid
 	}
-	if _, ok := t.data.Events[x.TriggerID]; !ok {
-		return storage.ErrNotFound
+	if _, err := t.Event(x.TriggerID); err != nil {
+		return err
 	}
 	if !exists {
 		if x.State != domain.ExecutionPending || x.Lease != (domain.Lease{}) {
@@ -663,14 +663,15 @@ func (t *transaction) PutTimer(v domain.Timer, expected domain.Revision) error {
 		return storage.ErrInvalid
 	}
 	if v.Event.CausationID != "" {
-		if _, ok := t.data.Events[v.Event.CausationID]; !ok {
-			return storage.ErrNotFound
+		if _, err := t.Event(v.Event.CausationID); err != nil {
+			return err
 		}
 	}
-	for _, a := range t.data.Events {
-		if a.Event.ID == v.Event.ID || a.Event.Source == v.Event.Source && a.Event.DeliveryID == v.Event.DeliveryID {
-			return storage.ErrConflict
-		}
+	if _, err := t.Event(v.Event.ID); err == nil {
+		return storage.ErrConflict
+	}
+	if _, err := t.EventByDelivery(v.Event.Source, v.Event.DeliveryID); err == nil {
+		return storage.ErrConflict
 	}
 
 	v.Revision = expected + 1
@@ -778,8 +779,8 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 	}
 
 	if v.WakeEventID != "" {
-		if _, ok := t.data.Events[v.WakeEventID]; !ok {
-			return storage.ErrNotFound
+		if _, err := t.Event(v.WakeEventID); err != nil {
+			return err
 		}
 	}
 	v.Revision = expected + 1
