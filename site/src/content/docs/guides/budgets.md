@@ -37,10 +37,13 @@ Apply the change as usual with `open-conduit config apply FILE --generation N` (
 
 ## Units
 
-The daemon counts two units itself:
+The daemon counts three units itself, whatever the executor is:
 
 - `attempts`: each new attempt at a Work, a retry included.
 - `turns`: each time an attempt starts or resumes. Work that waits on events between turns, such as an issue whose agent wakes on each check result and comment, has one turn per wake.
+- `active_seconds`: the time each turn held its lease, including a turn that dies without a result. Time parked waiting for an event doesn't count, and time across a daemon restart that adopts the attempt counts once. For ten hours of runner a day, use `{ "unit": "active_seconds", "per": "scope", "period": "day", "max": 36000 }`.
+
+An executor can't report these three units: a result that does is refused.
 
 Any other unit is what the executor reports. What counts as a cost is up to each executor:
 
@@ -64,6 +67,8 @@ You then have two choices:
 - **Release the hold** without changing the config (`H` in the TUI, Release in the web view, or `open-conduit work release ID --revision N`). This lets the next turn start, whatever the budgets say then. If the budget is still used up, the turn after that is held again.
 
 A budget hold doesn't lift when a new day or week begins. Release it when you're ready for the Work to go on.
+
+A budget never ends a turn that is already running, so usage can pass `max`. `active_seconds` is charged when a turn ends or parks, so one long turn can run well past the limit before it counts. To limit how long one turn runs, set the binding's `timeout_seconds`.
 
 ## Warnings
 

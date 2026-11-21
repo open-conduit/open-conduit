@@ -444,6 +444,9 @@ type Segment struct {
 	// (Sandbox, Container).
 	Invoke   string `json:",omitempty"`
 	Isolated bool   `json:",omitempty"`
+	// Unmetered says the segment's time is not charged to budgets: its
+	// launch was refused for capacity, so its start was refunded too.
+	Unmetered bool `json:",omitempty"`
 	// Relaunched says a new owner recovered the attempt while its launch
 	// had started nothing, and launched it afresh (Recovered is set too).
 	Relaunched bool `json:",omitempty"`
@@ -515,6 +518,22 @@ func (state AttemptState) ContainerPin() *extension.ContainerPin {
 		return state.Segments[n-1].Container
 	}
 	return nil
+}
+
+// meteredActive is the attempt's active time in seconds as budgets count it:
+// its ended segments, the last ended at the execution's finish once it is
+// terminal, as history counts them, without any that are Unmetered. A
+// recovery splits a segment with no gap or overlap, so time across it counts
+// once.
+func (state AttemptState) meteredActive(x domain.Execution) float64 {
+	recorded, _ := segments(state.Segments, x)
+	active := state.DroppedActive
+	for _, g := range recorded {
+		if g.EndedAt != nil && !g.Unmetered && g.EndedAt.After(g.StartedAt) {
+			active += g.EndedAt.Sub(g.StartedAt)
+		}
+	}
+	return active.Seconds()
 }
 
 // SegmentNumber is the open (or last) segment's number, counting those

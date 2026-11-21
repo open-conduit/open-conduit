@@ -99,6 +99,9 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 		if err = tx.PutExecution(x, x.Revision); err != nil {
 			return err
 		}
+		if err = stageFinishedInTx(tx, x.ID); err != nil {
+			return err
+		}
 		pending, err := pendingInputs(tx, w.ID)
 		if err != nil {
 			return err
@@ -156,6 +159,9 @@ func cancelWorkInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain
 				x.State = domain.ExecutionCancelled
 				x.Outcome = nil
 				if err = tx.PutExecution(x, x.Revision); err != nil {
+					return err
+				}
+				if err = stageFinishedInTx(tx, x.ID); err != nil {
 					return err
 				}
 			}

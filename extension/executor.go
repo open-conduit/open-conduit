@@ -113,9 +113,15 @@ const (
 // UnitPattern is the form of a usage unit's name.
 var UnitPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,31}$`)
 
-// ReservedUnits are the units core counts at admission, which no executor
-// may report: every start of a turn (turns) and every new attempt (attempts).
-var ReservedUnits = []string{"attempts", "turns"}
+// UnitActiveSeconds is the unit of an attempt's active time: the seconds its
+// segments held a lease, parked time excluded. Core measures it, whatever the
+// executor is and whether or not it reports usage.
+const UnitActiveSeconds = "active_seconds"
+
+// ReservedUnits are the units core counts itself, which no executor may
+// report: every start of a turn (turns), every new attempt (attempts) and
+// the time segments held a lease (active_seconds).
+var ReservedUnits = []string{"attempts", "turns", UnitActiveSeconds}
 
 // MaxUnits bounds the named units one result reports.
 const MaxUnits = 16

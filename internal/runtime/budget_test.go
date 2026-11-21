@@ -177,7 +177,7 @@ func TestUsageUnitsContract(t *testing.T) {
 	if got := (extension.Usage{Cost: &turnsCost, Currency: "Turns"}).Amounts(); len(got) != 0 {
 		t.Fatalf("a reserved currency was charged as a unit: %v", got)
 	}
-	for _, units := range []map[string]float64{{"turns": 1}, {"attempts": 1}, {"Bad Unit": 1}, {"usd": -1}} {
+	for _, units := range []map[string]float64{{"turns": 1}, {"attempts": 1}, {extension.UnitActiveSeconds: 1}, {"Bad Unit": 1}, {"usd": -1}} {
 		bad := ok
 		bad.Usage.Units = units
 		if err := extension.ValidateResult(bad); !errors.Is(err, extension.ErrInvalid) {

@@ -6,21 +6,25 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Budgets (#361) cap what Work may consume, in named units, and are
-// enforced where the host admits a turn (Scheduler.Start). Core counts two
-// units itself: turns (every start, a resume included) and attempts (every
-// new execution). Every other unit is what executors report on their
+// enforced where the host admits a turn (Scheduler.Start). Core counts three
+// units itself: turns (every start, a resume included), attempts (every new
+// execution) and active_seconds (the time segments held a lease, charged as
+// each segment ends). Every other unit is what executors report on their
 // results (extension.Usage.Amounts): core adds the amounts up and never
-// decides what counts as a cost.
+// decides what counts as a cost. A budget never ends a running turn; a
+// turn's length is limited by its timeout.
 //
 // A turn's usage is staged with its attempt state (putAttemptState) and
 // charged to the ledgers of the budgets that apply, in the window of the
@@ -156,9 +160,28 @@ func stageUsageInTx(tx storage.Tx, state *AttemptState) error {
 	}
 	delta := map[string]float64{}
 	for unit, v := range state.Usage().Amounts() {
-		if v > charged[unit] {
+		// A result stored before a unit was reserved is not core's count.
+		if !slices.Contains(extension.ReservedUnits, unit) && v > charged[unit] {
 			delta[unit] = v - charged[unit]
 			charged[unit] = v
+		}
+	}
+	x, err := tx.Execution(state.ExecutionID)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if err == nil {
+		active := state.meteredActive(x)
+		if _, counted := stored.Charged[extension.UnitActiveSeconds]; !counted {
+			// An attempt from before this unit counts from what it had then.
+			charged[extension.UnitActiveSeconds] = 0
+			if found {
+				charged[extension.UnitActiveSeconds] = active
+			}
+		}
+		if v := charged[extension.UnitActiveSeconds]; active > v {
+			delta[extension.UnitActiveSeconds] = active - v
+			charged[extension.UnitActiveSeconds] = active
 		}
 	}
 	if len(charged) > 0 {
@@ -179,6 +202,20 @@ func stageUsageInTx(tx storage.Tx, state *AttemptState) error {
 		p.Amounts[unit] += v
 	}
 	return putJSON(tx, budgetPendingNamespace, key, p)
+}
+
+// stageFinishedInTx stages the active time of an execution that has just
+// ended on a path that wrote its attempt state first, or not at all: the
+// last segment's time is known only once the execution has its finish.
+func stageFinishedInTx(tx storage.Tx, id domain.ID) error {
+	state, err := attemptState(tx, id)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return putAttemptState(tx, state)
 }
 
 // settleUsageInTx charges every staged usage to the ledgers of the budgets
