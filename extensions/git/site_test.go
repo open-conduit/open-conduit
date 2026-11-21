@@ -25,25 +25,35 @@ type fakeSite struct {
 	home string
 	mu   sync.Mutex
 	down bool
-	// hang makes every command wait until it is cancelled.
-	hang bool
-	argv [][]string
-	envs [][]string
+	// hang makes every command wait until it is cancelled, calling onHang
+	// first when it is set.
+	hang   bool
+	onHang func()
+	argv   [][]string
+	envs   [][]string
 }
 
 func (s *fakeSite) ID() string { return s.id }
 
 func (s *fakeSite) Run(ctx context.Context, cmd extension.SiteCommand) (extension.SiteResult, error) {
 	s.mu.Lock()
-	down, hang := s.down, s.hang
+	down, hang, onHang := s.down, s.hang, s.onHang
 	s.argv, s.envs = append(s.argv, cmd.Argv), append(s.envs, cmd.Env)
 	s.mu.Unlock()
 	if hang {
+		if onHang != nil {
+			onHang()
+		}
 		<-ctx.Done()
 		return extension.SiteResult{}, errors.Join(extension.ErrSiteUnavailable, ctx.Err())
 	}
 	if down {
 		return extension.SiteResult{}, extension.ErrSiteUnavailable
+	}
+	// The site's disk is the fixture's, not the machine running the test:
+	// 1 TiB with half free, in KiB.
+	if len(cmd.Argv) > 2 && cmd.Argv[2] == siteScriptDisk {
+		return extension.SiteResult{Stdout: []byte("1073741824 536870912\n")}, nil
 	}
 	c := exec.CommandContext(ctx, cmd.Argv[0], cmd.Argv[1:]...)
 	c.Dir = cmd.Dir
@@ -53,7 +63,9 @@ func (s *fakeSite) Run(ctx context.Context, cmd extension.SiteCommand) (extensio
 	c.Stdin, c.Stdout, c.Stderr = bytes.NewReader(cmd.Stdin), &stdout, &stderr
 	err := c.Run()
 	var exit *exec.ExitError
-	if err != nil && !errors.As(err, &exit) {
+	// A command its context ended didn't run and fail, so as at a real
+	// site it is unavailable rather than a result with an exit code.
+	if err != nil && (ctx.Err() != nil || !errors.As(err, &exit)) {
 		return extension.SiteResult{}, errors.Join(extension.ErrSiteUnavailable, err)
 	}
 	return extension.SiteResult{ExitCode: c.ProcessState.ExitCode(), Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, nil
@@ -395,35 +407,70 @@ func (f *siteFixture) status1(_ context.Context, o extension.ResourceOwner) (ext
 
 // A site that hangs costs Reconcile one bounded wait, then backs off, and
 // holds up no other lease.
+//
+// The lease's deadline is the test's to end, the moment the site hangs, so
+// nothing waits on real time. Leases are reconciled in an order their
+// owners decide, so the two owners take a turn at the hanging site: in one
+// case or the other the hanging lease goes first, and a budget shared
+// between leases would be spent before the healthy one's turn.
 func TestReconcileAtAHangingSite(t *testing.T) {
-	f := newSiteFixture(t)
-	defer func(d time.Duration) { siteReconcileTimeout = d }(siteReconcileTimeout)
-	siteReconcileTimeout = 200 * time.Millisecond
-	c := repoCfg(f.origin, nil)
-	done := extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, ExecutionSucceeded: true, WorkDone: true, WorkSucceeded: true}
-	stuck, err := f.acquireAt("ssh/one", owner("W1", "x1"), c, extension.ResourceRequest{})
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct{ name, stuckWork, fineWork string }{
+		{"W1 hangs", "W1", "W2"},
+		{"W2 hangs", "W2", "W1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSiteFixture(t)
+			c := repoCfg(f.origin, nil)
+			done := extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, ExecutionSucceeded: true, WorkDone: true, WorkSucceeded: true}
+			stuck, err := f.acquireAt("ssh/one", owner(tc.stuckWork, "x1"), c, extension.ResourceRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fine, err := f.acquireAt("ssh/two", owner(tc.fineWork, "y1"), c, extension.ResourceRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.set("x1", done)
+			f.set("y1", done)
+			// Reconcile takes leases one at a time, so expire is the bound
+			// of the lease now running.
+			var expire context.CancelFunc
+			f.provider.reconcileBound = func(ctx context.Context) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(ctx)
+				expire = cancel
+				return ctx, cancel
+			}
+			site := f.sites["ssh/one"]
+			site.mu.Lock()
+			site.hang, site.onHang = true, func() { expire() }
+			site.mu.Unlock()
+			report, _ := f.provider.Reconcile(context.Background(), f.status1)
+			if exists(fine.Dir) || report.Removed != 1 || !exists(stuck.Dir) {
+				t.Fatalf("report %+v: the other site's clone stayed %v", report, exists(fine.Dir))
+			}
+			tries := site.runs()
+			if _, err := f.provider.Reconcile(context.Background(), f.status1); err != nil || site.runs() != tries {
+				t.Fatalf("the hanging site was tried again within its backoff: %v", err)
+			}
+		})
 	}
-	fine, err := f.acquireAt("ssh/two", owner("W2", "y1"), c, extension.ResourceRequest{})
-	if err != nil {
-		t.Fatal(err)
+}
+
+// Without a test's bound, a lease's site commands have siteReconcileTimeout.
+func TestReconcileBoundIsTheTimeout(t *testing.T) {
+	ctx, cancel := (&Provider{}).boundReconcile(context.Background())
+	defer cancel()
+	left := time.Until(mustDeadline(t, ctx))
+	if left <= 0 || left > siteReconcileTimeout {
+		t.Fatalf("a lease's bound has %s left, want at most %s", left, siteReconcileTimeout)
 	}
-	f.set("x1", done)
-	f.set("y1", done)
-	f.sites["ssh/one"].mu.Lock()
-	f.sites["ssh/one"].hang = true
-	f.sites["ssh/one"].mu.Unlock()
-	start := time.Now()
-	report, _ := f.provider.Reconcile(context.Background(), f.status1)
-	if took := time.Since(start); took > 5*time.Second {
-		t.Fatalf("reconcile took %s with one site hanging", took)
+}
+
+func mustDeadline(t *testing.T, ctx context.Context) time.Time {
+	t.Helper()
+	d, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("a lease's site commands have no deadline")
 	}
-	if exists(fine.Dir) || report.Removed != 1 || !exists(stuck.Dir) {
-		t.Fatalf("report %+v: the other site's clone stayed %v", report, exists(fine.Dir))
-	}
-	tries := f.sites["ssh/one"].runs()
-	if _, err := f.provider.Reconcile(context.Background(), f.status1); err != nil || f.sites["ssh/one"].runs() != tries {
-		t.Fatalf("the hanging site was tried again within its backoff: %v", err)
-	}
+	return d
 }
