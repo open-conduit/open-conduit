@@ -323,38 +323,10 @@ func CommandFound(name string) bool {
 }
 
 // Warnings returns what config check warns about from the config's text
-// alone, without failing: CommandWarnings, then UnenforcedWarnings. The
-// executors' own warnings about their bindings need the validated config
-// (BindingWarnings).
+// alone, without failing: CommandWarnings. The executors' own warnings
+// about their bindings need the validated config (BindingWarnings).
 func Warnings(data []byte) []string {
-	return append(CommandWarnings(data), UnenforcedWarnings(data)...)
-}
-
-// UnenforcedWarnings returns one warning per admission_limit the config sets,
-// in settings or a scope's limits: it is validated and shown in the effective
-// config, but nothing yet caps the Work a scope admits (#39).
-func UnenforcedWarnings(data []byte) []string {
-	var doc struct {
-		Settings map[string]json.RawMessage `json:"settings"`
-		Scopes   []struct {
-			ID     string                     `json:"id"`
-			Limits map[string]json.RawMessage `json:"limits"`
-		} `json:"scopes"`
-	}
-	if json.Unmarshal(data, &doc) != nil {
-		return nil
-	}
-	const note = " has no effect yet: Open Conduit does not cap the Work a scope admits; remove it, or use concurrency to cap running attempts"
-	var out []string
-	if _, ok := doc.Settings["admission_limit"]; ok {
-		out = append(out, "settings.admission_limit"+note)
-	}
-	for _, sc := range doc.Scopes {
-		if _, ok := sc.Limits["admission_limit"]; ok {
-			out = append(out, "scope "+sc.ID+" limits.admission_limit"+note)
-		}
-	}
-	return out
+	return CommandWarnings(data)
 }
 
 // CommandWarnings returns one warning per program run by a cmd: reference in

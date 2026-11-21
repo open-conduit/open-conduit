@@ -57,6 +57,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		pass := d.passTimes.begin()
 		pass.phase("route", func() { d.routePending(ctx, c) })
 		pass.phase("poll", func() { d.pollPass(ctx, c) })
+		pass.phase("admission", func() { d.admit(ctx, c) })
 		pass.phase("start", func() { d.startReady(ctx) })
 		pass.phase("controls", func() { d.dispatchControls(ctx, c) })
 		pass.phase("subscriptions", func() {
@@ -190,6 +191,22 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 			return
 		}
 		after = page.NextSequence
+	}
+}
+
+// admit runs the admission pass (Scheduler.Admit): open Work beyond its
+// scope's admission_limit is held, and held Work is let in as places free.
+func (d *daemon) admit(ctx context.Context, c *components) {
+	r, err := c.scheduler.Admit(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			d.report("admission", "", errorCode(err))
+		}
+		return
+	}
+	d.clear("admission", "")
+	if len(r.Held) > 0 || len(r.Released) > 0 {
+		d.log.Info("admission", "held", len(r.Held), "released", len(r.Released))
 	}
 }
 
@@ -599,6 +616,8 @@ func errorCode(err error) string {
 		return capacityCode(capacity)
 	case errors.Is(err, runtime.ErrCapacity):
 		return "capacity"
+	case errors.Is(err, runtime.ErrNotAdmitted):
+		return "not_admitted"
 	case errors.Is(err, runtime.ErrBudgetHeld):
 		return "over_budget"
 	case errors.Is(err, runtime.ErrResourceHeld):

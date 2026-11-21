@@ -81,9 +81,12 @@ type SchedulerOptions struct {
 	// ExecutorPools gives an executor registration its own capacity pool,
 	// bounded by PoolLimits[pool] (zero or absent: unbounded) instead of
 	// GlobalLimit, so one kind of work cannot starve another (#13).
-	ExecutorPools        map[string]string
-	PoolLimits           map[string]int
-	ScopeLimits          map[domain.ID]int
+	ExecutorPools map[string]string
+	PoolLimits    map[string]int
+	ScopeLimits   map[domain.ID]int
+	// AdmissionLimits caps the open Work each scope (with its descendants)
+	// has admitted (#706, admission.go); none means no cap.
+	AdmissionLimits      map[domain.ID]int
 	Retry                RetryPolicy
 	CausalLimits         CausalLimits
 	AutoContinueHandoff  bool
@@ -679,6 +682,14 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 		limits[scope] = limit
 	}
 	o.ScopeLimits = limits
+	admission := map[domain.ID]int{}
+	for scope, limit := range o.AdmissionLimits {
+		if scope == "" || limit < 1 {
+			return nil, storage.ErrInvalid
+		}
+		admission[scope] = limit
+	}
+	o.AdmissionLimits = admission
 	pools := map[string]string{}
 	for executor, pool := range o.ExecutorPools {
 		if executor == "" || pool == "" || pool == GlobalPool {
@@ -1242,6 +1253,9 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 			if x.State == domain.ExecutionParked {
 				parked = x.ID
 			}
+		}
+		if e = s.checkAdmittedInTx(tx, ready, len(xs)); e != nil {
+			return e
 		}
 		if len(xs) == 0 && s.options.Toolbelt != nil && s.options.Toolbelt.StartGated() {
 			// Held Work is not asked again; settled Work is not asked.

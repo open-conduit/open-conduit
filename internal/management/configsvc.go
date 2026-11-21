@@ -86,6 +86,17 @@ type Adoption struct {
 // no longer does is replaced by the config file when the file validates, so
 // the daemon can always start once the file is fixed.
 func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
+	c, err := openConfig(ctx, store, now, registry, path, def)
+	if err != nil {
+		return nil, err
+	}
+	if err = c.dropImplicitAdmissionLimit(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func openConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
 	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
 	if def != nil {
 		if s, err := config.Validate(def, registry); err == nil {

@@ -84,7 +84,7 @@ def check(config):
                 parent = resolve(scope['parent'])
         result = copy.deepcopy(parent) if parent else {
             'authorization': {'connections': [], 'operations': [], 'read_scopes': []},
-            'limits': {k: config['settings'].get(k, d) for k, d in [('concurrency', 4), ('admission_limit', 10)]},
+            'limits': {k: config['settings'].get(k, d) for k, d in [('concurrency', 4), ('admission_limit', None)]},
             'secret_refs': {}, 'bindings': {}, 'routes': {}, 'extensions': {}, 'enabled': True,
         }
         result['enabled'] = result['enabled'] and scope.get('enabled', True)
@@ -106,7 +106,7 @@ def check(config):
             if not set(requested) <= set(available):
                 fail(path + '/authorization/' + category, 'unknown_reference')
         for key, value in scope.get('limits', {}).items():
-            if value > result['limits'][key]:
+            if result['limits'][key] is not None and value > result['limits'][key]:
                 fail(path + '/limits/' + key, 'limit_widening')
             result['limits'][key] = value
         result['secret_refs'].update(scope.get('secret_refs', {}))

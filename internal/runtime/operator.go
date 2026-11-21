@@ -33,7 +33,8 @@ type Hold struct {
 	At      time.Time `json:"at"`
 	// Kind says what placed a hold the runtime placed itself: "budget"
 	// (HoldKindBudget) for Work over a budget, "gate" (HoldKindGate) for
-	// Work a start gate held. "" is an operator's hold or a blocked wait's.
+	// Work a start gate held, "admission" (HoldKindAdmission) for Work
+	// beyond its scope's admission limit. "" is an operator's hold or a blocked wait's.
 	Kind string `json:"kind,omitempty"`
 	// Holder is the registration whose start gate placed a gate hold.
 	Holder string `json:"holder,omitempty"`
@@ -269,6 +270,13 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		// that held it; the one after is checked again.
 		if h.Kind == HoldKindBudget {
 			if e = passBudgetInTx(tx, w.ID, event); e != nil {
+				return e
+			}
+		}
+		// Releasing an admission hold admits the Work now, past the
+		// limit that held it.
+		if h.Kind == HoldKindAdmission {
+			if e = admitInTx(tx, c.now(), w.ID, event); e != nil {
 				return e
 			}
 		}
