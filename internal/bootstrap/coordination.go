@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/protocol/artifactstore"
 	"github.com/open-conduit/open-conduit/storage"
 
 	// SQLite is the default backend and is always built in. Another
@@ -41,7 +42,12 @@ const storageFile = "storage.json"
 // the location names, so a location two state directories share is open
 // in one daemon at a time. artifacts names a registered
 // storage.ArtifactBackend and its location the same way; without it the
-// store is the file store at <state>/artifacts.
+// store is the file store at <state>/artifacts. With a command, artifacts
+// names a provider executable instead (protocol/artifactstore), so a store
+// can be installed without rebuilding the binary:
+//
+//	"artifacts": {"backend": "s3", "command": "/usr/local/bin/oc-s3",
+//	              "location": "s3://bucket/prefix"}
 type storageChoice struct {
 	Backend   string           `json:"backend"`
 	Location  string           `json:"location,omitempty"`
@@ -52,6 +58,27 @@ type storageChoice struct {
 type artifactsChoice struct {
 	Backend  string `json:"backend"`
 	Location string `json:"location,omitempty"`
+	// Command is the absolute path of a provider executable serving this
+	// backend. A state directory is the operator's own: a restore writes
+	// this from the operator's flags and never takes it from a bundle.
+	Command string `json:"command,omitempty"`
+}
+
+// backend resolves the choice: its provider, or a built-in backend.
+func (c artifactsChoice) resolve() (storage.ArtifactBackend, error) {
+	if c.Command == "" {
+		return storage.LookupArtifactBackend(c.Backend)
+	}
+	if !filepath.IsAbs(c.Command) {
+		return nil, fmt.Errorf("artifact provider command %q is not an absolute path: %w", c.Command, storage.ErrInvalid)
+	}
+	if c.Location == "" {
+		return nil, fmt.Errorf("artifact provider %q needs a location: %w", c.Backend, storage.ErrInvalid)
+	}
+	if _, err := storage.LookupArtifactBackend(c.Backend); err == nil {
+		return nil, fmt.Errorf("artifact provider %q has the name of a built-in backend: %w", c.Backend, storage.ErrInvalid)
+	}
+	return artifactstore.Command(c.Command), nil
 }
 
 // coordination is a state directory's resolved coordination backend.
@@ -131,13 +158,15 @@ func artifactsOf(stateDir string) (artifactStorage, error) {
 	if err != nil {
 		return a, err
 	}
+	resolved := artifactsChoice{Backend: a.name}
 	if choice.Artifacts != nil {
-		a.name = choice.Artifacts.Backend
-		if choice.Artifacts.Location != "" {
-			a.location = choice.Artifacts.Location
+		resolved = *choice.Artifacts
+		a.name = resolved.Backend
+		if resolved.Location != "" {
+			a.location = resolved.Location
 		}
 	}
-	if a.backend, err = storage.LookupArtifactBackend(a.name); err != nil {
+	if a.backend, err = resolved.resolve(); err != nil {
 		return a, fmt.Errorf("%s: artifacts: %w", storageFile, err)
 	}
 	return a, nil
@@ -177,19 +206,19 @@ func openArtifacts(ctx context.Context, stateDir string) (artifactStorage, stora
 // anything is restored, so an unknown one refuses the restore.
 func restoreTarget(o cli.RestoreOptions) (backup.ArtifactTarget, *artifactsChoice, error) {
 	if o.ArtifactBackend == "" {
-		if o.ArtifactLocation != "" {
-			return backup.ArtifactTarget{}, nil, fmt.Errorf("an artifact location needs its backend (--artifacts NAME)")
+		if o.ArtifactLocation != "" || o.ArtifactCommand != "" {
+			return backup.ArtifactTarget{}, nil, fmt.Errorf("an artifact location or command needs its backend (--artifacts NAME)")
 		}
 		return backup.ArtifactTarget{Backend: artifacts.Backend}, nil, nil
 	}
-	b, err := storage.LookupArtifactBackend(o.ArtifactBackend)
-	if err != nil {
-		return backup.ArtifactTarget{}, nil, err
-	}
+	choice := &artifactsChoice{Backend: o.ArtifactBackend, Location: o.ArtifactLocation, Command: o.ArtifactCommand}
 	if o.ArtifactLocation == "" && o.ArtifactBackend != artifacts.BackendName {
 		return backup.ArtifactTarget{}, nil, fmt.Errorf("artifact backend %q needs a location (--artifacts-location)", o.ArtifactBackend)
 	}
-	choice := &artifactsChoice{Backend: o.ArtifactBackend, Location: o.ArtifactLocation}
+	b, err := choice.resolve()
+	if err != nil {
+		return backup.ArtifactTarget{}, nil, err
+	}
 	if o.ArtifactBackend == artifacts.BackendName && o.ArtifactLocation == "" {
 		// The default store: nothing to record.
 		choice = nil

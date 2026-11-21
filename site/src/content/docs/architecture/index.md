@@ -29,6 +29,7 @@ Each page separates three kinds of material:
 ## Runtime
 
 - [SQLite and local artifact guarantees](sqlite-artifacts/)
+- [Artifact provider protocol](artifact-providers/)
 - [Verified backup bundles](backup-bundles/)
 - [Durable event acceptance and reconciliation](event-ingress/)
 - [Durable routing, Work lifecycle and causal limits](routing-lifecycle/)

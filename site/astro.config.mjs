@@ -113,6 +113,7 @@ export default defineConfig({
 							collapsed: true,
 							items: [
 								{ label: 'SQLite and artifacts', slug: 'architecture/sqlite-artifacts' },
+								{ label: 'Artifact providers', slug: 'architecture/artifact-providers' },
 								{ label: 'Backup bundles', slug: 'architecture/backup-bundles' },
 								{ label: 'Event ingress', slug: 'architecture/event-ingress' },
 								{ label: 'Routing and Work lifecycle', slug: 'architecture/routing-lifecycle' },
