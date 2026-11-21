@@ -70,6 +70,14 @@ func TestUnroutedReadsSearchIndexes(t *testing.T) {
 			t.Errorf("%s reads the backlog: %s", label, p)
 		}
 	}
+	// The usage feed's read searches its type's index from the cursor, in
+	// sequence order, so a page never sorts or walks the retained log.
+	for _, scopes := range [][]domain.ID{nil, {"a", ""}} {
+		q, args := typeEventsQuery(domain.TypeExecutionUsage, scopes, 10, 200)
+		if p := plan(q, args); !strings.HasPrefix(p, "SEARCH events USING INDEX events_type (") || !strings.Contains(p, "sequence>?") && !strings.Contains(p, "rowid>?") || strings.Contains(p, "TEMP B-TREE") {
+			t.Errorf("the type read with scopes %v: %s", scopes, p)
+		}
+	}
 	keys := []domain.CorrelationKey{{Source: "github", ExternalID: "1"}, {Source: "slack", ExternalID: "2"}}
 	for _, target := range []storage.InputTarget{{Work: "w", Keys: keys}, {Work: "w"}, {Keys: keys[:1]}} {
 		for _, bounds := range [][2]uint64{{0, 0}, {10, 500}} {

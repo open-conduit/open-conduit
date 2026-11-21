@@ -327,6 +327,13 @@ func TestUnifiedHistoryMixedExecutors(t *testing.T) {
 	if agentDone.Usage == nil || agentDone.Usage.InputTokens == nil || *agentDone.Usage.InputTokens != 1200 || agentDone.Usage.Cost == nil || agentDone.Usage.Currency != "USD" {
 		t.Fatalf("executor usage report not on outcome telemetry: %+v", agentDone)
 	}
+	shellDone := rs.one(t, "execution.completed", forExecution(shellRun))
+	if shellDone.Usage == nil {
+		t.Fatalf("a shell run's minutes are not on its telemetry: %+v", shellDone)
+	}
+	if _, ok := shellDone.Usage.Units["minutes"]; !ok {
+		t.Fatalf("a shell run's minutes are not on its telemetry: %+v", shellDone.Usage)
+	}
 
 	// The same history is available through the operator CLI.
 	var out, errOut strings.Builder

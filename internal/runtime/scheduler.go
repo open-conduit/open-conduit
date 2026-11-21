@@ -310,6 +310,13 @@ type AttemptState struct {
 	// Charged is the attempt's usage in named units already staged for the
 	// budget ledgers (stageUsageInTx), so each amount is charged once.
 	Charged map[string]float64 `json:",omitempty"`
+	// UsageRecorded is the attempt's usage already published in usage
+	// records, by unit, and UsageRecords how many (recordUsageInTx).
+	UsageRecorded map[string]float64 `json:",omitempty"`
+	UsageRecords  int                `json:",omitempty"`
+	// landedAt is when the result being written landed, for its usage
+	// record. It is not stored.
+	landedAt time.Time
 	// StoppedTurnRecorded says the attempt ended while its turn ran and
 	// the stopped turn's result has since been recorded (RecordStopped):
 	// its last segment's artifacts are final.
@@ -335,6 +342,7 @@ func (state AttemptState) clone() AttemptState {
 	state.Segments = slices.Clone(state.Segments)
 	state.InputEventIDs = slices.Clone(state.InputEventIDs)
 	state.Charged = maps.Clone(state.Charged)
+	state.UsageRecorded = maps.Clone(state.UsageRecorded)
 	if state.Result != nil {
 		r := *state.Result
 		state.Result = &r
@@ -382,6 +390,13 @@ func addUsage(a, b extension.Usage) extension.Usage {
 	case a.Currency == b.Currency:
 		c := *a.Cost + *b.Cost
 		out.Cost, out.Currency = &c, a.Currency
+	}
+	if len(a.Attribution)+len(b.Attribution) > 0 {
+		out.Attribution = maps.Clone(a.Attribution)
+		if out.Attribution == nil {
+			out.Attribution = map[string]string{}
+		}
+		maps.Copy(out.Attribution, b.Attribution)
 	}
 	if len(a.Units)+len(b.Units) > 0 {
 		out.Units = map[string]float64{}
@@ -1988,7 +2003,7 @@ func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extens
 		}
 		state.Excluded = excluded
 		state.LaunchState = "failed"
-		state.Result = &result
+		state.Result, state.landedAt = &result, s.now()
 		state.turnArtifacts(result.Artifacts)
 		if err = putAttemptState(tx, state); err != nil {
 			return err
@@ -2146,7 +2161,7 @@ func (s *Scheduler) complete(ctx context.Context, ref domain.LeaseRef, result ex
 		}
 		state.Excluded = true
 		state.LaunchState = string(x.State)
-		state.Result = &result
+		state.Result, state.landedAt = &result, s.now()
 		state.turnArtifacts(result.Artifacts)
 		if err = putAttemptState(tx, state); err != nil {
 			return err

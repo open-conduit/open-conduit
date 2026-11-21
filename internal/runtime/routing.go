@@ -744,6 +744,21 @@ func (r *Router) route(ctx context.Context, id domain.ID) error {
 		if s.event.Routed {
 			return nil
 		}
+		if s.event.Event.Type == domain.TypeExecutionUsage {
+			stop := false
+			if err := r.transact(ctx, nil, func(tx storage.Tx) error {
+				routable, e := usageRoutableInTx(tx, id, r.options.CausalLimits)
+				if stop = e == nil && !routable; stop {
+					e = tx.MarkRouted(id, "", "unmatched")
+				}
+				return e
+			}); err != nil {
+				return err
+			}
+			if stop {
+				return nil
+			}
+		}
 		var wp routePlan
 		var werr error
 		attachOnly := false

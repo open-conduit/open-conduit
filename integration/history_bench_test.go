@@ -318,6 +318,45 @@ func BenchmarkHistoryWorkEvents(b *testing.B) {
 	})
 }
 
+// A collector's read of the usage feed: one page of a type's Events after
+// its cursor, a cost that follows that type, not the log. The records are
+// added once per store, off the clock.
+func BenchmarkHistoryUsageFeed(b *testing.B) {
+	const records = 100
+	seededFeeds := map[*history]bool{}
+	benchHistory(b, func(b *testing.B, h *history) {
+		if !seededFeeds[h] {
+			b.StopTimer()
+			seededFeeds[h] = true
+			if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+				for i := range records {
+					id := fmt.Sprintf("usage-%d", i)
+					ev := domain.Event{ID: domain.ID(id), Type: domain.TypeExecutionUsage, Source: "core.execution", DeliveryID: id, OccurredAt: h.clock.Now(), ReceivedAt: h.clock.Now(), Data: domain.Payload{Schema: domain.SchemaExecutionUsage, Data: []byte(`{"amounts":{"tokens":1}}`)}}
+					if _, _, e := runtime.AcceptInTx(tx, "history-scope", ev); e != nil {
+						return e
+					}
+					if e := tx.MarkRouted(ev.ID, "", "unmatched"); e != nil {
+						return e
+					}
+				}
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			b.StartTimer()
+		}
+		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+			got, e := tx.TypeEvents(domain.TypeExecutionUsage, []domain.ID{"history-scope"}, 0, 200)
+			if e == nil && len(got) != records {
+				e = fmt.Errorf("feed has %d records, want %d", len(got), records)
+			}
+			return e
+		}); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
 // historyService is the extension host's side of the protocol for a
 // package configured in the history's scope, as the daemon serves state
 // reads to a projection.

@@ -318,6 +318,7 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_work ON events(` + eventWork + `, sequence)`,
 	`CREATE INDEX IF NOT EXISTS events_routed_work ON events(` + routedWork + `, sequence)`,
 	`CREATE INDEX IF NOT EXISTS events_scope ON events(` + eventScope + `, sequence)`,
+	`CREATE INDEX IF NOT EXISTS events_type ON events(` + eventType + `, sequence)`,
 	// execution_artifacts is ReferencedArtifacts' reverse lookup, the refs
 	// each attempt's record holds. Triggers keep it, so every binary that
 	// writes an attempt keeps it current, whether it knows the table or

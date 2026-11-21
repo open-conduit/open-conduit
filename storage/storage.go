@@ -139,6 +139,10 @@ type Tx interface {
 	// unrecorded few. Like WorkEvents, its cost follows the scopes' own
 	// events, not retained history.
 	ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// TypeEvents is Events restricted to one type and, when scopes is not
+	// nil, to those recorded in scopes ("" standing for not recorded yet).
+	// Its cost follows the Events of that type, not retained history.
+	TypeEvents(eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// LatestSequence is the last accepted sequence visible to this
 	// transaction, zero before any event. Every Event at or below it is
 	// visible too (see Sequences above).

@@ -743,17 +743,17 @@ func (r *recorder) executionRecords(add func(observability.Record), before *doma
 			}
 			attrs["execution.resource_excluded"] = strconv.FormatBool(state.Excluded)
 			u := state.Usage()
-			usage = measurement(u.InputTokens, u.OutputTokens, u.CachedTokens, u.Cost, u.Currency)
+			usage = measurement(u.InputTokens, u.OutputTokens, u.CachedTokens, u.Cost, u.Currency, u.Units)
 		}
 		add(observability.Record{Name: name, Correlation: c, From: string(before.State), To: string(after.State), Attributes: attrs, Usage: usage})
 	}
 }
 
-func measurement(in, out, cached *uint64, cost *float64, currency string) *observability.Measurement {
-	if in == nil && out == nil && cached == nil && cost == nil {
+func measurement(in, out, cached *uint64, cost *float64, currency string, units map[string]float64) *observability.Measurement {
+	if in == nil && out == nil && cached == nil && cost == nil && len(units) == 0 {
 		return nil
 	}
-	return &observability.Measurement{InputTokens: in, OutputTokens: out, CachedTokens: cached, Cost: cost, Currency: currency}
+	return &observability.Measurement{InputTokens: in, OutputTokens: out, CachedTokens: cached, Cost: cost, Currency: currency, Units: units}
 }
 
 func (r *recorder) ingressRecords(add func(observability.Record), before *ingressState, ns string) {

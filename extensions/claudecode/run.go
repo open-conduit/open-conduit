@@ -1249,6 +1249,12 @@ func usageOf(p parsed) extension.Usage {
 		cost := *p.Cost
 		u.Cost, u.Currency = &cost, "USD"
 	}
+	if len(p.Models) > 0 {
+		models := slices.Sorted(slices.Values(p.Models))
+		if v := strings.Join(models, ","); len(v) <= extension.MaxAttributionValue {
+			u.Attribution = map[string]string{"model": v}
+		}
+	}
 	return u
 }
 

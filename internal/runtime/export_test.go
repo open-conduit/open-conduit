@@ -27,6 +27,11 @@ func PutLegacyAttemptState(tx storage.Tx, execution, work domain.ID, executor st
 	return putAttemptState(tx, AttemptState{ExecutionID: execution, WorkID: work, Executor: executor})
 }
 
+// UsageRoutableInTx exposes the depth check routing applies to usage records.
+func UsageRoutableInTx(tx storage.Tx, id domain.ID, limits CausalLimits) (bool, error) {
+	return usageRoutableInTx(tx, id, limits)
+}
+
 // WaitScanned is the highest sequence the wake scans of Wait id have
 // already judged.
 func WaitScanned(tx storage.Tx, id domain.ID) (uint64, error) {

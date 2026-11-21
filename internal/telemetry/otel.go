@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -168,6 +170,9 @@ func Attributes(r observability.Record) []attribute.KeyValue {
 		}
 		if u.Cost != nil {
 			kv = append(kv, attribute.Float64("open_conduit.usage.cost", *u.Cost), attribute.String("open_conduit.usage.currency", u.Currency))
+		}
+		for _, unit := range slices.Sorted(maps.Keys(u.Units)) {
+			kv = append(kv, attribute.Float64("open_conduit.usage.units."+unit, u.Units[unit]))
 		}
 	}
 	return kv

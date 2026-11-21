@@ -236,6 +236,16 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 		page := func(after uint64) ([]domain.AcceptedEvent, error) { return tx.Events(after, 200) }
 		if work := q.filters["work_id"]; work != "" {
 			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.WorkEvents(domain.ID(work), after, 200) }
+		} else if typ := q.filters["type"]; typ != "" {
+			// A type's events are read through its index, so following
+			// one (the usage feed) costs the same however long the log.
+			var within []domain.ID
+			if scope := q.filters["scope_id"]; scope != "" {
+				within = []domain.ID{domain.ID(scope), ""}
+			} else if c.reach != nil {
+				within = append(c.scopes(), "")
+			}
+			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.TypeEvents(typ, within, after, 200) }
 		} else if scope := q.filters["scope_id"]; scope != "" {
 			page = func(after uint64) ([]domain.AcceptedEvent, error) {
 				return tx.ScopeEvents([]domain.ID{domain.ID(scope), ""}, after, 200)

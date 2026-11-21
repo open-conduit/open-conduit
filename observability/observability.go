@@ -30,6 +30,9 @@ type Measurement struct {
 	InputTokens, OutputTokens, CachedTokens *uint64
 	Cost                                    *float64
 	Currency                                string
+	// Units are the amounts in named units the executor reported
+	// (extension.Usage.Units), such as a shell run's minutes.
+	Units map[string]float64 `json:",omitempty"`
 }
 type Observer interface {
 	Observe(context.Context, Record) error

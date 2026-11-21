@@ -181,6 +181,36 @@ func (t *transaction) ScopeEvents(scopes []domain.ID, after uint64, limit int) (
 	args = append(args, limit)
 	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND "+eventScope+" IN ("+strings.Join(marks, ",")+") ORDER BY sequence LIMIT ?", args...)
 }
+
+// TypeEvents walks events_type, named so that a scope filter can't move the
+// read onto events_scope and its cost off the Events of the type.
+func (t *transaction) TypeEvents(eventTypeName string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if eventTypeName == "" || after > 1<<63-1 || scopes != nil && len(scopes) == 0 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	query, args := typeEventsQuery(eventTypeName, scopes, after, limit)
+	return list[domain.AcceptedEvent](t, query, args...)
+}
+
+func typeEventsQuery(eventTypeName string, scopes []domain.ID, after uint64, limit int) (string, []any) {
+	query := "SELECT record FROM events INDEXED BY events_type WHERE " + eventType + "=? AND sequence>?"
+	args := []any{eventTypeName, after}
+	if scopes != nil {
+		marks := make([]string, 0, len(scopes))
+		for _, s := range slices.Compact(slices.Sorted(slices.Values(scopes))) {
+			marks = append(marks, "?")
+			args = append(args, string(s))
+		}
+		query += " AND " + eventScope + " IN (" + strings.Join(marks, ",") + ")"
+	}
+	return query + " ORDER BY sequence LIMIT ?", append(args, limit)
+}
 func (t *transaction) LatestSequence() (uint64, error) {
 	if !t.live {
 		return 0, storage.ErrInvalid

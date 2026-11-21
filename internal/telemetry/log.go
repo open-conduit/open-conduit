@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -65,6 +67,9 @@ func (l *LogExporter) Export(ctx context.Context, records []observability.Record
 			}
 			if u.Cost != nil {
 				usage = append(usage, slog.Float64("cost", *u.Cost), slog.String("currency", u.Currency))
+			}
+			for _, unit := range slices.Sorted(maps.Keys(u.Units)) {
+				usage = append(usage, slog.Float64("units."+unit, u.Units[unit]))
 			}
 			attrs = append(attrs, slog.Group("usage", usage...))
 		}

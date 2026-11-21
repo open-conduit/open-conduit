@@ -855,6 +855,9 @@ func (s *attemptState) result(rn *run, o domain.Outcome, hint *extension.RetryHi
 		c := *s.d.Cost
 		u.Cost, u.Currency = &c, "USD"
 	}
+	if m := s.d.Model; m != "" && len(m) <= extension.MaxAttributionValue {
+		u.Attribution = map[string]string{"model": m}
+	}
 	return res
 }
 
