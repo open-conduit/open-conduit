@@ -244,6 +244,76 @@ func sampleDaemon(d *drill, stats string) procSample {
 	return s
 }
 
+// contextSwitches is the cumulative context switches of the daemon and of
+// the daemon with every process under it. Over an idle window their rate
+// follows wake-ups without needing root, but isn't equal to them: a process
+// can switch more than once per wake-up.
+func contextSwitches(t *testing.T, pid int) (daemon, tree int64) {
+	t.Helper()
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kids := map[int][]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) == 2 {
+			p, _ := strconv.Atoi(f[0])
+			pp, _ := strconv.Atoi(f[1])
+			kids[pp] = append(kids[pp], p)
+		}
+	}
+	var pids []int
+	for todo := []int{pid}; len(todo) > 0; {
+		p := todo[0]
+		todo = append(todo[1:], kids[p]...)
+		pids = append(pids, p)
+	}
+	counts := switchCounts(t, pids)
+	for _, p := range pids {
+		tree += counts[p]
+	}
+	return counts[pid], tree
+}
+
+// switchCounts reads each process's context switches: every thread's from
+// /proc on Linux, and from top elsewhere.
+func switchCounts(t *testing.T, pids []int) map[int]int64 {
+	t.Helper()
+	counts := map[int]int64{}
+	if runtime.GOOS == "linux" {
+		for _, p := range pids {
+			files, _ := filepath.Glob(filepath.Join("/proc", strconv.Itoa(p), "task", "*", "status"))
+			for _, path := range files {
+				b, err := os.ReadFile(path)
+				if err != nil {
+					continue // the thread has exited
+				}
+				for _, line := range strings.Split(string(b), "\n") {
+					if name, v, ok := strings.Cut(line, ":"); ok && strings.HasSuffix(name, "ctxt_switches") {
+						n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+						counts[p] += n
+					}
+				}
+			}
+		}
+		return counts
+	}
+	out, err := exec.Command("top", "-l", "1", "-stats", "pid,csw").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) == 2 {
+			p, e1 := strconv.Atoi(strings.TrimRight(f[0], "*-"))
+			n, e2 := strconv.ParseInt(strings.TrimRight(f[1], "+"), 10, 64)
+			if e1 == nil && e2 == nil {
+				counts[p] = n
+			}
+		}
+	}
+	return counts
+}
+
 // parseCPUTime reads ps's [[dd-]hh:]mm:ss.cc.
 func parseCPUTime(v string) time.Duration {
 	var days int
