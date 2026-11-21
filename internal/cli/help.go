@@ -72,6 +72,7 @@ var helpGroups = []helpGroup{
 	}},
 	{"Observe", []helpEntry{
 		{"health", `  health                     the daemon's state and components; exits 1 unless it is ready`},
+		{"quiescence", `  quiescence                 what is in flight, or when the daemon is next due; exits 1 unless it is quiescent`},
 		{"doctor", `  doctor [--check-secrets] [--json]   check the config, its bindings, the agent CLIs and the daemon`},
 		{"scopes", `  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID`},
 		{"work", `  work list [--scope S --state --kind --parent-id] [--json] | work get ID`},

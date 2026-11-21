@@ -100,6 +100,7 @@ func devRun(ctx context.Context, r cli.DevRequest) (err error) {
 		return err
 	}
 	s.announce()
+	//duty:dev_watch
 	tick := time.NewTicker(r.Watch)
 	defer tick.Stop()
 	for {
@@ -225,6 +226,7 @@ func (s *devSession) start(ctx context.Context) error {
 				return nil
 			}
 		}
+		//duty:dev_watch
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the daemon did not answer within a minute; its log is %s", s.log.Name())
 		}
@@ -247,6 +249,7 @@ func (s *devSession) stop() {
 	_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case <-s.exited:
+	//duty:dev_watch
 	case <-time.After(15 * time.Second):
 		_ = s.cmd.Process.Kill()
 		<-s.exited
@@ -262,6 +265,7 @@ func (s *devSession) reap() {
 		if len(left) == 0 {
 			return
 		}
+		//duty:dev_watch
 		if time.Now().After(deadline) {
 			for _, p := range left {
 				devscope.Kill(p)

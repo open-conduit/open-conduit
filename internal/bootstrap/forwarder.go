@@ -147,6 +147,7 @@ func (d *daemon) forwardRefused(r *http.Request, f *config.Forwarder, code forwa
 	d.hooks.forwardRefused++
 	d.hooks.forwardLast = string(code)
 	d.hooks.forwardUnreported++
+	//duty:forward_report
 	report := d.hooks.forwardReported.IsZero() || now.Sub(d.hooks.forwardReported) >= forwardReportEvery
 	refused := d.hooks.forwardUnreported
 	if report {

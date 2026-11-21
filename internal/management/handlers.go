@@ -94,6 +94,63 @@ func (s *Server) capacity(c *call) (int, any, error) {
 	return 200, map[string]any{"pools": pools}, nil
 }
 
+// Quiescence is GET /quiescence: whether the daemon has anything in flight
+// and, if not, when it next has something to do. Until is absent when nothing
+// is due. A process-bound duty owes nothing while the daemon is stopped; a
+// package task can't yet say when it is next needed, so each is listed.
+type Quiescence struct {
+	Quiescent    bool                       `json:"quiescent"`
+	Until        *time.Time                 `json:"until,omitempty"`
+	Next         string                     `json:"next,omitempty"`
+	Reasons      []runtime.QuiescenceReason `json:"reasons"`
+	Obligations  []QuiescenceObligation     `json:"obligations"`
+	ProcessBound []QuiescenceDuty           `json:"process_bound"`
+	PackageTasks []QuiescenceTask           `json:"package_tasks"`
+	Startup      *QuiescenceStartup         `json:"startup,omitempty"`
+}
+
+// QuiescenceObligation is something the daemon has to do: an awake daemon
+// does it at Due, and a stopped one must be started by Latest.
+type QuiescenceObligation struct {
+	Duty   string    `json:"duty"`
+	Due    time.Time `json:"due"`
+	Latest time.Time `json:"latest"`
+}
+
+// QuiescenceDuty is a periodic duty that needs no process while stopped.
+type QuiescenceDuty struct {
+	Duty string `json:"duty"`
+	Why  string `json:"why"`
+}
+
+// QuiescenceTask is a package's background task and its pace.
+type QuiescenceTask struct {
+	Task         string `json:"task"`
+	EverySeconds int64  `json:"every_seconds"`
+}
+
+// QuiescenceStartup is what the latest start cost: from the process starting
+// to the management socket listening, and to its first completed pass.
+type QuiescenceStartup struct {
+	At          time.Time `json:"at"`
+	ListeningMS int64     `json:"listening_ms"`
+	FirstPassMS int64     `json:"first_pass_ms"`
+}
+
+func (s *Server) quiescence(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	if s.o.Quiescence == nil {
+		return 0, nil, fail(503, "unavailable", "this server doesn't report quiescence")
+	}
+	q, err := s.o.Quiescence(c.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, q, nil
+}
+
 func (s *Server) schema(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err

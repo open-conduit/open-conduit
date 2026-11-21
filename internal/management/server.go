@@ -54,7 +54,13 @@ type Options struct {
 	// PhaseRunning, PhaseStopping); nil is running.
 	Components func(context.Context) map[string]string
 	Phase      func() string
-	CursorKey  []byte
+	// Quiescence answers GET /quiescence: what is in flight and when the
+	// daemon is next due (optional: without it the route is unavailable).
+	// RequestServed is told of each request served, other than the reads a
+	// waker polls (health and quiescence).
+	Quiescence    func(context.Context) (Quiescence, error)
+	RequestServed func()
+	CursorKey     []byte
 	// Doctor inputs, all optional: ingress state for reconcile lag and loss
 	// declarations, the scheduler for pinned-executor checks, a resolver for
 	// explicit check_secrets runs and extension-contributed checks (telemetry
@@ -436,6 +442,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body["details"] = details
 		}
 		writeJSON(w, api.status, map[string]any{"error": body})
+		return
+	}
+	if s.o.RequestServed != nil {
+		if p := strings.TrimSuffix(r.URL.Path, "/"); !strings.HasSuffix(p, "/health") && !strings.HasSuffix(p, "/quiescence") {
+			s.o.RequestServed()
+		}
 	}
 }
 
@@ -541,6 +553,7 @@ type call struct {
 var routes = []route{
 	{"GET", []string{"health"}, targetAny, false, false, (*Server).health},
 	{"GET", []string{"capacity"}, targetDaemon, false, false, (*Server).capacity},
+	{"GET", []string{"quiescence"}, targetDaemon, false, false, (*Server).quiescence},
 	{"GET", []string{"schema"}, targetAny, false, false, (*Server).schema},
 	{"GET", []string{"scopes"}, targetList, false, false, (*Server).listScopes},
 	{"GET", []string{"scopes", "*"}, targetScope, false, false, (*Server).getScope},

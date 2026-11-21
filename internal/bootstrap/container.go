@@ -435,6 +435,7 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 // them, and the homes of finished Work, at most once per resource
 // interval.
 func (d *daemon) reconcileContainers(ctx context.Context) {
+	//duty:container_reconcile
 	if len(d.containers.providers.all()) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
 	}

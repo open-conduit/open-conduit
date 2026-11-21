@@ -108,6 +108,7 @@ func (p *terminalProcess) Close() error {
 		err = p.File.Close()
 		select {
 		case <-p.ended:
+		//duty:terminal_hangup
 		case <-time.After(terminalHangup):
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 			<-p.ended

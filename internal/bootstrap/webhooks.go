@@ -150,6 +150,7 @@ var (
 	// probeTicker paces the probes; tests replace it with a channel they
 	// fire themselves.
 	probeTicker = func(every time.Duration) (<-chan time.Time, func()) {
+		//duty:tunnel_probe
 		t := time.NewTicker(every)
 		return t.C, t.Stop
 	}
@@ -399,6 +400,7 @@ func (d *daemon) superviseTunnel(ctx context.Context, kind string, run extension
 		select {
 		case <-ctx.Done():
 			return
+		//duty:tunnel_restart
 		case <-time.After(backoff):
 		}
 		backoff = min(backoff*2, tunnelMaxBackoff)
@@ -594,6 +596,7 @@ func (d *daemon) webhookHandler() http.Handler {
 			d.hooks.mu.Lock()
 			d.hooks.delivered = d.now()
 			d.hooks.mu.Unlock()
+			defer d.requestServed()
 			h.ServeHTTP(w, r)
 			return
 		}

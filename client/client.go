@@ -231,6 +231,38 @@ type CapacityPool struct {
 	InUse   int    `json:"in_use"`
 	Waiting int    `json:"waiting"`
 }
+
+// Quiescence is GET /v1/quiescence: whether the daemon has anything in
+// flight and, if not, when it next has something to do (Until; absent when
+// nothing is due).
+type Quiescence struct {
+	Quiescent bool       `json:"quiescent"`
+	Until     *time.Time `json:"until,omitempty"`
+	Next      string     `json:"next,omitempty"`
+	Reasons   []struct {
+		Code  string `json:"code"`
+		Count int    `json:"count"`
+	} `json:"reasons"`
+	Obligations []struct {
+		Duty   string    `json:"duty"`
+		Due    time.Time `json:"due"`
+		Latest time.Time `json:"latest"`
+	} `json:"obligations"`
+	ProcessBound []struct {
+		Duty string `json:"duty"`
+		Why  string `json:"why"`
+	} `json:"process_bound"`
+	PackageTasks []struct {
+		Task         string `json:"task"`
+		EverySeconds int64  `json:"every_seconds"`
+	} `json:"package_tasks"`
+	Startup *struct {
+		At          time.Time `json:"at"`
+		ListeningMS int64     `json:"listening_ms"`
+		FirstPassMS int64     `json:"first_pass_ms"`
+	} `json:"startup,omitempty"`
+}
+
 type Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"next_cursor"`
@@ -603,6 +635,10 @@ func (c *Client) Health(ctx context.Context) (h Health, err error) {
 }
 func (c *Client) Capacity(ctx context.Context) (out Capacity, err error) {
 	err = c.Do(ctx, "GET", "capacity", nil, nil, "", &out)
+	return
+}
+func (c *Client) Quiescence(ctx context.Context) (out Quiescence, err error) {
+	err = c.Do(ctx, "GET", "quiescence", nil, nil, "", &out)
 	return
 }
 func get[T any](c *Client, ctx context.Context, path string) (out T, err error) {
