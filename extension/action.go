@@ -92,7 +92,9 @@ type Action struct {
 	// the action with the name as its Input. The value never reaches the
 	// provider, an Event or a panel: the host refuses any other Input, and
 	// doesn't offer the action to a surface that can't take a value this
-	// way. Choices don't apply.
+	// way. Choices don't apply. A package declares it with the manifest's
+	// secret_actions, so a host too old to take the value privately refuses
+	// the package; the host refuses the listing of one that doesn't.
 	Secret string
 }
 

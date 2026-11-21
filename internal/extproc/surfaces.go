@@ -1022,8 +1022,20 @@ func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([
 	if err := a.r.p.Call(ctx, "work.actions", protocol.WorkActionsParams{Target: protocol.FromActionTarget(t)}, &out); err != nil {
 		return nil, err
 	}
+	return offeredActions(a.r.m, out)
+}
+
+// offeredActions are the actions a package listed. One that asks for a secret
+// without the manifest's secret_actions fails the whole listing rather than
+// being dropped: the host's check that keeps a value out of an action's input
+// reads this list, so an action missing from it could be invoked with a value,
+// while a failed listing refuses every invocation.
+func offeredActions(m protocol.Manifest, out protocol.WorkActionsResult) ([]extension.Action, error) {
 	actions := make([]extension.Action, 0, len(out.Actions))
 	for _, x := range out.Actions {
+		if x.Secret != "" && !m.Provides.SecretActions {
+			return nil, &extension.OperationError{Code: "undeclared_secret_action", Message: m.Name + " offers action " + x.ID + ", which asks for a secret, without declaring secret_actions in its manifest"}
+		}
 		actions = append(actions, extension.Action{ID: x.ID, Label: x.Label, Prompt: x.Prompt, Choices: x.Choices, Detail: x.Detail, Awaited: x.Awaited, Secret: x.Secret})
 	}
 	return actions, nil
