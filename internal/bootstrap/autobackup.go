@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -134,7 +135,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
-	if err := backup.Create(ctx, destination, d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
+	if err := backup.Create(ctx, destination, d.signingKey(ctx), d.backups.name, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
@@ -150,6 +151,41 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		names = names[1:]
 	}
 	return nil
+}
+
+// signingKey is the key a scheduled bundle is signed with, nil when none is
+// configured. A key that can't be had doesn't cost the backup: an unsigned
+// bundle a restore must explicitly accept beats no bundle when the disk goes.
+// The diagnostic says so until signing works again.
+func (d *daemon) signingKey(ctx context.Context) ed25519.PrivateKey {
+	if d.configs == nil {
+		return nil
+	}
+	s, _ := d.configs.Current()
+	if s == nil {
+		return nil
+	}
+	return d.signingKeyFrom(ctx, s.Settings.Backup.SigningKey)
+}
+
+// signingKeyFrom resolves the reference, reporting what stops it.
+func (d *daemon) signingKeyFrom(ctx context.Context, ref string) ed25519.PrivateKey {
+	if ref == "" {
+		d.clear("backup_signing", "")
+		return nil
+	}
+	value, err := d.resolver.ResolveNamed(ctx, "backup_signing_key", ref)
+	if err != nil {
+		d.report("backup_signing", "", "signing_key_unavailable", "publishing this bundle unsigned: "+err.Error())
+		return nil
+	}
+	key, err := backup.ParsePrivateKey(value)
+	if err != nil {
+		d.report("backup_signing", "", "signing_key_invalid", "publishing this bundle unsigned: "+err.Error())
+		return nil
+	}
+	d.clear("backup_signing", "")
+	return key
 }
 
 // treeSize is the total size of the regular files under root, for the log.

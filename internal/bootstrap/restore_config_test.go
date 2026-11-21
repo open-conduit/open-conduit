@@ -80,7 +80,7 @@ func TestRestoreReportsTheConfigAndWhatItNeeds(t *testing.T) {
 				t.Fatal(err)
 			}
 			bundle := filepath.Join(t.TempDir(), "bundle")
-			if _, err := BackupState(ctx, state, bundle, "test"); err != nil {
+			if _, err := BackupState(ctx, state, bundle, "test", cli.BackupOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			// The new host has a config folder with no packages installed

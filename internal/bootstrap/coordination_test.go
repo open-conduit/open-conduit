@@ -73,7 +73,7 @@ func TestOfflineCommandsRefuseAbsentChosenState(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "unmounted", "conduit.db")
 	writeChoice(t, dir, `{"backend": "sqlite", "location": "`+missing+`"}`)
-	if _, err := BackupState(context.Background(), dir, filepath.Join(t.TempDir(), "bundle"), "test"); err == nil || !strings.Contains(err.Error(), "no Open Conduit database") {
+	if _, err := BackupState(context.Background(), dir, filepath.Join(t.TempDir(), "bundle"), "test", cli.BackupOptions{}); err == nil || !strings.Contains(err.Error(), "no Open Conduit database") {
 		t.Fatalf("backup of absent state: %v", err)
 	}
 	if err := RecoverOperator(context.Background(), dir, filepath.Join(dir, "operator.token")); err == nil {
@@ -231,7 +231,7 @@ func TestArtifactChoiceRefusesWhatItCannotHonour(t *testing.T) {
 			if _, _, err := openArtifacts(ctx, dir); err == nil {
 				t.Fatal("opened an artifact store it cannot honour")
 			}
-			if _, err := BackupState(ctx, dir, filepath.Join(t.TempDir(), "bundle"), "test"); err == nil {
+			if _, err := BackupState(ctx, dir, filepath.Join(t.TempDir(), "bundle"), "test", cli.BackupOptions{}); err == nil {
 				t.Fatal("backup ran without the chosen artifact store")
 			}
 			r, err := CheckState(ctx, dir)

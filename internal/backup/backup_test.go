@@ -73,10 +73,10 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
+	if err := Create(ctx, bundle, nil, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
+	if err := Create(ctx, bundle, nil, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
 		t.Fatal("overwrote existing backup")
 	}
 	// Later coordination state is deliberately outside the captured snapshot.
@@ -86,7 +86,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// What the caller records goes into the staged directory: a failure
 	// publishes nothing, and success publishes it with the state.
 	refused := filepath.Join(root, "refused")
-	if err := Restore(ctx, bundle, refused, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil {
+	if err := Restore(ctx, bundle, refused, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore published despite a failed record")
 	}
 	if _, err := os.Lstat(refused); !os.IsNotExist(err) {
@@ -99,7 +99,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(dir, "recorded"), []byte(backend), 0o600)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, record); err != nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, record); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "recorded")); err != nil {
@@ -111,13 +111,13 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// refused rather than mixed with the bundle's.
 	elsewhere := filepath.Join(root, "chosen-artifacts")
 	chosen := ArtifactTarget{Backend: artifacts.Backend, Location: elsewhere}
-	if err := Restore(ctx, bundle, filepath.Join(root, "refused-chosen"), now, nil, storage.LookupBackend, chosen, func(string, string) error { return errors.New("record failed") }); err == nil {
+	if err := Restore(ctx, bundle, filepath.Join(root, "refused-chosen"), Trust{}, now, nil, storage.LookupBackend, chosen, func(string, string) error { return errors.New("record failed") }); err == nil {
 		t.Fatal("restore into a chosen store published despite a failed record")
 	}
 	if held := listAll(t, elsewhere); len(held) != 0 {
 		t.Fatalf("a failed restore left %d artifacts in the chosen store", len(held))
 	}
-	if err := Restore(ctx, bundle, filepath.Join(root, "restored-chosen"), now, nil, storage.LookupBackend, chosen, nil); err != nil {
+	if err := Restore(ctx, bundle, filepath.Join(root, "restored-chosen"), Trust{}, now, nil, storage.LookupBackend, chosen, nil); err != nil {
 		t.Fatal(err)
 	}
 	if held := listAll(t, elsewhere); len(held) != 1 || held[0].Ref != ref {
@@ -126,7 +126,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "restored-chosen", "artifacts")); !os.IsNotExist(err) {
 		t.Fatalf("a restore into a chosen store also made the directory's own: %v", err)
 	}
-	if err := Restore(ctx, bundle, filepath.Join(root, "restored-again"), now, nil, storage.LookupBackend, chosen, nil); err == nil || !strings.Contains(err.Error(), "already holds content") {
+	if err := Restore(ctx, bundle, filepath.Join(root, "restored-again"), Trust{}, now, nil, storage.LookupBackend, chosen, nil); err == nil || !strings.Contains(err.Error(), "already holds content") {
 		t.Fatalf("restore into a store with content: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "restored-again")); !os.IsNotExist(err) {
@@ -136,7 +136,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	// the content in the store the published storage.json names.
 	afterRename := filepath.Join(root, "chosen-after-rename")
 	syncParent = func(string) error { return errors.New("parent sync failed") }
-	err = Restore(ctx, bundle, filepath.Join(root, "restored-after-rename"), now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend, Location: afterRename}, nil)
+	err = Restore(ctx, bundle, filepath.Join(root, "restored-after-rename"), Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend, Location: afterRename}, nil)
 	syncParent = syncDirectory
 	if err == nil {
 		t.Fatal("restore hid a failed parent sync")
@@ -187,7 +187,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -227,7 +227,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
+			if err := Restore(ctx, bundle, target, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -242,7 +242,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := filepath.Join(root, "missing-content-backup")
-	if err := Create(ctx, failed, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
+	if err := Create(ctx, failed, nil, sqlite.Name, db, files, "test-build", kvRetention()); err == nil {
 		t.Fatal("accepted backup missing referenced content")
 	}
 	if _, err := os.Lstat(failed); !errors.Is(err, os.ErrNotExist) {
@@ -320,7 +320,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
+	if err := Create(ctx, bundle, nil, sqlite.Name, db, files, "test-build", kvRetention()); err != nil {
 		t.Fatal(err)
 	}
 	objects := filepath.Join(bundle, "artifacts", "objects")
@@ -332,7 +332,7 @@ func TestRestoreLeavesAFlatBundleUnchanged(t *testing.T) {
 	}
 	before := treeOf(t, bundle)
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err != nil {
+	if err := Restore(ctx, bundle, destination, Trust{}, now, nil, storage.LookupBackend, ArtifactTarget{Backend: artifacts.Backend}, nil); err != nil {
 		t.Fatal(err)
 	}
 	after := treeOf(t, bundle)
@@ -472,7 +472,7 @@ func TestBackupHoldsRetentionWhileItCopies(t *testing.T) {
 		heldAtSnapshot = len(rows)
 		return false, err
 	}
-	if err = Create(ctx, filepath.Join(root, "held"), sqlite.Name, db, files, "test-build", retention); err != nil {
+	if err = Create(ctx, filepath.Join(root, "held"), nil, sqlite.Name, db, files, "test-build", retention); err != nil {
 		t.Fatal(err)
 	}
 	if heldAtSnapshot != 1 || len(files.reads) != 2 || files.reads[0] != 1 || files.reads[1] != 1 {
@@ -486,7 +486,7 @@ func TestBackupHoldsRetentionWhileItCopies(t *testing.T) {
 	if err = live.Delete(ctx, refs[1]); err != nil {
 		t.Fatal(err)
 	}
-	if err = Create(ctx, filepath.Join(root, "missing"), sqlite.Name, db, live, "test-build", kvRetention()); !errors.Is(err, storage.ErrNotFound) {
+	if err = Create(ctx, filepath.Join(root, "missing"), nil, sqlite.Name, db, live, "test-build", kvRetention()); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("backup of missing content: %v", err)
 	}
 	if rows, err := liveHolds(ctx, db); err != nil || len(rows) != 0 {
@@ -496,7 +496,7 @@ func TestBackupHoldsRetentionWhileItCopies(t *testing.T) {
 	refused := kvRetention()
 	refused.Hold = func(storage.Tx, string, time.Time) error { return storage.ErrConflict }
 	for name, r := range map[string]Retention{"no-hold": {}, "refused": refused} {
-		if err = Create(ctx, filepath.Join(root, name), sqlite.Name, db, live, "test-build", r); err == nil {
+		if err = Create(ctx, filepath.Join(root, name), nil, sqlite.Name, db, live, "test-build", r); err == nil {
 			t.Fatalf("%s: backup published without a hold", name)
 		}
 		if _, err = os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
@@ -578,7 +578,7 @@ func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
 			renewals <- tick
 		}
 	}()
-	err = Create(ctx, filepath.Join(root, "stalled"), sqlite.Name, db, stalledReads{live}, "test-build", retention)
+	err = Create(ctx, filepath.Join(root, "stalled"), nil, sqlite.Name, db, stalledReads{live}, "test-build", retention)
 	want := []time.Time{now.Add(DefaultHoldFor), now.Add(5*time.Minute + DefaultHoldFor), now.Add(10*time.Minute + DefaultHoldFor)}
 	if !errors.Is(err, renewal) || !slices.Equal(untils, want) {
 		t.Fatalf("backup with a failed renewal: holds until %v, want %v: %v", untils, want, err)

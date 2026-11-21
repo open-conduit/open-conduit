@@ -61,7 +61,7 @@ func newInPlaceFixture(t *testing.T) inPlaceFixture {
 	}
 	record("x-before")
 	bundle := filepath.Join(t.TempDir(), "bundle")
-	if _, err := BackupState(ctx, state, bundle, "test"); err != nil {
+	if _, err := BackupState(ctx, state, bundle, "test", cli.BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// The later timeline.

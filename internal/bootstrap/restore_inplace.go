@@ -130,6 +130,14 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		return finishInPlace(ctx, lock, stateDir, o, info)
 	}
 
+	// Checked only now: a restart of `serve --restore` that restores nothing
+	// must not stop serving because the trust keys have since rotated.
+	checked, trust, err := authenticated(bundle, o)
+	if err != nil {
+		return info, err
+	}
+	info.Authenticity, info.SigningKey = checked.Authenticity, checked.SigningKey
+
 	// What the replaced storage choice names outside the directory is
 	// never swapped away silently.
 	previous, err := readChoice(stateDir)
@@ -143,7 +151,7 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
-	if err := backup.Restore(ctx, bundle, stage, now, retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
+	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, recordChoiceWith(choice)); err != nil {
 		return info, err
 	}
 	swap, err := prepareSwap(ctx, stateDir, stage, stamp, restoredRecord{DatabaseSHA256: digest, BundleCreatedAt: info.CreatedAt, Bundle: bundle, RestoredAt: now})

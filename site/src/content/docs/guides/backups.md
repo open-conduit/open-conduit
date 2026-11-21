@@ -40,6 +40,24 @@ When `storage.json` names an artifact store outside the state directory, `--in-p
 
 `backup restore BUNDLE --to DIR` writes a new directory instead, never over an existing one, to inspect a bundle or to restore on a new host (below).
 
+## Sign your bundles
+
+Sign bundles if they leave this machine, so a restore can tell yours from one someone planted:
+
+```sh
+open-conduit backup keygen ./backup-signing.key   # prints the public key
+open-conduit secret set backup-signing < ./backup-signing.key   # prints the reference
+rm ./backup-signing.key
+```
+
+`secret set` prints the reference to use. Put it and the public key in the config, and keep a copy of the private key somewhere that isn't this disk:
+
+```json
+{ "settings": { "backup": { "signing_key": "keyring:backup-signing", "trust_keys": ["ed25519:..."] } } }
+```
+
+With trust keys set, `backup verify` and `backup restore` refuse a bundle that a trusted key didn't sign. Pass `--accept-unsigned` to take one with no signature, such as a bundle from before you turned signing on. On a host that has lost its config, name the key with `--trust-key ed25519:...`.
+
 ## Move to a new host
 
 The bundle carries the config: the database holds every config generation, secret references included, and the daemon starts from the active one. It doesn't carry what the references point at (keyring entries, `secrets.json`, environment variables) or the packages you installed, so set those up on the new host first.
