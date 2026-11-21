@@ -140,3 +140,43 @@ func TestRestoreStartsOnTheGivenConfig(t *testing.T) {
 		}
 	})
 }
+
+// TestServeRestoreStartConfigAppliesOnce: serve --restore keeps its flags
+// across restarts, so the start config is published when the bundle is
+// restored and never again over what was applied since.
+func TestServeRestoreStartConfigAppliesOnce(t *testing.T) {
+	ctx := context.Background()
+	bundle := startBundle(t)
+	state := filepath.Join(t.TempDir(), "state")
+	name := func() string {
+		t.Helper()
+		_, store, err := openState(ctx, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		var got string
+		if err := store.View(ctx, func(tx storage.Tx) error {
+			s, err := tx.Scope("eng")
+			got = s.Name
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := writeStart(t, `{"version":1,"settings":{},"connections":[],"scopes":[{"id":"eng","name":"first start"}]}`)
+	if _, err := RestoreInPlace(ctx, bundle, state, cli.RestoreOptions{ConfigPath: first, StartConfig: first, Once: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "first start" {
+		t.Fatalf("after the restore the scope is %q", got)
+	}
+	later := writeStart(t, `{"version":1,"settings":{},"connections":[],"scopes":[{"id":"eng","name":"a restart"}]}`)
+	if _, err := RestoreInPlace(ctx, bundle, state, cli.RestoreOptions{ConfigPath: later, StartConfig: later, Once: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "first start" {
+		t.Fatalf("a restart published its start config again: the scope is %q", got)
+	}
+}

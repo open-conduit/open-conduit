@@ -48,7 +48,7 @@ var helpGroups = []helpGroup{
         [--upgrade-bundles-kept 3] [--upgrade-bundles-max-age 0] [--no-upgrade-bundle]
                              (a first start on a newer record format takes a verified pre-upgrade-<time> bundle in the
                              backup directory and won't start without one; --no-upgrade-bundle skips it for this run)
-        [--restore BUNDLE [--restore-artifacts NAME --restore-artifacts-location LOC] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
+        [--restore BUNDLE [--restore-start-config FILE] [--restore-artifacts NAME --restore-artifacts-location LOC] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
                              (restore BUNDLE in place before serving, as backup restore --in-place does, once:
                              a start that finds the directory restored from it already serves it as it is)
         [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
