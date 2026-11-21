@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -11,16 +10,20 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// drainOrigin names where this daemon runs. A drain records it, and a daemon
-// that starts with a different one has been moved. A host with no name still
-// tells a move by its path; one that keeps both stays drained until
-// `drain end`, the safe way to be wrong.
+// drainOrigin is the state directory's real path. A drain records it, and a
+// daemon that starts with a different one has been moved. The hostname is
+// deliberately no part of it: a recreated container or rescheduled pod gets a
+// new one while it is the same daemon on the same state, and must stay
+// drained. A move that keeps the path stays drained until `drain end`, the
+// safe way to be wrong.
 func drainOrigin(stateDir string) string {
-	host, _ := os.Hostname()
 	if abs, err := filepath.Abs(stateDir); err == nil {
 		stateDir = abs
 	}
-	return host + ":" + filepath.Clean(stateDir)
+	if real, err := filepath.EvalSymlinks(stateDir); err == nil {
+		stateDir = real
+	}
+	return filepath.Clean(stateDir)
 }
 
 // daemonDrain serves the management API's drain routes.

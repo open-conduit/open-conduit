@@ -24,9 +24,9 @@ const (
 // ErrDraining refuses a new attempt while the daemon is draining.
 var ErrDraining = errors.New("daemon is draining")
 
-// Drain is a drain in force. Origin names the installation's place (host and
-// state directory) when it began, so a daemon started somewhere else can tell
-// it has been moved.
+// Drain is a drain in force. Origin names the installation's place (its state
+// directory) when it began, so a daemon started somewhere else can tell it
+// has been moved.
 type Drain struct {
 	Since  time.Time `json:"since"`
 	Origin string    `json:"origin"`

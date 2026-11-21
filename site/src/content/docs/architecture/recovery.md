@@ -77,7 +77,7 @@ open-conduit drain end                               # start attempts again
 
 The report (`GET /v1/drain`) gives `safe_to_move`, what is still `blocking` it (an attempt in flight, a stop not yet confirmed, an unsettled control or usage), what is `carried` in the state for the next daemon (unrouted Events, unread input, Waits still to judge), and each scope's attempts in flight, parked attempts and active Waits. A parked attempt holds no process, so it doesn't block a move: it resumes on its wake on the new daemon. Beginning and ending a drain are in the audit ledger.
 
-A drain is durable, so a restart on the same host and path stays drained until `drain end`. It ends by itself, with an audit record, when a daemon starts from a different host or state directory, and when its state is restored from a bundle, since either is the move it was for. A move that keeps both the hostname and the path stays drained until you run `drain end`.
+A drain is durable, so a restart on the same state path stays drained until `drain end`, including a recreated container or rescheduled pod, whose hostname changes. It ends by itself, with an audit record, when a daemon starts on a different state directory path, and when its state is restored from a bundle, since either is the move it was for. A move that keeps the path (a container's `/state` on a new host, say) stays drained until you run `drain end`.
 
 ## Moving a daemon to another machine
 
@@ -92,7 +92,7 @@ A drain is durable, so a restart on the same host and path stays drained until `
 3. **Write a config for the new machine**, with its paths and with secrets it can resolve.
 4. **Stop the daemon and carry the state**, in one of two ways:
    - **A bundle:** `backup create`, then on the new machine `backup restore BUNDLE --to DIR --start-config FILE` (or `--in-place`). The config is published as a new generation inside the restore's stage, so one that doesn't validate, or that drops a scope with open Work, publishes nothing and the daemon can't come up on the old machine's paths. Without `--start-config` the restored daemon resumes the bundle's generation, whatever paths it holds.
-   - **The whole directory**, only when the active config's paths are still right on the new machine, since a daemon started on a moved directory ends the drain and starts Work on that generation at once. Change its owner to the new user first, because the daemon refuses a state directory it doesn't own.
+   - **The whole directory**, only when the active config's paths are still right on the new machine, since a daemon started at a new state path ends the drain and starts Work on that generation at once. At the same state path it stays drained until you run `drain end`. Change its owner to the new user first, because the daemon refuses a state directory it doesn't own.
 
    When the paths change and you also want what a bundle leaves out, restore with `--start-config` and copy the directories you want from the table below into the restored directory before the first start.
 5. **Install the packages** the report named, and start the daemon on the new machine. Never run the old one again: the two share a [container host label](../sandboxes/#the-host-label). A state path deep enough to take the socket past 100 bytes needs `--socket`.

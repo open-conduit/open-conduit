@@ -42,7 +42,7 @@ func TestDrainStopsNewAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim with no drain: %v", err)
 	}
-	beginDrain(t, f, "host-a:/state")
+	beginDrain(t, f, "/state")
 	if _, err := s.Claim(ctx, queued); !errors.Is(err, runtime.ErrDraining) {
 		t.Fatalf("claim during a drain: %v", err)
 	}
@@ -75,15 +75,15 @@ func TestDrainStopsNewAttempts(t *testing.T) {
 func TestMovedDaemonEndsTheDrain(t *testing.T) {
 	f, _, _ := admissionFixture(t, nil)
 	ctx := context.Background()
-	beginDrain(t, f, "host-a:/state")
-	if ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "host-a:/state"); err != nil || ended != nil {
+	beginDrain(t, f, "/state")
+	if ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "/state"); err != nil || ended != nil {
 		t.Fatalf("same origin: %+v, %v", ended, err)
 	}
 	if !drainStatus(t, f).Draining {
 		t.Fatal("a restart in place ended the drain")
 	}
-	ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "host-b:/new")
-	if err != nil || ended == nil || ended.Origin != "host-a:/state" {
+	ended, err := runtime.EndMovedDrain(ctx, f.Store, f.Clock.Now(), "/new")
+	if err != nil || ended == nil || ended.Origin != "/state" {
 		t.Fatalf("moved: %+v, %v", ended, err)
 	}
 	if drainStatus(t, f).Draining {
