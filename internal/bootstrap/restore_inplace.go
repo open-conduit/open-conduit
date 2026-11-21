@@ -155,12 +155,15 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
-	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
+	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
 		return info, err
 	}
 	swap, err := prepareSwap(ctx, stateDir, stage, stamp, restoredRecord{DatabaseSHA256: digest, BundleCreatedAt: info.CreatedAt, Bundle: bundle, RestoredAt: now})
 	if err != nil {
 		_ = os.RemoveAll(stage)
+		if o.DatabaseLocation != "" {
+			return info, fmt.Errorf("%s now holds the restored database but the restore stopped before using it, so clear it before restoring there again: %w", o.DatabaseLocation, err)
+		}
 		return info, err
 	}
 	if err := runSwap(stateDir, swap); err != nil {
@@ -170,6 +173,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	aside := filepath.Join(stateDir, swap.Aside, storageFile)
 	// The operator chose a new store (keepsStorage): the replaced one
 	// stays where it is, named by the storage.json moved aside.
+	if l := previous.Location; o.DatabaseLocation != "" && l != "" && filepath.Clean(l) != filepath.Join(stateDir, "conduit.db") {
+		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: l, Note: "the replaced database, which " + aside + " names: left where it is"})
+	}
 	if a := previous.Artifacts; a != nil && a.Location != "" && a.Location != filepath.Join(stateDir, "artifacts") {
 		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: a.Location, Note: "the replaced artifact store, which " + aside + " names: left where it is"})
 	}
@@ -178,13 +184,13 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 
 // keepsStorage refuses an in-place restore that would move the daemon off
 // a store its storage.json names outside the state directory without
-// being asked. The restored database always goes into the directory, so
-// an external database refuses; an external or non-default artifact store
+// being asked. An external database needs the operator to name the empty
+// location the bundle's database goes to; an external or non-default artifact store
 // needs the operator to name the store the bundle's artifacts go to (an
 // empty one), or --artifacts files to move to the directory's own.
 func keepsStorage(stateDir string, previous storageChoice, o cli.RestoreOptions) error {
-	if previous.Location != "" && filepath.Clean(previous.Location) != filepath.Join(stateDir, "conduit.db") {
-		return fmt.Errorf("%s names a database outside the state directory (%s), and an in-place restore puts the bundle's database in the directory: restore with --to DIR and move it where the daemon expects it instead", storageFile, previous.Location)
+	if o.DatabaseLocation == "" && previous.Location != "" && filepath.Clean(previous.Location) != filepath.Join(stateDir, "conduit.db") {
+		return fmt.Errorf("%s names a database outside the state directory (%s): name the empty location the bundle's database goes to (--database-location LOC)", storageFile, previous.Location)
 	}
 	a := previous.Artifacts
 	if a == nil || o.ArtifactBackend != "" {

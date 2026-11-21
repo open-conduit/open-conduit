@@ -378,18 +378,25 @@ type Backends func(name string) (storage.Backend, error)
 // all. nil records nothing.
 type Record func(dir, backend string) error
 
-// ArtifactTarget is the artifact store a restore imports into: Backend
-// opened at Location, or, when Location is empty, at the restored
+// Target is where a restore puts a bundle's state. Database is the location
+// the bundle's backend restores to, which must hold no state; empty is
+// conduit.db in the restored directory. Artifacts is the store to import
+// into, opened at ArtifactLocation, or, when that is empty, at the restored
 // directory's artifacts (the file store's default place).
-type ArtifactTarget struct {
-	Backend  storage.ArtifactBackend
-	Location string
+type Target struct {
+	Database         string
+	Artifacts        storage.ArtifactBackend
+	ArtifactLocation string
 }
 
 // Restore verifies all bundle bytes before publishing a new isolated state
-// directory. The bundle's backend restores its snapshot to conduit.db in
-// that directory and fences old lease authority, and its artifacts are
-// imported into the store target opens. That store must hold nothing yet,
+// directory. The bundle's backend restores its snapshot to target.Database,
+// or conduit.db in that directory, and fences old lease authority, and its
+// artifacts are imported into the store target opens. The snapshot's
+// references are checked before the database is written, so a bundle that
+// fails leaves a named location untouched. A failure after the write (the
+// caller's record, publishing the directory) can't take a named location
+// back, since a backend offers no way to delete state: the error says so. That store must hold nothing yet,
 // as the directory must not exist, so a restore never mixes a bundle's
 // content into a live store; when a restore into a location outside the
 // directory fails before the directory is published, what it imported
@@ -399,8 +406,8 @@ type ArtifactTarget struct {
 // daemon may own destination; an existing path is rejected, never
 // overwritten. The bundle must pass trust first, checked on the same manifest
 // bytes the restore then acts on.
-func Restore(ctx context.Context, bundle, destination string, trust Trust, now time.Time, expired Expired, backends Backends, target ArtifactTarget, record Record) (err error) {
-	if now.IsZero() || target.Backend == nil {
+func Restore(ctx context.Context, bundle, destination string, trust Trust, now time.Time, expired Expired, backends Backends, target Target, record Record) (err error) {
+	if now.IsZero() || target.Artifacts == nil {
 		return storage.ErrInvalid
 	}
 	m, raw, err := readManifestBytes(filepath.Join(bundle, "manifest.json"))
@@ -416,6 +423,14 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	}
 	if err := refuseNewer(m, backend); err != nil {
 		return err
+	}
+	if target.Database != "" {
+		switch present, err := backend.Present(ctx, target.Database); {
+		case err != nil:
+			return err
+		case present:
+			return fmt.Errorf("backup: %s already holds state: restore into an empty location: %w", target.Database, os.ErrExist)
+		}
 	}
 	// The bundle may be somewhere others can write, so its database is read
 	// once, into a private copy hashed as it is written, and only that copy
@@ -453,9 +468,9 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	// if a later step (syncing the parent) fails.
 	var external storage.ArtifactStore
 	var imported []domain.ArtifactRef
-	var published bool
-	if target.Location != "" {
-		if external, err = openEmpty(ctx, target.Backend, target.Location); err != nil {
+	var published, wrote bool
+	if target.ArtifactLocation != "" {
+		if external, err = openEmpty(ctx, target.Artifacts, target.ArtifactLocation); err != nil {
 			return err
 		}
 		defer external.Close()
@@ -471,7 +486,7 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	published, err = publish(ctx, destination, func(stage string) error {
 		output := external
 		if output == nil {
-			staged, err := openEmpty(ctx, target.Backend, filepath.Join(stage, "artifacts"))
+			staged, err := openEmpty(ctx, target.Artifacts, filepath.Join(stage, "artifacts"))
 			if err != nil {
 				return err
 			}
@@ -514,19 +529,6 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
 		}
-		if err := backend.Restore(ctx, database, filepath.Join(stage, snapshotName), now); err != nil {
-			return err
-		}
-		if record != nil {
-			if err := record(stage, m.backend()); err != nil {
-				return err
-			}
-		}
-		restored, err := backend.Open(ctx, filepath.Join(stage, snapshotName))
-		if err != nil {
-			return err
-		}
-		defer restored.Close()
 		omitted := map[string]domain.ArtifactRef{}
 		for _, ref := range m.Omitted {
 			if seen[ref.ID] {
@@ -535,14 +537,14 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			seen[ref.ID] = true
 			omitted[ref.ID] = ref
 		}
-		return restored.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		captured := map[string]domain.ArtifactRef{}
+		for _, item := range m.Artifacts {
+			captured[item.Ref.ID] = item.Ref
+		}
+		err := backend.ReadSnapshot(ctx, database, now, func(tx storage.Tx) error {
 			xs, err := tx.ListExecutions("")
 			if err != nil {
 				return err
-			}
-			captured := map[string]domain.ArtifactRef{}
-			for _, item := range m.Artifacts {
-				captured[item.Ref.ID] = item.Ref
 			}
 			for _, x := range xs {
 				gone, err := expired.of(tx, x.ID)
@@ -561,7 +563,25 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			}
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		location := target.Database
+		if location == "" {
+			location = filepath.Join(stage, snapshotName)
+		}
+		if err := backend.Restore(ctx, database, location, now); err != nil {
+			return err
+		}
+		wrote = target.Database != ""
+		if record != nil {
+			return record(stage, m.backend())
+		}
+		return nil
 	})
+	if err != nil && wrote && !published {
+		return fmt.Errorf("backup: %s now holds the restored database but the restore failed after writing it; nothing uses it, so clear it before restoring there again: %w", target.Database, err)
+	}
 	return err
 }
 

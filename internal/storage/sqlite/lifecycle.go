@@ -112,6 +112,33 @@ func (backend) Restore(ctx context.Context, snapshot, destination string, now ti
 	return Restore(ctx, snapshot, destination, now)
 }
 
+// ReadSnapshot restores the snapshot to a private file beside it and reads
+// that, so a snapshot of an older format is read as Open would raise it.
+func (backend) ReadSnapshot(ctx context.Context, snapshot string, now time.Time, read func(storage.Tx) error) error {
+	if read == nil {
+		return storage.ErrInvalid
+	}
+	abs, err := filepath.Abs(snapshot)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(abs), ".sqlite-read-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	copied := filepath.Join(tmp, "conduit.db")
+	if err := Restore(ctx, abs, copied, now); err != nil {
+		return err
+	}
+	s, err := Open(ctx, copied)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.View(ctx, read)
+}
+
 // Inspect opens a private copy of the database and its WAL, so nothing
 // Open does (recovering the WAL, recording the record format) reaches the
 // original. It owns the original while the inspection is open, so no

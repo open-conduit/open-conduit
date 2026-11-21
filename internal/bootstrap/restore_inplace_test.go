@@ -297,6 +297,45 @@ func TestRestoreInPlaceKeepsAnExternalStore(t *testing.T) {
 	}
 }
 
+// An in-place restore moves a daemon whose database is outside the state
+// directory to the empty location the operator names, records it, and
+// leaves the replaced database where it was.
+func TestRestoreInPlaceToANamedDatabase(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	old := filepath.Join(t.TempDir(), "old.db")
+	writeChoice(t, f.state, `{"backend": "sqlite", "location": "`+old+`"}`)
+	db, err := sqlite.Backend.Open(ctx, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	named := filepath.Join(t.TempDir(), "new.db")
+	info, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{DatabaseLocation: named})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := coordinationOf(f.state)
+	if err != nil || c.location != named {
+		t.Fatalf("restored choice = %+v, %v; want %s", c, err, named)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("the replaced database moved: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.state, "conduit.db")); !os.IsNotExist(err) {
+		t.Fatalf("the directory has its own database as well: %v", err)
+	}
+	var reported bool
+	for _, e := range info.InPlace.LaterTimeline {
+		reported = reported || e.Path == old
+	}
+	if !reported {
+		t.Fatalf("the report doesn't name the replaced database: %+v", info.InPlace.LaterTimeline)
+	}
+}
+
 // TestRestoreInPlaceClearsStaleStages: stages a restore left when it was
 // killed before its swap began are removed and reported by the next one,
 // so repeated failures don't fill the volume with copies of the database.

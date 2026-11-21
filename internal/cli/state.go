@@ -141,6 +141,11 @@ type RestoreOptions struct {
 	// ArtifactCommand is the absolute path of the provider executable that
 	// serves ArtifactBackend, when it isn't built into this binary.
 	ArtifactCommand string
+	// DatabaseLocation is where the bundle's backend restores its database,
+	// in that backend's terms (a path, a connection string). It must hold no
+	// state, and the directory's storage.json records it. Empty is conduit.db
+	// in the directory.
+	DatabaseLocation string
 	// ConfigPath is the config file the restored directory will run with:
 	// its installed packages are the ones the restored generation is
 	// checked against.
@@ -216,7 +221,7 @@ func (o *operator) backup(args []string) int {
 	if len(args) < 2 {
 		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
 	}
-	f := newFlags("backup", "to", "artifacts", "artifacts-location", "artifacts-command", "config", "start-config", "trust-key")
+	f := newFlags("backup", "to", "database-location", "artifacts", "artifacts-location", "artifacts-command", "config", "start-config", "trust-key")
 	inPlace := f.fs.Bool("in-place", false, "")
 	unsigned := f.fs.Bool("unsigned", false, "")
 	acceptUnsigned := f.fs.Bool("accept-unsigned", false, "")
@@ -246,7 +251,7 @@ func (o *operator) backup(args []string) int {
 	case "verify":
 		return o.emit(o.env.State.Verify(cx, o.abs(pos[0]), RestoreOptions{ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}))
 	case "restore":
-		ro := RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
+		ro := RestoreOptions{DatabaseLocation: f.get("database-location"), ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
 		if v := f.get("start-config"); v != "" {
 			ro.StartConfig = o.abs(v)
 		}

@@ -146,7 +146,7 @@ func VerifyBundle(ctx context.Context, bundle string, o cli.RestoreOptions) (cli
 	dest := filepath.Join(tmp, "state")
 	// Verification restores into the file store in its own temporary
 	// directory, never into a store the operator uses.
-	if err := backup.Restore(ctx, bundle, dest, trust, time.Now().UTC(), retentionExpired, restoreBackends, backup.ArtifactTarget{Backend: artifacts.Backend}, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, trust, time.Now().UTC(), retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend}, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)
@@ -186,7 +186,7 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(choice), o)); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {

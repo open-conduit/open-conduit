@@ -104,7 +104,7 @@ func TestUpgradeBundleRestoresOnTheOlderBinary(t *testing.T) {
 	}
 	defer sqlite.SimulateRecordFormat(olderFormat)()
 	restored := filepath.Join(t.TempDir(), "restored")
-	if err := backup.Restore(ctx, bundle, restored, backup.Trust{}, upgradeStart, retentionExpired, restoreBackends, backup.ArtifactTarget{Backend: artifacts.Backend}, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, restored, backup.Trust{}, upgradeStart, retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend}, recordChoice); err != nil {
 		t.Fatalf("the older binary can't restore it: %v", err)
 	}
 	_, again, err := openState(ctx, restored)

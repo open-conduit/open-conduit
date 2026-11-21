@@ -171,6 +171,9 @@ func (fakeBackend) OpenPrior(context.Context, string) (storage.Prior, error) {
 func (fakeBackend) Restore(context.Context, string, string, time.Time) error {
 	return storage.ErrInvalid
 }
+func (fakeBackend) ReadSnapshot(context.Context, string, time.Time, func(storage.Tx) error) error {
+	return storage.ErrInvalid
+}
 func (fakeBackend) Writes() storage.StoredVersion { return storage.StoredVersion{} }
 
 // Without an artifact choice a state directory's artifacts are the file
@@ -297,7 +300,7 @@ func TestStateCheckReportsTheArtifactBackend(t *testing.T) {
 // default; the default store records nothing.
 func TestRestoredDirectoryRecordsItsArtifactBackend(t *testing.T) {
 	target, choice, err := restoreTarget(cli.RestoreOptions{})
-	if err != nil || choice != nil || target.Location != "" || target.Backend != artifacts.Backend {
+	if err != nil || choice != nil || target.ArtifactLocation != "" || target.Artifacts != artifacts.Backend {
 		t.Fatalf("default restore target: %+v %+v %v", target, choice, err)
 	}
 	for name, o := range map[string]cli.RestoreOptions{
@@ -316,11 +319,11 @@ func TestRestoredDirectoryRecordsItsArtifactBackend(t *testing.T) {
 	}
 	elsewhere := filepath.Join(t.TempDir(), "kept")
 	target, choice, err = restoreTarget(cli.RestoreOptions{ArtifactBackend: "files", ArtifactLocation: elsewhere})
-	if err != nil || target.Location != elsewhere {
+	if err != nil || target.ArtifactLocation != elsewhere {
 		t.Fatalf("chosen restore target: %+v %v", target, err)
 	}
 	dir := t.TempDir()
-	if err := recordChoiceWith(choice)(dir, "sqlite"); err != nil {
+	if err := recordChoiceWith("", choice)(dir, "sqlite"); err != nil {
 		t.Fatal(err)
 	}
 	a, err := artifactsOf(dir)

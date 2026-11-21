@@ -59,6 +59,12 @@ type Backend interface {
 	// Database.Fence) before the restored state can be opened, so no lease
 	// holder from before the snapshot can commit to it.
 	Restore(ctx context.Context, snapshot, destination string, now time.Time) error
+	// ReadSnapshot calls read once over the state Restore would publish from
+	// snapshot, raised to this binary's versions, and publishes nothing: the
+	// snapshot is unchanged and no location is touched. It is how a restore
+	// checks a snapshot before writing to a destination it could not take
+	// back, such as a database on a server. read is read-only, as a View is.
+	ReadSnapshot(ctx context.Context, snapshot string, now time.Time, read func(Tx) error) error
 	// Writes is the versions this binary writes. State stored at a higher
 	// version is what Open and Inspect refuse, so a bundle that records a
 	// higher one can be refused from its manifest, before anything is copied.

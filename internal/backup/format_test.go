@@ -59,7 +59,7 @@ func TestNewerBundleIsRefusedBeforeAnythingIsCopied(t *testing.T) {
 	bundle := formatBundle(t, "v2")
 	parent := t.TempDir()
 	destination := filepath.Join(parent, "restored")
-	target := ArtifactTarget{Backend: artifacts.Backend}
+	target := Target{Artifacts: artifacts.Backend}
 
 	restore := sqlite.SimulateRecordFormat(sqlite.RecordFormat - 1)
 	err := CheckFormat(bundle, lookup)

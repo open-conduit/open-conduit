@@ -1,10 +1,12 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -80,6 +82,7 @@ func LifecycleCases() []LifecycleCase {
 		{"inspect_reads_without_changing_state", inspectChangesNothing},
 		{"open_prior_preserves_older_state_unchanged", priorUnchanged},
 		{"snapshot_is_consistent_and_restores", snapshotConsistent},
+		{"read_snapshot_sees_state_and_publishes_nothing", readSnapshot},
 		{"restore_fences_every_lease", restoreFences},
 		{"fence_ends_live_lease_authority", fenceInPlace},
 		{"integrity_check_finds_corruption", integrityCheck},
@@ -488,6 +491,52 @@ func restoreFences(t *testing.T, h LifecycleHarness) error {
 	}
 	defer again.Close()
 	return fenced(again, ref, c)
+}
+
+// readSnapshot: ReadSnapshot reads exactly the state the snapshot holds,
+// passes on read's error, and leaves the snapshot as it was.
+func readSnapshot(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	location, err := openSeeded(t, h)
+	if err != nil {
+		return err
+	}
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	snapshot := filepath.Join(t.TempDir(), "snapshot")
+	if err := db.Snapshot(ctx, snapshot, nil); err != nil {
+		return err
+	}
+	before, err := os.ReadFile(snapshot)
+	if err != nil {
+		return err
+	}
+	var seen bool
+	if err := h.Backend.ReadSnapshot(ctx, snapshot, lifecycleNow, func(tx storage.Tx) error {
+		var err error
+		seen, err = hasWork(tx, "work")
+		return err
+	}); err != nil {
+		return err
+	}
+	if !seen {
+		return errors.New("read snapshot: the snapshot's Work was not there")
+	}
+	refused := errors.New("refused by read")
+	if err := h.Backend.ReadSnapshot(ctx, snapshot, lifecycleNow, func(storage.Tx) error { return refused }); !errors.Is(err, refused) {
+		return fmt.Errorf("read snapshot: read's error came back as %v", err)
+	}
+	after, err := os.ReadFile(snapshot)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(before, after) {
+		return errors.New("read snapshot: changed the snapshot")
+	}
+	return nil
 }
 
 // fenceInPlace: Fence ends the authority of a live lease in open state,
