@@ -26,7 +26,8 @@ type IngressOptions struct {
 	// MaxRepeats restarts a generation whose same page keeps being
 	// re-requested after a successful answer (the runtime rejected it).
 	MaxRepeats int
-	// PageSize is the history page size (default 200).
+	// PageSize is the history and replies page size (default the entry's
+	// history_page_size).
 	PageSize int
 	// DirectPages bounds one listing of the app's direct messages, in
 	// pages of 200 (default 50).
@@ -79,6 +80,19 @@ type Ingress struct {
 	stagedID  string
 	staged    map[string]map[string]bool
 	unclaimed map[string]Unclaimed
+	// reads are this generation's thread reads, whole or as far as a rate
+	// limit let them go, so a page Slack defers resumes rather than pays
+	// for them again. pacedID is the generation a rate limit has deferred.
+	readsID string
+	reads   map[string]*threadRead
+	pacedID string
+}
+
+// threadRead is one thread's replies read so far in a generation.
+type threadRead struct {
+	messages []Message
+	next     string
+	done     bool
 }
 
 type threadMemo struct {
@@ -125,6 +139,9 @@ func NewIngress(s Settings, c *Client, now func() time.Time, o IngressOptions) *
 		o.MaxRepeats = 3
 	}
 	if o.PageSize <= 0 || o.PageSize > 999 {
+		o.PageSize = s.PageSize
+	}
+	if o.PageSize <= 0 {
 		o.PageSize = 200
 	}
 	if o.DirectPages <= 0 {
@@ -388,7 +405,11 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	}
 	repeats := g.answered[answerKey]
 	g.mu.Unlock()
-	if scan.ScanID != "" && (now.Sub(start) > g.o.MaxScanAge || repeats >= g.o.MaxRepeats) {
+	g.mu.Lock()
+	paced := g.pacedID == scanID
+	g.mu.Unlock()
+	// A generation Slack is pacing is old because it is waiting, not stuck.
+	if scan.ScanID != "" && (now.Sub(start) > g.o.MaxScanAge && !paced || repeats >= g.o.MaxRepeats) {
 		// An exhausted partial page discards staging; the next scan starts afresh.
 		return extension.Snapshot{ScanID: scanID}, nil
 	}
@@ -399,7 +420,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 		// An entry of direct messages only starts at the first of them.
 		var done bool
 		if c, done, err = g.nextDirect(ctx, scanID, "", b); err != nil {
-			return extension.Snapshot{}, err
+			return g.deferred(scan, scanID, err)
 		}
 		if done {
 			c.phase = ""
@@ -414,7 +435,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 		snap, err = g.historyPage(ctx, scanID, start, c, b)
 	}
 	if err != nil {
-		return extension.Snapshot{}, err
+		return g.deferred(scan, scanID, err)
 	}
 	snap.ScanID, snap.Checkpoint = scanID, scanID
 	snap.Observations = dedupe(snap.Observations)
@@ -428,6 +449,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 				delete(g.threads, key)
 			}
 		}
+		g.readsID, g.reads = "", nil
 		if g.stagedID == scanID {
 			out := map[string]Unclaimed{}
 			for ch, u := range g.staged {
@@ -438,6 +460,21 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	}
 	g.mu.Unlock()
 	return snap, nil
+}
+
+// deferred is a page Slack rate limited: the same page again once the limit
+// lifts. What it read before the limit stays in memory (the history page and
+// reads), so each retry gets further and a one-request-a-minute app still
+// finishes. Any other error stays the page's failure.
+func (g *Ingress) deferred(scan extension.Scan, scanID string, err error) (extension.Snapshot, error) {
+	var limit *RateLimitError
+	if !errors.As(err, &limit) {
+		return extension.Snapshot{}, err
+	}
+	g.mu.Lock()
+	g.pacedID = scanID
+	g.mu.Unlock()
+	return extension.Snapshot{ScanID: scanID, NextCursor: scan.Cursor, NotBefore: limit.Until}, nil
 }
 
 func (g *Ingress) window(start time.Time) (oldest, latest time.Time) {
@@ -681,15 +718,16 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 	now := g.now()
 	g.mu.Lock()
 	m := g.threads[key]
-	if !withParent && m != nil && m.latest == parent.LatestReply && m.count == parent.ReplyCount && now.Sub(m.readAt) < g.s.Refresh {
+	// A read earlier in this generation stands whatever its age: a paced
+	// generation can outlast refresh_minutes.
+	if !withParent && m != nil && m.latest == parent.LatestReply && m.count == parent.ReplyCount && (m.seen == scanID || now.Sub(m.readAt) < g.s.Refresh) {
 		m.seen = scanID
 		obs := m.obs
 		g.mu.Unlock()
 		return obs, nil
 	}
 	g.mu.Unlock()
-	messages, calls, err := g.c.Thread(ctx, channel, thread, "", TS(latest))
-	b.units += calls
+	messages, err := g.readThread(ctx, scanID, channel, thread, latest, b)
 	if err != nil {
 		return nil, err
 	}
@@ -721,6 +759,36 @@ func (g *Ingress) thread(ctx context.Context, scanID, channel, thread string, pa
 		g.mu.Unlock()
 	}
 	return out, nil
+}
+
+// readThread reads a thread up to latest, resuming from where this generation
+// last got to. An unfinished read is an error, never a short success.
+func (g *Ingress) readThread(ctx context.Context, scanID, channel, thread string, latest time.Time, b *budget) ([]Message, error) {
+	key := ThreadKey(channel, thread)
+	g.mu.Lock()
+	if g.readsID != scanID {
+		g.readsID, g.reads = scanID, map[string]*threadRead{}
+	}
+	r := g.reads[key]
+	if r == nil {
+		r = &threadRead{}
+		g.reads[key] = r
+	}
+	g.mu.Unlock()
+	for !r.done {
+		page, next, err := g.c.Replies(ctx, channel, thread, "", TS(latest), r.next, g.o.PageSize)
+		b.units++
+		if err != nil {
+			return nil, err
+		}
+		r.messages = append(r.messages, page...)
+		// Slack can return fewer than asked, so the bound is on messages.
+		if next != "" && (len(page) == 0 || len(r.messages) >= maxThreadMessages) {
+			return nil, ErrThreadTooLong
+		}
+		r.next, r.done = next, next == ""
+	}
+	return r.messages, nil
 }
 
 // asks reports whether an observation is a person's message the start

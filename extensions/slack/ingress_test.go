@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,6 +127,29 @@ func (f *fixture) scanErr() ([]extension.Observation, error) {
 	}
 	f.t.Fatal("scan did not complete")
 	return nil, nil
+}
+
+// untilDeferred scans to the first page Slack defers, and returns the scan
+// that asked for it.
+func (f *fixture) untilDeferred() (extension.Scan, extension.Snapshot) {
+	f.t.Helper()
+	scan := extension.Scan{Source: src}
+	for i := 0; i < 100; i++ {
+		page, err := f.in.Reconcile(context.Background(), scan)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		if !page.NotBefore.IsZero() {
+			scan.ScanID = page.ScanID
+			return scan, page
+		}
+		if page.Complete {
+			f.t.Fatal("scan completed without a deferral")
+		}
+		scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+	}
+	f.t.Fatal("no deferral")
+	return scan, extension.Snapshot{}
 }
 
 func byItem(obs []extension.Observation) map[string]extension.Observation {
@@ -379,21 +403,143 @@ func TestRateLimitedScanInfersNothingThenResumes(t *testing.T) {
 	f.fake.Reply(chanA, root, bob, "a")
 	f.sync()
 	f.fake.RateLimit("conversations.replies", 30, 1)
-	_, err := f.scanErr()
-	var limit *slack.RateLimitError
-	if !errors.As(err, &limit) || limit.Method != "conversations.replies" {
-		t.Fatalf("expected a rate limit, got %v", err)
+	scan, page := f.untilDeferred()
+	if page.Complete || len(page.Observations) != 0 || page.NextCursor != scan.Cursor || !page.NotBefore.Equal(f.clock.Now().Add(30*time.Second)) {
+		t.Fatalf("expected a deferred page, got %+v", page)
 	}
 	if until, paused := f.client.PausedUntil(); !paused || until.Sub(f.clock.Now()) != 30*time.Second {
 		t.Fatalf("pause %v %v", until, paused)
 	}
 	before := f.fake.Calls("conversations.replies")
-	if _, err := f.scanErr(); !errors.As(err, &limit) || f.fake.Calls("conversations.replies") != before {
-		t.Fatal("a paused method reached Slack")
+	again, err := f.in.Reconcile(context.Background(), scan)
+	if err != nil || again.NotBefore.IsZero() || f.fake.Calls("conversations.replies") != before {
+		t.Fatalf("a paused method reached Slack: %+v %v", again, err)
 	}
 	f.clock.Add(31 * time.Second)
 	if obs := f.scan(); len(obs) != 2 {
 		t.Fatalf("resumed scan: %d", len(obs))
+	}
+}
+
+// perMinute is Slack's limit for a non-Marketplace app: each method answers
+// once a minute and says when to come back.
+type perMinute struct {
+	base  http.RoundTripper
+	now   func() time.Time
+	mu    sync.Mutex
+	next  map[string]time.Time
+	calls int
+}
+
+func (l *perMinute) RoundTrip(r *http.Request) (*http.Response, error) {
+	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	l.mu.Lock()
+	wait := l.next[method].Sub(l.now())
+	if wait <= 0 {
+		l.next[method] = l.now().Add(time.Minute)
+		l.calls++
+	}
+	l.mu.Unlock()
+	if wait > 0 {
+		return &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, Request: r,
+			Header: http.Header{"Retry-After": {strconv.Itoa(int(wait.Seconds()) + 1)}}, Body: http.NoBody}, nil
+	}
+	return l.base.RoundTrip(r)
+}
+
+// A scan under one request a minute per method finishes, with every message
+// of a thread longer than a page, however long that takes.
+func TestScanCompletesUnderOneRequestAMinute(t *testing.T) {
+	f := newFixture(t, `,"history_page_size":15`, slack.IngressOptions{})
+	limiter := &perMinute{base: http.DefaultTransport, now: f.clock.Now, next: map[string]time.Time{}}
+	cfg, err := slack.ParseConnection([]byte(`{"api_url":"` + f.fake.URL + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := slack.NewClient(cfg, func(context.Context, string) (string, error) { return "xoxb-test", nil },
+		slack.ClientOptions{Now: f.clock.Now, HTTP: &http.Client{Transport: limiter}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := slack.NewIngress(f.s, client, f.clock.Now, slack.IngressOptions{})
+	want := 0
+	for i := 0; i < 40; i++ {
+		root := f.fake.Post(chanA, alice, "q"+strconv.Itoa(i))
+		want++
+		if i%8 == 0 {
+			for r := 0; r < 40; r++ {
+				f.fake.Reply(chanA, root, bob, "a"+strconv.Itoa(r))
+				want++
+			}
+		}
+	}
+	f.sync()
+	started := f.clock.Now()
+	scan := extension.Scan{Source: src}
+	got := map[string]bool{}
+	deferred := 0
+	for i := 0; ; i++ {
+		if i > 5000 {
+			t.Fatal("scan never completed")
+		}
+		page, err := in.Reconcile(context.Background(), scan)
+		if err != nil {
+			t.Fatalf("page %d: %v", i, err)
+		}
+		if page.ScanID == "" || (scan.ScanID != "" && page.ScanID != scan.ScanID) {
+			t.Fatalf("generation restarted at page %d: %+v", i, page)
+		}
+		for _, o := range page.Observations {
+			got[o.ID] = true
+		}
+		if page.Complete {
+			break
+		}
+		if !page.NotBefore.IsZero() {
+			deferred++
+			f.clock.Set(page.NotBefore)
+		}
+		scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+	}
+	if len(got) != want {
+		t.Fatalf("observed %d of %d messages", len(got), want)
+	}
+	if deferred == 0 {
+		t.Fatal("the limit never applied")
+	}
+	// Three history pages and, for five long threads, three replies pages
+	// each, plus one for each of the channel's other pages' threads: no read
+	// is paid for twice.
+	if took := f.clock.Now().Sub(started); limiter.calls != f.fake.Calls("conversations.history")+f.fake.Calls("conversations.replies") || took < time.Duration(limiter.calls/2-1)*time.Minute {
+		t.Fatalf("%d calls over %s", limiter.calls, took)
+	}
+	if replies := f.fake.Calls("conversations.replies"); replies != 5*3 {
+		t.Fatalf("replies calls = %d, want 15: a read was repeated", replies)
+	}
+}
+
+// A paced generation is old because it is waiting, so the age bound that
+// restarts a stuck one leaves it alone.
+func TestPacedGenerationOutlastsTheAgeBound(t *testing.T) {
+	f := newFixture(t, "", slack.IngressOptions{})
+	root := f.fake.Post(chanA, alice, "q")
+	f.fake.Reply(chanA, root, bob, "a")
+	f.sync()
+	f.fake.RateLimit("conversations.replies", 30, 1)
+	scan, _ := f.untilDeferred()
+	f.clock.Add(7 * time.Hour)
+	next, err := f.in.Reconcile(context.Background(), scan)
+	if err != nil || next.ScanID != scan.ScanID || (next.NextCursor == "" && !next.Complete) {
+		t.Fatalf("paced generation was restarted: %+v %v", next, err)
+	}
+}
+
+func TestReconcileSecondsMustFitTheWindow(t *testing.T) {
+	base := `{"namespace":"` + ns + `","scope":"` + scope + `","team":"` + team + `","channels":["` + chanA + `"],"bot_user_id":"` + botUser + `","signing_secret":"signing","history_hours":1,`
+	for extra, ok := range map[string]bool{`"reconcile_seconds":3600}`: true, `"reconcile_seconds":3601}`: false, `"reconcile_seconds":-1}`: false, `"history_page_size":15}`: true, `"history_page_size":201}`: false} {
+		if _, err := slack.ParseExtension([]byte(base+extra), []string{"signing"}); (err == nil) != ok {
+			t.Fatalf("%s: %v", extra, err)
+		}
 	}
 }
 

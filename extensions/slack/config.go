@@ -158,6 +158,13 @@ type ExtensionConfig struct {
 	// RefreshMinutes bounds how long an unchanged thread's replies are taken
 	// from memory instead of re-read (default 60).
 	RefreshMinutes int `json:"refresh_minutes,omitempty"`
+	// ReconcileSeconds is how often this entry reconciles (default
+	// settings.reconcile_seconds), from 1 up to history_hours.
+	ReconcileSeconds int `json:"reconcile_seconds,omitempty"`
+	// HistoryPageSize is how many messages one history or replies call
+	// asks for, 1-200 (default 200). Slack's limit for commercially
+	// distributed non-Marketplace apps is 15.
+	HistoryPageSize int `json:"history_page_size,omitempty"`
 	// Receiver is how push deliveries and button presses arrive: socket
 	// (default; Socket Mode with the connection's app_token, no public
 	// endpoint), http (the Events API and interactivity Request URLs on the
@@ -311,8 +318,12 @@ type Settings struct {
 	Claim            string
 	ClaimSince       time.Time
 	History, Refresh time.Duration
-	SigningSecret    string
-	Projection       Projection
+	// Reconcile is the entry's own interval (zero: the host's); PageSize
+	// the messages asked for per history or replies call.
+	Reconcile     time.Duration
+	PageSize      int
+	SigningSecret string
+	Projection    Projection
 	// Post maps each binding that may post (slack.post) to the sorted
 	// channels it may post in.
 	Post map[string][]string
@@ -636,6 +647,20 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("slack extension: refresh_minutes must be 1-1440")
 		}
 		s.Refresh = time.Duration(c.RefreshMinutes) * time.Minute
+	}
+	if c.ReconcileSeconds != 0 {
+		// A pass reads only the window, so a longer gap would never be read.
+		if c.ReconcileSeconds < 1 || c.ReconcileSeconds > 365*24*3600 || time.Duration(c.ReconcileSeconds)*time.Second > s.History {
+			return s, errors.New("slack extension: reconcile_seconds must be at least 1 and within history_hours")
+		}
+		s.Reconcile = time.Duration(c.ReconcileSeconds) * time.Second
+	}
+	s.PageSize = 200
+	if c.HistoryPageSize != 0 {
+		if c.HistoryPageSize < 1 || c.HistoryPageSize > 200 {
+			return s, errors.New("slack extension: history_page_size must be 1-200")
+		}
+		s.PageSize = c.HistoryPageSize
 	}
 	if len(c.Post) > 100 {
 		return s, errors.New("slack extension: post must list at most 100 bindings")

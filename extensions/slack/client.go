@@ -387,8 +387,12 @@ func (c *Client) Replies(ctx context.Context, channel, thread, oldest, latest, c
 	return out.Messages, next, nil
 }
 
-// maxThreadPages bounds one thread read (200 messages a page).
-const maxThreadPages = 50
+// maxThreadPages bounds one thread read (200 messages a page), and
+// maxThreadMessages the same read at any page size.
+const (
+	maxThreadPages    = 50
+	maxThreadMessages = maxThreadPages * 200
+)
 
 // ErrThreadTooLong means a thread exceeded the bounded read.
 var ErrThreadTooLong = errors.New("slack thread exceeds the bounded read")
