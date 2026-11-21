@@ -34,7 +34,9 @@ func (t *transaction) PutTimer(v domain.Timer, expected domain.Revision) error {
 		}
 	}
 	var n int
-	if err = t.queryRow("SELECT count(*) FROM events WHERE id=? OR (source=? AND delivery_id=?)", v.Event.ID, v.Event.Source, v.Event.DeliveryID).Scan(&n); err != nil {
+	// A retired Event's identity stays taken: arming over it would leave a
+	// timer that can never fire, or whose Event is lost as a duplicate.
+	if err = t.queryRow("SELECT (SELECT count(*) FROM events WHERE id=?1 OR (source=?2 AND delivery_id=?3)) + (SELECT count(*) FROM event_tombstones WHERE id=?1 OR (source=?2 AND delivery_id=?3))", v.Event.ID, v.Event.Source, v.Event.DeliveryID).Scan(&n); err != nil {
 		return err
 	}
 	if n != 0 {

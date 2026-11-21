@@ -32,7 +32,7 @@ const SchemaVersion uint32 = 1
 // the highest format that opened it, and Open refuses a database whose format
 // is newer than its own (ErrRecordsNewer), before it changes anything.
 // TestRecordFieldsArePinned fails until a field change comes with a bump.
-const RecordFormat uint32 = 8
+const RecordFormat uint32 = 9
 
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat
@@ -396,6 +396,10 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted_key ON events(` + eventKeySource + `, ` + eventKeyID + `, sequence) WHERE ` + unrouted,
 	`CREATE INDEX IF NOT EXISTS events_unrouted_type ON events(` + eventType + `, sequence) WHERE ` + unrouted,
 	auditTable,
+	// event_tombstones holds what RetireEvent leaves of an Event. Record
+	// format 9 keeps a binary that doesn't read it from opening the store
+	// and accepting a retired delivery again.
+	`CREATE TABLE IF NOT EXISTS event_tombstones (id TEXT PRIMARY KEY, source TEXT NOT NULL, delivery_id TEXT NOT NULL, record BLOB NOT NULL, UNIQUE(source,delivery_id))`,
 }
 
 // executionRefs selects (artifact ID, attempt ID) for every ref the record

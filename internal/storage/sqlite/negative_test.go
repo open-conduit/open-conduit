@@ -58,6 +58,37 @@ func (b staleLiveTx) LiveWorks() ([]domain.Work, error)           { return b.Tx.
 func (b staleLiveTx) LiveExecutions() ([]domain.Execution, error) { return b.Tx.ListExecutions("") }
 func (b staleLiveTx) ActiveWaits() ([]domain.Wait, error)         { return b.Tx.ListWaits("") }
 
+// lostTombstone treats a retired delivery as never seen.
+type lostTombstone struct{ storage.Store }
+type lostTombstoneTx struct{ storage.Tx }
+
+func (b lostTombstone) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(lostTombstoneTx{tx}) })
+}
+func (b lostTombstoneTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
+	a, added, err := b.Tx.AcceptEvent(e)
+	if err == nil && !added && a.Retired {
+		return domain.AcceptedEvent{Event: e, Sequence: a.Sequence + 1}, true, nil
+	}
+	return a, added, err
+}
+
+// liveSequence reads the latest sequence from the live rows, as the store
+// did before Events could be retired.
+type liveSequence struct{ storage.Store }
+type liveSequenceTx struct{ storage.Tx }
+
+func (b liveSequence) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(liveSequenceTx{tx}) })
+}
+func (b liveSequenceTx) LatestSequence() (uint64, error) {
+	rows, err := b.Tx.Events(0, 0)
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	return rows[len(rows)-1].Sequence, nil
+}
+
 func TestWeakenedSQLiteIsRejected(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -66,6 +97,8 @@ func TestWeakenedSQLiteIsRejected(t *testing.T) {
 	}{
 		{"lost_atomicity", func(s storage.Store) storage.Store { return lostAtomicity{s} }, []string{"atomic_route_work_kv_timer", "timer_fire_rearm_rollback", "namespaced_kv_and_checkpoint_rollback", "wait_registration_atomic_with_park"}},
 		{"lost_dedup", func(s storage.Store) storage.Store { return lostDedup{s} }, []string{"event_identity_not_correlation"}},
+		{"lost_tombstone", func(s storage.Store) storage.Store { return lostTombstone{s} }, []string{"retired_event_keeps_identity_and_sequence"}},
+		{"live_sequence", func(s storage.Store) storage.Store { return liveSequence{s} }, []string{"retired_event_keeps_identity_and_sequence"}},
 		{"lost_fencing", func(s storage.Store) storage.Store { return lostFencing{s} }, []string{"lease_expiry_recovery_and_fencing", "terminal_work_cancellation_fences_worker"}},
 		{"stale_live_reads", func(s storage.Store) storage.Store { return staleLive{s} }, []string{"live_reads_follow_state"}},
 	}

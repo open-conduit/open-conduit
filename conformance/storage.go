@@ -79,6 +79,7 @@ func StorageCases() []StorageCase {
 		{"terminal_correlation_and_causation", terminalCorrelationAndCausation},
 		{"event_identity_not_correlation", eventIdentity},
 		{"event_actor_round_trip", eventActor},
+		{"retired_event_keeps_identity_and_sequence", retiredEvents},
 		{"acceptance_separate_from_routing", routeReplay},
 		{"atomic_route_work_kv_timer", atomicRoute},
 		{"correlation_revision_and_copy_isolation", workRevision},
@@ -111,6 +112,242 @@ func StorageCases() []StorageCase {
 		{"transient_aborts_commit_nothing_and_retry", transientAborts},
 		{"audit_ledger_numbers_chains_and_pages", auditLedger},
 	}
+}
+
+// retiredEvents: an Event moved out of the live log (RetireEvent) still
+// decides everything its identity decided. A redelivery is a duplicate, its
+// ID stays taken, a new Event can cite it, its routing stays fixed, and the
+// sequence never goes back past it even when it was the newest. Only the
+// list reads and its payload lose it, and a rolled back retire changes
+// nothing.
+func retiredEvents(s storage.Store) error {
+	c := NewClock()
+	data := domain.Payload{Schema: "test.retired.v1", Data: []byte(`{"a":1}`)}
+	var gone domain.AcceptedEvent
+	if err := transact(s, c, func(tx storage.Tx) error {
+		kept := event("kept", c.Now())
+		if _, _, err := tx.AcceptEvent(kept); err != nil {
+			return err
+		}
+		if _, _, err := tx.AcceptEvent(event("unrouted", c.Now())); err != nil {
+			return err
+		}
+		e := event("gone", c.Now())
+		e.Data = data
+		var err error
+		if gone, _, err = tx.AcceptEvent(e); err != nil {
+			return err
+		}
+		if err = tx.MarkRouted("kept", "", "unmatched"); err != nil {
+			return err
+		}
+		if err = tx.MarkRouted("gone", "", "unmatched"); err != nil {
+			return err
+		}
+		if err = wantError(tx.RetireEvent("unrouted"), storage.ErrInvalid); err != nil {
+			return fmt.Errorf("retiring an unrouted event: %w", err)
+		}
+		if err = wantError(tx.RetireEvent("missing"), storage.ErrNotFound); err != nil {
+			return fmt.Errorf("retiring an unknown event: %w", err)
+		}
+		if err = tx.RetireEvent("gone"); err != nil {
+			return err
+		}
+		return tx.RetireEvent("gone")
+	}); err != nil {
+		return err
+	}
+	checkTombstone := func(where string, got domain.AcceptedEvent) error {
+		if !got.Retired || got.Event.ID != "gone" || got.Sequence != gone.Sequence || got.Disposition != "unmatched" || !got.Routed {
+			return fmt.Errorf("tombstone %s: got %+v", where, got)
+		}
+		if got.Event.Data.Schema != "" || len(got.Event.Data.Data) != 0 {
+			return fmt.Errorf("tombstone %s kept its payload", where)
+		}
+		return nil
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		latest, err := tx.LatestSequence()
+		if err != nil {
+			return err
+		}
+		if latest != gone.Sequence {
+			return fmt.Errorf("sequence went backwards: latest %d after retiring %d", latest, gone.Sequence)
+		}
+		rows, err := tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		typed, err := tx.TypeEvents("test.changed.v1", nil, 0, 0)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 2 || len(typed) != 2 {
+			return fmt.Errorf("retired event still listed: %d events, %d by type", len(rows), len(typed))
+		}
+		got, err := tx.Event("gone")
+		if err != nil {
+			return err
+		}
+		if err = checkTombstone("by Event", got); err != nil {
+			return err
+		}
+		if got, err = tx.EventByDelivery("test", "gone"); err != nil {
+			return err
+		}
+		if err = checkTombstone("by delivery", got); err != nil {
+			return err
+		}
+		again := event("redelivered", c.Now())
+		again.DeliveryID = "gone"
+		dup, added, err := tx.AcceptEvent(again)
+		if err != nil {
+			return err
+		}
+		if added {
+			return fmt.Errorf("redelivery accepted again after retiring")
+		}
+		if err = checkTombstone("on redelivery", dup); err != nil {
+			return err
+		}
+		taken := event("gone", c.Now())
+		taken.DeliveryID = "elsewhere"
+		if _, _, err = tx.AcceptEvent(taken); !errors.Is(err, storage.ErrConflict) {
+			return fmt.Errorf("retired ID reused: got %v, want conflict", err)
+		}
+		if err = tx.MarkRouted("gone", "", "unmatched"); err != nil {
+			return fmt.Errorf("same route replayed on a tombstone: %w", err)
+		}
+		if err = wantError(tx.MarkRouted("gone", "", "dropped"), storage.ErrConflict); err != nil {
+			return fmt.Errorf("tombstone routing changed: %w", err)
+		}
+		if err = tx.PutScope(domain.Scope{ID: "scope", Name: "scope"}, 0); err != nil {
+			return err
+		}
+		if err = wantError(tx.SetEventScope("gone", "scope"), storage.ErrConflict); err != nil {
+			return fmt.Errorf("tombstone scope changed: %w", err)
+		}
+		child := event("child", c.Now())
+		child.CausationID = "gone"
+		next, added, err := tx.AcceptEvent(child)
+		if err != nil {
+			return fmt.Errorf("citing a retired cause: %w", err)
+		}
+		if !added || next.Sequence <= gone.Sequence {
+			return fmt.Errorf("sequence went backwards: next %d after retired %d", next.Sequence, gone.Sequence)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	rollback := errors.New("roll back")
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.RetireEvent("kept"); err != nil {
+			return err
+		}
+		return rollback
+	}); !errors.Is(err, rollback) {
+		return fmt.Errorf("retire in a failed transaction: %v", err)
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		got, err := tx.Event("kept")
+		if err != nil {
+			return err
+		}
+		if got.Retired {
+			return fmt.Errorf("a rolled back retire was kept")
+		}
+		rows, err := tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if r.Event.ID == "kept" {
+				return nil
+			}
+		}
+		return fmt.Errorf("a rolled back retire left the live log")
+	}); err != nil {
+		return err
+	}
+	return retiredReferences(s, c)
+}
+
+// retiredReferences: the records that name an Event hold when it is retired.
+// A Timer can cite a retired cause but can't take its ID or delivery, an
+// attempt whose trigger was retired can still be updated, a Wait can start at
+// a boundary that is a retired Event's sequence, and one can be woken by a
+// retired Event. It runs on retiredEvents' store, whose Event "gone" is
+// retired and whose Scope "scope" exists.
+func retiredReferences(s storage.Store, c *Clock) error {
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "work", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{{Source: "test", ExternalID: "thread"}}}, 0); err != nil {
+			return err
+		}
+		if _, _, err := tx.AcceptEvent(event("trigger", c.Now())); err != nil {
+			return err
+		}
+		if err := tx.PutExecution(domain.Execution{ID: "execution", WorkID: "work", ExecutorBinding: "shell", Attempt: 1, State: domain.ExecutionPending, TriggerID: "trigger"}, 0); err != nil {
+			return err
+		}
+		if _, _, err := tx.AcceptEvent(event("wake", c.Now())); err != nil {
+			return err
+		}
+		for _, id := range []domain.ID{"trigger", "wake"} {
+			if err := tx.MarkRouted(id, "", "unmatched"); err != nil {
+				return err
+			}
+			if err := tx.RetireEvent(id); err != nil {
+				return err
+			}
+		}
+		fire := c.Now().Add(time.Hour)
+		cited := event("timer-cited", c.Now())
+		cited.CausationID = "gone"
+		if err := tx.PutTimer(domain.Timer{ID: "cites", FireAt: fire, Event: cited}, 0); err != nil {
+			return fmt.Errorf("timer citing a retired cause: %w", err)
+		}
+		sameID := event("gone", c.Now())
+		sameID.DeliveryID = "timer-elsewhere"
+		if err := wantError(tx.PutTimer(domain.Timer{ID: "same-id", FireAt: fire, Event: sameID}, 0), storage.ErrConflict); err != nil {
+			return fmt.Errorf("timer reused a retired event ID: %w", err)
+		}
+		sameDelivery := event("timer-new", c.Now())
+		sameDelivery.DeliveryID = "gone"
+		if err := wantError(tx.PutTimer(domain.Timer{ID: "same-delivery", FireAt: fire, Event: sameDelivery}, 0), storage.ErrConflict); err != nil {
+			return fmt.Errorf("timer reused a retired delivery: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	ref, err := claim(s, c)
+	if err != nil {
+		return fmt.Errorf("claiming an attempt whose trigger was retired: %w", err)
+	}
+	if err = s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, park); err != nil {
+		return fmt.Errorf("updating an attempt whose trigger was retired: %w", err)
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		latest, err := tx.LatestSequence()
+		if err != nil {
+			return err
+		}
+		v, err := tx.Wait("wait")
+		if err != nil {
+			return err
+		}
+		boundary := v
+		boundary.ID, boundary.AfterSequence = "boundary", latest
+		if err = tx.PutWait(boundary, 0); err != nil {
+			return fmt.Errorf("wait at the boundary of a retired event: %w", err)
+		}
+		v.State, v.WakeEventID = domain.WaitWoken, "wake"
+		if err = tx.PutWait(v, v.Revision); err != nil {
+			return fmt.Errorf("wait woken by a retired event: %w", err)
+		}
+		return nil
+	})
 }
 
 // finishedArtifacts: an attempt fenced while its turn ran takes the

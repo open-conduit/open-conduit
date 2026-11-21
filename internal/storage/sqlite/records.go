@@ -24,7 +24,35 @@ func namespace(s string) bool {
 	return true
 }
 func (t *transaction) Event(id domain.ID) (domain.AcceptedEvent, error) {
-	return read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE id=?", id)
+	a, err := read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE id=?", id)
+	if errors.Is(err, storage.ErrNotFound) {
+		return read[domain.AcceptedEvent](t, "SELECT record FROM event_tombstones WHERE id=?", id)
+	}
+	return a, err
+}
+
+// RetireEvent implements storage.Tx.
+func (t *transaction) RetireEvent(id domain.ID) error {
+	a, err := t.Event(id)
+	if err != nil {
+		return err
+	}
+	if a.Retired {
+		return nil
+	}
+	if !a.Routed {
+		return storage.ErrInvalid
+	}
+	a.Retired, a.Event.Data = true, domain.Payload{}
+	b, err := encode(a)
+	if err != nil {
+		return err
+	}
+	if _, err = t.exec("INSERT INTO event_tombstones(id,source,delivery_id,record) VALUES(?,?,?,?)", a.Event.ID, a.Event.Source, a.Event.DeliveryID, b); err != nil {
+		return err
+	}
+	_, err = t.exec("DELETE FROM events WHERE id=?", id)
+	return err
 }
 func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	if !t.live {
@@ -216,11 +244,17 @@ func (t *transaction) LatestSequence() (uint64, error) {
 		return 0, storage.ErrInvalid
 	}
 	var sequence uint64
-	err := t.queryRow("SELECT coalesce(max(sequence),0) FROM events").Scan(&sequence)
+	// AUTOINCREMENT's own high-water mark: unlike max(sequence), it holds
+	// when the newest Event has been retired.
+	err := t.queryRow("SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='events'),0)").Scan(&sequence)
 	return sequence, mapError(err)
 }
 func (t *transaction) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
-	return read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE source=? AND delivery_id=?", source, deliveryID)
+	a, err := read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE source=? AND delivery_id=?", source, deliveryID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return read[domain.AcceptedEvent](t, "SELECT record FROM event_tombstones WHERE source=? AND delivery_id=?", source, deliveryID)
+	}
+	return a, err
 }
 func (t *transaction) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
 	fail := func(err error) (domain.AcceptedEvent, bool, error) { return domain.AcceptedEvent{}, false, err }
@@ -353,6 +387,9 @@ func (t *transaction) SetEventScope(id, scope domain.ID) error {
 		if a.ScopeID == scope {
 			return nil
 		}
+		return storage.ErrConflict
+	}
+	if a.Retired {
 		return storage.ErrConflict
 	}
 	if _, err = t.Scope(scope); err != nil {
@@ -555,8 +592,8 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 		}
 		return err
 	}
-	var sequence uint64
-	if err = t.queryRow("SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&sequence); err != nil {
+	sequence, err := t.LatestSequence()
+	if err != nil {
 		return err
 	}
 	if v.ID == "" || x.WorkID != w.ID || w.State != domain.WorkWaiting || x.State != domain.ExecutionParked && x.State != domain.ExecutionWaiting || len(v.Match.Keys) == 0 || v.AfterSequence > sequence {

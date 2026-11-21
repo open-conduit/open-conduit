@@ -79,6 +79,7 @@ func (readOnly) AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error) {
 }
 func (readOnly) MarkRouted(domain.ID, domain.ID, string) error        { return ErrReadOnly }
 func (readOnly) SetEventScope(domain.ID, domain.ID) error             { return ErrReadOnly }
+func (readOnly) RetireEvent(domain.ID) error                          { return ErrReadOnly }
 func (readOnly) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (readOnly) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
 func (readOnly) SetExecutionExecutor(domain.ID, string) error         { return ErrReadOnly }
@@ -155,6 +156,18 @@ type Tx interface {
 	// write-once: the same scope again is nil, another is ErrConflict, an
 	// empty one ErrInvalid, and an unknown Event or Scope ErrNotFound.
 	SetEventScope(eventID, scopeID domain.ID) error
+	// RetireEvent moves a routed Event out of the live log, leaving a
+	// tombstone: its envelope and routing metadata without its payload,
+	// marked Retired. Event and EventByDelivery answer with the tombstone, so
+	// a redelivery is still a duplicate, its ID and delivery stay taken (by
+	// a new Event or a Timer's), and a new Event, a Timer, an attempt's
+	// trigger or a Wait's wake can still cite it. The list reads (Events, WorkEvents,
+	// ScopeEvents, TypeEvents and the unrouted reads) omit it, as a gap in
+	// the sequence, and LatestSequence and later sequences never go back
+	// past it. Its routing and scope stay fixed: the same MarkRouted again
+	// is nil, and any change is ErrConflict. Retiring it again is nil, an
+	// unrouted Event is ErrInvalid and an unknown one ErrNotFound.
+	RetireEvent(eventID domain.ID) error
 	ListWorks() ([]domain.Work, error)
 	// LiveWorks is ListWorks restricted to Work that has not finished
 	// (State not Terminal), in ID order. Like UnroutedEvents, its cost
