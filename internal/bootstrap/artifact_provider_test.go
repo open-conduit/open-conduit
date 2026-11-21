@@ -38,6 +38,11 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case "stutter", "stuck":
+		if err := artifactstore.Serve(context.Background(), os.Stdin, os.Stdout, emptyReadsBackend{stuck: os.Getenv(providerEnv) == "stuck"}); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
 	case "lying":
 		if err := artifactstore.Serve(context.Background(), os.Stdin, os.Stdout, lyingBackend{}); err != nil {
 			os.Exit(1)
@@ -226,6 +231,89 @@ func TestStorageChoiceNamesAProvider(t *testing.T) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
 		}
 	}
+}
+
+// io.Reader allows a read of nothing with no error. The SDK reads past it,
+// and reports a reader that never gets anywhere rather than spinning.
+func TestProviderHandlesEmptyReads(t *testing.T) {
+	ctx := context.Background()
+	location := filepath.Join(t.TempDir(), "store")
+	honest, err := provider(t, "serve").Open(ctx, location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := honest.Create(ctx, "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(w, "content after empty reads"); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := w.Commit(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = honest.Close(); err != nil {
+		t.Fatal(err)
+	}
+	read := func(mode string) (string, error) {
+		s, err := provider(t, mode).Open(ctx, location)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		r, err := s.Open(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		b, err := io.ReadAll(r)
+		return string(b), err
+	}
+	if got, err := read("stutter"); err != nil || got != "content after empty reads" {
+		t.Fatalf("read past empty reads: %q, %v", got, err)
+	}
+	if got, err := read("stuck"); err == nil {
+		t.Fatalf("a stuck reader read cleanly: %q", got)
+	}
+}
+
+// emptyReadsBackend's readers return (0, nil) before each read, or for ever.
+type emptyReadsBackend struct{ stuck bool }
+
+func (b emptyReadsBackend) Open(ctx context.Context, location string) (storage.ArtifactStore, error) {
+	s, err := artifacts.Backend.Open(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	return emptyReadsStore{s, b.stuck}, nil
+}
+
+type emptyReadsStore struct {
+	storage.ArtifactStore
+	stuck bool
+}
+
+func (s emptyReadsStore) Open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
+	r, err := s.ArtifactStore.Open(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &emptyReader{ReadCloser: r, stuck: s.stuck}, nil
+}
+
+type emptyReader struct {
+	io.ReadCloser
+	stuck, primed bool
+}
+
+func (r *emptyReader) Read(b []byte) (int, error) {
+	if r.stuck || !r.primed {
+		r.primed = true
+		return 0, nil
+	}
+	r.primed = false
+	return r.ReadCloser.Read(b)
 }
 
 // lyingBackend alters what it reads and misreports what it commits.

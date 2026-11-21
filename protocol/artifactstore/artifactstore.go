@@ -477,6 +477,10 @@ func (s *server) writer(id string, end bool) (storage.ArtifactWriter, error) {
 	return w, nil
 }
 
+// maxEmptyReads is how many reads in a row may return nothing before a
+// reader counts as stuck.
+const maxEmptyReads = 100
+
 func (r *serverReader) read() (ReadResult, error) {
 	if r.err != nil {
 		if errors.Is(r.err, io.EOF) {
@@ -485,7 +489,15 @@ func (r *serverReader) read() (ReadResult, error) {
 		return ReadResult{}, r.err
 	}
 	buf := make([]byte, MaxChunk)
+	// io.Reader allows (0, nil), but an answer must carry bytes or EOF.
 	n, err := r.r.Read(buf)
+	for empty := 1; n == 0 && err == nil; empty++ {
+		if empty == maxEmptyReads {
+			err = io.ErrNoProgress
+			break
+		}
+		n, err = r.r.Read(buf)
+	}
 	if err != nil && n == 0 {
 		r.err = err
 		if errors.Is(err, io.EOF) {
