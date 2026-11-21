@@ -10,12 +10,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// drainOrigin is the state directory's real path. A drain records it, and a
-// daemon that starts with a different one has been moved. The hostname is
-// deliberately no part of it: a recreated container or rescheduled pod gets a
-// new one while it is the same daemon on the same state, and must stay
-// drained. A move that keeps the path stays drained until `drain end`, the
-// safe way to be wrong.
+// drainOrigin is the state directory's real path, which a drain records as
+// where it began. Nothing ends a drain for starting elsewhere.
 func drainOrigin(stateDir string) string {
 	if abs, err := filepath.Abs(stateDir); err == nil {
 		stateDir = abs

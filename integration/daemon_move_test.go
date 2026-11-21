@@ -91,8 +91,16 @@ func TestDaemonDrainAndMove(t *testing.T) {
 		}
 		d.stopAndMove()
 		d.start("")
-		if st, err := d.c.DrainStatus(ctx); err != nil || st.Draining {
-			t.Fatalf("the moved daemon is still draining: %+v, %v", st, err)
+		// The moved daemon stays drained, and starts nothing, until told to.
+		if st, err := d.c.DrainStatus(ctx); err != nil || !st.Draining {
+			t.Fatalf("the moved daemon isn't draining: %+v, %v", st, err)
+		}
+		d.settle()
+		if got := d.launchCount(); got != before {
+			t.Fatalf("the moved daemon launched %d attempts before drain end", got-before)
+		}
+		if _, err := d.c.EndDrain(ctx); err != nil {
+			t.Fatal(err)
 		}
 		d.verify(root, "woken by drill.reply", false)
 	})
@@ -107,6 +115,9 @@ func TestDaemonDrainAndMove(t *testing.T) {
 		drained(d)
 		d.stopAndMove()
 		d.start("")
+		if _, err := d.c.EndDrain(ctx); err != nil {
+			t.Fatal(err)
+		}
 		d.verify(root, "woken by core.wait.timeout", false)
 		w, _ := d.work()
 		timeouts, err := d.c.Events(ctx, map[string][]string{"work_id": {w.ID}, "type": {"core.wait.timeout"}})

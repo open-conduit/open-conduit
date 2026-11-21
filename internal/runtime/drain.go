@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -24,9 +23,10 @@ const (
 // ErrDraining refuses a new attempt while the daemon is draining.
 var ErrDraining = errors.New("daemon is draining")
 
-// Drain is a drain in force. Origin names the installation's place (its state
-// directory) when it began, so a daemon started somewhere else can tell it
-// has been moved.
+// Drain is a drain in force. Origin records the state directory it began in.
+// A start somewhere else doesn't end it: a copy of the state can't tell that
+// the daemon it was copied from has stopped, so only `drain end` or a restore
+// says this is now the daemon to run.
 type Drain struct {
 	Since  time.Time `json:"since"`
 	Origin string    `json:"origin"`
@@ -72,27 +72,6 @@ func EndDrainInTx(tx storage.Tx) (bool, error) {
 		return false, err
 	}
 	return true, tx.Delete(drainNamespace, drainKey)
-}
-
-// EndMovedDrain ends a drain begun at another origin: the daemon has been
-// moved, which is what the drain was for. The ledger records it. A drain from
-// this origin stays. It reports the drain it ended, if any.
-func EndMovedDrain(ctx context.Context, store storage.Store, now time.Time, origin string) (*Drain, error) {
-	var ended *Drain
-	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		ended = nil
-		d, on, err := DrainInTx(tx)
-		if err != nil || !on || d.Origin == origin {
-			return err
-		}
-		if err = tx.Delete(drainNamespace, drainKey); err != nil {
-			return err
-		}
-		ended = &d
-		_, err = tx.AppendAudit(domain.AuditRecord{Actor: "system:daemon", Action: "core.drain.ended_by_move", Outcome: domain.AuditOK, Detail: map[string]string{"from": d.Origin, "to": origin}})
-		return err
-	})
-	return ended, err
 }
 
 // InFlight is whether an attempt holds a process or is about to: a parked

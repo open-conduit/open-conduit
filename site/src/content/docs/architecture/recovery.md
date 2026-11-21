@@ -77,7 +77,7 @@ open-conduit drain end                               # start attempts again
 
 The report (`GET /v1/drain`) gives `safe_to_move`, what is still `blocking` it (an attempt in flight, a stop not yet confirmed, an unsettled control or usage), what is `carried` in the state for the next daemon (unrouted Events, unread input, Waits still to judge), and each scope's attempts in flight, parked attempts and active Waits. A parked attempt holds no process, so it doesn't block a move: it resumes on its wake on the new daemon. Beginning and ending a drain are in the audit ledger.
 
-A drain is durable, so a restart on the same state path stays drained until `drain end`, including a recreated container or rescheduled pod, whose hostname changes. It ends by itself, with an audit record, when a daemon starts on a different state directory path, and when its state is restored from a bundle, since either is the move it was for. A move that keeps the path (a container's `/state` on a new host, say) stays drained until you run `drain end`.
+A drain is durable, so a daemon stays drained until you run `drain end`, across a restart, a recreated container or a move of its directory to any path. A copy of the state can't tell that the daemon it came from has stopped, so starting one never ends the drain by itself, and two live copies can't both act on the same Work by accident. The one exception is a restore from a bundle, which ends the drain with an audit record because the restore is itself the deliberate step.
 
 ## Moving a daemon to another machine
 
@@ -92,10 +92,10 @@ A drain is durable, so a restart on the same state path stays drained until `dra
 3. **Write a config for the new machine**, with its paths and with secrets it can resolve.
 4. **Stop the daemon and carry the state**, in one of two ways:
    - **A bundle:** `backup create`, then on the new machine `backup restore BUNDLE --to DIR --start-config FILE` (or `--in-place`). The config is published as a new generation inside the restore's stage, so one that doesn't validate, or that drops a scope with open Work, publishes nothing and the daemon can't come up on the old machine's paths. Without `--start-config` the restored daemon resumes the bundle's generation, whatever paths it holds.
-   - **The whole directory**, only when the active config's paths are still right on the new machine, since a daemon started at a new state path ends the drain and starts Work on that generation at once. At the same state path it stays drained until you run `drain end`. Change its owner to the new user first, because the daemon refuses a state directory it doesn't own.
+   - **The whole directory.** Change its owner to the new user first (`chown -R`), because the daemon refuses a state directory it doesn't own. It starts drained, so nothing runs until you say so: if the active config's paths are wrong here, apply a corrected config, then run `drain end` once the old daemon is stopped for good.
 
    When the paths change and you also want what a bundle leaves out, restore with `--start-config` and copy the directories you want from the table below into the restored directory before the first start.
-5. **Install the packages** the report named, and start the daemon on the new machine. Never run the old one again: the two share a [container host label](../sandboxes/#the-host-label). A state path deep enough to take the socket past 100 bytes needs `--socket`.
+5. **Install the packages** the report named, and start the daemon on the new machine. A carried directory comes up drained, so run `drain end` once you've checked it (a restored bundle has already ended its drain). Never run the old one again: the two share a [container host label](../sandboxes/#the-host-label). A state path deep enough to take the socket past 100 bytes needs `--socket`.
 
 Parked Work resumes on its wake and each timer fires once, including one that came due during the move.
 
@@ -206,7 +206,7 @@ Recovery order:
 
 `TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
 
-`TestDrainStopsNewAttempts` (in `internal/runtime`) refuses a new attempt during a drain, reports the one in flight, lets it launch, and starts Work again once the drain ends. `TestMovedDaemonEndsTheDrain` keeps the drain across a restart at the same origin, with a start at another origin ending it.
+`TestDrainStopsNewAttempts` (in `internal/runtime`) refuses a new attempt during a drain, reports the one in flight, lets it launch, and starts Work again once the drain ends. `TestDrainSurvivesAStartAnywhere` keeps the drain when the state reopens at another path.
 
 `TestDaemonDrainAndMove` (in `integration`) drains a real daemon with a Work parked, moves its state to a new directory tree and starts another on it: a wake during the drain launches nothing until the new daemon runs it, and a timer due across the move fires once. With the drain's guards removed it fails. `TestDaemonRestoreOntoAnotherPath` bundles a drained daemon and restores it under another path with `--start-config` and an empty Claude config directory: the one Work is still listed and its next turn starts from the handoff note. `TestRestoreStartsOnTheGivenConfig` refuses a start config that doesn't validate or drops a scope with open Work, publishing nothing, with a restore without one as its negative control. `TestPortabilityNamesEveryItem` covers a fixture with one of each non-portable item and no secret text in the report. `TestMovedWorkspaceKeepsItsWork` and `TestMovedWorktreeThatCantReattachIsKept` (in `extensions/git`) cover workspaces carried with the directory. No drill runs a containerised agent across a move or crosses operating systems.
 

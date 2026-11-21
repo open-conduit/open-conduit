@@ -563,13 +563,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	reg := d.configRegistry()
 	d.defaultDoc = d.defaultConfig()
-	// A drain from another host or path has done its job: this is the
-	// daemon it was moving to.
-	if ended, err := runtime.EndMovedDrain(ctx, d.coord, d.now(), drainOrigin(o.StateDir)); err != nil {
-		return err
-	} else if ended != nil {
-		d.log.Info("drain ended: the state has moved", "from", ended.Origin, "to", drainOrigin(o.StateDir))
-	}
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
