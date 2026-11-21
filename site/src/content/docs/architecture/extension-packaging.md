@@ -118,7 +118,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |
 | `RunEnvironment` | `run_environment` | `run.environment` |
 | `Annotate` | `annotate` | `work.annotate` |
-| `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
+| `Actions`, `Act` | `actions` (and `secret_actions`, set by hand, when an action has a `Secret`) | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
 | `Target` (`TargetResolvers`) | `targets` | `target.resolve` |
 | `OnSegmentEnd` (`SegmentEnded`) | `segment_end` | `segment.ended` |
