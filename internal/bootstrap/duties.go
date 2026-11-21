@@ -69,7 +69,7 @@ var hostDuties = []hostDuty{
 	{Name: "package_drain", Why: "retiring packages exist only in a running process"},
 	{Name: "package_retry", Why: "retries starting a package in this process; a new start tries again"},
 	{Name: "package_idle", Why: "stops an idle on-demand package process; a stopped daemon has none"},
-	{Name: "package_task", Why: "runs on the first pass after a start; a task can't yet declare a due time, so each is listed in the answer"},
+	{Name: "package_task", Why: "a task that hands its waiting back has a durable due time, an obligation in the answer; one on a bare interval runs on the first pass after a start and is listed with its pace"},
 	{Name: "executor_state_sweep", Why: "runs on the first pass after a start"},
 	{Name: "tunnel_probe", Why: "probes this process's public URL"},
 	{Name: "forward_report", Why: "throttles a log line"},
@@ -207,8 +207,10 @@ func (d *daemon) quiescence(ctx context.Context) (management.Quiescence, error) 
 	q := management.Quiescence{Reasons: []runtime.QuiescenceReason{}, Obligations: []management.QuiescenceObligation{}, ProcessBound: []management.QuiescenceDuty{}, PackageTasks: []management.QuiescenceTask{}}
 	var timer time.Time
 	stored := map[string]dutyRecord{}
+	sleeps := map[string]taskSleep{}
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		clear(stored)
+		clear(sleeps)
 		q.Startup = nil
 		var e error
 		if q.Reasons, timer, e = runtime.QuiescenceInTx(tx); e != nil {
@@ -224,6 +226,15 @@ func (d *daemon) quiescence(ctx context.Context) (management.Quiescence, error) 
 				return e
 			}
 			stored[row.Key] = r
+		}
+		if rows, e = tx.List(taskNamespace, ""); e != nil {
+			return e
+		}
+		for _, row := range rows {
+			var r taskSleep
+			if json.Unmarshal(row.Value, &r) == nil {
+				sleeps[row.Key] = r
+			}
 		}
 		raw, e := tx.Get(startupNamespace, startupKey)
 		if errors.Is(e, storage.ErrNotFound) {
@@ -269,7 +280,14 @@ func (d *daemon) quiescence(ctx context.Context) (management.Quiescence, error) 
 	}
 	for _, x := range d.extensionPackages() {
 		for _, t := range x.Tasks() {
-			q.PackageTasks = append(q.PackageTasks, management.QuiescenceTask{Task: x.Name() + "/" + t.Name, EverySeconds: int64(t.Pace / time.Second)})
+			key := x.Name() + "/" + t.Name
+			entry := management.QuiescenceTask{Task: key, EverySeconds: int64(t.Pace / time.Second)}
+			if r, ok := sleeps[key]; ok {
+				due := r.NextDue
+				entry.NextDue, entry.Sleeping = &due, true
+				q.Obligations = append(q.Obligations, management.QuiescenceObligation{Duty: "task:" + key, Due: due, Latest: due})
+			}
+			q.PackageTasks = append(q.PackageTasks, entry)
 		}
 	}
 	sort.Slice(q.PackageTasks, func(i, j int) bool { return q.PackageTasks[i].Task < q.PackageTasks[j].Task })

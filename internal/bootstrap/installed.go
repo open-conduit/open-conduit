@@ -111,7 +111,7 @@ type workKind struct {
 type task struct {
 	Name string
 	Pace time.Duration
-	Run  func(ctx context.Context) error
+	Run  func(ctx context.Context) (protocol.TaskRunResult, error)
 }
 
 // packageCheck is a doctor check a package declares: Deep runs only with
@@ -123,6 +123,15 @@ type packageCheck struct {
 }
 
 func (x *installed) Name() string { return x.m.Name }
+
+// generation is the package process's start count: a new one has lost what
+// the last held in memory.
+func (x *installed) generation() uint64 {
+	if x.r == nil {
+		return 0
+	}
+	return x.r.Process().Generation()
+}
 
 // Title is the manifest's display name.
 func (x *installed) Title() string { return x.m.Title }
@@ -645,7 +654,7 @@ func (x *installed) Tasks() []task {
 	var out []task
 	for _, t := range x.m.Provides.Tasks {
 		name := t.Name
-		out = append(out, task{Name: name, Pace: time.Duration(t.IntervalSeconds) * time.Second, Run: func(ctx context.Context) error { return x.r.Task(ctx, name) }})
+		out = append(out, task{Name: name, Pace: time.Duration(t.IntervalSeconds) * time.Second, Run: func(ctx context.Context) (protocol.TaskRunResult, error) { return x.r.RunTask(ctx, name) }})
 	}
 	return out
 }

@@ -89,6 +89,12 @@ func (h *Host) ConfigDir() string {
 // NewHost returns a Host on an existing connection (tests).
 func NewHost(conn *jsonrpc.Conn) *Host { return &Host{conn: conn} }
 
+// WakeTask asks the host to run one of the extension's own tasks on its next
+// pass, after making work for it that no Event or Work change shows.
+func (h *Host) WakeTask(ctx context.Context, task string) error {
+	return h.Call(ctx, "task.wake", protocol.TaskWakeParams{Task: task}, nil)
+}
+
 // Call makes any extension-to-host call.
 func (h *Host) Call(ctx context.Context, method string, params, out any) error {
 	return h.conn.Call(ctx, method, params, out)

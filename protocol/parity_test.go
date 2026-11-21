@@ -65,6 +65,7 @@ var parity = map[string][]string{
 	"Host.BindingSecrets":    {"method:secret.resolve"},
 	"Host.Report":            {"method:check.run"},
 	"Host.Nudge":             {"method:event.accept", "method:timer.arm"},
+	"Host.WakeTask":          {"method:task.wake"},
 	"Host.StateDir":          {"method:initialize"},
 	"Host.ExecutorDir":       {"method:initialize"},
 	"Host.DryRun":            {"method:configure"},

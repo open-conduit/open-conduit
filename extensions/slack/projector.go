@@ -46,6 +46,8 @@ const (
 
 // ProjectorOptions configure a Projector.
 type ProjectorOptions struct {
+	// Wake asks for a projection pass soon, after leaving a delivery for one.
+	Wake     func()
 	Store    storage.Store
 	Client   *Client
 	Settings Settings
@@ -278,6 +280,14 @@ func Marker(work, execution domain.ID, intent string) *Metadata {
 // pending while delivery is in progress or waiting for its marker search, or
 // failed after a definitive refusal.
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
+	state, err := p.deliver(ctx, in)
+	if (err != nil || state != IntentPosted && state != IntentFailed) && p.o.Wake != nil {
+		p.o.Wake() // left for a later pass, which may be asleep
+	}
+	return state, err
+}
+
+func (p *Projector) deliver(ctx context.Context, in Intent) (string, error) {
 	// No Thread posts a new top-level message, which can't be broadcast.
 	if in.ID == "" || strings.TrimSpace(in.Text) == "" || !slackIDPattern.MatchString(in.Channel) || in.Thread != "" && !tsPattern.MatchString(in.Thread) || in.Thread == "" && (in.Broadcast || in.Work == "" || p.o.Accept == nil) {
 		return "", storage.ErrInvalid
@@ -745,6 +755,50 @@ func (p *Projector) converge(ctx context.Context, limit int) (ProjectionResult, 
 	res.Progress = n
 	res.Codes = append(res.Codes, codes...)
 	return res, err
+}
+
+// Quiet says whether the projector has nothing to do until Work changes: no
+// live Work in a thread or under another Work (its prompts and progress move
+// without a change to it), and no reply or upload unfinished.
+func (p *Projector) Quiet(ctx context.Context) (bool, error) {
+	if p.o.Settings.Projection.Disabled {
+		return true, nil
+	}
+	quiet := false
+	err := p.transact(ctx, func(tx storage.Tx) error {
+		quiet = false
+		live, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), States: storage.LiveWorkStates})
+		if err != nil {
+			return err
+		}
+		for _, w := range live {
+			if _, _, ok := p.Thread(w); ok || w.ParentID != "" {
+				return nil
+			}
+		}
+		rows, err := tx.List(p.ns, "intent/")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var rec intentRecord
+			if json.Unmarshal(row.Value, &rec) == nil && rec.Text != "" && rec.State != IntentPosted && rec.State != IntentFailed {
+				return nil
+			}
+		}
+		if rows, err = tx.List(p.ns, "upload/"); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var rec uploadRecord
+			if json.Unmarshal(row.Value, &rec) == nil && rec.State == IntentAttempted && rec.File != "" {
+				return nil
+			}
+		}
+		quiet = true
+		return nil
+	})
+	return quiet, err
 }
 
 // ErrorCode is a safe diagnostic code for an extension error.

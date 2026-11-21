@@ -70,7 +70,10 @@ type Extension struct {
 	Recurrences map[string]RecurrenceFunc
 	Triggers    map[string]func([]domain.Event) int
 	Tasks       map[string]func(ctx context.Context, h *Host) error
-	Checks      map[string]func(ctx context.Context, h *Host, deep bool) (string, error)
+	// TaskPlans are tasks that say when they next have something to do. A
+	// name here is served instead of the same name in Tasks.
+	TaskPlans map[string]func(ctx context.Context, h *Host) (protocol.TaskRunResult, error)
+	Checks    map[string]func(ctx context.Context, h *Host, deep bool) (string, error)
 	// Probes are the read-only setup probes the extension offers
 	// (Manifest.Provides.Probes), served through probe.serve.
 	Probes []extension.SetupProbe
@@ -508,11 +511,14 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
+		if plan, ok := s.ext.TaskPlans[p.Task]; ok {
+			return plan(ctx, s.host)
+		}
 		f, ok := s.ext.Tasks[p.Task]
 		if !ok {
 			return nil, notFound(method)
 		}
-		return struct{}{}, f(ctx, s.host)
+		return protocol.TaskRunResult{}, f(ctx, s.host)
 	case "check.run":
 		var p protocol.CheckRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

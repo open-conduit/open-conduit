@@ -253,8 +253,10 @@ type Quiescence struct {
 		Why  string `json:"why"`
 	} `json:"process_bound"`
 	PackageTasks []struct {
-		Task         string `json:"task"`
-		EverySeconds int64  `json:"every_seconds"`
+		Task         string     `json:"task"`
+		EverySeconds int64      `json:"every_seconds"`
+		Sleeping     bool       `json:"sleeping,omitempty"`
+		NextDue      *time.Time `json:"next_due,omitempty"`
 	} `json:"package_tasks"`
 	Startup *struct {
 		At          time.Time `json:"at"`

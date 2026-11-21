@@ -53,6 +53,7 @@ import {
   type Snapshot,
   type SourceDecl,
   TaskRunParams,
+  type TaskRunResult,
   ValidateParams,
   type WaitRequest,
   WebhookHandleParams,
@@ -326,7 +327,13 @@ export interface CheckContext extends Context {
 /** A check returns its detail line, and throws to fail with the error's message as detail. */
 export type CheckFn = (ctx: CheckContext) => string | Promise<string>;
 
-export type TaskFn = (ctx: Context) => void | Promise<void>;
+/**
+ * A task may return when it next has something to do and what wakes it
+ * sooner (at most an hour off); returning nothing keeps its interval.
+ */
+export type TaskFn = (
+  ctx: Context,
+) => void | TaskRunResult | Promise<void | TaskRunResult>;
 
 export type MigrateFn = (
   from: number,
@@ -1065,8 +1072,7 @@ export class Server {
       case "task.run": {
         const fn = served.tasks.get(params(TaskRunParams, raw).task);
         if (fn === undefined) throw notFound(method);
-        await fn({ host: this.host, signal });
-        return {};
+        return (await fn({ host: this.host, signal })) ?? {};
       }
       case "check.run": {
         const p = params(CheckRunParams, raw);

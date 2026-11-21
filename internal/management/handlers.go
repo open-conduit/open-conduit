@@ -96,8 +96,9 @@ func (s *Server) capacity(c *call) (int, any, error) {
 
 // Quiescence is GET /quiescence: whether the daemon has anything in flight
 // and, if not, when it next has something to do. Until is absent when nothing
-// is due. A process-bound duty owes nothing while the daemon is stopped; a
-// package task can't yet say when it is next needed, so each is listed.
+// is due. A process-bound duty owes nothing while the daemon is stopped. Every
+// package task is listed; one that handed its waiting back carries its next
+// due time, which is also an obligation.
 type Quiescence struct {
 	Quiescent    bool                       `json:"quiescent"`
 	Until        *time.Time                 `json:"until,omitempty"`
@@ -123,10 +124,13 @@ type QuiescenceDuty struct {
 	Why  string `json:"why"`
 }
 
-// QuiescenceTask is a package's background task and its pace.
+// QuiescenceTask is a package's background task and its pace. Sleeping says
+// it handed its waiting back, and NextDue is the latest it will next run.
 type QuiescenceTask struct {
-	Task         string `json:"task"`
-	EverySeconds int64  `json:"every_seconds"`
+	Task         string     `json:"task"`
+	EverySeconds int64      `json:"every_seconds"`
+	Sleeping     bool       `json:"sleeping,omitempty"`
+	NextDue      *time.Time `json:"next_due,omitempty"`
 }
 
 // QuiescenceStartup is what the latest start cost: from the process starting

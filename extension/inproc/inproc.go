@@ -163,6 +163,10 @@ type Host struct {
 	// Nudge asks the host loop for an early pass, after the extension made
 	// something the loop acts on (an accepted Event, an armed timer).
 	Nudge func()
+	// WakeTask asks the host to run one of the extension's own tasks on its
+	// next pass, after making work for it that no Event or Work change
+	// shows. A task that isn't sleeping is unaffected.
+	WakeTask func(task string)
 	// StateDir is the daemon's state directory, and DryRun whether the
 	// daemon makes no external writes and starts no timed work.
 	StateDir string
@@ -588,7 +592,20 @@ type Renderer interface {
 type Task struct {
 	Name string
 	Pace time.Duration
-	Run  func(ctx context.Context) error
+	// Run is the pass of a task on a bare Pace. A task with a Plan needs none.
+	Run func(ctx context.Context) error
+	// Plan, when set, runs instead of Run and says when the task next has
+	// something to do, so the host needn't call it at Pace.
+	Plan func(ctx context.Context) (TaskPlan, error)
+}
+
+// TaskPlan is a task's next run (protocol.TaskRunResult). The zero value
+// keeps the task's Pace. Next is when it next has something to do; Families
+// and Work are what run it sooner.
+type TaskPlan struct {
+	Next     time.Time
+	Families []string
+	Work     bool
 }
 
 // Tasker extensions have background tasks.

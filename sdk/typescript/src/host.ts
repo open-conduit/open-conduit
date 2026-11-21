@@ -114,6 +114,11 @@ export class Host {
     return out;
   }
 
+  /** Runs one of the extension's own tasks on the host's next pass. */
+  async wakeTask(task: string, signal?: AbortSignal): Promise<void> {
+    await this.#call("task.wake", { task }, signal);
+  }
+
   /** A KV value and its version, or undefined when the key is absent. */
   async get(
     namespace: string,

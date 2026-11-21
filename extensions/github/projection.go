@@ -22,6 +22,8 @@ var ErrIntentConflict = errors.New("github intent reused with different content"
 
 // ProjectorOptions configure a Projector.
 type ProjectorOptions struct {
+	// Wake asks for a projection pass soon, after leaving a delivery for one.
+	Wake     func()
 	Store    storage.Store
 	Client   *Client
 	Settings Settings
@@ -196,6 +198,14 @@ func refused(err error) bool {
 // It returns the durable record state ("posted", or "attempted"/"pending"
 // when delivery is still in progress or waiting for its marker search).
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
+	state, err := p.deliver(ctx, in)
+	if (err != nil || state != intentPosted) && p.o.Wake != nil {
+		p.o.Wake() // left for a later pass, which may be asleep
+	}
+	return state, err
+}
+
+func (p *Projector) deliver(ctx context.Context, in Intent) (string, error) {
 	if in.ID == "" || in.Number <= 0 || (strings.TrimSpace(in.Body) == "" && in.Review == nil) {
 		return "", storage.ErrInvalid
 	}
@@ -762,6 +772,74 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		}
 	}
 	return res, nil
+}
+
+// Quiet says whether the projector has nothing to do until Work changes or a
+// comment arrives: no live issue Work (its labels are verified on a clock),
+// no delivery unfinished, and no comment left to acknowledge.
+func (p *Projector) Quiet(ctx context.Context) (bool, error) {
+	if p.o.Settings.Projection.Disabled {
+		return true, nil
+	}
+	quiet := false
+	err := p.transact(ctx, func(tx storage.Tx) error {
+		quiet = false
+		live, err := tx.QueryWorks(storage.WorkQuery{ScopeID: domain.ID(p.o.Settings.Scope), States: storage.LiveWorkStates})
+		if err != nil {
+			return err
+		}
+		for _, w := range live {
+			for _, k := range w.CorrelationKeys {
+				if k.Source != p.o.Settings.Namespace {
+					continue
+				}
+				if _, _, ok := ParseIssueKey(k.ExternalID); ok {
+					return nil
+				}
+			}
+		}
+		rows, err := tx.List(p.ns, "intent/")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var rec intentRecord
+			if json.Unmarshal(row.Value, &rec) == nil && (rec.Body != "" || rec.Review != nil) && rec.State != intentPosted {
+				return nil
+			}
+		}
+		if rows, err = tx.List(p.ns, "issue-intent/"); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var rec issueRecord
+			if json.Unmarshal(row.Value, &rec) == nil && rec.State != intentPosted {
+				return nil
+			}
+		}
+		var cur ackCursor
+		if _, err = p.get(tx, "ack/cursor", &cur); err != nil {
+			return err
+		}
+		for after := cur.After; ; {
+			events, err := tx.TypeEvents(TypeCommentHuman, nil, after, 100)
+			if err != nil {
+				return err
+			}
+			for _, a := range events {
+				if a.Event.Source == p.o.Settings.Namespace {
+					return nil
+				}
+			}
+			if len(events) < 100 {
+				break
+			}
+			after = events[len(events)-1].Sequence
+		}
+		quiet = true
+		return nil
+	})
+	return quiet, err
 }
 
 // FinishedNotice is posted once on an issue that is still open when its

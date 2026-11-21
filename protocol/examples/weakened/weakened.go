@@ -54,6 +54,7 @@ var Modes = []Mode{
 	{"list-any", notes.Name, "containers.policy", "lists a running container for any execution, even one it never saw"},
 	{"tunnel-open", notes.Name, "tunnels.policy", "accepts any tunnel config, even one it can't run"},
 	{"verifier-open", notes.Name, "verifiers.policy", "accepts any credential as a person, signed or not"},
+	{"task-wakes-on-nothing", notes.Name, "surfaces.served", "answers a task with a wake that names nothing, so nothing could ever run it early"},
 }
 
 // Lookup returns a mode by name.
@@ -200,6 +201,12 @@ func rewriteInitialize(r io.Reader) io.Reader {
 
 func weakenNotes(mode string, ext *sdk.Extension) {
 	switch mode {
+	case "task-wakes-on-nothing":
+		ext.TaskPlans = map[string]func(context.Context, *sdk.Host) (protocol.TaskRunResult, error){
+			"notes-index": func(context.Context, *sdk.Host) (protocol.TaskRunResult, error) {
+				return protocol.TaskRunResult{Wake: &protocol.TaskWake{}}, nil
+			},
+		}
 	case "mode-blind", "sandbox-open":
 		p := ext.Providers[notes.Scratch]
 		ext.Providers[notes.Scratch] = weakProvider{ResourceProvider: p, base: p.(workspaceChecks), mode: mode}

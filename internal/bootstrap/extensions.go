@@ -81,6 +81,7 @@ type externalState struct {
 	sources        map[string]bool      // registered ingress names
 	tasks          map[string]time.Time // last start by package/task
 	running        map[string]bool      // task in flight
+	clock          taskClock            // tasks that handed their waiting back
 	public         string               // public URL last sent in configure
 	// startGrants are the package grants (settings.extensions) the
 	// packages start with before a generation is published: the
@@ -641,6 +642,21 @@ func usesExtension(scope *config.EffectiveScope, m protocol.Manifest) bool {
 	return false
 }
 
+// packageScopes are the enabled scopes that use the package: what it may read.
+func (d *daemon) packageScopes(m protocol.Manifest) []domain.ID {
+	s, _ := d.extensionSnapshot()
+	if s == nil {
+		return nil
+	}
+	var out []domain.ID
+	for _, id := range s.Order {
+		if scope := s.Scopes[id]; scope != nil && scope.Enabled && usesExtension(scope, m) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 	connTypes := map[string]bool{}
 	for _, c := range m.Provides.Connections {
@@ -666,19 +682,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return runtime.CausalLimits{}
 		},
-		Scopes: func() []domain.ID {
-			s := snapshot()
-			if s == nil {
-				return nil
-			}
-			var out []domain.ID
-			for _, id := range s.Order {
-				if scope := s.Scopes[id]; scope != nil && scope.Enabled && usesExtension(scope, m) {
-					out = append(out, id)
-				}
-			}
-			return out
-		},
+		Scopes:         func() []domain.ID { return d.packageScopes(m) },
 		Secrets:        d.scopedSecrets(m.Name, extTypes, connTypes, containerTypes),
 		BindingSecrets: d.bindingSecrets(m),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
@@ -702,8 +706,9 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		WaitProgress: func(ctx context.Context, owner string, work domain.ID, progress string) error {
 			return d.waitProgress(owner)(ctx, work, progress)
 		},
-		Nudge:   d.poke,
-		Capture: d.telemetry.Capture,
+		Nudge:    d.poke,
+		WakeTask: func(task string) { d.wakeTask(m.Name + "/" + task) },
+		Capture:  d.telemetry.Capture,
 		Act: func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error) {
 			return d.act(owner)(ctx, r)
 		},
@@ -1049,6 +1054,7 @@ func (d *daemon) lifetime() context.Context {
 // (config apply, tunnel URL change).
 func (d *daemon) configureExtensions(ctx context.Context) {
 	d.configurePackages(ctx)
+	d.wakePackageTasks()
 	d.hooks.mu.Lock()
 	d.external.mu.Lock()
 	d.external.public = d.hooks.public
@@ -1068,39 +1074,6 @@ func (d *daemon) reconfigureOnURLChange(ctx context.Context) {
 	if changed {
 		d.configureExtensions(ctx)
 	}
-}
-
-// runTask starts an extension task, keyed extension/task, on its own
-// goroutine once pace has elapsed since its last start; one task never
-// overlaps itself. Its error is reported as an extension_task diagnostic.
-func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, run func(context.Context) error) {
-	d.external.mu.Lock()
-	if d.external.tasks == nil {
-		d.external.tasks, d.external.running = map[string]time.Time{}, map[string]bool{}
-	}
-	//duty:package_task
-	due := !d.external.running[key] && d.now().Sub(d.external.tasks[key]) >= pace
-	if due {
-		d.external.running[key], d.external.tasks[key] = true, d.now()
-	}
-	d.external.mu.Unlock()
-	if !due {
-		return
-	}
-	d.goSafe("extension_task", func() {
-		defer func() {
-			d.external.mu.Lock()
-			d.external.running[key] = false
-			d.external.mu.Unlock()
-		}()
-		cx, cancel := context.WithTimeout(ctx, min(max(pace, time.Minute), 10*time.Minute))
-		defer cancel()
-		if err := run(cx); err != nil && ctx.Err() == nil {
-			d.report("extension_task", domain.ID(key), errorCode(err))
-		} else {
-			d.clear("extension_task", domain.ID(key))
-		}
-	})
 }
 
 // extensionCheck reports each installed package's own health for doctor:

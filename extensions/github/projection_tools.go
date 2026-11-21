@@ -48,6 +48,14 @@ type issueRecord struct {
 // with the durable state ("posted", or "attempted"/"pending" while an
 // ambiguous create waits for its marker search; Converge finishes it).
 func (p *Projector) CreateIssue(ctx context.Context, in IssueIntent) (PostedIssue, string, error) {
+	issue, state, err := p.createIssue(ctx, in)
+	if (err != nil || state != intentPosted) && p.o.Wake != nil {
+		p.o.Wake() // left for a later pass, which may be asleep
+	}
+	return issue, state, err
+}
+
+func (p *Projector) createIssue(ctx context.Context, in IssueIntent) (PostedIssue, string, error) {
 	if in.ID == "" || strings.TrimSpace(in.Title) == "" {
 		return PostedIssue{}, "", storage.ErrInvalid
 	}

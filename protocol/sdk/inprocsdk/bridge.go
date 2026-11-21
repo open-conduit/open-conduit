@@ -363,6 +363,16 @@ func (b *Bridge) wire() {
 	if t, ok := b.x.(inproc.Tasker); ok {
 		e.Tasks = map[string]func(context.Context, *sdk.Host) error{}
 		for _, task := range t.Tasks() {
+			if plan := task.Plan; plan != nil {
+				if e.TaskPlans == nil {
+					e.TaskPlans = map[string]func(context.Context, *sdk.Host) (protocol.TaskRunResult, error){}
+				}
+				e.TaskPlans[taskName(name, task.Name)] = func(ctx context.Context, _ *sdk.Host) (protocol.TaskRunResult, error) {
+					p, err := plan(ctx)
+					return taskResult(p), err
+				}
+				continue
+			}
 			run := task.Run
 			e.Tasks[taskName(name, task.Name)] = func(ctx context.Context, _ *sdk.Host) error { return run(ctx) }
 		}
@@ -669,7 +679,18 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 				slog.New(slog.NewJSONHandler(os.Stderr, nil)).Warn("extension report", "extension", b.x.Name(), "code", code)
 			}
 		},
-		Nudge:       func() {},
+		Nudge: func() {},
+		// Sent apart from the caller: a package wakes its tasks from inside
+		// configure, which the host is waiting on.
+		WakeTask: func(task string) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := h.WakeTask(ctx, taskName(b.x.Name(), task)); err != nil {
+					slog.New(slog.NewJSONHandler(os.Stderr, nil)).Warn("task wake failed", "extension", b.x.Name(), "task", task, "error", err)
+				}
+			}()
+		},
 		StateDir:    h.StateDir(),
 		ExecutorDir: h.ExecutorDir,
 		DryRun:      b.isDryRun(),
@@ -726,6 +747,19 @@ func (b *Bridge) isDryRun() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.dryRun
+}
+
+// taskResult is a plan on the wire; the zero plan keeps the declared interval.
+func taskResult(p inproc.TaskPlan) protocol.TaskRunResult {
+	var out protocol.TaskRunResult
+	if !p.Next.IsZero() {
+		next := p.Next
+		out.NextRunAt = &next
+	}
+	if len(p.Families) > 0 || p.Work {
+		out.Wake = &protocol.TaskWake{Families: slices.Clone(p.Families), Work: p.Work}
+	}
+	return out
 }
 
 // taskName is a task's declared name: a package's tasks are named after

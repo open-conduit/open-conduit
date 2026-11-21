@@ -1353,11 +1353,17 @@ func (r *runner) surfaces(ctx context.Context, remote *extproc.Remote) {
 	sort.Strings(names)
 	for _, t := range names {
 		cx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		err := remote.Task(cx, t)
+		res, err := remote.RunTask(cx, t)
 		cancel()
 		if unserved(err) {
 			r.fail(id, "task %s: %v", t, err)
 			return
+		}
+		if err == nil {
+			if bad := res.Validate(); bad != nil {
+				r.fail(id, "task %s: its result can't be honoured: %v", t, bad)
+				return
+			}
 		}
 		status := "ok"
 		if err != nil {

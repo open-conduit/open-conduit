@@ -85,13 +85,14 @@ type hook struct {
 // registry is the extension's entries for the daemon's lifetime: a
 // registration is immutable, so a changed entry reports restart_required.
 type registry struct {
-	mu      sync.Mutex
-	entries map[string]*entry // by namespace
-	failed  map[string]string // registration failure code by namespace
-	hooks   map[string]*hook  // by namespace
-	public  string
-	codes   map[string]string
-	next    int // the entry the next projection pass starts at
+	mu        sync.Mutex
+	entries   map[string]*entry // by namespace
+	failed    map[string]string // registration failure code by namespace
+	hooks     map[string]*hook  // by namespace
+	public    string
+	codes     map[string]string
+	next      int  // the entry the next projection pass starts at
+	projected bool // the last projection pass wrote something
 	// unmatched is by route ("github/<connection>" or an entry's name).
 	unmatched map[string]*unmatched
 	// memos are the deliveries a connection's webhook route is delivering,
@@ -188,7 +189,8 @@ func (x *Extension) startTools(h inproc.Host) error {
 			return err
 		})
 	}
-	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Pending: h.Pending, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file"), Own: own})
+	tools, err := NewTools(ToolsOptions{Store: h.Store, Sources: x.toolSources, Now: x.now, Jobs: jobs, WaitProgress: h.WaitProgress, Pending: h.Pending, Writers: x.clients, MayRead: authorize("read"), MayFile: authorize("file"), Own: own,
+		WakeSweep: func() { x.wakeTask("git_credentials") }})
 	if err != nil {
 		return err
 	}
@@ -343,7 +345,8 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 			t.ObserveChecks(ctx, obs)
 		}
 	}, Memo: x.sharedMemo})
-	projector, err := NewProjector(ProjectorOptions{Store: h.Store, Client: client, Settings: settings, Now: x.now, Writers: x.clients, Scope: scope, Act: h.Act})
+	projector, err := NewProjector(ProjectorOptions{Store: h.Store, Client: client, Settings: settings, Now: x.now, Writers: x.clients, Scope: scope, Act: h.Act,
+		Wake: func() { x.wakeTask("projection") }})
 	if err != nil {
 		return err
 	}
@@ -610,10 +613,103 @@ func (x *Extension) Tasks() []inproc.Task {
 		return nil
 	}
 	return []inproc.Task{
-		{Name: "projection", Pace: projectionPace, Run: x.project},
-		{Name: "webhooks", Pace: time.Second, Run: x.manageHooks},
-		{Name: "git_credentials", Pace: gitTokenPace, Run: x.sweepGitTokens},
+		{Name: "projection", Pace: projectionPace, Plan: x.planProjection},
+		{Name: "webhooks", Pace: time.Second, Plan: x.planHooks},
+		{Name: "git_credentials", Pace: gitTokenPace, Plan: x.planGitTokens},
 	}
+}
+
+// wakeTask asks the host to run one of the tasks soon.
+func (x *Extension) wakeTask(task string) {
+	x.mu.Lock()
+	wake := x.host.WakeTask
+	x.mu.Unlock()
+	if wake != nil {
+		wake(task)
+	}
+}
+
+// planProjection sleeps until Work changes or a comment arrives once every
+// entry is quiet. A pass that did anything, or left a code, keeps the pace.
+func (x *Extension) planProjection(ctx context.Context) (inproc.TaskPlan, error) {
+	if err := x.project(ctx); err != nil {
+		return inproc.TaskPlan{}, err
+	}
+	entries := x.list()
+	x.own.mu.Lock()
+	busy := x.own.projected
+	x.own.mu.Unlock()
+	if busy {
+		return inproc.TaskPlan{}, nil
+	}
+	for _, e := range entries {
+		x.own.mu.Lock()
+		code := e.projection
+		x.own.mu.Unlock()
+		if code != "" {
+			return inproc.TaskPlan{}, nil
+		}
+		if quiet, err := e.projector.Quiet(ctx); err != nil || !quiet {
+			return inproc.TaskPlan{}, nil
+		}
+	}
+	return inproc.TaskPlan{Families: []string{TypeCommentHuman}, Work: true}, nil
+}
+
+// planHooks sleeps until a managed hook's retry or delivery read is due. A
+// new public URL reaches the task through configure.
+func (x *Extension) planHooks(ctx context.Context) (inproc.TaskPlan, error) {
+	if err := x.manageHooks(ctx); err != nil {
+		return inproc.TaskPlan{}, err
+	}
+	r := x.own
+	now := x.now()
+	next := now.Add(protocol.MaxTaskSleep)
+	r.mu.Lock()
+	public := r.public
+	r.mu.Unlock()
+	if public == "" {
+		return inproc.TaskPlan{Next: next}, nil
+	}
+	for _, e := range x.list() {
+		s := e.ingress.Settings()
+		r.mu.Lock()
+		shared, st := e.shared, r.hooks[s.Namespace]
+		var due time.Time
+		if st != nil {
+			switch {
+			case st.code != "ok" && st.code != "dry_run":
+				due = st.next
+			case st.code == "ok" && st.id != "":
+				due = st.checked.Add(hookCheckEvery)
+			}
+		}
+		r.mu.Unlock()
+		if !s.ManageWebhook || s.WebhookSecret == "" || shared {
+			continue
+		}
+		if st == nil {
+			return inproc.TaskPlan{}, nil
+		}
+		if !due.IsZero() && due.Before(next) {
+			next = due
+		}
+	}
+	return inproc.TaskPlan{Next: next}, nil
+}
+
+// planGitTokens sleeps while no token is out; minting one wakes it.
+func (x *Extension) planGitTokens(ctx context.Context) (inproc.TaskPlan, error) {
+	if err := x.sweepGitTokens(ctx); err != nil {
+		return inproc.TaskPlan{}, err
+	}
+	x.mu.Lock()
+	t := x.tools
+	x.mu.Unlock()
+	if t != nil && t.HasGitTokens() {
+		return inproc.TaskPlan{}, nil
+	}
+	return inproc.TaskPlan{Next: x.now().Add(protocol.MaxTaskSleep)}, nil
 }
 
 // project converges the entries in turn, starting after the one the last
@@ -623,6 +719,7 @@ func (x *Extension) project(ctx context.Context) error {
 	entries := x.list()
 	x.own.mu.Lock()
 	start := x.own.next
+	x.own.projected = false
 	x.own.mu.Unlock()
 	for i := range entries {
 		k := (start + i) % len(entries)
@@ -643,6 +740,7 @@ func (x *Extension) project(ctx context.Context) error {
 		if ctx.Err() == nil {
 			e.projection = code
 		}
+		x.own.projected = x.own.projected || res.Labeled+res.Posted+res.Recovered+res.Reacted > 0
 		x.own.next = k + 1
 		x.own.mu.Unlock()
 	}

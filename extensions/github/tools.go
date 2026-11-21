@@ -157,6 +157,8 @@ type Source struct {
 // ToolsOptions configure Tools.
 type ToolsOptions struct {
 	Store storage.Store
+	// WakeSweep asks for a token sweep soon, after minting a token.
+	WakeSweep func()
 	// Sources returns the registered sources (the host's live registry).
 	Sources func() []Source
 	Now     func() time.Time

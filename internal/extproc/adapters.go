@@ -481,7 +481,16 @@ func (r *Remote) SegmentEnded(_ context.Context, execution domain.ID) {
 
 // Task runs one declared background pass.
 func (r *Remote) Task(ctx context.Context, task string) error {
-	return r.p.Call(ctx, "task.run", protocol.TaskRunParams{Task: task}, nil)
+	_, err := r.RunTask(ctx, task)
+	return err
+}
+
+// RunTask runs one declared background pass and returns what the task said
+// about its next run. An older package's empty result keeps its interval.
+func (r *Remote) RunTask(ctx context.Context, task string) (protocol.TaskRunResult, error) {
+	var out protocol.TaskRunResult
+	err := r.p.Call(ctx, "task.run", protocol.TaskRunParams{Task: task}, &out)
+	return out, err
 }
 
 // Check runs one declared doctor check on the host's view of the

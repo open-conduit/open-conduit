@@ -186,7 +186,7 @@ In Go, return an `*extension.ConfigError` (`extension.Invalid`, `Add`, `Merge`, 
 2. **Start.** The host runs `command` (its own executable for `open-conduit extension-run <name>`, [served by open-conduit itself](../extension-packaging/#served-by-open-conduit-itself)) with a sanitised environment (the B05 baseline and the variables the operator grants the package, no secrets), the protocol on stdin/stdout, and the extension's private state directory. The process is a child of the daemon, in its own process group.
 3. **`initialize`.** The host sends `{protocol_versions, host: {name, version}, state_dir, executor_dirs}`. `executor_dirs` maps each executor the package declares to the host's `<state>/executors/<name>`, the directory that executor keeps its runs in whether it runs in process or out: the binding's sandbox and container guards accept launches only from runs under it, and a package that takes over from an in-process executor finds that executor's runs there. The extension returns `{protocol_version, manifest}`. The host refuses a manifest that differs from the file, or no common version. No other method is valid before `initialize` succeeds.
 4. **`configure`.** The host sends the current generation's entries, connections (secret names only, never references), `public_url` and `dry_run`. `disabled` lists the extension's entries in scopes that are configured but disabled: it starts nothing for them but keeps what it holds for them (the schedule extension keeps their timers armed). Each entry carries the connection it names (`connection`) and the connections the bindings in its scope name (`binding_connections`), each when it is of one of the extension's declared connection types and the scope authorization grants it. The extension returns the ingress sources and webhook paths it registers (under its own namespaces); a webhook path covers the paths beneath it, so a schedule entry's `/schedule/<scope>/<entry>` serves `.../<job>/<token>`. It is sent again on every config apply and tunnel URL change, without a restart.
-5. **Running.** The host calls the surfaces the manifest enables (`Manifest.Enabled`): routing, operations, executor and provider methods, and `task.run` at each declared interval. The extension calls the host's KV, state, artifact, secret, timer, event and resource methods, and `ingress.deliver` from its own receivers.
+5. **Running.** The host calls the surfaces the manifest enables (`Manifest.Enabled`): routing, operations, executor and provider methods, and `task.run` at each declared interval or when the task [next asks to run](#when-a-task-next-runs). The extension calls the host's KV, state, artifact, secret, timer, event and resource methods, and `ingress.deliver` from its own receivers.
 6. **Shutdown.** The host sends `shutdown`. The extension answers `shutting_down` to new requests, finishes or cancels in-flight work, and exits. Then the host closes stdin, sends SIGTERM after a grace period, and SIGKILL. An extension must also exit when stdin reaches EOF, so a host crash never leaves an orphaned extension serving nobody.
 
 An executor extension's *executions* are separate. Its detached processes survive the extension and the daemon, exactly as the shell and claude-code executors' processes do today. They are adopted through `executor.recover` with their recovery metadata, never by reattaching to the old extension process.
@@ -235,6 +235,26 @@ Extension KV writes are never interactive transactions:
 - A `kv.commit` batch may also carry `emissions`: the Events of the extension's own families a transaction returns for the host to accept in its own transaction, a root Event of the scope or one derived from `parent`. They are the wire form of `inproc.Host.AcceptInTx` and `AcceptDerivedInTx`: no transaction handle crosses the wire, the transaction returns what it accepts. The host applies the checks, then accepts each Emission, then the writes, all in one transaction, and answers each Emission's accepted Event and whether it was new. A failed check or a refused Emission (undeclared family, foreign source, bad schema, a parent outside the scope) applies nothing. An Emission over its chain's causal bounds is refused alone (`refused: causal_limit`, recorded for the operator) and the rest commits, as an in-process transaction may after `inproc.ErrCausalLimit`. The host names an emitted Event `protocol.EmittedEventID(source, delivery_id)`, so the transaction's own records can name it before it commits, and emitting it again is the same Event. `conformance.RunExtensionEmissions` checks this, against the host's service in process and over the wire, with a non-atomic and an unchecked emitter as its negative controls.
 
 This is an adapter over `storage.Tx` (`Get`, compare, `Put`/`Delete` in one `Transact`), not a new storage capability.
+
+## When a task next runs
+
+A task's `task.run` result can hand its waiting back to the host. An empty result, which is all an older package sends, keeps the declared `interval_seconds`.
+
+| Field | Meaning |
+| --- | --- |
+| `next_run_at` | Nothing to do until this time. |
+| `wake.families` | Run once after an Event of one of these types is accepted in a scope the package may read. |
+| `wake.work` | Run when Work the package may read, or one of its attempts, changes. |
+
+- **The host keeps the wait.** It is stored in `core.host.tasks` with the position the run started from, so a restart keeps the time, and anything accepted during the run or while the daemon was stopped still wakes the task.
+- **A task can't starve itself.** The host runs it within `protocol.MaxTaskSleep` (one hour) whatever it asked for, and no sooner than a second after its last run unless something wakes it. A failed run, or a result the host can't honour, returns the task to its interval.
+- **`task.wake`** runs one of the package's own tasks on the next pass, for work it made that no Event or Work change shows (a queued delivery, a credential to revoke). A package holding state in memory calls it from `configure`, since a daemon restart keeps the wait but not the process.
+- **The host also wakes sleeping tasks** when the configuration or tunnel URL changes, and when the package's process restarts within a running daemon.
+- **Authority.** A wake only watches what the package may already read: its configured scopes and its own Work kinds.
+
+The Go SDK declares one with `Extension.PlannedTask`, an in-process extension with `inproc.Task.Plan`, and the TypeScript SDK by returning the result from a task.
+
+GitHub, Slack and schedule use this. Their projections sleep only with no live Work of theirs and nothing unfinished; with live Work they keep their interval, because what they mirror can move without a change the host sees. Other bundled tasks keep their intervals.
 
 ## Doctor checks
 

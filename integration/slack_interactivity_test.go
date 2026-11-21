@@ -249,7 +249,7 @@ func TestSlackHTTPReceiverNeedsNoAppToken(t *testing.T) {
 	t.Cleanup(p.x.Stop)
 	for _, task := range p.x.Tasks() {
 		if task.Name == "sockets" {
-			if err := task.Run(context.Background()); err != nil {
+			if _, err := task.Plan(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 		}
