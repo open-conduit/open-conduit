@@ -106,7 +106,7 @@ open-conduit work list
 open-conduit tui
 ```
 
-Each connection the CLI makes opens one SSH session. `work attach` and `container attach` run on the daemon's machine and can't be used this way.
+Each connection the CLI makes opens one SSH session. Over this relay, add `--stream` to `work attach` or `container attach`: the daemon runs the session beside the run and relays its terminal to you. Over an `https://` endpoint they do this by themselves. It needs the `operate` role.
 
 To take someone's access away, revoke their credentials (`auth revoke`, with each ID from `auth operators`) and remove their key. A credential with a TTL also lapses on its own at its expiry.
 

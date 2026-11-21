@@ -552,6 +552,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.current.Store(c)
+	// A terminal lives in this process, so any on record lost its client
+	// when the last one ended. Their holds go before anything is scheduled.
+	if n, err := c.control.RecoverTerminals(ctx); err != nil {
+		d.log.Error("terminals left by the last run not closed", "closed", n, "error", err.Error())
+	} else if n > 0 {
+		d.log.Info("closed terminals left by the last run", "closed", n)
+	}
 	// Extensions are configured once the generation is active, so a
 	// configure can arm timers through it, as every later apply can.
 	d.configureExtensions(ctx)
@@ -735,7 +742,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
-		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
+		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
 		return nil, err
 	}
 	return c, nil

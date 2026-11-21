@@ -646,6 +646,7 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 // gateway and network: one recorded with one of the Work's attempts.
 func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string) error {
 	var pin *extension.ContainerPin
+	var execution domain.ID
 	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		pin = nil
 		xs, err := tx.ListExecutions(w.ID)
@@ -661,7 +662,7 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 			}
 			for _, a := range st.Attaches {
 				if a.ID == ref {
-					pin = &a
+					pin, execution = &a, x.ID
 				}
 			}
 		}
@@ -675,6 +676,12 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 	p := d.containers.providers.all()[pin.Provider]
 	if p == nil {
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
+	}
+	// A terminal whose client went leaves its container running: the attach
+	// process was only attached to it. A container that has exited is left
+	// to Remove.
+	if err := extension.StopContainer(ctx, p, pin, d.containerRecords(execution), containerStopGrace); err != nil {
+		return err
 	}
 	return extension.RemoveContainer(ctx, p, extension.ContainerRef{ID: pin.ID})
 }

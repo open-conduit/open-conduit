@@ -95,9 +95,12 @@ var helpGroups = []helpGroup{
   work cancel|retry|hold|release ID [--revision N] [--reason TEXT] [--key K]
   work interrupt ID [--revision N] [--reason TEXT] [--key K]   stop the running turn; the Work and its queued input stay for the next
   work rebind ID --binding B [--revision N] [--reason TEXT] [--key K]
-  work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
+  work attach ID [--keep-held] [--stream]
+                                 hold, attach to the executor's session, release on exit;
+                                 --stream (automatic over https) runs it through the daemon
   work wake ID --type T --delivery-id D --key-source S --key-external-id X [--revision N] [--schema S --data JSON] [--key K]`},
-		{"container", `  container attach ID        attach to held Work's session in a container, as work attach does for Work that ran in one`},
+		{"container", `  container attach ID [--stream]
+                             attach to held Work's session in a container, as work attach does for Work that ran in one`},
 		{"claim", `  claim [SCOPE#]N [--scope S] [--entry NAME]   claim an issue by hand (the scope's claim action)`},
 		{"actions", `  actions run PROVIDER ID (--scope S | --work W) [--input TEXT] [--key K]   invoke one as the local operator`},
 		{"events", `  events skip ID [--reason TEXT] | events reroute ID [--reason TEXT]

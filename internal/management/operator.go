@@ -226,6 +226,9 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 	if s.o.Attach == nil {
 		return 0, nil, ErrAttachUnsupported
 	}
+	if err := s.noTerminal(c); err != nil {
+		return 0, nil, err
+	}
 	t, err := s.attachTarget(c)
 	if err != nil {
 		return 0, nil, err
@@ -335,6 +338,9 @@ func (s *Server) containerAttach(c *call) (int, any, error) {
 	}
 	if s.o.ContainerAttach == nil {
 		return 0, nil, ErrAttachUnsupported
+	}
+	if err := s.noTerminal(c); err != nil {
+		return 0, nil, err
 	}
 	t, err := s.attachTarget(c)
 	if err != nil {
