@@ -36,7 +36,10 @@ type pendingTurn struct {
 
 // attachInfo is what an operator needs to attach to the Work's session.
 type attachInfo struct {
-	Dir            string   `json:"dir"`
+	Dir string `json:"dir"`
+	// RealDir is Dir with its links resolved, which is the path claude files
+	// the transcript under. Once Dir has moved away it can't be worked out.
+	RealDir        string   `json:"real_dir,omitempty"`
 	Binary         string   `json:"binary"`
 	Model          string   `json:"model"`
 	PermissionMode string   `json:"permission_mode"`

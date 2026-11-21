@@ -103,7 +103,7 @@ What each directory is worth carrying:
 
 | Directory | In a bundle | Without it |
 | --- | --- | --- |
-| `homes/` | No | A containerised agent's session is gone, and its next turn starts from the handoff note |
+| `homes/` | No | A containerised agent's session is gone, and its next turn starts from the handoff note. Carried, the session resumes, including at a new path: when the workspace's old path no longer exists, the Claude Code executor refiles the session under the new one (`session_moved` in telemetry) |
 | `executors/` | No | Attempts recover or retry. A non-container Claude transcript is outside the state directory anyway (`<CLAUDE_CONFIG_DIR>/projects/<absolute cwd>/`), so its next turn also starts from the note |
 | `resources/` | No | Workspaces are made again from the remote, so unpushed work is lost. Carried, a clone is picked up where it lands and a worktree is [reattached or set aside](../workspaces/#a-workspace-that-moved-with-its-state-directory) |
 | `extensions/` | No | Packages rebuild their caches |
