@@ -6,7 +6,7 @@
 import { extension, OperationError, t } from "@open-conduit/sdk";
 
 // The package's release, written into the manifest.
-export const version = "0.1.0";
+export const version = process.env.EXTENSION_VERSION ?? "0.1.0";
 
 export function build() {
   // Each registration also declares itself, so the manifest

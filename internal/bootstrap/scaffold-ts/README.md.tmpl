@@ -25,3 +25,23 @@ CI (`.github/workflows/ci.yml`) runs `make check`, and lints and certifies the p
 `make package` bundles the extension as a CommonJS `.cjs` file and writes a small launcher as the executable. The launcher uses the Node that packaged it while that Node still exists, whatever the daemon's PATH finds, and otherwise the first Node on PATH. To publish a package, build it with `make package PORTABLE=1`: it records no path from your machine and always uses the Node on PATH, so the machine running it needs Node 22.18 or later on the daemon's PATH.
 
 Install the built package with `open-conduit extension install dist/{{NAME}}`; it takes effect at the next `open-conduit serve`.
+
+## Releasing
+
+Push a tag (`git tag v1.0.0 && git push origin v1.0.0`). The release workflow (`.github/workflows/release.yml`) builds one portable archive, which runs anywhere with Node 22.18 or later on the daemon's PATH. It signs the archive with Sigstore as that workflow (keyless, through GitHub's OIDC token) and uploads it to the tag's release with its bundle (`.sigstore.json`) beside it.
+
+An operator who trusts you adds your workflow to their `settings.extension_trust`. `open-conduit extension install URL` then checks the bundle beside the archive before it installs anything:
+
+```json
+"extension_trust": {
+  "publishers": [
+    {
+      "subject_regexp": "https://github\\.com/OWNER/REPO/\\.github/workflows/release\\.yml@refs/tags/v.*",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "packages": ["{{NAME}}"]
+    }
+  ]
+}
+```
+
+Replace `OWNER/REPO` with this repository. A release signed by any other workflow, repository or ref is refused.

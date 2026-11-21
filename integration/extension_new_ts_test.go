@@ -1,6 +1,8 @@
 package integration_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,4 +120,38 @@ func TestExtensionNewTS(t *testing.T) {
 	}
 	run(dir, env, "make", "check")
 	run(dir, env, "make", "lint", "certify", "OPEN_CONDUIT="+daemonBinary(t))
+
+	// The release archive is portable and carries the tag's version. Under
+	// settings.extension_trust it is refused unsigned and installs pinned.
+	run(dir, env, "make", "archive", "VERSION=1.2.3")
+	launcher, err = os.ReadFile(filepath.Join(dir, "dist", "acme", "acme-extension"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(launcher), nodePath) {
+		t.Fatalf("the release archive's launcher names this machine's node:\n%s", launcher)
+	}
+	archive := filepath.Join(dir, strings.TrimSpace(run(dir, env, "make", "-s", "archive-name", "VERSION=1.2.3")))
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeTrust := func(trust string) {
+		t.Helper()
+		if err := os.WriteFile(configPath, []byte(`{"version":1,"settings":{"extension_trust":`+trust+`},"connections":[],"scopes":[]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTrust(`{"publishers":[{"subject_regexp":"https://github\\.com/acme/acme/.+","issuer":"https://token.actions.githubusercontent.com"}]}`)
+	cmd = exec.Command(daemonBinary(t), "extension", "install", archive, "--config", configPath)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "untrusted_package") || !strings.Contains(string(out), "no signature bundle") {
+		t.Fatalf("an unsigned archive: %v\n%s", err, out)
+	}
+	writeTrust(`{"pinned":{"acme":["sha256:` + hex.EncodeToString(sum[:]) + `"]}}`)
+	if out := run(dir, env, daemonBinary(t), "extension", "install", archive, "--config", configPath); !strings.Contains(out, "Installed acme 1.2.3") || !strings.Contains(out, "publisher: pinned digest") {
+		t.Fatalf("a pinned archive: %s", out)
+	}
 }
