@@ -557,28 +557,41 @@ func TestBackupStopsWhenItsHoldCannotBeRenewed(t *testing.T) {
 	var untils []time.Time
 	renewal := errors.New("renewal refused")
 	retention.Hold = func(tx storage.Tx, id string, until time.Time) error {
-		// A transaction may run more than once; count each expiry once.
+		// A transaction may run more than once, so only a new expiry counts
+		// and tells the renewals that this put has read the clock.
 		if len(untils) == 0 || !untils[len(untils)-1].Equal(until) {
 			untils = append(untils, until)
+			held <- struct{}{}
 		}
-		held <- struct{}{}
 		if len(untils) > 2 {
 			return renewal
 		}
 		return hold(tx, id, until)
 	}
+	// The reads stall until the backup is cancelled, so a renewal failure
+	// that doesn't cancel it fails here rather than hanging the test binary.
+	bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, errors.New("the failed renewal did not cancel the backup"))
+	defer cancel()
 	go func() {
 		// Each renewal after the last hold was put, on a later clock.
 		for range 2 {
-			<-held
+			select {
+			case <-held:
+			case <-bounded.Done():
+				return
+			}
 			mu.Lock()
 			clock = clock.Add(5 * time.Minute)
 			tick := clock
 			mu.Unlock()
-			renewals <- tick
+			select {
+			case renewals <- tick:
+			case <-bounded.Done():
+				return
+			}
 		}
 	}()
-	err = Create(ctx, filepath.Join(root, "stalled"), nil, sqlite.Name, db, stalledReads{live}, "test-build", retention)
+	err = Create(bounded, filepath.Join(root, "stalled"), nil, sqlite.Name, db, stalledReads{live}, "test-build", retention)
 	want := []time.Time{now.Add(DefaultHoldFor), now.Add(5*time.Minute + DefaultHoldFor), now.Add(10*time.Minute + DefaultHoldFor)}
 	if !errors.Is(err, renewal) || !slices.Equal(untils, want) {
 		t.Fatalf("backup with a failed renewal: holds until %v, want %v: %v", untils, want, err)
