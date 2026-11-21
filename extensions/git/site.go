@@ -535,9 +535,18 @@ func (p *Provider) takeBack(ctx context.Context, site extension.Site, ref string
 	return l, info, p.drop(left)
 }
 
-// siteReconcileTimeout bounds each site command Reconcile runs for one
-// lease, so a site that hangs doesn't hold up the others for long.
-var siteReconcileTimeout = time.Minute
+// siteReconcileTimeout bounds the site commands Reconcile runs for one
+// lease, together. Each lease has its own, so a site that hangs doesn't
+// hold up the others for long or spend their time.
+const siteReconcileTimeout = time.Minute
+
+// boundReconcile is the context for one lease's site commands in Reconcile.
+func (p *Provider) boundReconcile(ctx context.Context) (context.Context, context.CancelFunc) {
+	if p.reconcileBound != nil {
+		return p.reconcileBound(ctx)
+	}
+	return context.WithTimeout(ctx, siteReconcileTimeout)
+}
 
 // siteBackoff is how long a site lease whose cleanup failed for the nth
 // time waits before the next try: a minute, doubling to an hour, so a site
@@ -594,7 +603,7 @@ func (p *Provider) reconcileAtSite(ctx context.Context, l *lease, retain func(st
 }
 
 func (p *Provider) removeLeaseAtSite(ctx context.Context, l *lease, force bool, retain func(string) error, report *extension.ResourceReport) error {
-	ctx, cancel := context.WithTimeout(ctx, siteReconcileTimeout)
+	ctx, cancel := p.boundReconcile(ctx)
 	defer cancel()
 	kept, err := p.removeAtSite(ctx, *l, force)
 	if err != nil {

@@ -70,6 +70,9 @@ type Provider struct {
 	locks map[string]*sync.Mutex
 	// sites resolves the sites leases are at (UseSites).
 	sites extension.SiteResolver
+	// reconcileBound replaces the deadline of one lease's site commands in
+	// Reconcile, so a test can end it without waiting on real time.
+	reconcileBound func(context.Context) (context.Context, context.CancelFunc)
 }
 
 var refName = regexp.MustCompile(`^(shared|work|fresh|clone)-[0-9a-f]{32}$`)
