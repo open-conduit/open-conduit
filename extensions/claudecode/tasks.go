@@ -98,10 +98,21 @@ const (
 // task's own. The trap comes before the PID: nothing signals the group
 // until the PID is published, so a stop can never end the wrapper before
 // it records an exit, which the sweep would count lost.
+//
+// That trap would also absorb a stop landing before the command exists, so
+// the command starts from a subshell that restores the default disposition
+// and only then looks for stop.json. A stop writes that file before it
+// signals, so a TERM from before the restore is seen in the file and one
+// from after it ends the subshell: either way the command doesn't run on
+// until SIGKILL, and the wrapper still records the exit as 143.
 const taskWrapper = `d=$1; shift
 trap ':' HUP INT TERM
 printf '%s\n' "$$" > "$d/pid.tmp" && mv -f "$d/pid.tmp" "$d/pid"
-"$@"
+(
+trap - HUP INT TERM
+if [ -e "$d/stop.json" ]; then exit 143; fi
+exec "$@"
+)
 c=$?
 trap '' HUP INT TERM
 kill -TERM 0 2>/dev/null
