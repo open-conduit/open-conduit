@@ -40,6 +40,8 @@ The daemon backs itself up every day, without stopping, into `backups/` in its s
 open-conduit service install --web --web-host conduit.example.com --backup-dir /mnt/backups/open-conduit
 ```
 
+The backup directory may be a network mount, unlike the state directory. A bundle is written by one process, but it is still a SQLite file plus renames and directory syncs, so doctor warns about a network mount. Run `open-conduit backup verify` on a bundle there before relying on it.
+
 A bundle holds the database and the artifacts runs kept, and the database holds every config generation, so a restored daemon runs the config it had and `open-conduit config export` writes the file back. It does not hold secret values, installed packages or the agents' logins: keep the secrets and the list of packages with the server's own setup, and expect to sign `gh` and `claude` in again on a new server. [Restore](../backups/#restore) is the same as on one machine.
 
 ## 3. A credential and a role for each person

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -116,8 +117,21 @@ func OpenReadOnly(root string) (*Store, error) {
 
 // Open creates private subdirectories and acquires an exclusive process
 // lock, then removes the unpublished streams a process that held it before
-// left behind: the lock proves no other process still owns them.
+// left behind: the lock proves no other process still owns them. It refuses
+// a root on a network filesystem, where that lock proves nothing.
 func Open(root string) (*Store, error) {
+	if err := localfs.Require(root, "artifact store"); err != nil {
+		return nil, err
+	}
+	return open(root)
+}
+
+// OpenBundle is Open for the store inside a backup bundle being written. A
+// bundle has one writer and its digests catch a bad copy, so unlike live
+// state it may be written to a mounted network volume.
+func OpenBundle(root string) (*Store, error) { return open(root) }
+
+func open(root string) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err

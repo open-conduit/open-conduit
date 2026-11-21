@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -277,6 +278,10 @@ func AcquireLock(stateDir string) (*Lock, error) {
 		return nil, err
 	}
 	if err := checkPrivateDir(stateDir); err != nil {
+		return nil, err
+	}
+	// Before the lock: on a network filesystem the lock itself proves nothing.
+	if err := localfs.Require(stateDir, "state directory"); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(stateDir, "daemon.lock"), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)

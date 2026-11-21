@@ -96,9 +96,11 @@ The volume must be writable by uid `10001`. The daemon creates its state and con
 - On Kubernetes, set `fsGroup: 10001` in the pod's `securityContext`.
 - A host directory or a volume created as root needs `chown -R 10001:10001` once, or an init container that does it.
 
+The volume must be a block volume, such as EBS, Persistent Disk or Azure Disk. The daemon refuses to start on EFS, Filestore, Azure Files, NFS, SMB or a FUSE bucket mount, because two pods could then write the same database and silently corrupt it.
+
 The control socket is in the state directory, and its path must be at most 100 bytes. Move the state elsewhere with `OPEN_CONDUIT_DATA_DIR`, and keep it on the volume.
 
-[Backups](../backups/) work as on any host, into `backups/` in the state directory by default. Point `--backup-dir` at a second volume, or copy the bundles off with whatever the cluster already uses. A volume snapshot of a running daemon isn't a consistent backup; a bundle is. To restore one, start the container with `serve --restore BUNDLE` and the bundle mounted: it restores in place before serving, once per bundle, with no shell or separate job ([in a container](../../architecture/recovery/#in-a-container)).
+[Backups](../backups/) work as on any host, into `backups/` in the state directory by default. Point `--backup-dir` at a second volume, which may be a network mount (doctor warns, so run `backup verify` on its bundles), or copy the bundles off with whatever the cluster already uses. A volume snapshot of a running daemon isn't a consistent backup; a bundle is. To restore one, start the container with `serve --restore BUNDLE` and the bundle mounted: it restores in place before serving, once per bundle, with no shell or separate job ([in a container](../../architecture/recovery/#in-a-container)).
 
 ## Stopping and restarting
 

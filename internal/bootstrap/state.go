@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -43,6 +44,9 @@ func locked(stateDir string) (*management.Lock, error) {
 		return nil, fmt.Errorf("no Open Conduit database in %s", stateDir)
 	}
 	lock, err := management.AcquireLock(stateDir)
+	if errors.Is(err, localfs.ErrNotLocal) {
+		return nil, err // Stopping a daemon wouldn't help.
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: stop the daemon first (or use open-conduit doctor while it runs)", err)
 	}
@@ -236,6 +240,10 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	lock, err := locked(stateDir)
 	if err != nil {
 		r := cli.StateReport{StateDir: stateDir}
+		if errors.Is(err, localfs.ErrNotLocal) {
+			r.Checks = append(r.Checks, cli.StateCheck{Name: "filesystem", Status: "fail", Code: filesystemCode(err), Message: err.Error()})
+			return r, nil
+		}
 		r.Checks = append(r.Checks, cli.StateCheck{Name: "lock", Status: "fail", Code: "in_use_or_unsafe", Message: err.Error()})
 		return r, nil
 	}
@@ -253,6 +261,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		}
 	}
 	add("lock", "ok", "stopped", "no daemon owns the directory; permissions are owner-only")
+	if fs, err := localfs.Detect(stateDir); err == nil {
+		add("filesystem", "ok", "local", fs.Name)
+	}
 	if _, err := os.Lstat(filepath.Join(stateDir, "management.sock")); err == nil {
 		add("socket", "info", "stale_socket", "a socket from an unclean stop remains; the next start removes it after its ownership checks")
 	}

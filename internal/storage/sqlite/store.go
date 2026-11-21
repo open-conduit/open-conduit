@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/storage"
 	modernsqlite "modernc.org/sqlite"
 )
@@ -65,6 +66,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
+	}
+	// WAL needs shared memory and POSIX locks that work: refuse before
+	// creating anything.
+	if err = localfs.Require(abs, "database"); err != nil {
+		return nil, fmt.Errorf("sqlite: %w", err)
 	}
 	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
 		return nil, err

@@ -213,7 +213,7 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 		if err != nil {
 			return err
 		}
-		output, err := artifacts.Open(filepath.Join(stage, "artifacts"))
+		output, err := artifacts.OpenBundle(filepath.Join(stage, "artifacts"))
 		if err != nil {
 			return err
 		}

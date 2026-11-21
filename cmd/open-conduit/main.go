@@ -106,6 +106,10 @@ func main() {
 		return bootstrap.ConfigWarnings(path, data, check.ModeWarnings(path, data), true)
 	}
 	env.OfflineChecks = offlineChecks
+	env.FilesystemCheck = func(stateDir string) client.Check {
+		c := bootstrap.FilesystemCheck(stateDir, "")
+		return client.Check{Name: c.Name, Status: c.Status, Code: c.Code, Detail: c.Detail, Items: c.Items}
+	}
 	env.Service = cli.SystemServiceHost()
 	env.Updater = updater
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))

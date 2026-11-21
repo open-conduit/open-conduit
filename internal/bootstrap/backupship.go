@@ -528,7 +528,7 @@ func fetchBundle(ctx context.Context, v extension.BackupDestination, t extension
 	}
 	// A destination stores files, not directories, so the artifact store's
 	// empty directories are made again.
-	store, err := artifacts.Open(filepath.Join(stage, "artifacts"))
+	store, err := artifacts.OpenBundle(filepath.Join(stage, "artifacts"))
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}

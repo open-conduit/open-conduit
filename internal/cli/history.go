@@ -125,6 +125,9 @@ func (o *operator) doctor(args []string) int {
 // bindings, the agent CLIs) and reports the daemon's own as skipped.
 func (o *operator) offlineDoctor(cx context.Context, nr *notRunningError) client.Doctor {
 	d := client.Doctor{Checks: []client.Check{{Name: "daemon", Status: "warn", Code: "not_running", Detail: nr.Error()}}}
+	if o.env.FilesystemCheck != nil {
+		d.Checks = append(d.Checks, o.env.FilesystemCheck(o.stateDir()))
+	}
 	path := o.configPath("")
 	if data, err := os.ReadFile(path); err != nil {
 		d.Checks = append(d.Checks, client.Check{Name: "config", Status: "fail", Code: "missing", Detail: fmt.Sprintf("no config at %s; create one with open-conduit init", path)})
