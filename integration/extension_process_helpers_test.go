@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -39,20 +40,21 @@ var (
 func extensionBinaries(t *testing.T) (string, string) {
 	t.Helper()
 	extOnce.Do(func() {
-		dir, err := keptDir("oc-extension-bin-")
+		dir, err := sharedBuild("extension-bin", []string{"race=" + strconv.FormatBool(raceEnabled)}, func(dir string) error {
+			// One go build for both, so they build and link in parallel.
+			args := []string{"build", "-o", dir + string(filepath.Separator)}
+			if raceEnabled {
+				args = append(args, "-race")
+			}
+			cmd := exec.Command("go", append(args, "./protocol/examples/notes/cmd/notes-extension", "./protocol/examples/runner/cmd/runner-extension")...)
+			cmd.Dir = ".."
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("build example extensions: %v\n%s", err, out)
+			}
+			return nil
+		})
 		if err != nil {
 			extBuildErr = err
-			return
-		}
-		// One go build for both, so they build and link in parallel.
-		args := []string{"build", "-o", dir + string(filepath.Separator)}
-		if raceEnabled {
-			args = append(args, "-race")
-		}
-		cmd := exec.Command("go", append(args, "./protocol/examples/notes/cmd/notes-extension", "./protocol/examples/runner/cmd/runner-extension")...)
-		cmd.Dir = ".."
-		if out, err := cmd.CombinedOutput(); err != nil {
-			extBuildErr = fmt.Errorf("build example extensions: %v\n%s", err, out)
 			return
 		}
 		notesBin, runnerBin = filepath.Join(dir, "notes-extension"), filepath.Join(dir, "runner-extension")

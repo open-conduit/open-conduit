@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -34,26 +35,30 @@ var (
 func packageBinaries(t *testing.T) map[string]string {
 	t.Helper()
 	pkgOnce.Do(func() {
-		dir, err := keptDir("oc-package-bin-")
+		builds := []struct{ out, pkg string }{
+			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
+			{"os", "./cmd/os"},
+		}
+		dir, err := sharedBuild("package-bin", []string{"race=" + strconv.FormatBool(raceEnabled)}, func(dir string) error {
+			for _, b := range builds {
+				args := []string{"build", "-o", filepath.Join(dir, b.out)}
+				if raceEnabled && b.out != "os" {
+					args = append(args, "-race")
+				}
+				cmd := exec.Command("go", append(args, b.pkg)...)
+				cmd.Dir = ".."
+				if o, err := cmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("build %s: %v\n%s", b.out, err, o)
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			pkgErr = err
 			return
 		}
 		out := map[string]string{}
-		for _, b := range []struct{ out, pkg string }{
-			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
-			{"os", "./cmd/os"},
-		} {
-			args := []string{"build", "-o", filepath.Join(dir, b.out)}
-			if raceEnabled && b.out != "os" {
-				args = append(args, "-race")
-			}
-			cmd := exec.Command("go", append(args, b.pkg)...)
-			cmd.Dir = ".."
-			if o, err := cmd.CombinedOutput(); err != nil {
-				pkgErr = fmt.Errorf("build %s: %v\n%s", b.out, err, o)
-				return
-			}
+		for _, b := range builds {
 			out[b.out] = filepath.Join(dir, b.out)
 		}
 		pkgBins = out

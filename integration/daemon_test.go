@@ -41,37 +41,8 @@ var (
 func daemonBinary(t *testing.T) string {
 	t.Helper()
 	daemonOnce.Do(func() {
-		dir, err := keptDir("oc-daemon-bin-")
+		dir, err := sharedBuild("daemon-bin", []string{"faultinject", "race=" + strconv.FormatBool(raceEnabled)}, buildDaemonDir)
 		if err != nil {
-			daemonErr = err
-			return
-		}
-		for _, b := range []struct{ out, pkg string }{{"open-conduit", "./cmd/open-conduit"}, {"os", "./cmd/os"}} {
-			args := []string{"build", "-o", filepath.Join(dir, b.out)}
-			if b.out == "open-conduit" {
-				args = append(args, "-tags", "faultinject")
-				if raceEnabled {
-					// Race-test runs also race-check the daemon composition;
-					// any report fails the drill (see newDrill cleanup).
-					args = append(args, "-race")
-				}
-			}
-			cmd := exec.Command("go", append(args, b.pkg)...)
-			cmd.Dir = ".."
-			if out, err := cmd.CombinedOutput(); err != nil {
-				daemonErr = fmt.Errorf("build %s: %v\n%s", b.out, err, out)
-				return
-			}
-		}
-		// The setup package is bundled beside the binary, as the release
-		// archive has it (#243), so a drill with no config starts on its
-		// first-run configuration.
-		if err := copySetup(dir); err != nil {
-			daemonErr = err
-			return
-		}
-		// So are the packages open-conduit serves itself (#428).
-		if err := bundleHostPackages(dir); err != nil {
 			daemonErr = err
 			return
 		}
@@ -81,6 +52,35 @@ func daemonBinary(t *testing.T) string {
 		t.Fatal(daemonErr)
 	}
 	return daemonBin
+}
+
+// buildDaemonDir builds the daemon and its toolbelt into dir, with the
+// packages a release archive bundles beside them.
+func buildDaemonDir(dir string) error {
+	for _, b := range []struct{ out, pkg string }{{"open-conduit", "./cmd/open-conduit"}, {"os", "./cmd/os"}} {
+		args := []string{"build", "-o", filepath.Join(dir, b.out)}
+		if b.out == "open-conduit" {
+			args = append(args, "-tags", "faultinject")
+			if raceEnabled {
+				// Race-test runs also race-check the daemon composition;
+				// any report fails the drill (see newDrill cleanup).
+				args = append(args, "-race")
+			}
+		}
+		cmd := exec.Command("go", append(args, b.pkg)...)
+		cmd.Dir = ".."
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("build %s: %v\n%s", b.out, err, out)
+		}
+	}
+	// The setup package is bundled beside the binary, as the release
+	// archive has it (#243), so a drill with no config starts on its
+	// first-run configuration.
+	if err := copySetup(dir); err != nil {
+		return err
+	}
+	// So are the packages open-conduit serves itself (#428).
+	return bundleHostPackages(dir)
 }
 
 // bundleHostPackages lays out the packages the open-conduit in dir
