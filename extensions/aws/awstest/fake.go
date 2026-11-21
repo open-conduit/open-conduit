@@ -12,8 +12,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -254,10 +254,10 @@ func (s *Server) assume(w http.ResponseWriter, form url.Values) {
 
 // esc is a value as XML text: STS escapes its answers, and so must the
 // fake, which echoes what the request named.
+// esc escapes a value for an XML response. html.EscapeString's entities are
+// all valid XML, and static analysis recognises it as a sanitizer.
 func esc(s string) string {
-	var b strings.Builder
-	_ = xml.EscapeText(&b, []byte(s))
-	return b.String()
+	return html.EscapeString(s)
 }
 
 func random(n int) string {
