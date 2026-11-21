@@ -21,9 +21,12 @@ type Method struct {
 	Notification bool
 	// InTransaction methods are called by the host while it holds a
 	// coordination transaction. They must be pure and deterministic, are
-	// bounded by InTransactionDeadlineMillis, and may make no callback
-	// (the host refuses one with CodeReentrant). A timeout or transport
-	// failure aborts that transaction with a retryable error.
+	// bounded by InTransactionDeadlineMillis, and may make no callback: the
+	// host holds any callback until the method ends, so one the method
+	// waits on runs out its deadline and both are refused with
+	// CodeReentrant. A callback from another handler that merely overlaps
+	// it is served once it is answered. A timeout or transport failure
+	// aborts that transaction with a retryable error.
 	InTransaction bool
 	// Provides names the manifest entry that enables the method ("" for
 	// lifecycle methods every extension serves or may call).
