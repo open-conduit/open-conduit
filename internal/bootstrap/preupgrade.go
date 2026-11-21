@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -22,7 +23,11 @@ import (
 // rotation never counts or prunes it.
 
 const (
-	upgradeBundlePrefix       = "pre-upgrade-"
+	upgradeBundlePrefix = "pre-upgrade-"
+	// upgradeVerifyPrefix names a verification restore's directory. It is a
+	// stage by the name the backup directory's sweep and an in-place
+	// restore's both clear.
+	upgradeVerifyPrefix       = ".conduit-snapshot-verify-"
 	defaultUpgradeBundlesKept = 3
 	// buildNamespace and buildKey hold the build that last ran on the state,
 	// so the next upgrade's bundle can say which build it came from.
@@ -34,6 +39,12 @@ const (
 // left, before anything rewrites it. If it can't, the daemon doesn't start
 // and the database stays at its old versions.
 func (d *daemon) preserveBeforeUpgrade(ctx context.Context) error {
+	// The daemon lock is held, so a verification stage here is a crash's.
+	if stale, err := filepath.Glob(filepath.Join(d.o.StateDir, upgradeVerifyPrefix+"*")); err == nil {
+		for _, p := range stale {
+			_ = os.RemoveAll(p)
+		}
+	}
 	c, err := coordinationOf(d.o.StateDir)
 	if err != nil {
 		return err
@@ -54,7 +65,7 @@ func (d *daemon) preserveBeforeUpgrade(ctx context.Context) error {
 	}
 	path, err := d.takeUpgradeBundle(ctx, c.name, prior)
 	if err != nil {
-		return fmt.Errorf("not starting: this binary would upgrade the database from record format %d, schema %d, and the bundle that makes going back possible could not be taken in %s: %w. The database is unchanged. Fix the backup directory (--backup-dir), or run serve --no-upgrade-bundle once to go ahead without a way back", stored.Records, stored.Schema, d.o.BackupDir, err)
+		return fmt.Errorf("not starting: this binary would upgrade the database from record format %d, schema %d, and the bundle that makes going back possible could not be taken (backup directory %s): %w. The database is unchanged. Fix that, or run serve --no-upgrade-bundle once to go ahead without a way back", stored.Records, stored.Schema, d.o.BackupDir, err)
 	}
 	d.log.Info("pre-upgrade bundle kept", "path", path, "record_format", stored.Records, "schema", stored.Schema, "bytes", treeSize(path))
 	d.pruneUpgradeBundles()
@@ -95,8 +106,9 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 	if err := backup.CreatePrior(ctx, stage, key, backendName, prior, files, build, retentionExpired, now, lastBuild); err != nil {
 		return "", err
 	}
-	if err := verifyUpgradeBundle(ctx, stage, now); err != nil {
-		return "", fmt.Errorf("verifying it: %w", err)
+	within := d.upgradeVerifyDir()
+	if err := verifyUpgradeBundle(ctx, stage, within, now); err != nil {
+		return "", fmt.Errorf("verifying it by restoring it into %s: %w", within, err)
 	}
 	staged, err := backup.Inspect(stage)
 	if err != nil {
@@ -121,11 +133,24 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 	return path, dir.Sync()
 }
 
-// verifyUpgradeBundle restores the bundle into a private directory, as
-// backup verify does. The bundle was made here a moment ago, so it is checked
-// for being whole, not for who signed it.
-func verifyUpgradeBundle(ctx context.Context, bundle string, now time.Time) error {
-	tmp, err := os.MkdirTemp("", "oc-verify-")
+// upgradeVerifyDir is where the verification restore goes: the backup
+// directory, the disk sized for bundles, rather than a system temporary
+// directory that is often a small tmpfs. A restore opens a live database,
+// which a network filesystem can't hold, so a backup directory on one (or one
+// that can't be classified) gives way to the state directory, which is
+// always local.
+func (d *daemon) upgradeVerifyDir() string {
+	if info, err := localfs.Detect(d.o.BackupDir); err != nil || info.Network {
+		return d.o.StateDir
+	}
+	return d.o.BackupDir
+}
+
+// verifyUpgradeBundle restores the bundle into a private directory within
+// dir, as backup verify does. The bundle was made here a moment ago, so it is
+// checked for being whole, not for who signed it.
+func verifyUpgradeBundle(ctx context.Context, bundle, dir string, now time.Time) error {
+	tmp, err := os.MkdirTemp(dir, upgradeVerifyPrefix)
 	if err != nil {
 		return err
 	}

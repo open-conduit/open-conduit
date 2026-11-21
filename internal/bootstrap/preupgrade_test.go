@@ -18,6 +18,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -278,5 +279,50 @@ func TestOfflineCommandsLeaveAnOlderDatabase(t *testing.T) {
 	}
 	if got := storedFormat(t, filepath.Join(state, "conduit.db")); got != fmt.Sprint(olderFormat) {
 		t.Fatalf("offline commands left format %s", got)
+	}
+}
+
+// The verification restore stays off the system temporary directory, which
+// is often a small tmpfs: a start must not depend on it.
+func TestUpgradeBundleVerifiesBesideTheBundle(t *testing.T) {
+	state := olderState(t)
+	missing := filepath.Join(t.TempDir(), "no-such-tmp")
+	t.Setenv("TMPDIR", missing)
+	d := upgradeDaemon(state, upgradeStart)
+	if err := d.preserveBeforeUpgrade(context.Background()); err != nil {
+		t.Fatalf("start depended on the temporary directory: %v", err)
+	}
+	if names, _ := upgradeBundles(d.o.BackupDir); len(names) != 1 {
+		t.Fatalf("bundles %v", names)
+	}
+	if left, _ := filepath.Glob(filepath.Join(d.o.BackupDir, ".conduit-snapshot-*")); len(left) != 0 {
+		t.Fatalf("staging left behind: %v", left)
+	}
+}
+
+// A backup directory on a network mount is allowed but can't hold the live
+// database a verification restore opens, so that restore uses the state
+// directory, and clears what a crash left there.
+func TestUpgradeBundleVerifiesOffANetworkBackupDir(t *testing.T) {
+	state := olderState(t)
+	d := upgradeDaemon(state, upgradeStart)
+	stale := filepath.Join(state, upgradeVerifyPrefix+"crashed")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer localfs.SwapProbe(func(path string) (localfs.Info, error) {
+		if strings.HasPrefix(path, d.o.BackupDir) {
+			return localfs.Info{Name: "nfs", Network: true}, nil
+		}
+		return localfs.Info{Name: "apfs"}, nil
+	})()
+	if err := d.preserveBeforeUpgrade(context.Background()); err != nil {
+		t.Fatalf("a network backup directory stopped the start: %v", err)
+	}
+	if names, _ := upgradeBundles(d.o.BackupDir); len(names) != 1 {
+		t.Fatalf("bundles %v", names)
+	}
+	if left, _ := filepath.Glob(filepath.Join(state, upgradeVerifyPrefix+"*")); len(left) != 0 {
+		t.Fatalf("verification stages left in the state directory: %v", left)
 	}
 }
