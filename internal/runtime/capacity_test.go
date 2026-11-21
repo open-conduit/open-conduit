@@ -2,7 +2,9 @@ package runtime_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -381,6 +383,85 @@ func TestExecutorAtCapacityHoldsTheWork(t *testing.T) {
 			}
 			if err != nil || st.FailureCount != tc.failures {
 				t.Fatalf("retry %+v %v, want %d failures", st, err, tc.failures)
+			}
+		})
+	}
+}
+
+// TestRefusedResumeNamesWhatRefusedIt: the hold and its release name the
+// system that refused, and the parked outcome never names the other one, so
+// the history points at the right system. A container refusal is the control.
+func TestRefusedResumeNamesWhatRefusedIt(t *testing.T) {
+	for _, tc := range []struct {
+		noun     string
+		executor bool
+	}{{"executor", true}, {"container", false}} {
+		t.Run(tc.noun, func(t *testing.T) {
+			ctx := context.Background()
+			f := waitFixture(t, "reopen", waitOptions(true))
+			d := f.Driver.(*waitDriver)
+			work := seedSchedulerWork(t, f, "named-resume")
+			key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "named-resume"}
+			attempt, err := d.Scheduler.Start(ctx, work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registerWait(t, f, attempt.Lease, "named-resume-wait", key, true, 1)
+			requireAccept(t, f, "named-resume-wake", &key)
+			if err = d.Wake("named-resume-wait"); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := d.Scheduler.Start(ctx, work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = runtime.HoldForCapacity(ctx, d.Scheduler, resumed.Lease, &extension.NoCapacityError{Reason: "full", Executor: tc.executor}); err != nil {
+				t.Fatal(err)
+			}
+			routingRead(t, f, func(tx storage.Tx) error {
+				x, e := tx.Execution(attempt.Lease.ExecutionID)
+				if e != nil {
+					return e
+				}
+				// A resume keeps the wait's own outcome when it has one, so the
+				// history must not claim the other system refused it.
+				other := map[string]string{"executor": "container", "container": "executor"}[tc.noun]
+				if x.State != domain.ExecutionParked || x.Outcome == nil || strings.Contains(x.Outcome.Summary, other) {
+					t.Fatalf("execution %s, outcome %+v, must be parked and not name %s", x.State, x.Outcome, other)
+				}
+				return nil
+			})
+			f.Clock.Advance(31 * time.Second)
+			timers, err := runtime.NewTimers(f.Store, f.Clock.Now, runtime.TimerOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = d.Scheduler.Poll(ctx, timers, 10); err != nil {
+				t.Fatal(err)
+			}
+			reasons := map[string]string{}
+			routingRead(t, f, func(tx storage.Tx) error {
+				events, e := tx.WorkEvents(work, 0, 0)
+				if e != nil {
+					return e
+				}
+				for _, a := range events {
+					if a.Event.Type != domain.EventCapacityHeld && a.Event.Type != domain.EventCapacityReleased {
+						continue
+					}
+					var n runtime.CapacityNotice
+					if e = json.Unmarshal(a.Event.Data.Data, &n); e != nil {
+						return e
+					}
+					reasons[a.Event.Type] = n.Reason
+				}
+				return nil
+			})
+			if got := reasons[domain.EventCapacityHeld]; !strings.HasPrefix(got, "Waiting for "+tc.noun+" capacity") {
+				t.Fatalf("held reason %q", got)
+			}
+			if got, want := reasons[domain.EventCapacityReleased], "Trying for "+tc.noun+" capacity again."; got != want {
+				t.Fatalf("released reason %q, want %q", got, want)
 			}
 		})
 	}
