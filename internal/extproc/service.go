@@ -66,6 +66,9 @@ type Deps struct {
 	// Nudge asks the host loop for an early pass after the extension made
 	// something the loop acts on (an accepted Event, an armed timer).
 	Nudge func()
+	// WakeTask runs one of the extension's own declared tasks on the next
+	// pass (task.wake).
+	WakeTask func(task string)
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every sink (telemetry.capture, permission
 	// telemetry.capture).
@@ -286,6 +289,18 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.accept(ctx, p)
+	case "task.wake":
+		var p protocol.TaskWakeParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if !slices.ContainsFunc(s.manifest.Provides.Tasks, func(t protocol.TaskDecl) bool { return t.Name == p.Task }) {
+			return nil, unauthorized("not one of this extension's tasks")
+		}
+		if s.deps.WakeTask != nil {
+			s.deps.WakeTask(p.Task)
+		}
+		return struct{}{}, nil
 	case "timer.arm":
 		var p protocol.TimerArmParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

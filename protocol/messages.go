@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -769,6 +771,70 @@ type SecretResolveResult struct {
 // Background tasks and checks.
 
 type TaskRunParams struct {
+	Task string `json:"task"`
+}
+
+// MaxTaskSleep is the longest a task may hand its waiting back for. A task
+// asking for longer, or naming only what wakes it, is still run by then, so a
+// bug in a package can't stop its task for ever.
+const MaxTaskSleep = time.Hour
+
+// TaskRunResult is what a task says about its next run. Empty, or absent from
+// an older package, the task keeps its declared interval.
+type TaskRunResult struct {
+	// NextRunAt is when the task next has something to do. The host doesn't
+	// call it before then, unless Wake says otherwise, and calls it by
+	// MaxTaskSleep from now whatever it says.
+	NextRunAt *time.Time `json:"next_run_at,omitempty"`
+	// Wake is what ends the wait early. Alone, it waits up to MaxTaskSleep.
+	Wake *TaskWake `json:"wake,omitempty"`
+}
+
+// Sleeps says whether the result hands the task's waiting to the host.
+func (r TaskRunResult) Sleeps() bool { return r.NextRunAt != nil || r.Wake != nil }
+
+// TaskWake is what runs a sleeping task before its time. The host only
+// watches what the package may read: its configured scopes and its own Work
+// kinds.
+type TaskWake struct {
+	// Families are Event types; the task runs once after one is accepted.
+	Families []string `json:"families,omitempty"`
+	// Work runs the task when Work the package can read, or one of its
+	// attempts, changes.
+	Work bool `json:"work,omitempty"`
+}
+
+// MaxTaskWakeFamilies bounds the Event types one result may name.
+const MaxTaskWakeFamilies = 32
+
+// maxTaskWakeFamily bounds one named Event type, in bytes.
+const maxTaskWakeFamily = 256
+
+// Validate refuses a result the host can't honour.
+func (r TaskRunResult) Validate() error {
+	if r.NextRunAt != nil && r.NextRunAt.IsZero() {
+		return errors.New("next_run_at is the zero time")
+	}
+	if r.Wake == nil {
+		return nil
+	}
+	if len(r.Wake.Families) == 0 && !r.Wake.Work {
+		return errors.New("wake names nothing")
+	}
+	if len(r.Wake.Families) > MaxTaskWakeFamilies {
+		return fmt.Errorf("wake names more than %d families", MaxTaskWakeFamilies)
+	}
+	for _, f := range r.Wake.Families {
+		if f == "" || len(f) > maxTaskWakeFamily {
+			return fmt.Errorf("wake family %q is not an Event type", f)
+		}
+	}
+	return nil
+}
+
+// TaskWakeParams asks the host to run one of the package's own tasks on its
+// next pass: the package made work for it that no Event or Work change shows.
+type TaskWakeParams struct {
 	Task string `json:"task"`
 }
 type CheckRunParams struct {

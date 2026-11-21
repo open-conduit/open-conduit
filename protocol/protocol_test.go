@@ -123,6 +123,7 @@ var useCases = map[string][]string{
 	"artifact.abort":              {"shell", "claude-code"},
 	"secret.resolve":              {"github", "slack", "linear", "jira", "bitbucket", "schedule", "posthog"},
 	"task.run":                    {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
+	"task.wake":                   {"github", "slack"},
 	"telemetry.export":            {"posthog", "introspection"},
 	"telemetry.metrics":           {"otlp"},
 	"telemetry.sink":              {"posthog"},

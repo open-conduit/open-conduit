@@ -166,6 +166,7 @@ var Methods = []Method{
 
 	// Background tasks, telemetry and operator surfaces.
 	{Name: "task.run", Direction: HostToExtension, Provides: "tasks", Contract: []string{"host:Projector.Converge", "host:Ensure", "host:Executor.Maintain", "host:manageHooks", "host:hostWatch", "host:publishJobRuns"}},
+	{Name: "task.wake", Direction: ExtensionToHost, Provides: "tasks", Contract: []string{"inproc.Host.WakeTask"}},
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}},
 	{Name: "telemetry.metrics", Direction: HostToExtension, Permission: PermissionTelemetryMetrics, Contract: []string{"observability.MetricExporter.ExportMetrics"}},
 	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}},

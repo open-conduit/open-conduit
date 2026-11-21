@@ -154,6 +154,9 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 		t.git.byID = map[domain.ID][]gitGrant{}
 	}
 	t.git.byID[exec] = append(t.git.byID[exec], gitGrant{repo: repo, client: client, token: tok, expires: expires})
+	if t.o.WakeSweep != nil {
+		defer t.o.WakeSweep() // the sweep sleeps while no token is out
+	}
 	t.git.mu.Unlock()
 	return gitCredentialOutput{Username: "x-access-token", Password: tok, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
 }
@@ -246,6 +249,13 @@ func (t *Tools) RevokeGitTokens(ctx context.Context, execution domain.ID) error 
 		t.git.mu.Unlock()
 	}
 	return errors.Join(errs...)
+}
+
+// HasGitTokens says whether any minted token is still to be revoked.
+func (t *Tools) HasGitTokens() bool {
+	t.git.mu.Lock()
+	defer t.git.mu.Unlock()
+	return len(t.git.byID) > 0
 }
 
 // SweepGitTokens revokes the git tokens of every execution live doesn't

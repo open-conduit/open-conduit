@@ -279,6 +279,26 @@ export const TaskRunParams = t.object(
 );
 export type TaskRunParams = Infer<typeof TaskRunParams>;
 
+/** What runs a sleeping task before its time. */
+export const TaskWake = t.object(
+  {
+    families: t.optional(t.array(t.string())),
+    work: t.optional(t.boolean()),
+  },
+  open,
+);
+export type TaskWake = Infer<typeof TaskWake>;
+
+/** What a task says about its next run; empty keeps its declared interval. */
+export const TaskRunResult = t.object(
+  {
+    next_run_at: t.optional(t.string()),
+    wake: t.optional(TaskWake),
+  },
+  open,
+);
+export type TaskRunResult = Infer<typeof TaskRunResult>;
+
 export const CheckRunParams = t.object(
   {
     check: t.string(),

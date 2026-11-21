@@ -275,15 +275,48 @@ func (x *Extension) now() time.Time {
 	return time.Now()
 }
 
-// Tasks: deliveries become job triggers and finished runs are announced on
-// every pass; the timers get a repair pass every minute besides the one
-// each configure makes.
+// timerRepairGap is how long the timers go without a repair pass while
+// nothing asks for one. Each configure makes its own.
+const timerRepairGap = 15 * time.Minute
+
+// Tasks: deliveries become job triggers when one is accepted, finished runs
+// are announced when Work changes, and the timers get a periodic repair pass
+// besides the one each configure makes. A task with a backlog or a failure
+// keeps its pace until it clears.
 func (x *Extension) Tasks() []inproc.Task {
 	return []inproc.Task{
-		{Name: "deliveries", Run: x.translate},
-		{Name: "runs", Run: x.publish},
-		{Name: "timers", Pace: ensureGap, Run: func(ctx context.Context) error { x.ensure(ctx, false); return nil }},
+		{Name: "deliveries", Plan: x.planDeliveries},
+		{Name: "runs", Plan: x.planRuns},
+		{Name: "timers", Pace: ensureGap, Plan: x.planTimers},
 	}
+}
+
+func (x *Extension) planDeliveries(ctx context.Context) (inproc.TaskPlan, error) {
+	examined, err := x.translate(ctx)
+	if err != nil || examined >= passLimit || x.code("deliveries") != "" {
+		return inproc.TaskPlan{}, err
+	}
+	return inproc.TaskPlan{Families: []string{typeDelivery}}, nil
+}
+
+func (x *Extension) planRuns(ctx context.Context) (inproc.TaskPlan, error) {
+	// Woken by a change, so the job Work that changed may be a new one.
+	x.mu.Lock()
+	x.jobs = nil
+	x.mu.Unlock()
+	n, err := x.publish(ctx)
+	if err != nil || n >= passLimit || x.code("runs") != "" {
+		return inproc.TaskPlan{}, err
+	}
+	return inproc.TaskPlan{Work: true}, nil
+}
+
+func (x *Extension) planTimers(ctx context.Context) (inproc.TaskPlan, error) {
+	x.ensure(ctx, false)
+	if x.code("timers") != "" {
+		return inproc.TaskPlan{}, nil
+	}
+	return inproc.TaskPlan{Next: x.now().Add(timerRepairGap)}, nil
 }
 
 // report records one task's code and reports them all, so one task's
@@ -367,7 +400,7 @@ func storageCode(err error) string {
 }
 
 // translate turns code-host deliveries into job triggers.
-func (x *Extension) translate(ctx context.Context) error {
+func (x *Extension) translate(ctx context.Context) (int, error) {
 	entries := map[domain.ID][]Settings{}
 	active := false
 	for _, e := range x.snapshot() {
@@ -381,13 +414,13 @@ func (x *Extension) translate(ctx context.Context) error {
 		}
 		entries[e.Scope] = append(entries[e.Scope], e.Settings)
 	}
-	_, codes, err := x.translateDeliveries(ctx, entries, active, passLimit)
+	examined, codes, err := x.translateDeliveries(ctx, entries, active, passLimit)
 	code := strings.Join(codes, ",")
 	if err != nil && ctx.Err() == nil {
 		code = storageCode(err)
 	}
 	x.report("deliveries", code)
-	return nil
+	return examined, nil
 }
 
 // translateDeliveries reads accepted code-host deliveries after a durable
@@ -456,7 +489,7 @@ func (x *Extension) translateDeliveries(ctx context.Context, entries map[domain.
 // trigger on the job's key, in one transaction with the job's checkpoint,
 // so `job:` waits wake through ordinary dependency aliases and a crash
 // repeats nothing.
-func (x *Extension) publish(ctx context.Context) error {
+func (x *Extension) publish(ctx context.Context) (int, error) {
 	n, codes, err := x.publishRuns(ctx, passLimit)
 	code := strings.Join(codes, ",")
 	if err != nil && ctx.Err() == nil {
@@ -466,7 +499,7 @@ func (x *Extension) publish(ctx context.Context) error {
 	if n > 0 {
 		x.nudge()
 	}
-	return nil
+	return n, nil
 }
 
 func (x *Extension) publishRuns(ctx context.Context, limit int) (int, []string, error) {

@@ -59,8 +59,10 @@ type unmatched struct {
 
 // Extension is the Slack extension.
 type Extension struct {
-	h     inproc.Host
-	tools *Tools
+	// projected says the last projection pass wrote something.
+	projected bool
+	h         inproc.Host
+	tools     *Tools
 	// book holds the entries' start points and marked threads (claims.go),
 	// which the route reads.
 	book *Book
@@ -259,6 +261,7 @@ func (x *Extension) Configure(ctx context.Context, p protocol.ConfigureParams) {
 		code = failed[0]
 	}
 	x.report("register", code)
+	x.wakeTask("sockets") // a socket of this process's may not be started yet
 }
 
 func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Settings) error {
@@ -285,7 +288,8 @@ func (x *Extension) add(ctx context.Context, e protocol.ConfigEntry, settings Se
 		settings.Projection.DryRun = true
 	}
 	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now,
-		Actions: x.h.Actions, Act: x.h.Act, Requests: x.h.Requests, Accept: x.accept, Cancel: x.h.CancelWork})
+		Actions: x.h.Actions, Act: x.h.Act, Requests: x.h.Requests, Accept: x.accept, Cancel: x.h.CancelWork,
+		Wake: func() { x.wakeTask("projection") }})
 	if err != nil {
 		return err
 	}
@@ -774,8 +778,50 @@ func (x *Extension) signingSecret(s *source) func(context.Context) (string, erro
 // registered, and one bounded reply pass every few seconds.
 func (x *Extension) Tasks() []inproc.Task {
 	return []inproc.Task{
-		{Name: "sockets", Pace: time.Second, Run: x.startSockets},
-		{Name: "projection", Pace: 5 * time.Second, Run: x.project},
+		{Name: "sockets", Pace: time.Second, Plan: x.planSockets},
+		{Name: "projection", Pace: 5 * time.Second, Plan: x.planProjection},
+	}
+}
+
+// planSockets has nothing to do once each socket is started: each keeps
+// itself connected, and configure wakes the task for a new one.
+func (x *Extension) planSockets(ctx context.Context) (inproc.TaskPlan, error) {
+	if err := x.startSockets(ctx); err != nil {
+		return inproc.TaskPlan{}, err
+	}
+	return inproc.TaskPlan{Next: x.now().Add(protocol.MaxTaskSleep)}, nil
+}
+
+// planProjection sleeps until Work changes once every entry is quiet. A pass
+// that did anything or left a code keeps the pace, since a bounded pass may
+// have left more.
+func (x *Extension) planProjection(ctx context.Context) (inproc.TaskPlan, error) {
+	if err := x.project(ctx); err != nil {
+		return inproc.TaskPlan{}, err
+	}
+	x.mu.Lock()
+	busy := x.projected
+	x.mu.Unlock()
+	if busy {
+		return inproc.TaskPlan{}, nil
+	}
+	for _, s := range x.list() {
+		x.mu.Lock()
+		code := x.replies[s.settings.Namespace]
+		x.mu.Unlock()
+		if code != "" {
+			return inproc.TaskPlan{}, nil
+		}
+		if quiet, err := s.projector.Quiet(ctx); err != nil || !quiet {
+			return inproc.TaskPlan{}, nil
+		}
+	}
+	return inproc.TaskPlan{Work: true}, nil
+}
+
+func (x *Extension) wakeTask(task string) {
+	if x.h.WakeTask != nil {
+		x.h.WakeTask(task)
 	}
 }
 
@@ -786,6 +832,7 @@ func (x *Extension) project(ctx context.Context) error {
 	sources := x.list()
 	x.mu.Lock()
 	start := x.next
+	x.projected = false
 	x.mu.Unlock()
 	for i := range sources {
 		k := (start + i) % len(sources)
@@ -802,6 +849,7 @@ func (x *Extension) project(ctx context.Context) error {
 		if ctx.Err() == nil {
 			x.replies[s.settings.Namespace] = code
 		}
+		x.projected = x.projected || res.Posted+res.Recovered+res.Failed+res.Progress > 0
 		x.next = k + 1
 		x.mu.Unlock()
 	}

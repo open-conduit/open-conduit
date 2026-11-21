@@ -411,6 +411,18 @@ func (e *Extension) Task(name string, every time.Duration, fn func(context.Conte
 	return e
 }
 
+// PlannedTask registers a task that says when it next has something to do.
+// every is its interval whenever its result says neither a time nor a wake,
+// and after it fails.
+func (e *Extension) PlannedTask(name string, every time.Duration, fn func(context.Context, *Host) (protocol.TaskRunResult, error)) *Extension {
+	if e.TaskPlans == nil {
+		e.TaskPlans = map[string]func(context.Context, *Host) (protocol.TaskRunResult, error){}
+	}
+	e.TaskPlans[name] = fn
+	e.Manifest.Provides.Tasks = append(e.Manifest.Provides.Tasks, protocol.TaskDecl{Name: name, IntervalSeconds: int(every / time.Second)})
+	return e
+}
+
 // CheckOption adds to a check's declaration.
 type CheckOption func(*protocol.CheckDecl)
 

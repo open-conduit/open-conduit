@@ -42,6 +42,8 @@ var typescriptWire = map[string]any{
 	"OperationParams":        protocol.OperationParams{},
 	"OperationResult":        protocol.OperationResult{},
 	"TaskRunParams":          protocol.TaskRunParams{},
+	"TaskRunResult":          protocol.TaskRunResult{},
+	"TaskWake":               protocol.TaskWake{},
 	"CheckRunParams":         protocol.CheckRunParams{},
 	"CheckRunResult":         protocol.CheckRunResult{},
 	"KVGetParams":            protocol.KVGetParams{},

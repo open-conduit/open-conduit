@@ -121,6 +121,8 @@ func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
 	x.mu.Unlock()
 	if x.own != nil {
 		x.register(p)
+		// What the hooks task knows is this process's: it checks them afresh.
+		x.wakeTask("webhooks")
 	}
 }
 

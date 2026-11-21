@@ -439,11 +439,16 @@ func (d *daemon) packageRender(e domain.Event) (string, bool) {
 	return "", false
 }
 
-// runPackageTasks starts each task when its pace has elapsed.
+// runPackageTasks starts each task that is due: at its pace, or, for one that
+// handed its waiting back, at its time or when what it named happens
+// (taskclock.go).
 func (d *daemon) runPackageTasks(ctx context.Context) {
-	for _, x := range d.extensionPackages() {
+	packages := d.extensionPackages()
+	d.loadTaskSleeps(ctx)
+	d.wakeSleepingTasks(ctx, packages)
+	for _, x := range packages {
 		for _, task := range x.Tasks() {
-			d.runTask(ctx, x.Name()+"/"+task.Name, task.Pace, task.Run)
+			d.runTask(ctx, x, x.Name()+"/"+task.Name, task)
 		}
 	}
 }

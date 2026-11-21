@@ -176,6 +176,8 @@ func WithAuthority(a extension.Authority) Option { return func(h *Host) { h.auth
 
 // Host is the in-memory host serving one extension.
 type Host struct {
+	taskWakes    []string
+	timers       []protocol.Timer
 	t            testing.TB
 	ext          *sdk.Extension
 	conn         *jsonrpc.Conn
@@ -277,6 +279,9 @@ func New(t testing.TB, ext *sdk.Extension, opts ...Option) *Host {
 
 // Server is the served extension (its StateDir and Host).
 func (h *Host) Server() *sdk.Server { return h.server }
+
+// Manifest is the served extension's manifest.
+func (h *Host) Manifest() protocol.Manifest { return h.ext.Manifest }
 
 // StateDir is the private state directory given at initialize.
 func (h *Host) StateDir() string { return h.stateDir }
@@ -548,6 +553,22 @@ func (h *Host) RunTask(ctx context.Context, name string) error {
 	return h.conn.Call(ctx, "task.run", protocol.TaskRunParams{Task: name}, nil)
 }
 
+// RunPlannedTask runs a background task once and returns what it said about
+// its next run.
+func (h *Host) RunPlannedTask(ctx context.Context, name string) (protocol.TaskRunResult, error) {
+	var out protocol.TaskRunResult
+	err := h.conn.Call(ctx, "task.run", protocol.TaskRunParams{Task: name}, &out)
+	return out, err
+}
+
+// TaskWakes are the tasks the extension has asked to run early (task.wake),
+// in order.
+func (h *Host) TaskWakes() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.taskWakes)
+}
+
 // Check runs a doctor check (shallow, with an empty configuration view).
 func (h *Host) Check(ctx context.Context, name string) (protocol.CheckRunResult, error) {
 	return h.CheckRun(ctx, protocol.CheckRunParams{Check: name})
@@ -651,6 +672,33 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		return nil, protocol.Errorf(protocol.CodeUndeclared, "method not enabled by the manifest")
 	}
 	switch method {
+	case "timer.arm":
+		var p protocol.TimerArmParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		t := p.Timer
+		t.Revision = p.Expected + 1
+		if i := slices.IndexFunc(h.timers, func(x protocol.Timer) bool { return x.ID == t.ID }); i >= 0 {
+			h.timers[i] = t
+		} else {
+			h.timers = append(h.timers, t)
+		}
+		return struct{}{}, nil
+	case "task.wake":
+		var p protocol.TaskWakeParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if !slices.ContainsFunc(h.ext.Manifest.Provides.Tasks, func(t protocol.TaskDecl) bool { return t.Name == p.Task }) {
+			return nil, protocol.Errorf(protocol.CodeUnauthorized, "not one of this extension's tasks")
+		}
+		h.mu.Lock()
+		h.taskWakes = append(h.taskWakes, p.Task)
+		h.mu.Unlock()
+		return struct{}{}, nil
 	case "kv.get":
 		var p protocol.KVGetParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -1107,6 +1155,8 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 			list = append(list, protocol.FromWork(w))
 		}
 		return list, nil
+	case "state.timers":
+		return append([]protocol.Timer{}, h.timers...), nil
 	case "state.waits":
 		for i := range h.works {
 			if h.works[i].ID == domain.ID(p.ID) && h.allowedLocked(h.works[i].ScopeID) {
