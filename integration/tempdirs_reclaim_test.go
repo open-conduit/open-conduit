@@ -142,7 +142,7 @@ func TestSharedBuildBuildsOnceForConcurrentRuns(t *testing.T) {
 func TestSharedBuildRebuildsAnUnfinishedOne(t *testing.T) {
 	base := t.TempDir()
 	partial := filepath.Join(base, sharedBuildPrefix+"partial-key")
-	if err := os.Mkdir(partial, 0o755); err != nil {
+	if err := os.Mkdir(partial, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(partial, "bin"), []byte("half"), 0o644); err != nil {
@@ -170,5 +170,97 @@ func TestSharedBuildDoesNotPublishAFailure(t *testing.T) {
 	}
 	if buildReady(filepath.Join(base, sharedBuildPrefix+"failed-key")) {
 		t.Fatal("a failed build was published")
+	}
+}
+
+// Something another user could have planted at a shared build's predictable
+// path is neither run nor removed. The first case is the negative control: the
+// same directory, private to this user, is what a run reuses.
+func TestSharedBuildRefusesADirectoryOthersCanWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   os.FileMode
+		reused bool
+	}{
+		{"private", 0o700, true},
+		{"group_writable", 0o770, false},
+		{"world_writable", 0o777, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			planted := filepath.Join(base, sharedBuildPrefix+"planted-key")
+			if err := os.Mkdir(planted, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"bin", sharedReadyFile} {
+				if err := os.WriteFile(filepath.Join(planted, f), []byte("planted"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chmod(planted, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(planted, 0o700) })
+			built := false
+			dir, err := sharedBuildAt(base, "planted", "key", func() (string, error) { return "key", nil }, func(dir string) error {
+				built = true
+				return os.WriteFile(filepath.Join(dir, "bin"), []byte("built"), 0o755)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := dir == planted; got != tc.reused {
+				t.Fatalf("used the directory at the shared path: %v, want %v", got, tc.reused)
+			}
+			if built == tc.reused {
+				t.Fatalf("built: %v, with reused %v", built, tc.reused)
+			}
+			want := "built"
+			if tc.reused {
+				want = "planted"
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "bin")); err != nil || string(got) != want {
+				t.Fatalf("bin = %q, %v, want %q", got, err, want)
+			}
+			if !tc.reused {
+				reclaimDirs(base)
+				if !dirExists(filepath.Join(planted, "bin")) {
+					t.Fatal("reclaim removed a directory it refused to trust")
+				}
+			}
+		})
+	}
+}
+
+// A directory another user owns is not private, even with safe permissions.
+func TestDirIsPrivateChecksTheOwner(t *testing.T) {
+	info, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dirIsPrivate(info, os.Getuid()) {
+		t.Fatal("this user's own temp directory is not private")
+	}
+	if dirIsPrivate(info, os.Getuid()+1) {
+		t.Fatal("a directory owned by another uid counted as private")
+	}
+}
+
+// A symlink at the shared path is refused rather than followed.
+func TestSharedBuildRefusesASymlink(t *testing.T) {
+	base := t.TempDir()
+	target := t.TempDir()
+	link := filepath.Join(base, sharedBuildPrefix+"linked-key")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := sharedBuildAt(base, "linked", "key", func() (string, error) { return "key", nil }, func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "bin"), []byte("built"), 0o755)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir == link || dirExists(filepath.Join(target, "bin")) {
+		t.Fatalf("built through the symlink: %s", dir)
 	}
 }

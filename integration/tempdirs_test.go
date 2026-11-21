@@ -53,18 +53,37 @@ var (
 	sharedLocks []*os.File
 )
 
-var errDirGone = errors.New("directory was reclaimed")
+var (
+	errDirGone    = errors.New("directory was reclaimed")
+	errDirNotOurs = errors.New("directory is not this user's alone")
+)
 
 // lockDir takes how (a syscall.LOCK_* mode) on the directory at path, and
 // returns the open file holding it. errDirGone means path no longer names the
 // directory that was locked: another process reclaimed it first.
+//
+// The temp directory can be shared and a shared build's name is predictable,
+// so another user can put something at path. errDirNotOurs refuses it, before
+// the lock so that they can't stall this run by holding one.
 func lockDir(path string, how int) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			return nil, errDirGone
+		case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR), errors.Is(err, fs.ErrPermission):
+			return nil, errDirNotOurs
 		}
 		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !dirIsPrivate(info, os.Getuid()) {
+		_ = f.Close()
+		return nil, errDirNotOurs
 	}
 	if err = flock(f, how); err != nil {
 		_ = f.Close()
@@ -75,6 +94,13 @@ func lockDir(path string, how int) (*os.File, error) {
 		return nil, errDirGone
 	}
 	return f, nil
+}
+
+// dirIsPrivate reports whether info is a directory uid owns and nobody else
+// can write to.
+func dirIsPrivate(info fs.FileInfo, uid int) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.IsDir() && int(st.Uid) == uid && info.Mode().Perm()&0o022 == 0
 }
 
 func flock(f *os.File, how int) error {
@@ -200,7 +226,7 @@ func privateBuild(name string, build func(dir string) error) (string, error) {
 func sharedBuildAt(base, name, key string, rekey func() (string, error), build func(dir string) error) (string, error) {
 	path := filepath.Join(base, sharedBuildPrefix+name+"-"+key)
 	for {
-		if err := os.Mkdir(path, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 			return "", err
 		}
 		// Shared first: it waits out a builder, and never waits on the live
@@ -209,6 +235,9 @@ func sharedBuildAt(base, name, key string, rekey func() (string, error), build f
 		lock, err := lockDir(path, syscall.LOCK_SH)
 		if errors.Is(err, errDirGone) {
 			continue
+		}
+		if errors.Is(err, errDirNotOurs) {
+			return privateBuild(name, build)
 		}
 		if err != nil {
 			return "", err
@@ -223,6 +252,9 @@ func sharedBuildAt(base, name, key string, rekey func() (string, error), build f
 		lock, err = lockDir(path, syscall.LOCK_EX|syscall.LOCK_NB)
 		if errors.Is(err, errDirGone) || errors.Is(err, syscall.EWOULDBLOCK) {
 			continue
+		}
+		if errors.Is(err, errDirNotOurs) {
+			return privateBuild(name, build)
 		}
 		if err != nil {
 			return "", err
