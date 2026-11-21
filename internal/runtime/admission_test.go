@@ -42,6 +42,7 @@ func admissionEvents(t *testing.T, f conformanceFixture, work domain.ID) []strin
 	t.Helper()
 	var out []string
 	routingRead(t, f, func(tx storage.Tx) error {
+		out = nil // A read can run again; each run lists the history afresh.
 		events, err := tx.Events(0, 0)
 		for _, a := range events {
 			if a.Event.WorkID == work && strings.HasPrefix(a.Event.Type, "core.admission.") {
