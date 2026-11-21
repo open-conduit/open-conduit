@@ -72,6 +72,7 @@ To follow what runs use, read `GET /v1/events?type=core.execution.usage&after_se
 | `GET` | `/v1/capacity` | view | daemon | – | – |
 | `GET` | `/v1/quiescence` | view | daemon | – | – |
 | `GET` | `/v1/drain` | view | daemon | – | – |
+| `GET` | `/v1/portability` | admin | daemon | – | – |
 | `POST` | `/v1/drain` | operate | daemon | optional | – |
 | `DELETE` | `/v1/drain` | operate | daemon | optional | – |
 | `GET` | `/v1/schema` | view | any | – | – |

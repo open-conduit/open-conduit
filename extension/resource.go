@@ -175,6 +175,20 @@ type ResourceSweeper interface {
 	Sweep(context.Context, ResourceStatusFunc) (ResourceSweepReport, error)
 }
 
+// ResourceUnsaved is a resource holding work that exists only where it is:
+// Kept says why (uncommitted, unpushed, unreadable, or at_site for one at a
+// remote site the provider didn't inspect). Path is where it is.
+type ResourceUnsaved struct {
+	Ref, Mode, Path, Site, Kept string
+}
+
+// ResourceUnsavedReporter is optionally implemented by a provider that can
+// say which of its resources hold work a move of this host would lose. It
+// reads and changes nothing, and is asked before a move.
+type ResourceUnsavedReporter interface {
+	Unsaved(context.Context) ([]ResourceUnsaved, error)
+}
+
 // ResourceProvider is an optional extension that supplies execution resources.
 // Core never calls it and never inspects resources; a host binds it to an
 // attempt (BindResources) and drives Reconcile from durable owner state.

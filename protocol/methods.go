@@ -110,6 +110,7 @@ var Methods = []Method{
 	{Name: "provider.owner_status", Direction: ExtensionToHost, Provides: "resources", Contract: []string{"extension.ResourceStatusFunc"}},
 	{Name: "site.run", Direction: ExtensionToHost, Provides: "resources.sites", Contract: []string{"extension.Site.Run", "extension.SiteResolver", "extension.ResourceSiteUser.UseSites"}},
 	{Name: "provider.sweep", Direction: HostToExtension, Provides: "resources.sweep", Contract: []string{"extension.ResourceSweeper.Sweep", "extension.ResourceSweepReport", "extension.ResourceSpare"}},
+	{Name: "provider.unsaved", Direction: HostToExtension, Provides: "resources.unsaved", Contract: []string{"extension.ResourceUnsavedReporter.Unsaved", "extension.ResourceUnsaved"}},
 	{Name: "sandbox_provider.plan", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Plan", "extension.SandboxPolicy", "extension.SandboxPaths"}},
 	{Name: "sandbox_provider.adopt", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Adopt"}},
 	{Name: "container_provider.plan", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Plan", "extension.ContainerPolicy", "extension.ContainerPlan"}},

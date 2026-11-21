@@ -61,7 +61,10 @@ type Options struct {
 	Quiescence func(context.Context) (Quiescence, error)
 	// Drain reads, begins and ends the daemon's drain (optional: without it
 	// the routes are unavailable).
-	Drain         DrainControl
+	Drain DrainControl
+	// Portability answers GET /portability: what is tied to this machine
+	// (optional: without it the route is unavailable).
+	Portability   func(context.Context) (Portability, error)
 	RequestServed func()
 	CursorKey     []byte
 	// Doctor inputs, all optional: ingress state for reconcile lag and loss
@@ -558,6 +561,7 @@ var routes = []route{
 	{"GET", []string{"capacity"}, targetDaemon, false, false, (*Server).capacity},
 	{"GET", []string{"quiescence"}, targetDaemon, false, false, (*Server).quiescence},
 	{"GET", []string{"drain"}, targetDaemon, false, false, (*Server).drainStatus},
+	{"GET", []string{"portability"}, targetDaemon, false, false, (*Server).portability},
 	{"POST", []string{"drain"}, targetDaemon, true, false, (*Server).drainBegin},
 	{"DELETE", []string{"drain"}, targetDaemon, true, false, (*Server).drainEnd},
 	{"GET", []string{"schema"}, targetAny, false, false, (*Server).schema},
@@ -732,7 +736,7 @@ func routePath(rt *route) string {
 // admin.
 func requiredRole(rt *route, parts []string, query url.Values) string {
 	path := strings.Join(rt.pattern, "/")
-	if path == "config/export" || path == "audit" || path == "auth/operators" || rt.pattern[0] == "secrets" {
+	if path == "config/export" || path == "portability" || path == "audit" || path == "auth/operators" || rt.pattern[0] == "secrets" {
 		return RoleAdmin
 	}
 	if path == "doctor" && slices.Contains(query["check_secrets"], "true") {

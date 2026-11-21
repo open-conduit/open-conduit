@@ -692,6 +692,43 @@ func (c *Client) EndDrain(ctx context.Context) (out DrainStatus, err error) {
 	return
 }
 
+// Portability is GET /v1/portability: everything tied to this machine.
+type Portability struct {
+	Portable bool        `json:"portable"`
+	Drain    DrainStatus `json:"drain"`
+	Secrets  []struct {
+		Path   string `json:"path"`
+		Scheme string `json:"scheme"`
+	} `json:"secrets"`
+	Paths []struct {
+		Path  string `json:"path"`
+		Value string `json:"value"`
+	} `json:"paths"`
+	Workspaces []struct {
+		Provider string `json:"provider"`
+		Ref      string `json:"ref"`
+		Mode     string `json:"mode,omitempty"`
+		Path     string `json:"path,omitempty"`
+		Site     string `json:"site,omitempty"`
+		Kept     string `json:"kept"`
+	} `json:"workspaces"`
+	Packages []struct {
+		Name    string `json:"name"`
+		Version string `json:"version,omitempty"`
+	} `json:"packages"`
+	Directories []struct {
+		Name string `json:"name"`
+		Why  string `json:"why"`
+	} `json:"directories"`
+	Unchecked []string `json:"unchecked,omitempty"`
+}
+
+// Portability reads what is tied to this machine.
+func (c *Client) Portability(ctx context.Context) (out Portability, err error) {
+	err = c.Do(ctx, "GET", "portability", nil, nil, "", &out)
+	return
+}
+
 func get[T any](c *Client, ctx context.Context, path string) (out T, err error) {
 	err = c.Do(ctx, "GET", path, nil, nil, "", &out)
 	return

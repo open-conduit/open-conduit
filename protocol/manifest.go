@@ -800,6 +800,10 @@ type ResourceDecl struct {
 	// the spare resources no lease release covers, through provider.sweep
 	// (extension.ResourceSweeper).
 	Sweep bool `json:"sweep,omitempty"`
+	// Unsaved marks a provider the host asks, before a move, which of its
+	// resources hold work that exists only there, through provider.unsaved
+	// (extension.ResourceUnsavedReporter).
+	Unsaved bool `json:"unsaved,omitempty"`
 	// Sites marks a provider that makes resources at the site a launch is
 	// placed at (extension.ResourceSiteUser): provider.acquire hands it the
 	// site, it runs commands there and later at the sites its resources
@@ -1421,6 +1425,7 @@ func (m Manifest) Enabled() []string {
 	set("resources", len(p.Resources) > 0)
 	for _, r := range p.Resources {
 		set("resources.sweep", r.Sweep)
+		set("resources.unsaved", r.Unsaved)
 		set("resources.sites", r.Sites)
 	}
 	set("sandboxes", len(p.Sandboxes) > 0)

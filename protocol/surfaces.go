@@ -403,6 +403,42 @@ func (r ResourceSweepReport) Extension() extension.ResourceSweepReport {
 	return extension.ResourceSweepReport{Removed: conv(r.Removed), Kept: conv(r.Kept)}
 }
 
+// ResourceUnsaved is one resource holding work that exists only where it is
+// (extension.ResourceUnsaved).
+type ResourceUnsaved struct {
+	Ref  string `json:"ref"`
+	Mode string `json:"mode,omitempty"`
+	Path string `json:"path,omitempty"`
+	Site string `json:"site,omitempty"`
+	Kept string `json:"kept"`
+}
+
+// ProviderUnsavedParams names the provider type provider.unsaved asks.
+type ProviderUnsavedParams struct {
+	Type string `json:"type"`
+}
+
+// ProviderUnsavedResult is provider.unsaved's answer.
+type ProviderUnsavedResult struct {
+	Resources []ResourceUnsaved `json:"resources,omitempty"`
+}
+
+func FromUnsaved(in []extension.ResourceUnsaved) ProviderUnsavedResult {
+	var out ProviderUnsavedResult
+	for _, r := range in {
+		out.Resources = append(out.Resources, ResourceUnsaved{Ref: r.Ref, Mode: r.Mode, Path: r.Path, Site: r.Site, Kept: r.Kept})
+	}
+	return out
+}
+
+func (r ProviderUnsavedResult) Extension() []extension.ResourceUnsaved {
+	var out []extension.ResourceUnsaved
+	for _, x := range r.Resources {
+		out = append(out, extension.ResourceUnsaved{Ref: x.Ref, Mode: x.Mode, Path: x.Path, Site: x.Site, Kept: x.Kept})
+	}
+	return out
+}
+
 // ExecutorSweepParams asks an executor to release the private state of the
 // executions the host doesn't know (extension.StateSweeper). The extension
 // quotes Sweep in executor.known while the call runs.

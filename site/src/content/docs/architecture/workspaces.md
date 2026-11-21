@@ -22,6 +22,7 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, an optional `Log` writer for human-readable progress, and `Files`: paths relative to the resource's directory that the executor wants read at acquisition. The host sets `Sandboxed` itself. |
 | `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). `Site` names the site `Dir` is at, empty for the host, and `Files` holds the requested files read there. |
 | `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept. |
+| `ResourceUnsavedReporter` | Optional `Unsaved()`: lists the resources holding work that exists only there, for the [portability report](../recovery/#moving-a-daemon-to-another-machine). It changes nothing. |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
 
 These are the guarantees a provider must meet:

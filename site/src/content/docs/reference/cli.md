@@ -140,6 +140,12 @@ drain [--reason TEXT] | drain status | drain end
                            stop starting attempts so the state can be moved; exits 1 until it is safe to move
 ```
 
+### `open-conduit portability`
+
+```text
+portability                what is tied to this machine, before a move; exits 1 unless nothing is and it is drained
+```
+
 ### `open-conduit doctor`
 
 ```text

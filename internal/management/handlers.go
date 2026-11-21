@@ -155,6 +155,70 @@ func (s *Server) quiescence(c *call) (int, any, error) {
 	return 200, q, nil
 }
 
+// Portability is GET /portability: everything tied to this machine, for an
+// operator about to move it. Portable is true when the daemon is drained and
+// nothing but Directories, which say what to carry, is listed. Secret references are named by where they are and their
+// scheme, never their text, which for cmd: can hold anything.
+type Portability struct {
+	Portable    bool                `json:"portable"`
+	Drain       runtime.DrainStatus `json:"drain"`
+	Secrets     []PortableSecret    `json:"secrets"`
+	Paths       []PortablePath      `json:"paths"`
+	Workspaces  []PortableWorkspace `json:"workspaces"`
+	Packages    []PortablePackage   `json:"packages"`
+	Directories []PortableDirectory `json:"directories"`
+	Unchecked   []string            `json:"unchecked,omitempty"`
+}
+
+// PortableSecret is a secret reference whose value won't resolve elsewhere.
+type PortableSecret struct {
+	Path   string `json:"path"`
+	Scheme string `json:"scheme"`
+}
+
+// PortablePath is an absolute path in the active config generation.
+type PortablePath struct {
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+// PortableWorkspace is a workspace holding work that exists only there.
+type PortableWorkspace struct {
+	Provider string `json:"provider"`
+	Ref      string `json:"ref"`
+	Mode     string `json:"mode,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Site     string `json:"site,omitempty"`
+	Kept     string `json:"kept"`
+}
+
+// PortablePackage is a package installed beside the config file.
+type PortablePackage struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+// PortableDirectory is a directory in the state directory a bundle leaves
+// out, and what is lost when it doesn't travel.
+type PortableDirectory struct {
+	Name string `json:"name"`
+	Why  string `json:"why"`
+}
+
+func (s *Server) portability(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	if s.o.Portability == nil {
+		return 0, nil, fail(503, "unavailable", "this server doesn't report portability")
+	}
+	out, err := s.o.Portability(c.ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, out, nil
+}
+
 // DrainControl is the daemon's drain, as the management API serves it.
 type DrainControl interface {
 	DrainStatus(context.Context) (runtime.DrainStatus, error)

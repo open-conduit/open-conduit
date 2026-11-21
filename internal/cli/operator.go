@@ -157,7 +157,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "quiescence": o.quiescence, "drain": o.drain, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
+	commands := map[string]func([]string) int{"health": o.health, "quiescence": o.quiescence, "drain": o.drain, "portability": o.portability, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -469,6 +469,25 @@ func (o *operator) drain(args []string) int {
 		status, err = c.BeginDrain(cx, f.get("reason"))
 	}
 	if code := o.emit(status, err); code != 0 || status.Safe {
+		return code
+	}
+	return 1
+}
+
+// portability prints what is tied to this machine; it exits 0 only when
+// nothing is and the daemon is drained.
+func (o *operator) portability(args []string) int {
+	if len(args) != 0 {
+		return usageError(o.errOut, "portability takes no arguments")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	p, err := c.Portability(cx)
+	if code := o.emit(p, err); code != 0 || p.Portable {
 		return code
 	}
 	return 1

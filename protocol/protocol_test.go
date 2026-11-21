@@ -76,6 +76,7 @@ var useCases = map[string][]string{
 	"provider.reconcile":          {"git"},
 	"provider.owner_status":       {"git"},
 	"provider.sweep":              {"git"},
+	"provider.unsaved":            {"git"},
 	"sandbox_provider.plan":       {"srt"},
 	"sandbox_provider.adopt":      {"srt"},
 	"container_provider.plan":     {"docker", "ssh"},
@@ -366,7 +367,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Verifiers = []protocol.VerifierDecl{{Type: "chat-idp"}}
 	m.Provides.SecretSchemes = []protocol.SecretSchemeDecl{{Scheme: "chat-vault"}}
 	m.Provides.BackupDestinations = []protocol.BackupDestinationDecl{{Type: "chat-bucket"}}
-	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Sites = true, true
+	m.Provides.Resources[0].Sweep, m.Provides.Resources[0].Unsaved, m.Provides.Resources[0].Sites = true, true, true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)

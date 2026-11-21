@@ -78,6 +78,7 @@ var helpGroups = []helpGroup{
 		{"quiescence", `  quiescence                 what is in flight, or when the daemon is next due; exits 1 unless it is quiescent`},
 		{"drain", `  drain [--reason TEXT] | drain status | drain end
                              stop starting attempts so the state can be moved; exits 1 until it is safe to move`},
+		{"portability", `  portability                what is tied to this machine, before a move; exits 1 unless nothing is and it is drained`},
 		{"doctor", `  doctor [--check-secrets] [--json]   check the config, its bindings, the agent CLIs and the daemon`},
 		{"scopes", `  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID`},
 		{"work", `  work list [--scope S --state --kind --parent-id] [--json] | work get ID`},
