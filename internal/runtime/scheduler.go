@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -57,6 +58,10 @@ func (e *ResourceHeldError) Error() string {
 func (e *ResourceHeldError) Is(target error) bool { return target == ErrResourceHeld }
 
 var ErrExecutorCall = errors.New("executor operation failed")
+
+// ErrExecutorCapacity is a launch the executor's extension refused as at its
+// request limit: nothing ran, and the Work is held without spending a retry.
+var ErrExecutorCapacity = errors.New("executor at capacity")
 var ErrSecretUnavailable = errors.New("execution secrets unavailable")
 
 // ErrEnvironmentUnavailable is an extension's run environment layer that
@@ -1721,13 +1726,21 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			return attempt, errors.Join(ErrContainerCapacity, s.holdForCapacity(ctx, attempt.Lease, r))
 		}
 	}
+	var busy *extension.NoCapacityError
+	if err != nil && !recovering && errors.As(err, &busy) && busy.Executor {
+		return attempt, errors.Join(ErrExecutorCapacity, s.holdForCapacity(ctx, attempt.Lease, busy))
+	}
 	if err != nil {
 		failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "executor operation failed"}}
 		commitErr := s.fail(ctx, attempt.Lease, failure, false, err)
 		if errors.Is(err, extension.ErrNotAdoptable) {
 			return attempt, errors.Join(extension.ErrNotAdoptable, commitErr)
 		}
-		return attempt, errors.Join(ErrExecutorCall, commitErr)
+		failed := ErrExecutorCall
+		if cause := ExecutorCause(err); cause != "" {
+			failed = errors.Join(ErrExecutorCall, failureCause(cause))
+		}
+		return attempt, errors.Join(failed, commitErr)
 	}
 	if handle == nil || !persisted.Load() {
 		commitErr := s.fail(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "executor did not durably acknowledge launch"}}, false, nil)
@@ -2006,6 +2019,28 @@ func FailureCause(err error) string {
 	}
 	return cause
 }
+
+// ExecutorCause is the safe account of a failed executor call for a
+// diagnostic: an authored error's code and message, or that the connection
+// closed. An unauthored error's text stays in the extension's log.
+func ExecutorCause(err error) string {
+	if cause := FailureCause(err); cause != "" {
+		return cause
+	}
+	var p *protocol.Error
+	if errors.As(err, &p) {
+		cause := strings.ToValidUTF8(p.Code+": "+p.Message, "")
+		if len(cause) > maxFailureCause {
+			cause = strings.ToValidUTF8(cause[:maxFailureCause], "")
+		}
+		return cause
+	}
+	if errors.Is(err, protocol.ErrTransport) {
+		return "transport closed"
+	}
+	return ""
+}
+
 func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extension.Result, excluded bool, cause error) error {
 	var hint *RetryHint
 	var provider RetryHintProvider

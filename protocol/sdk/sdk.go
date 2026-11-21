@@ -243,7 +243,7 @@ func NewServer(ext *Extension, r io.Reader, w io.Writer) *Server {
 	s.conn = jsonrpc.NewConn(r, w, func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 		<-built
 		return s.handle(ctx, method, raw)
-	}, jsonrpc.Options{OnUnauthored: func(method string, err error) {
+	}, jsonrpc.Options{Lane: protocol.LaneOf, OnUnauthored: func(method string, err error) {
 		// The host sees only "internal"; the reason stays in this
 		// process's log, which the host keeps as the extension's log.
 		fmt.Fprintf(os.Stderr, "open-conduit extension: %s failed: %v\n", method, err)

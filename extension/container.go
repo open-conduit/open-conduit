@@ -76,6 +76,9 @@ var (
 type NoCapacityError struct {
 	Reason  string
 	RetryAt *time.Time
+	// Executor marks a refusal by the executor's extension rather than a
+	// container provider, so the Work's history names the right capacity.
+	Executor bool `json:",omitempty"`
 }
 
 func (e *NoCapacityError) Error() string {

@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { type Readable, Writable } from "node:stream";
 import { Code, ConfigError, OperationError, ProtocolError } from "./errors.ts";
 import { type DeliveryInput, Host, type Put, base64, toBytes } from "./host.ts";
-import { Conn } from "./jsonrpc.ts";
+import { Conn, laneOf } from "./jsonrpc.ts";
 import {
   type Infer,
   type Type,
@@ -932,6 +932,7 @@ export class Server {
       output,
       (method, raw, signal) => this.#handle(method, raw, signal),
       {
+        lane: laneOf,
         onProtocolError: (reason) =>
           process.stderr.write(`open-conduit sdk: ${reason}\n`),
       },

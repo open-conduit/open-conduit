@@ -104,6 +104,10 @@ const (
 	// a request is refused with CodeOverloaded rather than blocking the
 	// reader (which also carries the responses nested callbacks wait for).
 	MaxInflight = 64
+	// MaxControlInflight is the capacity an extension reserves for
+	// LaneControl methods on top of MaxInflight, so the calls that prove an
+	// attempt has ended still get through when it is at capacity.
+	MaxControlInflight = 16
 	// InTransactionDeadlineMillis is the hard deadline for methods the host
 	// calls while holding a coordination transaction (Method.InTransaction).
 	InTransactionDeadlineMillis = 250

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { Code, ProtocolError, TransportError } from "./errors.ts";
-import { Conn } from "./jsonrpc.ts";
+import { Conn, laneOf } from "./jsonrpc.ts";
 
 function peer(maxMessage?: number) {
   const input = new PassThrough();
@@ -74,6 +74,35 @@ test("over the inflight bound a request is refused as overloaded", async () => {
   await new Promise((r) => setImmediate(r));
   assert.equal(lines[0]?.id, 2);
   assert.equal(lines[0]?.error?.data.code, Code.Overloaded);
+  release();
+  conn.close();
+});
+
+test("a held request takes no slot and a control request has its own", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const conn = new Conn(
+    input,
+    output,
+    async (method) => (method === "executor.wait" ? held : {}),
+    { maxInflight: 1, lane: laneOf },
+  );
+  const lines: { id: number; error?: unknown }[] = [];
+  output.on("data", (b: Buffer) =>
+    b
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .forEach((l) => lines.push(JSON.parse(l))),
+  );
+  input.write(
+    '{"jsonrpc":"2.0","id":1,"method":"executor.wait"}\n{"jsonrpc":"2.0","id":2,"method":"executor.wait"}\n{"jsonrpc":"2.0","id":3,"method":"executor.run"}\n{"jsonrpc":"2.0","id":4,"method":"executor.stop"}\n',
+  );
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(lines.map((l) => l.id).sort(), [3, 4]);
+  assert.ok(lines.every((l) => l.error === undefined));
   release();
   conn.close();
 });

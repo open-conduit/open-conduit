@@ -74,6 +74,17 @@ type capacityDue struct {
 	HeldEventID domain.ID `json:"held_event_id"`
 	Execution   domain.ID `json:"execution"`
 	Refusals    int       `json:"refusals"`
+	// Executor says the executor's extension refused rather than a container
+	// provider, so the release names the same capacity as the hold.
+	Executor bool `json:"executor,omitempty"`
+}
+
+// capacityNoun names what a capacity hold is waiting on in the Work's history.
+func capacityNoun(executor bool) string {
+	if executor {
+		return "executor"
+	}
+	return "container"
 }
 
 // CapacityNotice is the data of a core.capacity.* Event.
@@ -227,7 +238,7 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 			if n > 0 && state.Segments[n-1].EndedAt == nil {
 				state.Segments = state.Segments[:n-1]
 			}
-			outcome := domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "held for container capacity"}
+			outcome := domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "held for " + capacityNoun(refusal.Executor) + " capacity"}
 			if state.Result != nil && state.Result.Outcome.Kind == domain.OutcomeWaiting {
 				outcome = state.Result.Outcome
 			}
@@ -275,9 +286,10 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if len(detail) > maxCapacityReason {
 			detail = strings.ToValidUTF8(detail[:maxCapacityReason], "")
 		}
-		reason := "Waiting for container capacity. Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
+		noun := capacityNoun(refusal.Executor)
+		reason := "Waiting for " + noun + " capacity. Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
 		if detail != "" {
-			reason = "Waiting for container capacity: " + detail + ". Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
+			reason = "Waiting for " + noun + " capacity: " + detail + ". Trying again at " + retryAt.Format(time.RFC3339) + "; release the hold to try now."
 		}
 		event, err := capacityEventInTx(tx, now, w, domain.EventCapacityHeld, CapacityNotice{Reason: reason, Execution: x.ID, Refusals: refusals, RetryAt: &retryAt})
 		if err != nil {
@@ -286,7 +298,7 @@ func (s *Scheduler) holdForCapacity(ctx context.Context, ref domain.LeaseRef, re
 		if err = putJSON(tx, holdNamespace, identity(string(w.ID)), Hold{EventID: event, Reason: reason, At: now.UTC(), Kind: HoldKindCapacity}); err != nil {
 			return err
 		}
-		if err = armCapacityTimerInTx(tx, w, x.ID, event, refusals, retryAt); err != nil {
+		if err = armCapacityTimerInTx(tx, w, x.ID, event, refusals, refusal.Executor, retryAt); err != nil {
 			return err
 		}
 		// Advance the revision, as an operator hold does, so views see it.
@@ -329,7 +341,7 @@ func priorRefusalsInTx(tx storage.Tx, x domain.Execution, state AttemptState) (i
 
 // armCapacityTimerInTx arms the Timer that ends the hold event recorded,
 // replacing one left by a hold an operator released early.
-func armCapacityTimerInTx(tx storage.Tx, w domain.Work, execution, event domain.ID, refusals int, at time.Time) error {
+func armCapacityTimerInTx(tx storage.Tx, w domain.Work, execution, event domain.ID, refusals int, executor bool, at time.Time) error {
 	id := domain.ID("capacity/" + string(w.ID))
 	if old, err := tx.Timer(id); err == nil {
 		if err = tx.DeleteTimer(old.ID, old.Revision); err != nil {
@@ -341,7 +353,7 @@ func armCapacityTimerInTx(tx storage.Tx, w domain.Work, execution, event domain.
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return err
 	}
-	data, err := json.Marshal(capacityDue{HeldEventID: event, Execution: execution, Refusals: refusals})
+	data, err := json.Marshal(capacityDue{HeldEventID: event, Execution: execution, Refusals: refusals, Executor: executor})
 	if err != nil {
 		return err
 	}
@@ -382,7 +394,7 @@ func (s *Scheduler) ProcessCapacityDue(ctx context.Context, eventID domain.ID) e
 		if err = tx.Delete(holdNamespace, identity(string(w.ID))); err != nil {
 			return err
 		}
-		if _, err = capacityEventInTx(tx, s.now(), w, domain.EventCapacityReleased, CapacityNotice{Reason: "Trying for container capacity again.", Execution: due.Execution, Refusals: due.Refusals}); err != nil {
+		if _, err = capacityEventInTx(tx, s.now(), w, domain.EventCapacityReleased, CapacityNotice{Reason: "Trying for " + capacityNoun(due.Executor) + " capacity again.", Execution: due.Execution, Refusals: due.Refusals}); err != nil {
 			return err
 		}
 		if err = tx.PutWork(w, w.Revision); err != nil {

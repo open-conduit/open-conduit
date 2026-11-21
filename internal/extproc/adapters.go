@@ -618,7 +618,7 @@ func (e *remoteExecutor) start(ctx context.Context, method string, req extension
 	}
 	gen := e.r.p.Generation()
 	var out protocol.ExecutorRunResult
-	if err := e.r.p.Call(ctx, method, params, &out); err != nil {
+	if err := e.r.p.CallAdmitted(ctx, method, params, &out); err != nil {
 		e.r.s.closeRun(id)
 		t.mu.Lock()
 		perr := t.persistErr
@@ -627,6 +627,10 @@ func (e *remoteExecutor) start(ctx context.Context, method string, req extension
 			// The extension failed because the host refused persistence:
 			// report the host's own error, not its echo.
 			return nil, perr
+		}
+		if protocol.ErrorCode(err) == protocol.CodeOverloaded && method != "executor.recover" {
+			// Refused, so nothing ran: the Work waits without spending a retry.
+			return nil, &extension.NoCapacityError{Reason: "the extension is at its request limit", Executor: true}
 		}
 		return nil, err
 	}
@@ -653,7 +657,7 @@ func (e *remoteExecutor) target(ctx context.Context, method string, declared boo
 		return extension.ErrUnsupported
 	}
 	p.Executor = e.decl.Name
-	return e.r.p.Call(ctx, method, p, out)
+	return e.r.p.CallAdmitted(ctx, method, p, out)
 }
 
 func (e *remoteExecutor) Interrupt(ctx context.Context, id domain.ID) error {
@@ -793,7 +797,7 @@ func (h *remoteHandle) Wait(ctx context.Context) (extension.Result, error) {
 			}
 			params := protocol.ExecutorRunParams{Executor: h.e.decl.Name, RunID: h.run, Request: protocol.FromRunRequest(h.req), State: ptr(protocol.FromPayload(state))}
 			var re protocol.ExecutorRunResult
-			if err := h.e.r.p.Call(ctx, "executor.recover", params, &re); err != nil {
+			if err := h.e.r.p.CallAdmitted(ctx, "executor.recover", params, &re); err != nil {
 				if errors.Is(err, protocol.ErrTransport) {
 					if err := h.e.r.p.AwaitGeneration(ctx, gen); err != nil {
 						return extension.Result{}, err
@@ -821,6 +825,14 @@ func (h *remoteHandle) Wait(ctx context.Context) (extension.Result, error) {
 		case errors.Is(err, protocol.ErrTransport) || protocol.ErrorCode(err) == protocol.CodeShuttingDown:
 			if err := h.e.r.p.AwaitGeneration(ctx, gen); err != nil {
 				return extension.Result{}, err
+			}
+		case protocol.ErrorCode(err) == protocol.CodeOverloaded:
+			// An extension on an older SDK counts waits against its bound.
+			// The attempt is still running, so go on observing it.
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return extension.Result{}, ctx.Err()
 			}
 		case protocol.ErrorCode(err) == protocol.CodeNotFound && h.e.r.p.Generation() != gen:
 			// The handle belonged to a process that has since restarted.
