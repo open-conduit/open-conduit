@@ -539,7 +539,7 @@
               "pattern": "[\\r\\n]"
             }
           },
-          "description": "Secret name to reference (keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config."
+          "description": "Secret name to reference (stored:NAME, keyring:NAME, file:NAME, env:VAR, cmd:COMMAND, or SCHEME:REFERENCE for a scheme an installed package provides, such as a Vault path); values never appear in the config."
         }
       },
       "required": [

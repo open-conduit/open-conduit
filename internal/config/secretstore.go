@@ -26,6 +26,10 @@ const (
 	StoreFile    = "file"
 )
 
+// StoredScheme is the reference form that doesn't depend on which store holds
+// a value: stored:NAME reads what the daemon's secret store holds under NAME.
+const StoredScheme = "stored"
+
 // MaxSecretValue bounds a stored value, as it bounds what a reference may
 // resolve to.
 const MaxSecretValue = maxSecretOutput
@@ -37,6 +41,9 @@ var (
 	ErrSecretValue = errors.New("a secret value is 1 byte to 64 KiB")
 	// ErrKeyringRefused is the platform keyring refusing to store or remove.
 	ErrKeyringRefused = errors.New("the platform keyring refused the secret")
+	// ErrSecretInFile is a request for the keyring to hold a name the secrets
+	// file already holds: a stored: reference would go on reading the file.
+	ErrSecretInFile = errors.New("the secrets file already holds this name")
 	// ErrSecretsFile is a secrets file that cannot be read or written.
 	ErrSecretsFile = errors.New("the secrets file is unreadable or not a JSON object of strings")
 )
@@ -69,7 +76,10 @@ func ValidSecretName(name string) bool { return idPattern.MatchString(name) }
 
 // Set stores value under name and returns the reference that reads it.
 // store is StoreKeyring, StoreFile or "" for the keyring, falling back to
-// the file when no keyring is usable (fellBack reports that it did).
+// the file when no keyring is usable (fellBack reports that it did). A name
+// the secrets file already holds stays there: "" replaces it in the file and
+// StoreKeyring is refused (ErrSecretInFile). That keeps the file's copy
+// current whenever both stores hold a name, which stored: references rely on.
 func (s *SecretStore) Set(ctx context.Context, name, value, store string) (ref string, fellBack bool, err error) {
 	if !ValidSecretName(name) {
 		return "", false, ErrSecretName
@@ -77,16 +87,7 @@ func (s *SecretStore) Set(ctx context.Context, name, value, store string) (ref s
 	if value == "" || len(value) > MaxSecretValue {
 		return "", false, ErrSecretValue
 	}
-	switch store {
-	case "", StoreKeyring:
-		if err := s.keyring().Set(ctx, KeyringService, name, value); err == nil {
-			return StoreKeyring + ":" + name, false, nil
-		} else if store == StoreKeyring {
-			return "", false, ErrKeyringRefused
-		}
-		fellBack = true
-	case StoreFile:
-	default:
+	if store != "" && store != StoreKeyring && store != StoreFile {
 		return "", false, fmt.Errorf("store is %s or %s", StoreKeyring, StoreFile)
 	}
 	s.mu.Lock()
@@ -94,6 +95,18 @@ func (s *SecretStore) Set(ctx context.Context, name, value, store string) (ref s
 	values, err := s.readFile()
 	if err != nil {
 		return "", false, err
+	}
+	_, held := values[name]
+	if held && store == StoreKeyring {
+		return "", false, ErrSecretInFile
+	}
+	if store != StoreFile && !held {
+		if err := s.keyring().Set(ctx, KeyringService, name, value); err == nil {
+			return StoreKeyring + ":" + name, false, nil
+		} else if store == StoreKeyring {
+			return "", false, ErrKeyringRefused
+		}
+		fellBack = true
 	}
 	values[name] = value
 	if err := s.writeFile(values); err != nil {

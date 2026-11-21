@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,7 +44,7 @@ func (s *Server) secretStore() (*config.SecretStore, error) {
 
 // listSecrets is GET /secrets: every name the daemon's secret store holds
 // that it can know of (the secrets file's names, the names stored in the
-// keyring through this API, and every keyring:, file: or provider reference
+// keyring through this API, and every stored:, keyring:, file: or provider reference
 // the active config makes, a provider's store being its scheme), with where
 // it is stored, whether it resolves now and which
 // references in the active config name it. Values are read only to check
@@ -84,10 +85,33 @@ func (s *Server) listSecrets(c *call) (int, any, error) {
 			found[key{scheme, name}] = true
 		}
 	}
+	// A stored: reference counts against the entry it reads, in the order
+	// the resolver reads them. With neither, it has a row of its own, so a
+	// reference to a value not stored yet shows as failing.
+	viaStored := map[key][]string{}
+	for ref, pointers := range refs {
+		name, ok := strings.CutPrefix(ref, config.StoredScheme+":")
+		if !ok {
+			continue
+		}
+		k := key{config.StoredScheme, name}
+		if slices.Contains(names, name) {
+			k.store = config.StoreFile
+		} else if found[key{config.StoreKeyring, name}] {
+			k.store = config.StoreKeyring
+		}
+		found[k] = true
+		viaStored[k] = append(viaStored[k], pointers...)
+	}
 	out := make([]wireSecret, 0, len(found))
 	for k := range found {
 		ref := k.store + ":" + k.name
-		w := wireSecret{Name: k.name, Store: k.store, Reference: ref, ReferencedBy: refs[ref]}
+		referencedBy := append(slices.Clone(refs[ref]), viaStored[k]...)
+		if k.store == config.StoredScheme {
+			referencedBy = slices.Clone(viaStored[k])
+		}
+		slices.Sort(referencedBy)
+		w := wireSecret{Name: k.name, Store: k.store, Reference: ref, ReferencedBy: referencedBy}
 		if w.ReferencedBy == nil {
 			w.ReferencedBy = []string{}
 		}
@@ -182,7 +206,7 @@ func (s *Server) deleteSecret(c *call) (int, any, error) {
 	err = s.o.Config.Holding(func(snapshot *config.Snapshot) error {
 		refs := secretReferences(snapshot)
 		var using []config.Diagnostic
-		for _, ref := range []string{config.StoreKeyring + ":" + name, config.StoreFile + ":" + name} {
+		for _, ref := range []string{config.StoredScheme + ":" + name, config.StoreKeyring + ":" + name, config.StoreFile + ":" + name} {
 			for _, p := range refs[ref] {
 				using = append(using, config.Diagnostic{Path: p, Code: "secret_in_use", Message: "the active config reads " + ref + " here"})
 			}
@@ -239,6 +263,8 @@ func secretStoreError(err error) error {
 		return fail(422, "invalid_secret_value", "a secret value is 1 byte to 64 KiB")
 	case errors.Is(err, config.ErrKeyringRefused):
 		return fail(503, "keyring_refused", "the platform keyring refused the request; store the secret in the file instead (store: file)")
+	case errors.Is(err, config.ErrSecretInFile):
+		return fail(409, "secret_in_file", "the secrets file already holds this name; store it there (omit store, or store: file), or remove it first")
 	case errors.Is(err, config.ErrSecretsFile):
 		return fail(503, "secrets_file_unavailable", "the secrets file is unreadable, not owner-only or not a JSON object of strings")
 	}

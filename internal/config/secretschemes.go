@@ -17,7 +17,7 @@ func (v *validator) secretSchemes() {
 				continue
 			}
 			if _, ok := v.reg.SecretSchemes[scheme]; !ok {
-				v.fail(ptr(path, name), "unknown_registration", "no installed or bundled package provides this secret reference's scheme; install one, or use keyring:, file:, env: or cmd:"+registeredNames(v.reg.SecretSchemes, scheme))
+				v.fail(ptr(path, name), "unknown_registration", "no installed or bundled package provides this secret reference's scheme; install one, or use stored:, keyring:, file:, env: or cmd:"+registeredNames(v.reg.SecretSchemes, scheme))
 			}
 		}
 	}

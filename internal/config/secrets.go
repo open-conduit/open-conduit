@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,31 +126,19 @@ func (r *Resolver) ResolveNamed(ctx context.Context, name, ref string) (string, 
 		if v == "" {
 			return "", &secretError{code: "env_missing"}
 		}
+	case StoredScheme:
+		var code string
+		if v, code = r.stored(ctx, rest); code != "" {
+			return "", &secretError{code: code}
+		}
 	case "file":
-		data, err := ReadFile(r.SecretsFile)
-		if err != nil || r.SecretsFile == "" {
-			return "", &secretError{code: "file_unavailable"}
+		var code string
+		if v, code = r.fromFile(rest); code != "" {
+			return "", &secretError{code: code}
 		}
-		root, diags := decode(data)
-		if root == nil || len(diags) > 0 || root.kind != kObject {
-			return "", &secretError{code: "file_invalid"}
-		}
-		n := root.field(rest)
-		if n == nil {
-			return "", &secretError{code: "file_missing"}
-		}
-		if n.kind != kString {
-			return "", &secretError{code: "file_invalid"}
-		}
-		v = n.str
 	case "keyring":
 		var err error
-		if r.Keyring != nil {
-			v, err = r.Keyring.Get(KeyringService, rest)
-		} else {
-			v, err = r.platformKeyring(ctx, rest)
-		}
-		if err != nil {
+		if v, err = r.fromKeyring(ctx, rest); err != nil {
 			return "", &secretError{code: "keyring_unavailable"}
 		}
 	case "cmd":
@@ -165,6 +154,57 @@ func (r *Resolver) ResolveNamed(ctx context.Context, name, ref string) (string, 
 		return "", &secretError{code: "empty"}
 	}
 	return v, nil
+}
+
+// stored reads the value the daemon's secret store holds under name: the
+// secrets file's if it has the name, else the keyring's. SecretStore keeps
+// the file's copy current whenever both hold a name, so the order can't
+// serve a stale value. A secrets file that exists but can't be read fails
+// rather than falling through to a keyring value it might replace.
+func (r *Resolver) stored(ctx context.Context, name string) (string, string) {
+	if r.SecretsFile != "" {
+		_, err := os.Lstat(r.SecretsFile)
+		switch {
+		case err == nil:
+			if v, code := r.fromFile(name); code != "file_missing" {
+				return v, code
+			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", "file_unavailable"
+		}
+	}
+	v, err := r.fromKeyring(ctx, name)
+	if err != nil {
+		return "", "stored_missing"
+	}
+	return v, ""
+}
+
+// fromFile is the value the secrets file holds under name, or a safe code.
+func (r *Resolver) fromFile(name string) (string, string) {
+	data, err := ReadFile(r.SecretsFile)
+	if err != nil || r.SecretsFile == "" {
+		return "", "file_unavailable"
+	}
+	root, diags := decode(data)
+	if root == nil || len(diags) > 0 || root.kind != kObject {
+		return "", "file_invalid"
+	}
+	n := root.field(name)
+	if n == nil {
+		return "", "file_missing"
+	}
+	if n.kind != kString {
+		return "", "file_invalid"
+	}
+	return n.str, ""
+}
+
+func (r *Resolver) fromKeyring(ctx context.Context, name string) (string, error) {
+	if r.Keyring != nil {
+		return r.Keyring.Get(KeyringService, name)
+	}
+	return r.platformKeyring(ctx, name)
 }
 
 // provided asks the package serving scheme for a provider reference's value,

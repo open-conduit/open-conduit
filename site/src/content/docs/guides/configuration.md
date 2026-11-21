@@ -75,6 +75,7 @@ The config never holds a credential, only a reference to one:
 | --- | --- |
 | `env:NAME` | an environment variable |
 | `file:NAME` | a file |
+| `stored:NAME` | the value the daemon's secret store holds under this name, in whichever store that is. It can be set before the value exists, and fails until then |
 | `keyring:NAME` | the OS keyring |
 | `cmd:COMMAND` | a command's output |
 

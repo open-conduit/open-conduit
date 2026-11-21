@@ -38,7 +38,7 @@ func TestSecretStoreFile(t *testing.T) {
 	if v, err := r.Resolve(ctx, ref); err != nil || v != "two" {
 		t.Fatalf("resolve: %q %v", v, err)
 	}
-	if _, _, err = s.Set(ctx, "api", "x", StoreKeyring); !errors.Is(err, ErrKeyringRefused) {
+	if _, _, err = s.Set(ctx, "fresh", "x", StoreKeyring); !errors.Is(err, ErrKeyringRefused) {
 		t.Fatalf("keyring asked for: %v", err)
 	}
 	for _, c := range []struct{ name, value string }{{"Bad", "v"}, {"ok", ""}, {"ok", string(make([]byte, MaxSecretValue+1))}} {
@@ -60,5 +60,76 @@ func TestSecretStoreFile(t *testing.T) {
 	}
 	if _, _, err = s.Set(ctx, "api", "v", StoreFile); !errors.Is(err, ErrSecretsFile) {
 		t.Fatalf("a file others can read: %v", err)
+	}
+}
+
+// recordingKeyring is a keyring that stores values and reads them back.
+type recordingKeyring map[string]string
+
+func (k recordingKeyring) Set(_ context.Context, service, name, value string) error {
+	k[service+"/"+name] = value
+	return nil
+}
+func (k recordingKeyring) Remove(_ context.Context, service, name string) error {
+	delete(k, service+"/"+name)
+	return nil
+}
+func (k recordingKeyring) Get(service, name string) (string, error) {
+	if v, ok := k[service+"/"+name]; ok {
+		return v, nil
+	}
+	return "", errors.New("not found")
+}
+
+// A stored: reference reads whichever store holds the name, and the store
+// keeps the copy it reads current, so a stale keyring value is never served.
+func TestStoredReference(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "secrets.json")
+	k := recordingKeyring{}
+	s := &SecretStore{File: path, Keyring: k}
+	r := &Resolver{SecretsFile: path, Keyring: k}
+	const ref = "stored:api"
+	if !ValidSecretRef(ref) || ProviderScheme(ref) != "" || ValidSecretRef("stored:Bad Name") {
+		t.Fatal("stored: is a built-in form taking a secret name")
+	}
+	if _, err := r.Resolve(ctx, ref); SecretCode(err) != "stored_missing" {
+		t.Fatalf("nothing stored: %v", err)
+	}
+	if got, _, err := s.Set(ctx, "api", "in-keyring", ""); err != nil || got != "keyring:api" {
+		t.Fatalf("keyring: %s %v", got, err)
+	}
+	if v, err := r.Resolve(ctx, ref); err != nil || v != "in-keyring" {
+		t.Fatalf("from the keyring: %q %v", v, err)
+	}
+	// The value moves to the file, as it does when the keyring goes away.
+	// The keyring's copy is now stale and must not be served.
+	if _, _, err := s.Set(ctx, "api", "in-file", StoreFile); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := r.Resolve(ctx, ref); err != nil || v != "in-file" {
+		t.Fatalf("the file wins: %q %v", v, err)
+	}
+	// A later default write replaces the copy that is read.
+	if got, fellBack, err := s.Set(ctx, "api", "newer", ""); err != nil || got != "file:api" || fellBack {
+		t.Fatalf("default write of a name in the file: %s %v %v", got, fellBack, err)
+	}
+	if v, _ := r.Resolve(ctx, ref); v != "newer" {
+		t.Fatalf("after the default write: %q", v)
+	}
+	if k["open-conduit/api"] != "in-keyring" {
+		t.Fatalf("the keyring was written: %q", k["open-conduit/api"])
+	}
+	// Writing the keyring alone would leave stored: reading the old value.
+	if _, _, err := s.Set(ctx, "api", "shadowed", StoreKeyring); !errors.Is(err, ErrSecretInFile) {
+		t.Fatalf("keyring write shadowed by the file: %v", err)
+	}
+	// A file that can't be read fails closed, rather than serving the
+	// keyring's copy of a value the file may have replaced.
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := r.Resolve(ctx, ref); err == nil || SecretCode(err) != "file_invalid" {
+		t.Fatalf("unreadable file: %q %v", v, err)
 	}
 }

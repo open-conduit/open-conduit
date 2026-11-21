@@ -115,3 +115,17 @@ func TestPortabilityNamesEveryItem(t *testing.T) {
 		t.Fatal("reported portable")
 	}
 }
+
+// A stored: reference travels only when the secrets file holds its value.
+func TestMachineConfigStoredReference(t *testing.T) {
+	doc := []byte(`{"connections":[{"secret_refs":{"a":"stored:in-file","b":"stored:in-keyring","c":"file:plain","d":"keyring:bound"}}]}`)
+	secrets, _ := machineConfig(doc, []string{"in-file"})
+	var got []string
+	for _, s := range secrets {
+		got = append(got, s.Path+" "+s.Scheme)
+	}
+	want := []string{"/connections/0/secret_refs/b stored", "/connections/0/secret_refs/d keyring"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

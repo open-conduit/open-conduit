@@ -13,7 +13,7 @@ import (
 const Playbook = "work-tracker-issue"
 
 // RefPattern is a secret reference (never a secret value).
-var RefPattern = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
+var RefPattern = regexp.MustCompile(`^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
 
 // IDPattern is a config identifier (scope, connection).
 var IDPattern = idPattern

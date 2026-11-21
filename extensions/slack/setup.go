@@ -46,7 +46,7 @@ const ThreadWaitSeconds = 7 * 24 * 60 * 60
 const ThreadPlaybook = "slack-thread"
 
 var (
-	refPattern     = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
+	refPattern     = regexp.MustCompile(`^(stored:[a-z][a-z0-9_-]{0,62}|keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
 	channelPattern = regexp.MustCompile(`^[CG][A-Z0-9]{2,31}$`)
 )
 
@@ -166,7 +166,7 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	case (f.botRef == "") != (f.appRef == ""):
 		return extension.SetupResult{}, setupUsage("give both --bot-token and " + second + " references, or neither (to be prompted)")
 	case f.botRef != "" && (!refPattern.MatchString(f.botRef) || !refPattern.MatchString(f.appRef)):
-		return extension.SetupResult{}, setupUsage("--bot-token and " + second + " take references (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never tokens")
+		return extension.SetupResult{}, setupUsage("--bot-token and " + second + " take references (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never tokens")
 	case f.botRef != "" && (!slackIDPattern.MatchString(f.team) || f.channel == ""):
 		return extension.SetupResult{}, setupUsage("with token references, also give --team T… and --channel C… (nothing can be verified without the tokens)")
 	case strings.TrimSpace(f.name) == "" || len(f.name) > 35:

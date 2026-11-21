@@ -82,14 +82,14 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 		_ = host.OpenURL("https://linear.app/settings/account/security")
 		value, err := host.Prompt("Linear API key", extension.Prompt{Secret: true})
 		if err != nil || strings.TrimSpace(value) == "" {
-			return extension.SetupResult{}, tracker.SetupUsage("init linear needs --token REF (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND) or an interactive terminal")
+			return extension.SetupResult{}, tracker.SetupUsage("init linear needs --token REF (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND) or an interactive terminal")
 		}
 		if *token, err = host.StoreSecret(*connection+"-token", strings.TrimSpace(value)); err != nil {
 			return extension.SetupResult{}, err
 		}
 	}
 	if !tracker.RefPattern.MatchString(*token) {
-		return extension.SetupResult{}, tracker.SetupUsage("--token takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a key")
+		return extension.SetupResult{}, tracker.SetupUsage("--token takes a reference (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a key")
 	}
 	dir := *checkout
 	if dir != "" && !strings.HasPrefix(dir, "/") {
@@ -115,7 +115,7 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 			return extension.SetupResult{}, tracker.SetupUsage("--bitbucket takes workspace/slug")
 		}
 		if *bbToken == "" || !tracker.RefPattern.MatchString(*bbToken) {
-			return extension.SetupResult{}, tracker.SetupUsage("--bitbucket needs --bitbucket-token REF (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND)")
+			return extension.SetupResult{}, tracker.SetupUsage("--bitbucket needs --bitbucket-token REF (stored:NAME, keyring:NAME, file:NAME, env:VAR or cmd:COMMAND)")
 		}
 		if *bbConn != "" && !tracker.IDPattern.MatchString(*bbConn) {
 			return extension.SetupResult{}, tracker.SetupUsage("--bitbucket-connection must match [a-z][a-z0-9_-]*")
