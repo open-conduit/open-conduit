@@ -45,7 +45,9 @@ type BackupDestination interface {
 	Put(ctx context.Context, t BackupTarget, bundle string, f BackupFile, r io.Reader) error
 	// List names the complete bundles: those holding BackupManifest.
 	List(ctx context.Context, t BackupTarget) ([]string, error)
-	// Files lists a bundle's stored files.
+	// Files lists a bundle's stored files. A bundle the destination doesn't
+	// hold has none: that is an empty list, not an error, because the host
+	// asks before uploading.
 	Files(ctx context.Context, t BackupTarget, bundle string) ([]BackupFile, error)
 	// Read returns up to length bytes of a file from offset, and whether
 	// they reach its end.

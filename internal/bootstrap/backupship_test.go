@@ -30,6 +30,7 @@ type memoryDestination struct {
 	reads   []string
 	failPut func(path string) error
 	extra   []extension.BackupFile
+	lists   int
 }
 
 func newMemoryDestination() *memoryDestination {
@@ -56,6 +57,7 @@ func (m *memoryDestination) Put(_ context.Context, _ extension.BackupTarget, bun
 func (m *memoryDestination) List(context.Context, extension.BackupTarget) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.lists++
 	var out []string
 	for k := range m.files {
 		if b, ok := strings.CutSuffix(k, "/"+extension.BackupManifest); ok {
@@ -92,6 +94,13 @@ func (m *memoryDestination) Read(_ context.Context, _ extension.BackupTarget, bu
 	return bytes.Clone(data[offset:end]), end == int64(len(data)), nil
 }
 
+// shipOwed runs the shipment the scheduler would start now, if one is due.
+func shipOwed(ctx context.Context, d *daemon, now time.Time) {
+	if name, ok := d.claimShipment(now); ok {
+		d.shipBundle(ctx, name)
+	}
+}
+
 func shipTo(d *daemon, m *memoryDestination) {
 	d.reportedAt = map[string]time.Time{}
 	d.backups.targets = func() []shipTarget {
@@ -110,6 +119,7 @@ func TestScheduledBundleIsShippedManifestLast(t *testing.T) {
 	if err := d.backupNow(ctx, start); err != nil {
 		t.Fatal(err)
 	}
+	shipOwed(ctx, d, start)
 	name := "conduit-20261102T090000Z"
 	if got, _ := m.List(ctx, extension.BackupTarget{}); !slices.Equal(got, []string{name}) {
 		t.Fatalf("listed %v", got)
@@ -139,6 +149,7 @@ func TestFailedShipmentIsReportedAndRetried(t *testing.T) {
 	if err := d.backupNow(ctx, start); err != nil {
 		t.Fatalf("a failed shipment failed the backup: %v", err)
 	}
+	shipOwed(ctx, d, start)
 	if got := d.reportedCode("backup_destination", "offsite"); got != "ship_failed" {
 		t.Fatalf("diagnostic = %q", got)
 	}
@@ -152,7 +163,7 @@ func TestFailedShipmentIsReportedAndRetried(t *testing.T) {
 		t.Fatalf("retry at %v, want %v", d.backups.shipDue, want)
 	}
 	m.failPut = nil
-	d.retryShips(ctx, start.Add(backupRetry))
+	shipOwed(ctx, d, start.Add(backupRetry))
 	if got, _ := m.List(ctx, extension.BackupTarget{}); len(got) != 1 {
 		t.Fatalf("after the retry: %v", got)
 	}
@@ -160,10 +171,96 @@ func TestFailedShipmentIsReportedAndRetried(t *testing.T) {
 		t.Fatalf("still reported after landing: %q, due %v", got, d.backups.shipDue)
 	}
 	// A bundle the destination holds isn't uploaded again.
-	puts := len(m.order)
-	d.retryShips(ctx, start.Add(2*backupRetry))
+	puts, lists := len(m.order), m.lists
+	d.backups.shipDue = start
+	shipOwed(ctx, d, start.Add(2*backupRetry))
 	if len(m.order) != puts {
 		t.Fatalf("a held bundle was uploaded again: %d puts, was %d", len(m.order), puts)
+	}
+	if m.lists != lists {
+		t.Fatal("checking one bundle listed the whole destination")
+	}
+	// A held file at the wrong size is not held, so it is put again.
+	m.mu.Lock()
+	m.files["conduit-20261102T090000Z/"+extension.BackupManifest] = []byte("x")
+	m.mu.Unlock()
+	d.backups.shipDue = start
+	shipOwed(ctx, d, start.Add(3*backupRetry))
+	if len(m.order) == puts {
+		t.Fatal("a bundle with a wrong-sized manifest counted as held")
+	}
+}
+
+// hungDestination never answers until its context ends.
+type hungDestination struct {
+	*memoryDestination
+	entered chan struct{}
+}
+
+func (h hungDestination) Files(ctx context.Context, _ extension.BackupTarget, _ string) ([]extension.BackupFile, error) {
+	h.entered <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A destination that never answers holds up neither publishing nor pruning,
+// and the bundle it is shipping survives the pruning until it lets go.
+func TestHungDestinationDoesNotStopBackups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	d := backupDaemon(t, start)
+	d.o.BackupsKept = 1
+	h := hungDestination{newMemoryDestination(), make(chan struct{}, 1)}
+	d.reportedAt = map[string]time.Time{}
+	d.backups.targets = func() []shipTarget {
+		return []shipTarget{{cfg: config.BackupDestination{Name: "offsite", Type: "memory"}, d: h}}
+	}
+	if err := d.backupNow(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := d.claimShipment(start)
+	if !ok {
+		t.Fatal("no shipment owed after a backup")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.shipBundle(ctx, first)
+	}()
+	<-h.entered
+	for i := 1; i <= 2; i++ {
+		if err := d.backupNow(ctx, start.Add(time.Duration(i)*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{first, "conduit-20261102T110000Z"}
+	if got := bundleNames(t, d.o.BackupDir); !slices.Equal(got, want) {
+		t.Fatalf("bundles %v, want %v", got, want)
+	}
+	cancel()
+	<-done
+	if d.backups.shipping != "" {
+		t.Fatalf("claim kept after the shipment ended: %q", d.backups.shipping)
+	}
+}
+
+// A call that goes quiet is given up on, and one that keeps making progress
+// isn't, however long it takes in total.
+func TestWithinStall(t *testing.T) {
+	err := withinStall(context.Background(), time.Millisecond, func(ctx context.Context, _ func()) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if !errors.Is(err, errShipStalled) {
+		t.Fatalf("stalled call: %v", err)
+	}
+	err = withinStall(context.Background(), time.Hour, func(_ context.Context, progress func()) error {
+		progress()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("call making progress: %v", err)
 	}
 }
 
@@ -182,7 +279,7 @@ func shippedBundle(t *testing.T) (*memoryDestination, string, string) {
 		t.Fatal(err)
 	}
 	m := newMemoryDestination()
-	if _, _, err := putBundle(ctx, shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}, source, "conduit-1"); err != nil {
+	if _, _, err := putBundle(ctx, shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}, source, "conduit-1", shipStallLimit); err != nil {
 		t.Fatal(err)
 	}
 	return m, public, "conduit-1"

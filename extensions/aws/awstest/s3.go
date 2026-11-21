@@ -165,5 +165,7 @@ func (s *Server) s3List(w http.ResponseWriter, bucket, prefix, delimiter, token 
 		b.WriteString("<IsTruncated>false</IsTruncated>")
 	}
 	b.WriteString("</ListBucketResult>")
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write([]byte(b.String()))
 }

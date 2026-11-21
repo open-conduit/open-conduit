@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -24,9 +25,45 @@ import (
 
 // Shipping bundles off the host. After a scheduled bundle is published the
 // host puts its files to every configured destination, the manifest last,
-// so a bundle cut short is never listed as complete. The outcome is a
-// diagnostic per destination and a telemetry event. What a destination
+// so a bundle cut short is never listed as complete. A shipment runs apart
+// from the backup, and a destination that stops making progress is given up
+// on, so neither a slow nor a hung one holds up the local bundle. The outcome
+// is a diagnostic per destination and a telemetry event. What a destination
 // keeps, for how long and how it encrypts it are its owner's policy.
+
+// shipStallLimit is how long a destination may go without making progress
+// before the shipment gives up on it. It bounds silence, not the transfer, so
+// a large bundle on a slow link still lands. It sits above the 10 minutes the
+// bundled S3 type allows one request.
+const shipStallLimit = 15 * time.Minute
+
+var errShipStalled = errors.New("the destination stopped responding")
+
+// withinStall runs one destination call, cancelling it if progress isn't
+// called for limit.
+func withinStall(ctx context.Context, limit time.Duration, call func(ctx context.Context, progress func()) error) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timer := time.AfterFunc(limit, func() { cancel(errShipStalled) })
+	defer timer.Stop()
+	err := call(ctx, func() { timer.Reset(limit) })
+	if err != nil && errors.Is(context.Cause(ctx), errShipStalled) {
+		return errShipStalled
+	}
+	return err
+}
+
+// progressReader reports each read of a file being uploaded.
+type progressReader struct {
+	r        io.Reader
+	progress func()
+}
+
+func (p progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.progress()
+	return n, err
+}
 
 // shipTarget is one destination the host can reach, or the reason it can't.
 type shipTarget struct {
@@ -197,9 +234,35 @@ func (e *shipFailure) Error() string {
 }
 func (e *shipFailure) Unwrap() error { return e.err }
 
+// firstMissing is the index of the first file stored doesn't hold at its
+// size, or -1 when it holds them all.
+func firstMissing(files, stored []extension.BackupFile) int {
+	sizes := make(map[string]int64, len(stored))
+	for _, f := range stored {
+		sizes[f.Path] = f.Size
+	}
+	for i, f := range files {
+		if got, ok := sizes[f.Path]; !ok || got != f.Size {
+			return i
+		}
+	}
+	return -1
+}
+
+// storedFiles asks a destination what it holds of one bundle.
+func storedFiles(ctx context.Context, t shipTarget, name string, limit time.Duration) ([]extension.BackupFile, error) {
+	var stored []extension.BackupFile
+	err := withinStall(ctx, limit, func(ctx context.Context, _ func()) error {
+		var err error
+		stored, err = t.d.Files(ctx, destinationTarget(t.cfg), name)
+		return err
+	})
+	return stored, err
+}
+
 // putBundle stores a bundle and checks that the destination holds every
 // file at its size before calling it shipped.
-func putBundle(ctx context.Context, t shipTarget, dir, name string) (int, int64, error) {
+func putBundle(ctx context.Context, t shipTarget, dir, name string, limit time.Duration) (int, int64, error) {
 	files, err := bundleFiles(dir)
 	if err != nil {
 		return 0, 0, err
@@ -211,33 +274,72 @@ func putBundle(ctx context.Context, t shipTarget, dir, name string) (int, int64,
 		if err != nil {
 			return 0, 0, &shipFailure{i, len(files), err}
 		}
-		err = t.d.Put(ctx, target, name, f, r)
+		err = withinStall(ctx, limit, func(ctx context.Context, progress func()) error {
+			return t.d.Put(ctx, target, name, f, progressReader{r, progress})
+		})
 		_ = r.Close()
 		if err != nil {
 			return 0, 0, &shipFailure{i, len(files), fmt.Errorf("%s: %w", f.Path, err)}
 		}
 		total += f.Size
 	}
-	stored, err := t.d.Files(ctx, target, name)
+	stored, err := storedFiles(ctx, t, name, limit)
 	if err != nil {
 		return 0, 0, &shipFailure{len(files), len(files), fmt.Errorf("checking what was stored: %w", err)}
 	}
-	sizes := make(map[string]int64, len(stored))
-	for _, f := range stored {
-		sizes[f.Path] = f.Size
-	}
-	for i, f := range files {
-		if got, ok := sizes[f.Path]; !ok || got != f.Size {
-			return 0, 0, &shipFailure{i, len(files), fmt.Errorf("%s is missing or the wrong size at the destination", f.Path)}
-		}
+	if i := firstMissing(files, stored); i >= 0 {
+		return 0, 0, &shipFailure{i, len(files), fmt.Errorf("%s is missing or the wrong size at the destination", files[i].Path)}
 	}
 	return len(files), total, nil
 }
 
-// shipBundle ships a bundle to every destination. With skipHeld, one that
-// already lists it is left alone. A failure is tried again after backupRetry
-// (retryShips), with whatever bundle is then the newest.
-func (d *daemon) shipBundle(ctx context.Context, name string, now time.Time, skipHeld bool) {
+// holdsBundle asks whether a destination already has this bundle whole. It
+// costs one question about one bundle, however many the destination keeps.
+func holdsBundle(ctx context.Context, t shipTarget, dir, name string, limit time.Duration) (bool, error) {
+	files, err := bundleFiles(dir)
+	if err != nil {
+		return false, err
+	}
+	stored, err := storedFiles(ctx, t, name, limit)
+	if err != nil {
+		return false, err
+	}
+	return firstMissing(files, stored) < 0, nil
+}
+
+// claimShipment takes the newest bundle for shipping when a shipment is due
+// and none is in flight. The claim keeps pruning off it.
+func (d *daemon) claimShipment(now time.Time) (string, bool) {
+	b := &d.backups
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.shipping != "" || b.shipDue.IsZero() || now.Before(b.shipDue) {
+		return "", false
+	}
+	names, _, err := scheduledBundles(d.o.BackupDir)
+	if err != nil || len(names) == 0 {
+		b.shipDue = time.Time{}
+		return "", false
+	}
+	b.shipping = names[len(names)-1]
+	return b.shipping, true
+}
+
+// shipBundle ships a claimed bundle to every destination that doesn't
+// already hold it, and releases the claim. A failure is tried again after
+// backupRetry, with whatever bundle is then the newest; a bundle published
+// meanwhile is owed at once.
+func (d *daemon) shipBundle(ctx context.Context, name string) {
+	b := &d.backups
+	defer func() {
+		b.mu.Lock()
+		b.shipping = ""
+		b.mu.Unlock()
+	}()
+	limit := b.shipStall
+	if limit <= 0 {
+		limit = shipStallLimit
+	}
 	dir := filepath.Join(d.o.BackupDir, name)
 	failed := false
 	for _, t := range d.shipTargets() {
@@ -246,13 +348,11 @@ func (d *daemon) shipBundle(ctx context.Context, name string, now time.Time, ski
 		var files int
 		var size int64
 		held := false
-		if err == nil && skipHeld {
-			var have []string
-			have, err = t.d.List(ctx, destinationTarget(t.cfg))
-			held = err == nil && slices.Contains(have, name)
+		if err == nil {
+			held, err = holdsBundle(ctx, t, dir, name, limit)
 		}
 		if err == nil && !held {
-			files, size, err = putBundle(ctx, t, dir, name)
+			files, size, err = putBundle(ctx, t, dir, name, limit)
 		}
 		if ctx.Err() != nil {
 			return
@@ -280,27 +380,18 @@ func (d *daemon) shipBundle(ctx context.Context, name string, now time.Time, ski
 			d.capture(ctx, "backup.shipped", map[string]any{"destination": t.cfg.Name, "type": t.cfg.Type, "bundle": name, "outcome": "stored", "files": files, "bytes": size})
 		}
 	}
-	b := &d.backups
+	now := d.now()
+	names, _, _ := scheduledBundles(d.o.BackupDir)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.shipDue = time.Time{}
-	if failed {
+	switch {
+	case failed:
 		b.shipDue = now.Add(min(backupRetry, d.o.BackupInterval))
-	}
-}
-
-// retryShips ships the newest scheduled bundle to any destination that
-// doesn't list it.
-func (d *daemon) retryShips(ctx context.Context, now time.Time) {
-	names, _, err := scheduledBundles(d.o.BackupDir)
-	if err != nil || len(names) == 0 {
-		b := &d.backups
-		b.mu.Lock()
+	case len(names) > 0 && names[len(names)-1] != name:
+		b.shipDue = now
+	default:
 		b.shipDue = time.Time{}
-		b.mu.Unlock()
-		return
 	}
-	d.shipBundle(ctx, names[len(names)-1], now, true)
 }
 
 // offlineDestination starts the package that serves a named destination in
