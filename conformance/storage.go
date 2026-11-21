@@ -100,6 +100,7 @@ func StorageCases() []StorageCase {
 		{"live_reads_follow_state", liveReads},
 		{"work_events_follow_naming_and_routing", workEvents},
 		{"event_scope_recorded_once_and_indexed", scopeEvents},
+		{"type_events_follow_type_scope_cursor_and_limit", typeEvents},
 		{"unrouted_input_follows_work_attempts_and_keys", unroutedInput},
 		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
@@ -1808,6 +1809,68 @@ func unroutedInput(s storage.Store) error {
 			}
 			if joined(got) != q.want {
 				return fmt.Errorf("unrouted of type %s %q, want %q", q.label, joined(got), q.want)
+			}
+		}
+		return nil
+	})
+}
+
+// typeEvents: TypeEvents returns exactly the Events of one type, in
+// acceptance order after the cursor and within the limit, narrowed to the
+// scopes asked for when there are any ("" for those not recorded yet).
+func typeEvents(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "other", Name: "other"}, 0); err != nil {
+			return err
+		}
+		seq := map[domain.ID]uint64{}
+		for _, r := range []struct {
+			id, scope domain.ID
+			typ       string
+		}{{"u1", "scope", "test.usage.v1"}, {"x1", "scope", "test.changed.v1"}, {"u2", "other", "test.usage.v1"}, {"u3", "", "test.usage.v1"}, {"u4", "scope", "test.usage.v1"}} {
+			e := event(r.id, c.Now())
+			e.Type = r.typ
+			a, _, err := tx.AcceptEvent(e)
+			if err != nil {
+				return err
+			}
+			seq[r.id] = a.Sequence
+			if r.scope != "" {
+				if err = tx.SetEventScope(r.id, r.scope); err != nil {
+					return err
+				}
+			}
+		}
+		for _, q := range []struct {
+			typ         string
+			scopes      []domain.ID
+			after       uint64
+			limit       int
+			want, label string
+		}{
+			{"test.usage.v1", nil, 0, 0, "u1 u2 u3 u4", "of a type"},
+			{"test.usage.v1", nil, seq["u1"], 0, "u2 u3 u4", "after a cursor"},
+			{"test.usage.v1", nil, seq["u1"], 2, "u2 u3", "after a cursor, limited"},
+			{"test.usage.v1", []domain.ID{"scope"}, 0, 0, "u1 u4", "in one scope"},
+			{"test.usage.v1", []domain.ID{"scope", ""}, 0, 0, "u1 u3 u4", "in a scope and the unrecorded"},
+			{"test.usage.v1", []domain.ID{"scope", "scope"}, seq["u1"], 1, "u4", "in a scope named twice, limited"},
+			{"test.usage.v1", []domain.ID{}, 0, 0, "", "in no scope"},
+			{"test.missing.v1", nil, 0, 0, "", "of a missing type"},
+		} {
+			got, err := tx.TypeEvents(q.typ, q.scopes, q.after, q.limit)
+			if err != nil {
+				return err
+			}
+			var parts []string
+			for _, a := range got {
+				parts = append(parts, string(a.Event.ID))
+			}
+			if joined := strings.Join(parts, " "); joined != q.want {
+				return fmt.Errorf("type events %s: %q, want %q", q.label, joined, q.want)
 			}
 		}
 		return nil

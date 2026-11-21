@@ -183,6 +183,41 @@ func (b brokenScopeEventsTx) ScopeEvents(scopes []domain.ID, after uint64, limit
 	return out, err
 }
 
+// brokenTypeEvents weakens one property of TypeEvents: it returns every type
+// ("type"), rereads from the start ("cursor"), or lets "" match nothing, so
+// Events not yet backfilled go missing ("unrecorded").
+type brokenTypeEvents struct {
+	storage.Store
+	weaken string
+}
+type brokenTypeEventsTx struct {
+	storage.Tx
+	weaken string
+}
+
+func (b brokenTypeEvents) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenTypeEventsTx{tx, b.weaken}) })
+}
+func (b brokenTypeEventsTx) TypeEvents(eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if b.weaken == "cursor" {
+		after = 0
+	}
+	all, err := b.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if b.weaken != "type" && a.Event.Type != eventType {
+			continue
+		}
+		if scopes != nil && (!slices.Contains(scopes, a.ScopeID) || b.weaken == "unrecorded" && a.ScopeID == "") {
+			continue
+		}
+		if limit <= 0 || len(out) < limit {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
 // anyAttemptExecutor selects Work by the executor of any of its attempts,
 // not the latest's, as a store indexing attempts without asking which is
 // latest might.
@@ -591,6 +626,9 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"work_changes_stamped_in_order_across_clock_step_back", "not listed as changed", func() storage.Store { return &clockStamped{Store: reference.New(), stamps: map[domain.ID]time.Time{}} }},
 		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
 		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
+		{"type_events_follow_type_scope_cursor_and_limit", "type events of a type", func() storage.Store { return brokenTypeEvents{reference.New(), "type"} }},
+		{"type_events_follow_type_scope_cursor_and_limit", "type events after a cursor", func() storage.Store { return brokenTypeEvents{reference.New(), "cursor"} }},
+		{"type_events_follow_type_scope_cursor_and_limit", "type events in a scope and the unrecorded", func() storage.Store { return brokenTypeEvents{reference.New(), "unrecorded"} }},
 		{"unrouted_input_follows_work_attempts_and_keys", "unrouted input of a Work", func() storage.Store { return brokenUnroutedInput{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "latest attempt is claude's", func() storage.Store { return anyAttemptExecutor{reference.New()} }},
 		{"work_queries_select_order_page_and_count", "every Work by creation", func() storage.Store { return textTimes{reference.New()} }},

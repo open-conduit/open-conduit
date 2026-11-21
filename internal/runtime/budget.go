@@ -145,9 +145,13 @@ func stageUsageInTx(tx storage.Tx, state *AttemptState) error {
 		return nil
 	}
 	charged := map[string]float64{}
-	if stored, err := attemptState(tx, state.ExecutionID); err == nil {
-		maps.Copy(charged, stored.Charged)
-	} else if !errors.Is(err, storage.ErrNotFound) {
+	stored, err := attemptState(tx, state.ExecutionID)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	found := err == nil
+	maps.Copy(charged, stored.Charged)
+	if err = recordUsageInTx(tx, state, stored, found); err != nil {
 		return err
 	}
 	delta := map[string]float64{}
@@ -394,7 +398,8 @@ type BudgetUsage struct {
 // no turn is starting. The daemon runs it with its other passes.
 func (s *Scheduler) SettleBudgets(ctx context.Context) error {
 	if len(s.options.Budgets) == 0 {
-		// Without budgets nothing is charged; staged usage is dropped.
+		// Without budgets nothing is charged and staged usage is dropped; the
+		// usage records (recordUsageInTx) are written either way.
 		return s.transact(ctx, nil, func(tx storage.Tx) error {
 			rows, err := tx.List(budgetPendingNamespace, "")
 			for _, row := range rows {

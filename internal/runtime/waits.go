@@ -325,7 +325,7 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		// Parking is a cooperative executor suspension, not an uncertain failed
 		// process. It releases scheduling capacity while preserving the same attempt.
 		state.Excluded = true
-		state.Result = &result
+		state.Result, state.landedAt = &result, s.now()
 		state.turnArtifacts(result.Artifacts)
 		state.Declaration = nil
 		if err = putAttemptState(tx, state); err != nil {
@@ -1499,7 +1499,7 @@ func (s *Scheduler) acknowledgeWaiting(ctx context.Context, ref domain.LeaseRef,
 		} else if x.Outcome == nil || !reflect.DeepEqual(*x.Outcome, result.Outcome) || !(len(x.Artifacts) == 0 && len(result.Artifacts) == 0 || reflect.DeepEqual(x.Artifacts, result.Artifacts)) {
 			return storage.ErrConflict
 		}
-		state.Result = &result
+		state.Result, state.landedAt = &result, s.now()
 		state.turnArtifacts(result.Artifacts)
 		return putAttemptState(tx, state)
 	})

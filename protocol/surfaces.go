@@ -485,7 +485,7 @@ func FromRecords(rs []observability.Record) []TelemetryRecord {
 		c := r.Correlation
 		out[i] = TelemetryRecord{Name: r.Name, At: r.At, From: r.From, To: r.To, Attributes: r.Attributes, Correlation: Correlation{WorkID: string(c.WorkID), EventID: string(c.EventID), ExecutionID: string(c.ExecutionID), ScopeID: string(c.ScopeID), ExecutorBinding: c.ExecutorBinding, TraceID: c.TraceID}}
 		if u := r.Usage; u != nil {
-			out[i].Usage = &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency}
+			out[i].Usage = &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency, Units: u.Units}
 		}
 	}
 	return out
@@ -496,7 +496,7 @@ func ToRecords(rs []TelemetryRecord) []observability.Record {
 		c := r.Correlation
 		out[i] = observability.Record{Name: r.Name, At: r.At, From: r.From, To: r.To, Attributes: r.Attributes, Correlation: observability.Correlation{WorkID: domain.ID(c.WorkID), EventID: domain.ID(c.EventID), ExecutionID: domain.ID(c.ExecutionID), ScopeID: domain.ID(c.ScopeID), ExecutorBinding: c.ExecutorBinding, TraceID: c.TraceID}}
 		if u := r.Usage; u != nil {
-			out[i].Usage = &observability.Measurement{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency}
+			out[i].Usage = &observability.Measurement{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency, Units: u.Units}
 		}
 	}
 	return out

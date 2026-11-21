@@ -73,6 +73,8 @@ IDs are opaque and often contain ` + "`/`" + ` (` + "`manual/…`" + `, ` + "`wo
 
 A list returns ` + "`{\"items\": […], \"next_cursor\": …}`" + ` (the Work list adds ` + "`total`" + `). ` + "`limit`" + ` is 1 to 200 (50 by default). Pass ` + "`next_cursor`" + ` back as ` + "`cursor`" + `, with the same filters, for the next page, until it is empty. A cursor is opaque, belongs to its list and filters, and expires after 15 minutes (` + "`410 cursor_expired`" + `: start again). Each filter is given at most once; an unknown or repeated one is ` + "`400 invalid_filter`" + `. ` + "`with`" + ` adds to each item what its own endpoint returns: ` + "`GET /v1/work?with=actions,panels,runs`" + ` (any of the three; ` + "`limit`" + ` at most 50 with it) and ` + "`GET /v1/events?with=route`" + `.
 
+To follow what runs use, read ` + "`GET /v1/events?type=core.execution.usage&after_sequence=N`" + ` and keep the last ` + "`sequence`" + ` you read. Unlike a ` + "`cursor`" + `, that number never expires and survives a restart, and each record is read exactly once. Each record's ` + "`data`" + ` (schema ` + "`core.execution.usage.v1`" + `) is what one landed result added: ` + "`work`" + `, ` + "`execution`" + `, ` + "`scope`" + `, ` + "`binding`" + `, ` + "`executor`" + `, ` + "`segment`" + `, ` + "`started_at`" + `, ` + "`ended_at`" + `, ` + "`container`" + `, ` + "`amounts`" + ` by unit, and the executor's ` + "`attribution`" + ` (such as ` + "`model`" + `). An attempt's records sum to its ` + "`usage`" + `. A ` + "`cost`" + ` amount is the executor's own figure and may not be what anyone is billed.
+
 ## Endpoints
 
 | Method | Path | Role | Target | Idempotency-Key | Filters |

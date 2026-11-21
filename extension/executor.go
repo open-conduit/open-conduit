@@ -97,7 +97,18 @@ type Usage struct {
 	// Units are amounts in named units (UnitPattern), each finite and not
 	// negative. The names core counts itself (ReservedUnits) are refused.
 	Units map[string]float64 `json:",omitempty"`
+	// Attribution is the executor's opaque description of what did the
+	// work ("model", "provider"), carried on the usage record so a reader
+	// can price it. Keys match UnitPattern; the core reads no meaning in it.
+	Attribution map[string]string `json:",omitempty"`
 }
+
+// MaxAttribution bounds a usage's attribution entries, and
+// MaxAttributionValue the length of each value.
+const (
+	MaxAttribution      = 8
+	MaxAttributionValue = 256
+)
 
 // UnitPattern is the form of a usage unit's name.
 var UnitPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,31}$`)
@@ -136,6 +147,18 @@ func (u Usage) Amounts() map[string]float64 {
 		out["tokens"] = float64(n)
 	}
 	return out
+}
+
+func validAttribution(a map[string]string) bool {
+	if len(a) > MaxAttribution {
+		return false
+	}
+	for k, v := range a {
+		if !UnitPattern.MatchString(k) || len(v) > MaxAttributionValue {
+			return false
+		}
+	}
+	return true
 }
 
 func validUnits(units map[string]float64) bool {
@@ -494,6 +517,9 @@ func ValidateResult(r Result) error {
 	}
 	if !validUnits(r.Usage.Units) {
 		return fmt.Errorf("%w: usage units", ErrInvalid)
+	}
+	if !validAttribution(r.Usage.Attribution) {
+		return fmt.Errorf("%w: usage attribution", ErrInvalid)
 	}
 	return nil
 }

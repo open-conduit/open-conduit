@@ -527,6 +527,21 @@ func (t *storeTx) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]do
 	return out, nil
 }
 
+// TypeEvents is answered from Events, as ScopeEvents is.
+func (t *storeTx) TypeEvents(eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	out := []domain.AcceptedEvent{}
+	all, err := t.Events(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range all {
+		if a.Event.Type == eventType && (scopes == nil || slices.Contains(scopes, a.ScopeID)) && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // LatestSequence is the log's latest sequence, through state.sequence: a
 // cursor for Events, which may lie past the last Event of the extension's
 // own scopes.
