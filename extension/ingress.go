@@ -54,6 +54,12 @@ type Snapshot struct {
 	Complete bool
 	// Checkpoint is usable only after this page and its changes commit.
 	Checkpoint string
+	// NotBefore, when set, says the provider can't answer this page yet (a
+	// rate limit, say) and when to ask again. Such a page carries no
+	// Observations, is not Complete, and has NextCursor equal to the Scan's
+	// Cursor. The host keeps the generation and asks for the same page at
+	// that time; it is pacing, not a failure.
+	NotBefore time.Time
 }
 type Ingress interface {
 	Spec() IngressSpec

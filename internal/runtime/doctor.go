@@ -51,6 +51,9 @@ func SourceLag(s IngressStatus, now time.Time, factor int) (failing, lagging boo
 	switch {
 	case s.LastError != "":
 		return true, false
+	case s.LastComplete.IsZero() && !s.PacedSince.IsZero():
+		// A deferred page moves NextDue on, so it can't show the wait.
+		return false, now.Sub(s.PacedSince) > s.Interval
 	case s.LastComplete.IsZero():
 		return false, now.Sub(s.NextDue) > s.Interval
 	default:
@@ -184,9 +187,9 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	for _, s := range statuses {
 		switch {
 		case s.LastError == "" && s.LastComplete.IsZero():
-			current = append(current, s.Name+": first reconcile pending")
+			current = append(current, fmt.Sprintf("%s: first reconcile pending (every %s)%s", s.Name, s.Interval, paced(s, now)))
 		case s.LastError == "":
-			current = append(current, fmt.Sprintf("%s: reconciled %s ago", s.Name, now.Sub(s.LastComplete).Truncate(time.Second)))
+			current = append(current, fmt.Sprintf("%s: reconciled %s ago (every %s)%s", s.Name, now.Sub(s.LastComplete).Truncate(time.Second), s.Interval, paced(s, now)))
 		}
 		switch fails, lags := SourceLag(s, now, o.LagFactor); {
 		case fails:
@@ -196,9 +199,9 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 			}
 			failing = append(failing, fmt.Sprintf("%s: %s (failures %d, next %s)", s.Name, cause, s.Failures, s.NextDue.UTC().Format(time.RFC3339)))
 		case lags && s.LastComplete.IsZero():
-			lagging = append(lagging, s.Name+": no complete scan yet")
+			lagging = append(lagging, fmt.Sprintf("%s: no complete scan yet (every %s)%s", s.Name, s.Interval, paced(s, now)))
 		case lags:
-			lagging = append(lagging, fmt.Sprintf("%s: last complete %s ago", s.Name, now.Sub(s.LastComplete).Truncate(time.Second)))
+			lagging = append(lagging, fmt.Sprintf("%s: last complete %s ago (every %s)%s", s.Name, now.Sub(s.LastComplete).Truncate(time.Second), s.Interval, paced(s, now)))
 		}
 		for _, f := range s.Families {
 			if !f.ReDerivable {
@@ -220,6 +223,14 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 		checks = append(checks, Check{Name: "non_rederivable", Status: CheckOK, Code: "none", Detail: "every registered delivery family is recoverable by reconcile"})
 	}
 	return checks
+}
+
+// paced is a source's note that the provider is pacing its scan.
+func paced(s IngressStatus, now time.Time) string {
+	if s.PacedSince.IsZero() || !s.NextDue.After(now) {
+		return ""
+	}
+	return ", paced by the provider until " + s.NextDue.UTC().Format(time.RFC3339)
 }
 
 // PinnedExecutorCheck reports attempts that still need their pinned executor
