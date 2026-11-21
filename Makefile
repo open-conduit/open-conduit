@@ -196,6 +196,7 @@ drill:
 # against 1k, 10k and 50k retained events on real SQLite. Not part of check.
 bench-history:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkHistory' -benchtime 20x -benchmem ./integration
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkBackupHistory' -benchtime 3x -benchmem ./integration
 
 # #705 the routing pass draining a backlog of 1k and 10k unrouted events,
 # the state an outage leaves, on real SQLite. Not part of check.

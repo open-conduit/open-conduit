@@ -863,16 +863,20 @@ func TestLoadIdle(t *testing.T) {
 		ready := time.Since(start)
 		d.settle()
 		before := sampleDaemon(d, stats)
+		daemonBefore, treeBefore := contextSwitches(t, d.cmd.Process.Pid)
 		// Idle: nothing is submitted while the window passes.
 		end := time.NewTimer(window)
 		<-end.C
+		daemonAfter, treeAfter := contextSwitches(t, d.cmd.Process.Pid)
 		after := sampleDaemon(d, stats)
-		cpu := 100 * float64(after.cpu-before.cpu) / float64(after.at.Sub(before.at))
-		rows = append(rows, []string{strconv.Itoa(retained), roundLatency(ready), fmt.Sprintf("%.1f%%", cpu), fmt.Sprintf("%.0f MiB", float64(after.rssKB)/1024), strconv.Itoa(after.procs), fmt.Sprintf("%.0f MiB", float64(after.treeRSSKB)/1024), stateParts(d.state)})
+		elapsed := after.at.Sub(before.at)
+		cpu := 100 * float64(after.cpu-before.cpu) / float64(elapsed)
+		switches := func(from, to int64) string { return fmt.Sprintf("%.0f", float64(to-from)/elapsed.Seconds()) }
+		rows = append(rows, []string{strconv.Itoa(retained), roundLatency(ready), fmt.Sprintf("%.1f%%", cpu), switches(daemonBefore, daemonAfter), switches(treeBefore, treeAfter), fmt.Sprintf("%.0f MiB", float64(after.rssKB)/1024), strconv.Itoa(after.procs), fmt.Sprintf("%.0f MiB", float64(after.treeRSSKB)/1024), stateParts(d.state)})
 		stopDaemon(d)
 	}
-	report.table([]string{"Retained Events", "Start to API", "Idle CPU", "Daemon RSS", "Processes", "All RSS", "Disk by part"}, rows)
-	report.note("Wake-ups per second are not sampled: macOS exposes them only to root.")
+	report.table([]string{"Retained Events", "Start to API", "Idle CPU", "Daemon switches/s", "All switches/s", "Daemon RSS", "Processes", "All RSS", "Disk by part"}, rows)
+	report.note("Switches are context switches per second over the idle window. They follow wake-ups but can overstate them.")
 }
 
 // stateParts is the state directory's size by top-level entry, largest first.

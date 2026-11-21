@@ -78,19 +78,23 @@ func (w *benchWaits) report(b *testing.B) {
 // BenchmarkTransactEmpty is the floor of a write: BEGIN IMMEDIATE and COMMIT
 // at synchronous=FULL, with parallel callers queueing on the one connection.
 func BenchmarkTransactEmpty(b *testing.B) {
-	store, waits := benchStore(b, 0)
-	guard := storage.Guard{Now: time.Unix(1_700_000_000, 0)}
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if err := store.Transact(context.Background(), guard, func(storage.Tx) error { return nil }); err != nil {
-				b.Error(err)
-				return
-			}
-		}
-	})
-	b.StopTimer()
-	waits.report(b)
+	for _, rows := range []int{10_000, 100_000} {
+		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
+			store, waits := benchStore(b, rows)
+			guard := storage.Guard{Now: time.Unix(1_700_000_000, 0)}
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if err := store.Transact(context.Background(), guard, func(storage.Tx) error { return nil }); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			})
+			b.StopTimer()
+			waits.report(b)
+		})
+	}
 }
 
 // BenchmarkAcceptEvent accepts one new Event per transaction.

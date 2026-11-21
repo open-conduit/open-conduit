@@ -15,6 +15,8 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
@@ -287,6 +289,39 @@ func BenchmarkHistoryRetention(b *testing.B) {
 				if _, err := h.sched.SweepRetention(context.Background(), 100); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// One whole backup, which reads every Execution ever recorded for the
+// artifacts it must copy. It copies the database too, so it has its own
+// iteration count in `make bench-history`.
+func BenchmarkBackupHistory(b *testing.B) {
+	for _, n := range historySizes {
+		b.Run(fmt.Sprintf("events=%d", n), func(b *testing.B) {
+			h := seedHistory(b, n)
+			files, err := artifacts.Open(filepath.Join(h.dir, "artifacts"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			expired := func(tx storage.Tx, id domain.ID) (bool, error) {
+				r, e := runtime.RetentionInTx(tx, id)
+				return r.Expired, e
+			}
+			retention := backup.Retention{Expired: expired, Hold: runtime.HoldRetention, Release: runtime.ReleaseRetention, Now: h.clock.Now}
+			out := b.TempDir()
+			b.ResetTimer()
+			for i := range b.N {
+				path := filepath.Join(out, strconv.Itoa(i))
+				if err := backup.Create(context.Background(), path, nil, sqlite.Name, h.store, files, "bench", retention); err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if err := os.RemoveAll(path); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
 			}
 		})
 	}
