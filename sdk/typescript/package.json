@@ -4,6 +4,11 @@
   "private": true,
   "description": "Build Open Conduit extensions in TypeScript: serve protocol version 1, call the host, declare each operation once.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-conduit/open-conduit.git",
+    "directory": "sdk/typescript"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.18"

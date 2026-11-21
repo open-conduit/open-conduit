@@ -9,18 +9,21 @@ import (
 	"testing"
 )
 
-// tutorial is the "Build your first extension" page.
-const tutorial = "../site/src/content/docs/guides/first-extension.md"
+// The "Build your first extension" pages, in Go and in TypeScript.
+const (
+	tutorial   = "../site/src/content/docs/guides/first-extension.md"
+	tutorialTS = "../site/src/content/docs/guides/first-extension-typescript.md"
+)
 
 // titledFile matches the opening fence of a code block the tutorial asks the
 // reader to save, such as ```go title="main.go".
 var titledFile = regexp.MustCompile("^```[a-z]+ title=\"([^\"]+)\"$")
 
-// tutorialFiles returns the tutorial's titled code blocks by file name, and
+// tutorialFiles returns a tutorial's titled code blocks by file name, and
 // every open-conduit command line in its sh blocks.
-func tutorialFiles(t *testing.T) (map[string]string, []string) {
+func tutorialFiles(t *testing.T, page string) (map[string]string, []string) {
 	t.Helper()
-	data, err := os.ReadFile(tutorial)
+	data, err := os.ReadFile(page)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +50,7 @@ func tutorialFiles(t *testing.T) (map[string]string, []string) {
 		}
 	}
 	if cur != nil || sh {
-		t.Fatal("first-extension.md: unterminated code block")
+		t.Fatalf("%s: unterminated code block", page)
 	}
 	return files, commands
 }
@@ -102,7 +105,7 @@ func TestTutorialFirstExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, commands := tutorialFiles(t)
+	files, commands := tutorialFiles(t, tutorial)
 	for _, want := range []string{"main.go", "main_test.go", "e2e_test.go", "playbooks/weather.md", "fakeweather/main.go"} {
 		if files[want] == "" {
 			t.Fatalf("first-extension.md has no %s block", want)
@@ -137,8 +140,14 @@ func TestTutorialFirstExtension(t *testing.T) {
 		t.Fatalf("make check:\n%s", out)
 	}
 
-	// Step 4: the scope `init github --repo acme/web` writes, with the
-	// package installed beside it and the page's config set commands run.
+	tutorialInstall(t, run, root, bin, tmp, filepath.Join(dir, "dist", "weather"), commands)
+}
+
+// tutorialInstall follows a tutorial's install step: the scope `init github
+// --repo acme/web` writes, with the package installed beside it and the
+// page's config set commands run, and checks the result validates.
+func tutorialInstall(t *testing.T, run func(cwd, name string, args ...string) string, root, bin, tmp, pkg string, commands []string) {
+	t.Helper()
 	cfgDir := filepath.Join(tmp, "config")
 	cfg := filepath.Join(cfgDir, "config.json")
 	state := filepath.Join(tmp, "state")
@@ -146,7 +155,7 @@ func TestTutorialFirstExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(root, bin, "--data-dir", state, "init", "github", "--repo", "acme/web", "--checkout", root, "--config", cfg)
-	run(root, bin, "--data-dir", state, "extension", "install", filepath.Join(dir, "dist", "weather"), "--config", cfg)
+	run(root, bin, "--data-dir", state, "extension", "install", pkg, "--config", cfg)
 	sets := 0
 	for _, line := range commands {
 		args := shellFields(t, line)[1:]
@@ -157,9 +166,61 @@ func TestTutorialFirstExtension(t *testing.T) {
 		run(root, bin, append(append([]string{"--data-dir", state}, args...), "--file", cfg)...)
 	}
 	if sets == 0 {
-		t.Fatal("first-extension.md shows no config set commands")
+		t.Fatal("the tutorial shows no config set commands")
 	}
 	if out := run(root, bin, "--data-dir", state, "config", "check", "--file", cfg); !strings.Contains(out, "valid") {
 		t.Fatalf("config check: %s", out)
 	}
+}
+
+// TestTutorialFirstExtensionTS follows the TypeScript tutorial as a reader
+// would: it starts the package with `extension new --lang ts`, saves every
+// file the page shows over the scaffold's, runs make check, lint and
+// certify, then installs it and runs the page's config set commands. It
+// uses the weather example's node_modules, so like TestExtensionNewTS it
+// runs under `make ts-scaffold-check`.
+func TestTutorialFirstExtensionTS(t *testing.T) {
+	if os.Getenv("OPEN_CONDUIT_TS_SCAFFOLD_TESTS") == "" {
+		t.Skip("run with make ts-scaffold-check")
+	}
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, commands := tutorialFiles(t, tutorialTS)
+	for _, want := range []string{"src/extension.ts", "src/extension.test.ts", "playbooks/weather.md", "fakeweather.mjs"} {
+		if files[want] == "" {
+			t.Fatalf("first-extension-typescript.md has no %s block", want)
+		}
+	}
+	env := offlineEnv()
+	run := func(cwd, name string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir, cmd.Env = cwd, env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+		}
+		return string(out)
+	}
+	bin := daemonBinary(t)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "weather")
+	run(root, bin, "extension", "new", "weather", "--lang", "ts", "--dir", dir, "--replace", root)
+	if err := os.Symlink(filepath.Join(root, "protocol", "examples", "weather", "node_modules"), filepath.Join(dir, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(dir, "make", "check")
+	run(dir, "make", "lint", "certify", "OPEN_CONDUIT="+bin)
+	tutorialInstall(t, run, root, bin, tmp, filepath.Join(dir, "dist", "weather"), commands)
 }

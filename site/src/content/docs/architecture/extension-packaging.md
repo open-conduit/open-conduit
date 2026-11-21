@@ -3,7 +3,7 @@ title: "Extension packaging, SDK and certification"
 description: "How to write, package, install, upgrade, roll back, remove and certify a third-party extension package."
 ---
 
-New to extensions? [Build your first extension](../../guides/first-extension/) is a 30-minute tutorial that writes, tests and installs one; this page is the reference behind it.
+New to extensions? [Build your first extension](../../guides/first-extension/) (or [in TypeScript](../../guides/first-extension-typescript/)) is a 30-minute tutorial that writes, tests and installs one; this page is the reference behind it.
 
 This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. Installed packages run as separate processes that speak the [subprocess protocol](../extension-protocol/) (decision B08) and are supervised under its [runtime, trust model and schema evolution](../extension-protocol/#runtime-trust-model-and-schema-evolution). **Packaging, the SDK and certification are provisional**, like the protocol: they may still change, and decisions 21–32 at the end are listed for review.
 
@@ -38,7 +38,7 @@ With `--lang ts` it writes the same package in TypeScript, on the [TypeScript SD
 - `.github/workflows/ci.yml`, which runs `make check`, then lints and certifies with Open Conduit's `main` and its latest release built by `go install`.
 - `playbooks/NAME.md` and a README, as for Go.
 
-It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`, and `TestExtensionNewTS` (`make ts-scaffold-check`) does the same for `--lang ts`, then runs the built package with and without Node on PATH. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working.
+It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`, and `TestExtensionNewTS` (`make ts-scaffold-check`) does the same for `--lang ts`, then runs the built package with and without Node on PATH. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working. `TestTutorialFirstExtensionTS` does the same for [the TypeScript tutorial](../../guides/first-extension-typescript/).
 
 ## Writing an extension with the SDK
 
@@ -187,7 +187,7 @@ The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept
 
 `main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!` line naming Node, and make it executable. A package `extension new --lang ts` starts has a launcher that does this for you ([Starting a package](#starting-a-package)). [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`, as CommonJS, and writes `{ "type": "commonjs" }` as the package's own `package.json`. Node reads an extensionless file as the nearest `package.json` says, so without it a `"type": "module"` one above the package (the project's own, when the package is built inside it) makes Node load the bundle as ESM, and `package-manifest` fails with `require is not defined in ES module scope`. The daemon runs the command with its own PATH, so `env node` is the first Node on that PATH: under the background service, the PATH `service install` recorded from the installer's shell. After changing which Node you use (with a version manager, say), run `service install` again, and check the extension with `open-conduit doctor`. Its unit tests run on the SDK's [test host](#unit-tests-in-typescript-open-conduitsdktesting), and `make certify` certifies its package.
 
-The SDK doesn't yet include executors or the provider kinds (resources, sandboxes, tunnels), dependency filters, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
+The SDK doesn't yet include executors, the provider kinds (resources, sandboxes, tunnels) or dependency filters. Each release publishes it to npm as `@open-conduit/sdk`, at the same version as the core. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
 
 ### Examples
 
