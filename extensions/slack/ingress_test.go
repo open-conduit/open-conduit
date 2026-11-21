@@ -518,6 +518,82 @@ func TestScanCompletesUnderOneRequestAMinute(t *testing.T) {
 	}
 }
 
+// A generation paced for longer than history_hours minus the interval leaves
+// no gap: the next one reads back to where this one started.
+func TestNextGenerationCoversALongPacedOne(t *testing.T) {
+	f := newFixture(t, `,"history_hours":2,"reconcile_seconds":3600,"history_page_size":15`, slack.IngressOptions{})
+	limiter := &perMinute{base: http.DefaultTransport, now: f.clock.Now, next: map[string]time.Time{}}
+	cfg, err := slack.ParseConnection([]byte(`{"api_url":"` + f.fake.URL + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := slack.NewClient(cfg, func(context.Context, string) (string, error) { return "xoxb-test", nil },
+		slack.ClientOptions{Now: f.clock.Now, HTTP: &http.Client{Transport: limiter}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := slack.NewIngress(f.s, client, f.clock.Now, slack.IngressOptions{})
+	for i := 0; i < 90; i++ {
+		root := f.fake.Post(chanA, alice, "q"+strconv.Itoa(i))
+		f.fake.Reply(chanA, root, bob, "a")
+	}
+	f.sync()
+	first := f.clock.Now()
+	lost := ""
+	drive := func(checkpoint string) (map[string]bool, string) {
+		t.Helper()
+		scan := extension.Scan{Source: src, Checkpoint: checkpoint}
+		got := map[string]bool{}
+		for i := 0; i < 5000; i++ {
+			page, err := in.Reconcile(context.Background(), scan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range page.Observations {
+				got[o.ID] = true
+			}
+			if page.Complete {
+				return got, page.Checkpoint
+			}
+			if !page.NotBefore.IsZero() {
+				f.clock.Set(page.NotBefore)
+				if lost == "" {
+					// Posted just after the generation began; its push is lost.
+					f.fake.SetClock(f.clock.Now())
+					lost = f.fake.Post(chanA, alice, "lost")
+				}
+			}
+			scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+		}
+		t.Fatal("scan never completed")
+		return nil, ""
+	}
+	_, checkpoint := drive("")
+	if took := f.clock.Now().Sub(first); took < 85*time.Minute {
+		t.Fatalf("the generation took only %s", took)
+	}
+	f.clock.Add(time.Hour)
+	at, _ := slack.TSTime(lost)
+	if f.clock.Now().Add(-2 * time.Hour).Before(at) {
+		t.Fatal("the message is still inside history_hours; the test proves nothing")
+	}
+	has := func(got map[string]bool) bool {
+		for id := range got {
+			if strings.Contains(id, lost) {
+				return true
+			}
+		}
+		return false
+	}
+	// Negative control: history_hours alone misses it.
+	if got, _ := drive(""); has(got) {
+		t.Fatal("the window alone reached the message")
+	}
+	if got, _ := drive(checkpoint); !has(got) {
+		t.Fatal("the message after the long generation's start was never read")
+	}
+}
+
 // A paced generation is old because it is waiting, so the age bound that
 // restarts a stuck one leaves it alone.
 func TestPacedGenerationOutlastsTheAgeBound(t *testing.T) {

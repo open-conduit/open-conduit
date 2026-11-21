@@ -187,7 +187,7 @@ Retries of one callback share its `event_id`, and the message identity is its ob
 
 ## Reconcile
 
-Slack has no snapshot token. A generation reads a fixed window `[start − history_hours, start]`:
+Slack has no snapshot token. A generation reads a fixed window from `history_hours` before its start or, when the last complete generation began earlier, from that generation's start, so neither a long paced generation nor an outage leaves a stretch no pass reads. It looks back at most 168 hours, `history_hours` or two of the entry's `reconcile_seconds`, whichever is longest. The generation ID carries the window, so every page reads the same one:
 
 1. Every channel's top-level messages (`conversations.history`, newest first, with a cursor-stable pagination).
 2. For each thread parent, the thread's replies up to `start` (`conversations.replies`, followed to its end, at most 50 pages of 200).

@@ -341,16 +341,53 @@ func parseCursor(s string, channels int, directs bool) (cursor, bool) {
 	return cursor{}, false
 }
 
-func scanStart(id string) (time.Time, bool) {
+// maxLookback is how far back a generation may look to reach the last
+// complete one when history_hours is shorter.
+const maxLookback = 168 * time.Hour
+
+// A generation's ID is gen-<start>-<oldest> (Unix nanoseconds), so every page
+// of it, in any process, reads the same window. An ID without oldest is an
+// earlier version's, which read history_hours back.
+func generationID(start, oldest time.Time) string {
+	return "gen-" + strconv.FormatInt(start.UnixNano(), 10) + "-" + strconv.FormatInt(oldest.UnixNano(), 10)
+}
+
+func parseGeneration(id string) (start, oldest time.Time, ok bool) {
 	v, ok := strings.CutPrefix(id, "gen-")
 	if !ok {
-		return time.Time{}, false
+		return time.Time{}, time.Time{}, false
 	}
-	nanos, err := strconv.ParseInt(v, 10, 64)
+	startPart, oldestPart, both := strings.Cut(v, "-")
+	nanos, err := strconv.ParseInt(startPart, 10, 64)
 	if err != nil || nanos <= 0 {
-		return time.Time{}, false
+		return time.Time{}, time.Time{}, false
 	}
-	return time.Unix(0, nanos).UTC(), true
+	start = time.Unix(0, nanos).UTC()
+	if !both {
+		return start, time.Time{}, true
+	}
+	o, err := strconv.ParseInt(oldestPart, 10, 64)
+	if err != nil || o <= 0 || o > nanos {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, time.Unix(0, o).UTC(), true
+}
+
+// oldestFor is where a generation starting at start reads from: history_hours
+// back or, when the last complete generation (checkpoint) began before that,
+// that generation's start, so neither a long paced generation nor an outage
+// leaves a stretch no pass reads. It never reaches back further than
+// maxLookback, history_hours or two of the entry's intervals, whichever is
+// longest.
+func (g *Ingress) oldestFor(start time.Time, checkpoint string) time.Time {
+	oldest := start.Add(-g.s.History)
+	if last, _, ok := parseGeneration(checkpoint); ok && last.Before(oldest) {
+		oldest = last
+	}
+	if floor := start.Add(-max(g.s.History, maxLookback, 2*g.s.Reconcile)); oldest.Before(floor) {
+		oldest = floor
+	}
+	return oldest
 }
 
 type budget struct {
@@ -363,7 +400,7 @@ type budget struct {
 func (b *budget) spent() bool { return b.units >= b.max || time.Since(b.started) >= b.limit }
 
 // Reconcile returns one bounded page of a generation. A generation reads a
-// fixed window [start-history_hours, start] of every channel: each page of
+// fixed window [oldest, start] of every channel (oldestFor): each page of
 // top-level messages (newest first, cursor-stable) and, for each thread
 // parent, the thread's replies up to start; then the threads live Work owns
 // whose parent is older than the window. Unchanged threads (same reply count
@@ -378,11 +415,15 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	}
 	now := g.now().UTC()
 	scanID := scan.ScanID
-	start, ok := scanStart(scanID)
+	start, oldest, ok := parseGeneration(scanID)
 	if scanID == "" {
-		start, scanID = now, "gen-"+strconv.FormatInt(now.UnixNano(), 10)
+		start, oldest = now, g.oldestFor(now, scan.Checkpoint)
+		scanID = generationID(start, oldest)
 	} else if !ok {
 		return extension.Snapshot{ScanID: scanID}, nil // foreign generation: restart
+	}
+	if oldest.IsZero() {
+		oldest = start.Add(-g.s.History)
 	}
 	c := cursor{phase: phaseHistory}
 	if scan.Cursor != "" {
@@ -395,7 +436,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 		// A new generation never reuses an earlier one's identity.
 		for scanID == g.lastID {
 			start = start.Add(time.Microsecond)
-			scanID = "gen-" + strconv.FormatInt(start.UnixNano(), 10)
+			scanID = generationID(start, oldest)
 		}
 		g.lastID = scanID
 	}
@@ -430,9 +471,9 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	case c.phase == "":
 		snap.Complete = true
 	case c.phase == phaseActive:
-		snap, err = g.activePage(ctx, scanID, start, c, b)
+		snap, err = g.activePage(ctx, scanID, oldest, start, c, b)
 	default:
-		snap, err = g.historyPage(ctx, scanID, start, c, b)
+		snap, err = g.historyPage(ctx, scanID, oldest, start, c, b)
 	}
 	if err != nil {
 		return g.deferred(scan, scanID, err)
@@ -475,10 +516,6 @@ func (g *Ingress) deferred(scan extension.Scan, scanID string, err error) (exten
 	g.pacedID = scanID
 	g.mu.Unlock()
 	return extension.Snapshot{ScanID: scanID, NextCursor: scan.Cursor, NotBefore: limit.Until}, nil
-}
-
-func (g *Ingress) window(start time.Time) (oldest, latest time.Time) {
-	return start.Add(-g.s.History), start
 }
 
 // channelOf is the channel a cursor reads.
@@ -576,9 +613,8 @@ func (g *Ingress) directsFor(ctx context.Context, b *budget) ([]string, error) {
 	return out, nil
 }
 
-func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Time, c cursor, b *budget) (extension.Snapshot, error) {
+func (g *Ingress) historyPage(ctx context.Context, scanID string, oldest, latest time.Time, c cursor, b *budget) (extension.Snapshot, error) {
 	channel := g.channelOf(c)
-	oldest, latest := g.window(start)
 	key := scanID + "|" + c.at() + "|" + c.slack
 	g.mu.Lock()
 	memo := g.page
@@ -661,9 +697,8 @@ func (g *Ingress) historyPage(ctx context.Context, scanID string, start time.Tim
 	return snap, nil
 }
 
-func (g *Ingress) activePage(ctx context.Context, scanID string, start time.Time, c cursor, b *budget) (extension.Snapshot, error) {
+func (g *Ingress) activePage(ctx context.Context, scanID string, oldest, latest time.Time, c cursor, b *budget) (extension.Snapshot, error) {
 	channel := g.channelOf(c)
-	oldest, latest := g.window(start)
 	var threads []string
 	if g.o.ActiveThreads != nil {
 		all, err := g.o.ActiveThreads(ctx)
