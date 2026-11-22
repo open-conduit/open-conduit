@@ -170,6 +170,8 @@ type drill struct {
 	extra []string
 	// bin is the daemon to run, when not the shared build.
 	bin string
+	// environ is added to the daemon's environment at each start.
+	environ []string
 }
 
 func newDrill(t *testing.T) *drill {

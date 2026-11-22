@@ -63,7 +63,7 @@ func (d *drill) passFile() string { return filepath.Join(d.root, "loop-passes") 
 // loop barrier's file, cleared so the count is the new process's.
 func (d *drill) env(fault string) []string {
 	_ = os.Remove(d.passFile())
-	return append(os.Environ(), "OPEN_CONDUIT_FAULT="+fault, "OPEN_CONDUIT_PASS_FILE="+d.passFile())
+	return append(append(os.Environ(), "OPEN_CONDUIT_FAULT="+fault, "OPEN_CONDUIT_PASS_FILE="+d.passFile()), d.environ...)
 }
 
 // passes is the number of host loop passes the running daemon has completed.

@@ -208,3 +208,13 @@ func (t *faultyTx) Put(namespace, key string, value []byte) error {
 // starts, as the daemon did before it started only those something needs,
 // so a test can show its check of the running packages catches that.
 func startAll() bool { return os.Getenv("OPEN_CONDUIT_START_ALL_PACKAGES") == "1" }
+
+// daemonClock is OPEN_CONDUIT_CLOCK_SKEW ahead of real time, so an integration
+// test can age what a restarted daemon finds without waiting for it.
+func daemonClock() func() time.Time {
+	skew, err := time.ParseDuration(os.Getenv("OPEN_CONDUIT_CLOCK_SKEW"))
+	if err != nil || skew == 0 {
+		return time.Now
+	}
+	return func() time.Time { return time.Now().Add(skew) }
+}
