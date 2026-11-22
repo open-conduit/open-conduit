@@ -42,6 +42,7 @@ Other targets:
 ```sh
 make cross-build          # darwin and linux, amd64 and arm64, into dist/ (build evidence only)
 make drill                # the daemon kill and restart drills on their own
+make drill-replication    # replicate a daemon with Litestream, lose its disk, restore and start
 make ts-deps              # once: installs the TypeScript SDK's and example's npm dependencies (needs Node 22.18+)
 make ts-check             # Prettier, typecheck and unit tests for the TypeScript SDK and its example (npm run format fixes formatting)
 make certify              # builds the extension packages and certifies them, plus the negative controls (needs Node and npm)

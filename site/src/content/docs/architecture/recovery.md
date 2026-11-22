@@ -179,6 +179,41 @@ open-conduit serve --restore /backups/conduit-20261102T090000Z
 
 Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. With an artifact store outside the volume, name the empty store the bundle's artifacts go to with `--restore-artifacts NAME --restore-artifacts-location LOC`, as `--artifacts` and `--artifacts-location` do for `backup restore`. To start on a config for this machine rather than the bundle's generation, as a move to a new path needs, add `--restore-start-config FILE`, which does what `--start-config` does: a config that doesn't validate, or drops a scope with open Work, stops the start with nothing published. It applies only when the bundle is restored, so a restart never puts it back over a config applied since. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
 
+## Continuous replication
+
+Bundles and WAL replication do different jobs, and a deployment that can't afford to lose a day should run both:
+
+- **WAL replication keeps the recovery point to seconds.** It is the only protection for what has no outside source between bundles ([what a restore to an earlier point loses](#what-a-restore-to-an-earlier-point-loses)).
+- **Bundles are verified points to go back to.** A replica copies a bad write as faithfully as a good one, and a bundle can go back before it.
+
+Open Conduit doesn't ship a WAL replicator. [Litestream](https://litestream.io) is the supported one, tested at v0.5.18. Run it beside the daemon on `conduit.db`:
+
+```yaml
+dbs:
+  - path: /var/lib/open-conduit/conduit.db
+    truncate-page-n: 0
+    replica:
+      url: s3://my-bucket/open-conduit
+```
+
+- **Keep `truncate-page-n: 0`.** Otherwise Litestream can force a blocking checkpoint on a large WAL, and a write that waits longer than the store's 5-second busy timeout fails.
+- **Start them in either order.** Litestream waits for a database that doesn't exist yet, and the daemon publishes a new one with its schema already in it.
+- **The daemon stays compatible.** Its checkpoints are all passive, so none restarts the WAL under Litestream's read transaction or waits on it. Litestream adds two tables of its own (`_litestream_seq`, `_litestream_lock`), which travel in bundles and do no harm.
+- **Replicate the rest separately.** Litestream covers only the database. Keep artifacts in an object-store [artifact backend](../domain-storage/#backend-lifecycle), or copy `artifacts/` on a schedule, and copy `archive/` if `archive_finished_days` is set. What a restore can't find is [reported and recorded as lost](#restoring-from-a-replica).
+- **Stop Litestream before `backup restore --in-place`,** and point it at an empty replica path afterwards, because the restored database is a new history.
+
+To recover from a lost host:
+
+```sh
+litestream restore -config litestream.yml -o /recovered/conduit.db /var/lib/open-conduit/conduit.db
+open-conduit backup restore-replica /recovered/conduit.db --to /var/lib/open-conduit-restored \
+  --artifacts-from /recovered/artifacts --archive-from /recovered/archive
+open-conduit --data-dir /var/lib/open-conduit-restored serve
+open-conduit --data-dir /var/lib/open-conduit-restored drain end    # once the old host is stopped for good
+```
+
+`make drill-replication` runs this against a real daemon and the pinned Litestream. It is not part of `make check`.
+
 ## Restoring from a replica
 
 A replica is a copy of the database that another system kept, such as a WAL replicator. `backup restore-replica` turns one into a new state directory, with the checks a bundle gets:
@@ -252,7 +287,7 @@ Recovery order:
 
 `TestReplicaRestoresWhatSurvived` (in `internal/bootstrap`) restores a world-readable replica holding a replicator's table, with its artifacts and archive: the lease is fenced, the directory starts drained and a bundle of it verifies. `TestReplicaReportsWhatIsMissing` restores the same replica with neither, and it still passes `state check` and can be backed up. Removing the record of what was lost is its negative control, which the backup refuses. `TestReplicaIsDrainedBeforeItIsPublished` stops the restore just after publishing and finds the directory drained. `TestReplicaAppliesTheWALBesideIt` keeps a commit that exists only in the WAL.
 
-`TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file during a state check's copy, with a file that never settles as its negative control.
+`TestDaemonReplicationDrill` (in `integration`, run by `make drill-replication`) replicates a real daemon with Litestream through commits, `Reclaim` and `Rebuild`, deletes its state directory, restores the replica and starts on it: the same Work is there, nothing launches until the drain ends, and it then completes. `TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file during a state check's copy, with a file that never settles as its negative control.
 
 ## History
 
