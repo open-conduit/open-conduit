@@ -212,7 +212,7 @@ open-conduit --data-dir /var/lib/open-conduit-restored serve
 open-conduit --data-dir /var/lib/open-conduit-restored drain end    # once the old host is stopped for good
 ```
 
-`make drill-replication` runs this against a real daemon and the pinned Litestream. It is not part of `make check`.
+`make drill-replication` runs this against a real daemon and the pinned Litestream. It is not part of `make check`, because it builds Litestream, but CI runs it as the `replication` job on every code change.
 
 ## Restoring from a replica
 
