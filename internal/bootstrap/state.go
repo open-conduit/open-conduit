@@ -302,7 +302,7 @@ func restoredConfig(ctx context.Context, store storage.Store, configPath string)
 		return 0, nil, err
 	}
 	diags, _, err := checkAgainstPackages(configPath, "", normalized, func(reg config.Registry) (*config.Snapshot, error) {
-		return config.Validate(normalized, reg)
+		return config.ValidateStored(normalized, reg)
 	})
 	if err != nil {
 		return gen, []cli.ConfigEntry{{Code: "unchecked", Message: "the restored generation could not be checked: " + err.Error()}}, nil
@@ -525,7 +525,11 @@ func offlineSigningKey(ctx context.Context, o cli.BackupOptions) (ed25519.Privat
 	if err != nil || settings.SigningKey == "" {
 		return nil, err
 	}
-	resolver := &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath)}
+	policy, err := offlinePolicy()
+	if err != nil {
+		return nil, err
+	}
+	resolver := &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath), Policy: policy}
 	value, err := resolver.ResolveNamed(ctx, "backup_signing_key", settings.SigningKey)
 	if err != nil {
 		return nil, fmt.Errorf("resolving settings.backup.signing_key: %w (--unsigned publishes without it)", err)

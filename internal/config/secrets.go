@@ -69,6 +69,9 @@ type Resolver struct {
 	// Cache, when set, holds provider-served answers for a bounded
 	// lifetime, shared by every resolver For returns (SecretCache).
 	Cache *SecretCache
+	// Policy, when set, refuses a scheme it doesn't allow (policy_denied),
+	// whichever generation the reference came from.
+	Policy *Policy
 
 	consumer string
 	fresh    bool
@@ -119,6 +122,9 @@ func (r *Resolver) ResolveNamed(ctx context.Context, name, ref string) (string, 
 		return "", &secretError{code: "invalid_reference"}
 	}
 	scheme, rest, _ := strings.Cut(ref, ":")
+	if !r.Policy.AllowsScheme(scheme) {
+		return "", &secretError{code: PolicyDenied}
+	}
 	var v string
 	switch scheme {
 	case "env":

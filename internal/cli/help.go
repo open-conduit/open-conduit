@@ -51,6 +51,7 @@ var helpGroups = []helpGroup{
         [--restore BUNDLE [--restore-start-config FILE] [--restore-database-location LOC] [--restore-artifacts NAME --restore-artifacts-location LOC [--restore-artifacts-command PATH]] [--restore-trust-key KEYS] [--restore-accept-unsigned]]
                              (restore BUNDLE in place before serving, as backup restore --in-place does, once:
                              a start that finds the directory restored from it already serves it as it is)
+        [--policy FILE]      (limits the config can't raise, read once at start; or OPEN_CONDUIT_POLICY)
         [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                              (override the config's settings.webhooks for this run; TYPE is a tunnel
                              a package provides, such as ngrok or cloudflared, and JSON its config)

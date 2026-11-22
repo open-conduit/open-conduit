@@ -271,6 +271,13 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		} else if h.Kind == HoldKindGate {
 			return ErrGateHold
 		}
+		if h.Kind == HoldKindBudget {
+			if over, e := overPinnedInTx(tx, c.now(), c.scheduler.options.Budgets, w); e != nil {
+				return e
+			} else if over {
+				return ErrBudgetPinned
+			}
+		}
 		// A release under an open terminal would start an attempt on the
 		// session the operator is typing into.
 		if _, open, e := TerminalInTx(tx, w.ID); e != nil {

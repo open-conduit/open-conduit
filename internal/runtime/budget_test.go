@@ -324,3 +324,59 @@ func TestProductionSchedulerBudgetPassIsSpentOnce(t *testing.T) {
 		t.Fatalf("a pass left from the release let an over-budget turn through: %v", err)
 	}
 }
+
+// TestProductionSchedulerPinnedBudgetIsNotReleased: a budget the daemon's
+// policy sets holds Work, and an operator's release can't pass it.
+func TestProductionSchedulerPinnedBudgetIsNotReleased(t *testing.T) {
+	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "pinned")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "pinned"}
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		cost := 2.0
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &cost, Currency: "USD"}}}, nil
+	}
+	o := schedulerDefaultOptions(f, e)
+	o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1, WarnAt: 0.5, Pinned: true}}
+	s := newTestScheduler(t, f, o)
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	a, err := s.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAccept(t, f, "pinned-2", &key)
+	requireRoute(t, f.Driver, domain.ID("pinned-2"))
+	if err := s.Observe(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Start(ctx, work); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("a start over a pinned budget: %v", err)
+	}
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) error {
+		h, held, err := runtime.HoldInTx(tx, work)
+		if err != nil {
+			return err
+		}
+		if !held || !strings.Contains(h.Reason, "policy") {
+			t.Fatalf("hold: %v %+v", held, h)
+		}
+		w, err = tx.Work(work)
+		return err
+	})
+	if _, err := control.ReleaseWork(ctx, work, w.Revision, "one more", "pinned-release"); !errors.Is(err, runtime.ErrBudgetPinned) {
+		t.Fatalf("a release past a pinned budget: %v", err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		if _, held, err := runtime.HoldInTx(tx, work); err != nil || !held {
+			t.Fatalf("the refused release dropped the hold: %v %v", held, err)
+		}
+		return nil
+	})
+}

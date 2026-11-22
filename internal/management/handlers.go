@@ -75,8 +75,10 @@ type Pool struct {
 	Name    string `json:"name"`
 	Setting string `json:"setting,omitempty"`
 	Limit   int    `json:"limit"`
-	InUse   int    `json:"in_use"`
-	Waiting int    `json:"waiting"`
+	// Ceiling is the daemon policy's ceiling on this pool, when it sets one.
+	Ceiling int `json:"ceiling,omitempty"`
+	InUse   int `json:"in_use"`
+	Waiting int `json:"waiting"`
 }
 
 func (s *Server) capacity(c *call) (int, any, error) {

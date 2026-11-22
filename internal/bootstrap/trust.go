@@ -22,8 +22,36 @@ import (
 // policy, or one that couldn't be read, which refuses every installed
 // package rather than admit them unchecked.
 type packagePolicy struct {
-	p   *extproc.Policy
-	err error
+	p *extproc.Policy
+	// root is the daemon policy's extension_trust, which a package must
+	// pass as well and no config can drop.
+	root *extproc.Policy
+	err  error
+}
+
+// refusal is why the daemon policy's trust refuses the package, if it does.
+func (p packagePolicy) refusal(dir, name string) error {
+	if p.root == nil {
+		return nil
+	}
+	return extproc.CheckProvenance(dir, name, p.root).Refused
+}
+
+// withRoot adds the daemon policy's trust to a config's package policy.
+func (p packagePolicy) withRoot(policy *config.Policy) packagePolicy {
+	if policy != nil {
+		p.root = trustPolicy(policy.ExtensionTrust)
+	}
+	return p
+}
+
+// installPolicy is what an install is verified against: the daemon policy's
+// trust when it sets one. Discovery holds a package to both at start.
+func (p packagePolicy) installPolicy() *extproc.Policy {
+	if p.root != nil {
+		return p.root
+	}
+	return p.p
 }
 
 // trustPolicy is the extproc form of settings.extension_trust.
@@ -42,6 +70,14 @@ func trustPolicy(t *config.ExtensionTrust) *extproc.Policy {
 // that can't be read or decoded, or whose policy is malformed, fails
 // closed.
 func filePolicy(configPath string) packagePolicy {
+	root, err := offlinePolicy()
+	if err != nil {
+		return packagePolicy{err: fmt.Errorf("reading the daemon's policy: %w", err)}
+	}
+	return configFilePolicy(configPath).withRoot(root)
+}
+
+func configFilePolicy(configPath string) packagePolicy {
 	if configPath == "" {
 		return packagePolicy{}
 	}
@@ -74,9 +110,9 @@ func (d *daemon) startPolicy(ctx context.Context) packagePolicy {
 	case err != nil:
 		return packagePolicy{err: fmt.Errorf("reading the committed configuration for settings.extension_trust: %w", err)}
 	case generation != 0:
-		return documentPolicy(normalized)
+		return documentPolicy(normalized).withRoot(d.policy)
 	}
-	return filePolicy(d.o.ConfigPath)
+	return configFilePolicy(d.o.ConfigPath).withRoot(d.policy)
 }
 
 // admit checks one installed package. The error names the package first,
@@ -85,6 +121,9 @@ func (p packagePolicy) admit(f extproc.Found, warn func(name, msg string)) error
 	name := f.Manifest.Name
 	if p.err != nil {
 		return fmt.Errorf("%s: %w: %w", name, extproc.ErrProvenance, p.err)
+	}
+	if err := p.refusal(f.Dir, name); err != nil {
+		return fmt.Errorf("%s: the daemon's policy: %w", name, err)
 	}
 	if p.p == nil && warn == nil {
 		return nil // nothing to refuse and no one to warn: skip hashing the tree
@@ -121,6 +160,9 @@ func provenanceCheck(configPath string, policy packagePolicy) runtime.Check {
 	for _, in := range installed {
 		name := in.Manifest.Name
 		pr := extproc.CheckProvenance(in.Dir, name, policy.p)
+		if err := policy.refusal(in.Dir, name); err != nil && pr.Refused == nil {
+			pr.Refused = fmt.Errorf("the daemon's policy: %w", err)
+		}
 		item := fmt.Sprintf("%s %s: %s", name, in.Manifest.Version, pr.Publisher())
 		switch {
 		case pr.Refused != nil:

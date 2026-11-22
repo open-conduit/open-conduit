@@ -126,7 +126,7 @@ func openConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		c.fileGeneration = c.generation
 		return c, nil
 	}
-	snapshot, err := config.Validate(normalized, registry)
+	snapshot, err := config.ValidateStored(normalized, registry)
 	if err != nil {
 		return c.adopt(ctx, active.Generation, normalized, err)
 	}
@@ -534,7 +534,7 @@ func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 	}) != nil {
 		return nil
 	}
-	s, err := config.Validate(data, c.registry)
+	s, err := config.ValidateStored(data, c.registry)
 	if err != nil {
 		return nil
 	}

@@ -242,6 +242,8 @@ func mapError(err error) *apiError {
 		return fail(409, "generation_conflict", "expected generation is stale")
 	case errors.Is(err, ErrScopeInUse):
 		return fail(409, "scope_in_use", "scope has nonterminal work; drain it first")
+	case errors.Is(err, runtime.ErrBudgetPinned):
+		return fail(409, config.PolicyDenied, "the daemon's policy sets a budget this Work is over, and a release doesn't pass it; only the person running the daemon can raise it")
 	case errors.Is(err, runtime.ErrGateHold):
 		return fail(409, "gate_hold", "a start gate holds this Work until its approval request is answered; answer it, or cancel the Work")
 	case errors.Is(err, runtime.ErrInterruptUnsupported):

@@ -35,6 +35,9 @@ type Registry struct {
 	// Packages are the installed and bundled extension packages by name,
 	// which settings.extensions grants (PackageWarnings).
 	Packages map[string]bool
+	// Policy is the operator's policy above the config (--policy), which
+	// every config must fit inside; nil is none.
+	Policy *Policy
 	// ResourceConfig optionally validates a registered provider's binding
 	// resource config at load/apply time. Its error text is never echoed.
 	ResourceConfig map[string]func(json.RawMessage) error
@@ -168,7 +171,10 @@ type EffectiveScope struct {
 // Snapshot is one immutable validated generation candidate. Normalized
 // contains secret reference text: never log or return it.
 type Snapshot struct {
-	Hash string
+	// PolicyClamps says which limits the daemon's policy holds below what
+	// this generation states (doctor reports them).
+	PolicyClamps []string
+	Hash         string
 	// FileHash is the hash of the generation without its submitted
 	// includes' scopes: the part a config file sets, which a config file
 	// apply checks its candidate against, so a team's fragment apply never
@@ -257,6 +263,7 @@ type effective struct {
 type validator struct {
 	doc         *Document
 	reg         Registry
+	mode        policyMode
 	diags       []Diagnostic
 	connections map[string]bool
 	index       map[string]int
@@ -368,7 +375,11 @@ func Validate(data []byte, reg Registry) (*Snapshot, error) {
 	return ValidateDocument(doc, reg)
 }
 func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
-	v := &validator{doc: doc, reg: reg, connections: map[string]bool{}, index: map[string]int{},
+	return validateDocument(doc, reg, policyMode{})
+}
+
+func validateDocument(doc *Document, reg Registry, mode policyMode) (*Snapshot, error) {
+	v := &validator{doc: doc, reg: reg, mode: mode, connections: map[string]bool{}, index: map[string]int{},
 		state: map[string]*effective{}, visiting: map[string]bool{}, broken: map[string]bool{}}
 	for i, c := range doc.Connections {
 		p := ptr("connections", i)
@@ -406,10 +417,13 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
 		v.checkPassEnv(ptr("settings/extensions", name)+"/pass_env", doc.Settings.Extensions[name].PassEnv)
 	}
+	v.policy()
 	if len(v.diags) > 0 {
 		return nil, invalid(v.diags)
 	}
-	return v.snapshot(), nil
+	s := v.snapshot()
+	reg.Policy.clamp(s)
+	return s, nil
 }
 
 // resolve returns nil for cyclic scopes or descendants of a cycle.
@@ -440,6 +454,9 @@ func (v *validator) resolve(id string) *effective {
 	}
 	e := &effective{enabled: true, concurrency: v.doc.Settings.Concurrency, admission: v.doc.Settings.AdmissionLimit,
 		auth: Authorization{Connections: []string{}, Operations: []string{}, ReadScopes: []string{}, FileScopes: []string{}}, refs: map[string]string{}}
+	if v.reg.Policy.RequiresIsolation() {
+		e.auth.Isolation = IsolationRequired
+	}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, parent.isolationScope, maps.Clone(parent.refs),
 			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil, nil}
@@ -753,6 +770,10 @@ func (v *validator) isolated(p, scopeID string, e *effective, b Binding) {
 	if exec, ok := v.reg.Executors[b.Executor]; ok && exec.Capabilities().NoProcess {
 		return
 	}
+	if v.reg.Policy.RequiresIsolation() {
+		v.fail(p, PolicyDenied, fmt.Sprintf("the daemon's policy requires every binding to run in a sandbox or container, and executor %s runs processes; add a sandbox or container to the binding, or disable it in scope %s", b.Executor, scopeID))
+		return
+	}
 	inherited := ""
 	if e.isolationScope != scopeID {
 		inherited = ", which scope " + scopeID + " inherits,"
@@ -862,6 +883,8 @@ func (v *validator) checkPassEnv(path string, names []string) {
 			v.fail(ptr(path, i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
 		case refs[name]:
 			v.fail(ptr(path, i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
+		case !v.reg.Policy.AllowsPassEnv(name):
+			v.fail(ptr(path, i), PolicyDenied, "the daemon's policy does not allow pass_env to name "+name+"; use one of: "+listed(v.reg.Policy.PassEnv))
 		}
 	}
 }

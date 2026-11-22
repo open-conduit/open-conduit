@@ -553,7 +553,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 	if len(found) == 0 {
 		return
 	}
-	x.startGrants = d.startGrants(ctx)
+	x.startGrants = d.policy.FilterGrants(d.startGrants(ctx))
 	if err := extproc.CheckConflicts(found, takenNames(registry(nil))); err != nil {
 		for _, f := range found {
 			x.failed = append(x.failed, extproc.Diagnose(f.Manifest.Name, err, extproc.Paths{}))
@@ -582,6 +582,7 @@ func (d *daemon) configRegistry() config.Registry {
 		}
 	}
 	reg := registry(executors)
+	reg.Policy = d.policy
 	for _, x := range cat {
 		x.providerTypes(&reg)
 	}

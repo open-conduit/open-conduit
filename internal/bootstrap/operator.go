@@ -80,6 +80,10 @@ func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []
 // generation is self-contained), so both checks share this.
 func checkAgainstPackages(configPath, exclude string, data []byte, validate func(config.Registry) (*config.Snapshot, error)) ([]config.Diagnostic, []string, error) {
 	reg := registry(map[string]extension.Executor{})
+	var err error
+	if reg.Policy, err = offlinePolicy(); err != nil {
+		return nil, nil, err
+	}
 	pkgs := offlineExternal(&reg, configPath, exclude, data)
 	defer pkgs.close()
 	s, err := validate(reg)

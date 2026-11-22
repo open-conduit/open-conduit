@@ -34,9 +34,11 @@ func ExtensionOps(version, commit string, verify extproc.SignatureCheck) *cli.Ex
 				p.Previous = in.Previous
 				pr := extproc.CheckProvenance(in.Dir, in.Manifest.Name, policy.p)
 				p.Publisher, p.Warning = pr.Publisher(), pr.Warning
-				switch {
+				switch rootErr := policy.refusal(in.Dir, in.Manifest.Name); {
 				case policy.err != nil:
 					p.Refused = policy.err.Error()
+				case rootErr != nil:
+					p.Refused = "the daemon's policy: " + rootErr.Error()
 				case pr.Refused != nil:
 					p.Refused = pr.Refused.Error()
 				}
@@ -87,7 +89,7 @@ func ExtensionOps(version, commit string, verify extproc.SignatureCheck) *cli.Ex
 				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), fmt.Errorf("%w: %w", extproc.ErrProvenance, policy.err))
 			}
 			src := extproc.Source{Location: r.Source, SHA256: r.SHA256, Signature: r.Signature}
-			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: hostTaken(), Policy: policy.p, Verify: verify})
+			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: hostTaken(), Policy: policy.installPolicy(), Verify: verify})
 			if err != nil {
 				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), err)
 			}
