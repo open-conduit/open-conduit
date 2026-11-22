@@ -252,7 +252,7 @@ An upgrade needs no backup step: the first start on a newer format [keeps a veri
 
 ## Corrupted-state diagnosis
 
-Run `open-conduit state check [--json]` with the daemon stopped. It examines the database through its backend's `Inspect`, which changes nothing (SQLite's opens a private copy), so diagnosis never changes the state. A copy that a replicator changed while it was read is taken again, and a file that never settles is refused rather than reported as corrupt. It reports:
+Run `open-conduit state check [--json]` with the daemon stopped. It examines the database through its backend's `Inspect`, which changes nothing (SQLite's opens a private copy), so diagnosis never changes the state. A replicator can change the file while it is read, so the copy is used only once two copies in a row have identical content. A file that doesn't settle within five copies is refused rather than reported as corrupt. It reports:
 
 | Check | Meaning |
 | --- | --- |
@@ -287,7 +287,7 @@ Recovery order:
 
 `TestReplicaRestoresWhatSurvived` (in `internal/bootstrap`) restores a world-readable replica holding a replicator's table, with its artifacts and archive: the lease is fenced, the directory starts drained and a bundle of it verifies. `TestReplicaReportsWhatIsMissing` restores the same replica with neither, and it still passes `state check` and can be backed up. Removing the record of what was lost is its negative control, which the backup refuses. `TestReplicaIsDrainedBeforeItIsPublished` stops the restore just after publishing and finds the directory drained. `TestReplicaAppliesTheWALBesideIt` keeps a commit that exists only in the WAL.
 
-`TestDaemonReplicationDrill` (in `integration`, run by `make drill-replication`) replicates a real daemon with Litestream through commits, `Reclaim` and `Rebuild`, deletes its state directory, restores the replica and starts on it: the same Work is there, nothing launches until the drain ends, and it then completes. `TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file during a state check's copy, with a file that never settles as its negative control.
+`TestDaemonReplicationDrill` (in `integration`, run by `make drill-replication`) replicates a real daemon with Litestream through commits, `Reclaim` and `Rebuild`, deletes its state directory, restores the replica and starts on it: the same Work is there, nothing launches until the drain ends, and it then completes. `TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file's bytes between a state check's copies while keeping its size and modification time, with a file that never settles as its negative control.
 
 ## History
 
