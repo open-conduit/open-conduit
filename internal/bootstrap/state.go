@@ -268,8 +268,11 @@ func RestoreReplica(ctx context.Context, replica, destination string, o cli.Repl
 	}
 	now := time.Now().UTC()
 	source := backup.ReplicaSource{Database: replica, Artifacts: o.ArtifactsFrom, Archive: o.ArchiveFrom}
-	report, err := backup.RestoreReplica(ctx, source, destination, now, retentionExpired, sqlite.Name, restoreBackends, target, withStartConfig(ctx, recordChoiceWith("", choice), o.RestoreOptions, policy))
+	report, err := backup.RestoreReplica(ctx, source, destination, now, retentionExpired, sqlite.Name, restoreBackends, target, drainedReplica(ctx, withStartConfig(ctx, recordChoiceWith("", choice), o.RestoreOptions, policy), destination, now))
 	if err != nil {
+		return info, err
+	}
+	if err := replicaPublished(); err != nil {
 		return info, err
 	}
 	info.Artifacts, info.MissingArtifacts = report.Artifacts, report.MissingArtifacts
@@ -287,21 +290,44 @@ func RestoreReplica(ctx context.Context, replica, destination string, o cli.Repl
 		return info, err
 	}
 	defer store.Close()
-	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		if _, err := runtime.BeginDrainInTx(tx, now, drainOrigin(destination), replicaDrainReason); err != nil {
-			return err
-		}
-		_, err := tx.AppendAudit(domain.AuditRecord{Actor: "system:restore", Action: "core.replica.restored", Outcome: domain.AuditOK})
-		return err
-	}); err != nil {
-		return info, err
-	}
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		return info, err
 	}
 	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o.RestoreOptions), policy)
 	info.StartConfig = o.StartConfig
 	return info, err
+}
+
+// replicaPublished is a test seam: an error stops a replica restore where a
+// crash just after publishing the directory would.
+var replicaPublished = func() error { return nil }
+
+// drainedReplica begins the drain in the stage, after record, so the directory
+// is only ever published drained: a restore that stops at any later step can't
+// leave a copy that runs beside the host it came from. The origin is the
+// destination, where the stage is about to be.
+func drainedReplica(ctx context.Context, record backup.Record, destination string, now time.Time) backup.Record {
+	return func(dir, backend string) (err error) {
+		if record != nil {
+			if err := record(dir, backend); err != nil {
+				return err
+			}
+		}
+		// The destination doesn't exist yet, so its parent is what resolves.
+		origin := filepath.Join(drainOrigin(filepath.Dir(destination)), filepath.Base(destination))
+		_, store, err := openState(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, store.Close()) }()
+		return store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+			if _, err := runtime.BeginDrainInTx(tx, now, origin, replicaDrainReason); err != nil {
+				return err
+			}
+			_, err := tx.AppendAudit(domain.AuditRecord{Actor: "system:restore", Action: "core.replica.restored", Outcome: domain.AuditOK})
+			return err
+		})
+	}
 }
 
 // restoreConfigPath is the config file whose packages the restored

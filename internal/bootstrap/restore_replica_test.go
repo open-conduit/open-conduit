@@ -222,6 +222,40 @@ func TestReplicaReportsWhatIsMissing(t *testing.T) {
 	}
 }
 
+// TestReplicaIsDrainedBeforeItIsPublished stops the restore just after the
+// directory appears, as a crash would: what is there must already be drained.
+func TestReplicaIsDrainedBeforeItIsPublished(t *testing.T) {
+	ctx := context.Background()
+	f := newReplicaFixture(t)
+	saved := replicaPublished
+	replicaPublished = func() error { return errors.New("stopped after publishing") }
+	defer func() { replicaPublished = saved }()
+	dest := filepath.Join(t.TempDir(), "restored")
+	if _, err := RestoreReplica(ctx, f.database, dest, cli.ReplicaOptions{ArtifactsFrom: f.artifacts, ArchiveFrom: f.archive}); err == nil {
+		t.Fatal("the seam didn't stop the restore")
+	}
+	_, store, err := openState(ctx, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.View(ctx, func(tx storage.Tx) error {
+		d, on, err := runtime.DrainInTx(tx)
+		if err != nil {
+			return err
+		}
+		if !on {
+			t.Error("a published replica isn't drained")
+		}
+		if d.Origin != drainOrigin(dest) {
+			t.Errorf("drain origin %q, want %q", d.Origin, drainOrigin(dest))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestReplicaAppliesTheWALBesideIt commits a row only to the WAL: a restore
 // reading the file alone would lose it.
 func TestReplicaAppliesTheWALBesideIt(t *testing.T) {
