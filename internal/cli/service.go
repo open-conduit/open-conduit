@@ -166,6 +166,9 @@ func (o *operator) serviceInstall(h *ServiceHost, args []string) int {
 		argv = append(argv, "--socket", r.Socket)
 	}
 	argv = append(argv, "serve", "--config", r.ConfigPath)
+	if r.PolicyPath != "" {
+		argv = append(argv, "--policy", r.PolicyPath)
+	}
 	argv = append(argv, withoutFlag(serveArgs, "config")...)
 	path, missing := o.servicePath(h)
 	unit, log := o.unitPath(h), o.serviceLog()

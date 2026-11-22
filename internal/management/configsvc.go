@@ -84,7 +84,8 @@ type Adoption struct {
 // configuration), writing no file: the first apply writes it. Disk edits alone
 // never change an already committed generation that still validates; one that
 // no longer does is replaced by the config file when the file validates, so
-// the daemon can always start once the file is fixed.
+// the daemon can always start once the file is fixed. The exception is a
+// generation the daemon's policy refuses, which doesn't start at all.
 func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
 	c, err := openConfig(ctx, store, now, registry, path, def)
 	if err != nil {
@@ -126,7 +127,13 @@ func openConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		c.fileGeneration = c.generation
 		return c, nil
 	}
-	snapshot, err := config.Validate(normalized, registry)
+	snapshot, err := config.ValidateStored(normalized, registry)
+	if config.PolicyRefused(err) {
+		// Not adoption's case: this generation is what the daemon last ran,
+		// and the policy says it doesn't start. Replacing it from a file on
+		// disk would decide that for the operator.
+		return nil, fmt.Errorf("stored generation %d breaks the daemon's policy, so it doesn't start: %w; to replace it, start once under a policy that allows it, apply a config that fits, then put the policy back", active.Generation, err)
+	}
 	if err != nil {
 		return c.adopt(ctx, active.Generation, normalized, err)
 	}
@@ -534,7 +541,7 @@ func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 	}) != nil {
 		return nil
 	}
-	s, err := config.Validate(data, c.registry)
+	s, err := config.ValidateStored(data, c.registry)
 	if err != nil {
 		return nil
 	}

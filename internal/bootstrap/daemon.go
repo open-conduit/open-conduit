@@ -47,6 +47,9 @@ type Options struct {
 	Version, Commit string
 	StateDir        string
 	ConfigPath      string
+	// PolicyPath is the operator's policy above the config (--policy,
+	// OPEN_CONDUIT_POLICY), read once at start; empty is none.
+	PolicyPath string
 	// Socket defaults to StateDir/management.sock.
 	Socket string
 	// ToolbeltDir contains the `os` binary (default: beside the executable).
@@ -154,7 +157,9 @@ type attemptKey struct {
 }
 
 type daemon struct {
-	o Options
+	// policy is the operator's policy above the config, read once at start.
+	policy *config.Policy
+	o      Options
 	// configHandles holds the config texts extensions refer to by handle
 	// (configHost).
 	configHandles configHandles
@@ -395,6 +400,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath)}}
+	if d.policy, err = config.LoadPolicy(o.PolicyPath); err != nil {
+		return fmt.Errorf("policy %s: %w", o.PolicyPath, err)
+	}
+	d.resolver.Policy = d.policy
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err
@@ -807,7 +816,11 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.eventArchiveCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
+	checks := append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.eventArchiveCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
+	if d.policy != nil {
+		checks = append(checks, d.policyCheck)
+	}
+	return checks
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency
@@ -817,7 +830,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 func budgets(in []config.Budget) []runtime.Budget {
 	out := make([]runtime.Budget, 0, len(in))
 	for _, b := range in {
-		out = append(out, runtime.Budget{Unit: b.Unit, Per: b.Per, Period: b.Period, ScopeID: domain.ID(b.Scope), Max: b.Max, WarnAt: b.WarnAt})
+		out = append(out, runtime.Budget{Unit: b.Unit, Per: b.Per, Period: b.Period, ScopeID: domain.ID(b.Scope), Max: b.Max, WarnAt: b.WarnAt, PinnedMax: b.PinnedMax})
 	}
 	return out
 }

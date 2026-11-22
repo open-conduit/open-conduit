@@ -228,6 +228,10 @@ func (s Settings) PackagePassEnv(name string) []string {
 type Budget struct {
 	Unit, Per, Period, Scope string
 	Max, WarnAt              float64
+	// PinnedMax is the ceiling the daemon's policy sets on this ledger, in a
+	// Snapshot only; zero is none. Max may be lower, when the config's own
+	// limit is stricter: a release passes that limit but never this one.
+	PinnedMax float64
 }
 
 // DefaultBudgetWarnAt is the warning threshold of a budget that sets none.
@@ -530,6 +534,9 @@ type Document struct {
 	// its scopes and keeps the submitted includes, which a stored
 	// generation records so a fragment can be submitted to one later.
 	Includes []Include
+	// written says which settings limits the document states itself, as
+	// opposed to taking a default (a policy ceiling refuses only those).
+	written map[string]bool
 }
 
 // Include adds scopes under Parent, a scope of the config file itself:
@@ -660,6 +667,7 @@ func (c *checker) document(n *node) *Document {
 		doc.Version = 1
 	}
 	doc.Settings = c.settings(n.field("settings"))
+	doc.written = map[string]bool{"concurrency": n.field("settings").field("concurrency") != nil, "job_concurrency": n.field("settings").field("job_concurrency") != nil}
 	if cs := n.field("connections"); cs != nil && c.typed(cs, "connections", kArray, "array") {
 		for i, item := range cs.items {
 			doc.Connections = append(doc.Connections, c.connection(item, ptr("connections", i)))

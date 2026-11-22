@@ -14,7 +14,10 @@ import (
 // the os binary) never links the runtime implementation.
 type ServeRequest struct {
 	StateDir, ConfigPath, Socket, ToolbeltDir, LifecycleLog string
-	PollInterval, LeaseDuration, RetentionInterval          time.Duration
+	// PolicyPath is the operator's policy above the config (--policy,
+	// OPEN_CONDUIT_POLICY); empty is none.
+	PolicyPath                                     string
+	PollInterval, LeaseDuration, RetentionInterval time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
 	SweepInterval time.Duration
 	// CallTimeout bounds a route's decision and a container runtime's
@@ -134,7 +137,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
-	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, DatabaseLocation: r.RestoreDatabaseLocation, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, ArtifactCommand: r.RestoreArtifactsCommand, StartConfig: r.RestoreStartConfig, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
+	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, PolicyPath: r.PolicyPath, DatabaseLocation: r.RestoreDatabaseLocation, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, ArtifactCommand: r.RestoreArtifactsCommand, StartConfig: r.RestoreStartConfig, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
 	if err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", err)
 		return false
@@ -151,7 +154,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
+	fs := newFlags("serve", "config", "policy", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -246,6 +249,10 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	}
 	if r.Socket == "" {
 		r.Socket = o.abs(o.env.Getenv("OPEN_CONDUIT_SOCKET"))
+	}
+	r.PolicyPath = o.abs(fs.get("policy"))
+	if r.PolicyPath == "" {
+		r.PolicyPath = o.abs(o.env.Getenv("OPEN_CONDUIT_POLICY"))
 	}
 	return r, -1
 }

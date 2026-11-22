@@ -50,7 +50,7 @@ func (c *ConfigService) dropImplicitAdmissionLimit(ctx context.Context) error {
 	}
 	var next *config.Snapshot
 	if stripped != nil {
-		if s, err := config.Validate(stripped, c.registry); err == nil {
+		if s, err := config.ValidateStored(stripped, c.registry); err == nil {
 			next = s
 		}
 	}

@@ -79,7 +79,18 @@ func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []
 // differ only in how they validate (a file composes its includes; a
 // generation is self-contained), so both checks share this.
 func checkAgainstPackages(configPath, exclude string, data []byte, validate func(config.Registry) (*config.Snapshot, error)) ([]config.Diagnostic, []string, error) {
+	policy, err := offlinePolicy()
+	if err != nil {
+		return nil, nil, err
+	}
+	return checkUnderPolicy(policy, configPath, exclude, data, validate)
+}
+
+// checkUnderPolicy is checkAgainstPackages under a policy already loaded,
+// for a command that was told which one (serve --policy --restore).
+func checkUnderPolicy(policy *config.Policy, configPath, exclude string, data []byte, validate func(config.Registry) (*config.Snapshot, error)) ([]config.Diagnostic, []string, error) {
 	reg := registry(map[string]extension.Executor{})
+	reg.Policy = policy
 	pkgs := offlineExternal(&reg, configPath, exclude, data)
 	defer pkgs.close()
 	s, err := validate(reg)
@@ -459,6 +470,10 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
 	executors := map[string]extension.Executor{}
 	reg := registry(executors)
+	var policyErr error
+	if reg.Policy, policyErr = offlinePolicy(); policyErr != nil {
+		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unreadable_policy", Detail: "the daemon's policy can't be read: " + policyErr.Error()}, skipped}
+	}
 	pkgs := offlineExternal(&reg, configPath, "", data)
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	defer pkgs.close()

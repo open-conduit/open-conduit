@@ -520,13 +520,14 @@ func (d *daemon) manifestSnapshot(ctx context.Context) *config.Snapshot {
 		}
 	}
 	packageRegistry(&reg, xs)
+	reg.Policy = d.policy
 	generation, normalized, err := management.StoredGeneration(ctx, d.coord, d.now)
 	var s *config.Snapshot
 	switch {
 	case err != nil:
 		return nil
 	case generation != 0:
-		s, err = config.Validate(normalized, reg)
+		s, err = config.ValidateStored(normalized, reg)
 	default:
 		data, rerr := config.ReadFile(d.o.ConfigPath)
 		if rerr != nil {

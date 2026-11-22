@@ -69,6 +69,40 @@ type Budget struct {
 	Unit, Per, Period string
 	ScopeID           domain.ID
 	Max, WarnAt       float64
+	// PinnedMax is the ceiling the daemon's policy sets on this ledger; zero
+	// is none. Max may be lower, when the config's own limit is stricter: a
+	// release passes that limit but never this one.
+	PinnedMax float64
+}
+
+// overPinned reports whether used has reached the policy's ceiling.
+func (b Budget) overPinned(used float64) bool { return b.PinnedMax > 0 && used >= b.PinnedMax }
+
+// ErrBudgetPinned refuses the release of a hold while the Work is over a
+// pinned budget.
+var ErrBudgetPinned = fmt.Errorf("%w: over a budget the daemon's policy sets", ErrHeld)
+
+// overPinnedInTx reports whether the Work has reached a policy ceiling now.
+func overPinnedInTx(tx storage.Tx, now time.Time, budgets []Budget, w domain.Work) (bool, error) {
+	if !slices.ContainsFunc(budgets, func(b Budget) bool { return b.PinnedMax > 0 }) {
+		return false, nil
+	}
+	if err := settleUsageInTx(tx, now, budgets); err != nil {
+		return false, err
+	}
+	for _, b := range budgets {
+		if b.PinnedMax <= 0 || !b.applies(w.ScopeID) {
+			continue
+		}
+		l, err := ledgerInTx(tx, b.ledgerKey(w.ID, w.ScopeID, now))
+		if err != nil {
+			return false, err
+		}
+		if b.overPinned(l[b.Unit]) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (b Budget) applies(scope domain.ID) bool { return b.ScopeID == "" || b.ScopeID == scope }
@@ -374,7 +408,8 @@ func admitBudgetInTx(tx storage.Tx, now time.Time, budgets []Budget, w domain.Wo
 			over = append(over, overBudget{b, used})
 		}
 	}
-	if len(over) > 0 && !passed {
+	// A release's pass never carries a turn past a pinned budget.
+	if len(over) > 0 && (!passed || slices.ContainsFunc(over, func(o overBudget) bool { return o.overPinned(o.Used) })) {
 		return true, holdOverBudgetInTx(tx, now, w, over)
 	}
 	counted := map[string]float64{"turns": 1}
@@ -398,6 +433,9 @@ func holdOverBudgetInTx(tx storage.Tx, now time.Time, w domain.Work, over []over
 		}
 	}
 	reason := "Over budget: " + strings.Join(parts, "; ") + ". Release the hold to let one more turn start, or raise the limit."
+	if slices.ContainsFunc(over, func(o overBudget) bool { return o.overPinned(o.Used) }) {
+		reason = "Over budget: " + strings.Join(parts, "; ") + ". The daemon's policy sets this limit, so a release doesn't pass it; only the person running the daemon can raise it."
+	}
 	data, _ := json.Marshal(struct {
 		Reason string   `json:"reason"`
 		Over   []string `json:"over"`

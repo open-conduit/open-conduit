@@ -116,7 +116,7 @@ func ApplyFragment(stored []byte, name string, fragment []byte, reg Registry) (*
 		}
 	}
 	doc.Scopes = composed
-	s, err := ValidateDocument(doc, reg)
+	s, err := validateDocument(doc, reg, policyMode{fragment: name})
 	var invalidErr *ValidationError
 	if errors.As(err, &invalidErr) {
 		for i, d := range invalidErr.Diagnostics {

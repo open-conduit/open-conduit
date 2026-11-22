@@ -86,3 +86,48 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 		t.Fatalf("service install --restore: %d %q", code, msg)
 	}
 }
+
+// TestRestoreGetsThePolicyHoweverItWasSupplied: serve --policy and
+// OPEN_CONDUIT_POLICY give a restore the same policy, and the flag wins.
+func TestRestoreGetsThePolicyHoweverItWasSupplied(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name, env string
+		args      []string
+		want      string
+	}{
+		{"flag", "", []string{"serve", "--policy", "flag.json", "--restore", "b"}, "flag.json"},
+		{"variable", "env.json", []string{"serve", "--restore", "b"}, "env.json"},
+		{"flag over variable", "env.json", []string{"serve", "--policy", "flag.json", "--restore", "b"}, "flag.json"},
+		{"backup restore", "env.json", []string{"backup", "restore", "b", "--in-place"}, "env.json"},
+		{"none", "", []string{"serve", "--restore", "b"}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			var out, errOut bytes.Buffer
+			e := Env{Getenv: func(k string) string {
+				switch k {
+				case "OPEN_CONDUIT_DATA_DIR":
+					return filepath.Join(root, "state")
+				case "OPEN_CONDUIT_POLICY":
+					return c.env
+				}
+				return ""
+			}, Cwd: root, Serve: func(ServeRequest) int { return 0 },
+				State: &StateOps{RestoreInPlace: func(_ context.Context, _, _ string, o RestoreOptions) (BackupInfo, error) {
+					got = o.PolicyPath
+					return BackupInfo{InPlace: &InPlaceReport{Check: &StateReport{OK: true}}}, nil
+				}}}
+			if code := RunOperator("test", "abc", c.args, e, &out, &errOut); code != 0 {
+				t.Fatalf("exit %d: %s", code, errOut.String())
+			}
+			want := c.want
+			if want != "" {
+				want = filepath.Join(root, want)
+			}
+			if got != want {
+				t.Fatalf("policy path %q, want %q", got, want)
+			}
+		})
+	}
+}

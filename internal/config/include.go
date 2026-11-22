@@ -109,6 +109,11 @@ func compose(data []byte, reg Registry, inc Includes) (*Document, []string, erro
 			}
 			continue
 		}
+		// Refused before the folder is read.
+		if reg.Policy.RefusesIncludedFolders() {
+			c.fail(p+"/path", PolicyDenied, "the daemon's policy does not allow included folders; use a submitted include or move the scopes into the config file")
+			continue
+		}
 		folder, ok := includeFolder(in.Path, inc.Base)
 		if !ok {
 			c.fail(p+"/path", "invalid_value", "use an absolute folder, or one relative to the config file's directory")

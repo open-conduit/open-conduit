@@ -153,8 +153,14 @@ func (d *daemon) capacityPools(ctx context.Context) ([]management.Pool, error) {
 		switch u.Pool {
 		case runtime.GlobalPool:
 			p.Name, p.Setting = "agents", "settings.concurrency"
+			if d.policy != nil {
+				p.Ceiling = d.policy.Limits.Concurrency
+			}
 		case jobPool:
 			p.Setting = "settings.job_concurrency"
+			if d.policy != nil {
+				p.Ceiling = d.policy.Limits.JobConcurrency
+			}
 		}
 		out = append(out, p)
 	}

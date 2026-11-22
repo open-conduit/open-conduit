@@ -150,6 +150,10 @@ type RestoreOptions struct {
 	// its installed packages are the ones the restored generation is
 	// checked against.
 	ConfigPath string
+	// PolicyPath is the daemon's policy (--policy, OPEN_CONDUIT_POLICY),
+	// which the restored or start config is checked against. A path that
+	// can't be read refuses the restore before it changes anything.
+	PolicyPath string
 	// StartConfig is a config file to start on in place of the generation
 	// the bundle was taken on, for a restore onto another machine. It is
 	// published with the restore or the restore publishes nothing, and the
@@ -251,7 +255,7 @@ func (o *operator) backup(args []string) int {
 	case "verify":
 		return o.emit(o.env.State.Verify(cx, o.abs(pos[0]), RestoreOptions{ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}))
 	case "restore":
-		ro := RestoreOptions{DatabaseLocation: f.get("database-location"), ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), ConfigPath: o.configPath(f.get("config")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
+		ro := RestoreOptions{DatabaseLocation: f.get("database-location"), ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), ConfigPath: o.configPath(f.get("config")), PolicyPath: o.abs(o.env.Getenv("OPEN_CONDUIT_POLICY")), TrustKeys: trust, AcceptUnsigned: *acceptUnsigned}
 		if v := f.get("start-config"); v != "" {
 			ro.StartConfig = o.abs(v)
 		}

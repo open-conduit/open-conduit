@@ -197,6 +197,10 @@ func scopeIDs(ctx context.Context, store storage.Store) ([]string, error) {
 // existing one), fences every backed-up lease and writes a fresh operator
 // credential, revoking the bundle's.
 func RestoreState(ctx context.Context, bundle, destination string, o cli.RestoreOptions) (cli.BackupInfo, error) {
+	policy, err := restorePolicy(o)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
 	target, choice, err := restoreTarget(o)
 	if err != nil {
 		return cli.BackupInfo{}, err
@@ -208,7 +212,7 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, trust, time.Now().UTC(), retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o, policy)); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -230,7 +234,7 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		return info, err
 	}
-	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o))
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o), policy)
 	info.StartConfig = o.StartConfig
 	return info, err
 }
@@ -248,7 +252,7 @@ func restoreConfigPath(o cli.RestoreOptions) string {
 // stage, after the storage choice is recorded and before the directory is
 // published: a config that is refused leaves nothing published, so a daemon
 // can't start on the old machine's generation by accident.
-func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOptions) backup.Record {
+func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOptions, policy *config.Policy) backup.Record {
 	if o.StartConfig == "" {
 		return record
 	}
@@ -268,7 +272,7 @@ func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOpt
 			return fmt.Errorf("reading the start config: %w", err)
 		}
 		var published error
-		diags, _, err := checkAgainstPackages(o.StartConfig, "", data, func(reg config.Registry) (*config.Snapshot, error) {
+		diags, _, err := checkUnderPolicy(policy, o.StartConfig, "", data, func(reg config.Registry) (*config.Snapshot, error) {
 			s, err := management.PublishStartConfig(ctx, store, func() time.Time { return time.Now().UTC() }, reg, o.StartConfig)
 			var invalid *config.ValidationError
 			if err != nil && !errors.As(err, &invalid) {
@@ -296,13 +300,13 @@ func withStartConfig(ctx context.Context, record backup.Record, o cli.RestoreOpt
 // reason the daemon would refuse it, packages that couldn't start
 // included. A check that fails outright is reported as a problem too: the
 // directory is already published, and the operator still needs its token.
-func restoredConfig(ctx context.Context, store storage.Store, configPath string) (uint64, []cli.ConfigEntry, error) {
+func restoredConfig(ctx context.Context, store storage.Store, configPath string, policy *config.Policy) (uint64, []cli.ConfigEntry, error) {
 	gen, normalized, err := management.StoredGeneration(ctx, store, func() time.Time { return time.Now().UTC() })
 	if err != nil || gen == 0 {
 		return 0, nil, err
 	}
-	diags, _, err := checkAgainstPackages(configPath, "", normalized, func(reg config.Registry) (*config.Snapshot, error) {
-		return config.Validate(normalized, reg)
+	diags, _, err := checkUnderPolicy(policy, configPath, "", normalized, func(reg config.Registry) (*config.Snapshot, error) {
+		return config.ValidateStored(normalized, reg)
 	})
 	if err != nil {
 		return gen, []cli.ConfigEntry{{Code: "unchecked", Message: "the restored generation could not be checked: " + err.Error()}}, nil
@@ -525,7 +529,11 @@ func offlineSigningKey(ctx context.Context, o cli.BackupOptions) (ed25519.Privat
 	if err != nil || settings.SigningKey == "" {
 		return nil, err
 	}
-	resolver := &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath)}
+	policy, err := offlinePolicy()
+	if err != nil {
+		return nil, err
+	}
+	resolver := &config.Resolver{SecretsFile: config.SecretsPath(o.ConfigPath), Policy: policy}
 	value, err := resolver.ResolveNamed(ctx, "backup_signing_key", settings.SigningKey)
 	if err != nil {
 		return nil, fmt.Errorf("resolving settings.backup.signing_key: %w (--unsigned publishes without it)", err)
