@@ -54,6 +54,15 @@ func (t *transaction) RetireEvent(id domain.ID) error {
 	_, err = t.exec("DELETE FROM events WHERE id=?", id)
 	return err
 }
+func (t *transaction) Tombstones(after domain.ID, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	return list[domain.AcceptedEvent](t, "SELECT record FROM event_tombstones WHERE id>? ORDER BY id LIMIT ?", after, limit)
+}
 func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	if !t.live {
 		return nil, storage.ErrInvalid

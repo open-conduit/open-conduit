@@ -20,6 +20,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -146,7 +147,7 @@ func VerifyBundle(ctx context.Context, bundle string, o cli.RestoreOptions) (cli
 	dest := filepath.Join(tmp, "state")
 	// Verification restores into the file store in its own temporary
 	// directory, never into a store the operator uses.
-	if err := backup.Restore(ctx, bundle, dest, trust, time.Now().UTC(), retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend}, recordChoice); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, trust, time.Now().UTC(), retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend, EventArchive: sqlite.ArchiveBackend}, recordChoice); err != nil {
 		return info, err
 	}
 	_, store, err := openState(ctx, dest)

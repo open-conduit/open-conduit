@@ -43,6 +43,18 @@ func (b brokenDedupTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	return b.Tx.AcceptEvent(e)
 }
 
+// hidesRetired lists no tombstones, so a backup couldn't tell which Events
+// the archive has to hold.
+type hidesRetired struct{ storage.Store }
+type hidesRetiredTx struct{ storage.Tx }
+
+func (b hidesRetired) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(hidesRetiredTx{tx}) })
+}
+func (hidesRetiredTx) Tombstones(domain.ID, int) ([]domain.AcceptedEvent, error) {
+	return []domain.AcceptedEvent{}, nil
+}
+
 // forgetsRetired treats a tombstone as no record of the delivery, so a
 // redelivery of a retired Event is accepted again.
 type forgetsRetired struct{ storage.Store }
@@ -713,6 +725,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 	}{
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
 		{"retired_event_keeps_identity_and_sequence", "redelivery accepted again", func() storage.Store { return forgetsRetired{reference.New()} }},
+		{"retired_event_keeps_identity_and_sequence", "retired events", func() storage.Store { return hidesRetired{reference.New()} }},
 		{"retired_event_keeps_identity_and_sequence", "sequence went backwards", func() storage.Store { return liveMaxSequence{reference.New()} }},
 		{"retired_event_keeps_identity_and_sequence", "timer citing a retired cause", func() storage.Store { return liveOnlyReferences{reference.New(), "cause"} }},
 		{"retired_event_keeps_identity_and_sequence", "timer reused a retired event ID", func() storage.Store { return liveOnlyReferences{reference.New(), "id"} }},
