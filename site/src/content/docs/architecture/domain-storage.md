@@ -177,6 +177,8 @@ The routing, wait and recovery rules in [B04](../runtime-semantics/) (successor 
 
 A backend whose state another system replicates continuously can also implement `storage.ReplicaRestorer`: `RestoreReplica` publishes what that system kept at an absent destination, verified and fenced as `Restore` does a snapshot, without changing the replica ([restoring from a replica](../recovery/#restoring-from-a-replica)).
 
+A backend states its recovery point by implementing `storage.RecoveryStater`, which the lifecycle conformance suite requires. `RecoveryPoint(ctx, location)` changes nothing and says one of three things: `none` (the state can't be continuously copied, so the latest snapshot is the recovery point), `unobserved` (another system can copy it, but the backend can't see whether one is) or `observed` (the backend sees a copy, and gives its lag). A statement covers only what the backend knows. SQLite says `unobserved`, because a WAL replicator is a separate process, while a database server with its own replication could say `observed`. The interface is separate from `Backend` so that adding it breaks no backend built outside this repository. Doctor's `recovery_point` check reports the statement beside the newest scheduled bundle's age, as information: how much loss is acceptable is the operator's call, so it warns only when a backend can't answer or gives an invalid answer.
+
 ## Evidence
 
 Run `go test -race ./...` and `go vet ./...` from the repository root; no external service is needed.

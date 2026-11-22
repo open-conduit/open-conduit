@@ -86,6 +86,7 @@ func LifecycleCases() []LifecycleCase {
 		{"restore_fences_every_lease", restoreFences},
 		{"fence_ends_live_lease_authority", fenceInPlace},
 		{"integrity_check_finds_corruption", integrityCheck},
+		{"states_its_recovery_point", statesRecoveryPoint},
 	}
 }
 
@@ -554,6 +555,44 @@ func fenceInPlace(t *testing.T, h LifecycleHarness) error {
 		return err
 	}
 	return fenced(db, ref, c)
+}
+
+// statesRecoveryPoint: a backend says what it knows of its recovery point, in
+// a form the contract allows, whether the state is open or closed, and saying
+// so changes nothing.
+func statesRecoveryPoint(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	stater, ok := h.Backend.(storage.RecoveryStater)
+	if !ok {
+		return fmt.Errorf("the backend doesn't state its recovery point")
+	}
+	location, err := openSeeded(t, h)
+	if err != nil {
+		return err
+	}
+	before := h.Fingerprint(t, location)
+	point, err := stater.RecoveryPoint(ctx, location)
+	if err != nil {
+		return fmt.Errorf("stating the recovery point of closed state: %w", err)
+	}
+	if !point.Valid() {
+		return fmt.Errorf("the backend stated an invalid recovery point: %+v", point)
+	}
+	if h.Fingerprint(t, location) != before {
+		return fmt.Errorf("stating the recovery point changed the state")
+	}
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if point, err = stater.RecoveryPoint(ctx, location); err != nil {
+		return fmt.Errorf("stating the recovery point of open state: %w", err)
+	}
+	if !point.Valid() {
+		return fmt.Errorf("the backend stated an invalid recovery point: %+v", point)
+	}
+	return nil
 }
 
 // integrityCheck: healthy state passes, and once the state is damaged

@@ -2,17 +2,21 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func backupDaemon(t *testing.T, now time.Time) *daemon {
@@ -112,4 +116,58 @@ func TestScheduledBackupsOff(t *testing.T) {
 	if _, err := os.Lstat(d.o.BackupDir); !os.IsNotExist(err) {
 		t.Fatalf("backups off but directory made: %v", err)
 	}
+}
+
+// Doctor reports what the backend states and the newest bundle, and never
+// turns the answer into a warning: how much loss is acceptable is the
+// operator's call.
+func TestRecoveryCheckReportsTheBackendsStatement(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	d := backupDaemon(t, now)
+	d.backups.source = coordination{name: sqlite.Name, backend: sqlite.Backend, location: filepath.Join(d.o.StateDir, "conduit.db")}
+	check := d.recoveryCheck(ctx)
+	if check.Status != runtime.CheckInfo || check.Code != "replication_unobserved" || !strings.Contains(check.Detail, "can't see") {
+		t.Fatalf("check = %+v", check)
+	}
+	if len(check.Items) != 1 || check.Items[0] != "no scheduled bundle yet" {
+		t.Fatalf("items = %v", check.Items)
+	}
+	if err := d.backupNow(ctx, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	check = d.recoveryCheck(ctx)
+	if len(check.Items) != 1 || !strings.Contains(check.Items[0], "conduit-20261122T100000Z, 2h0m0s old") {
+		t.Fatalf("items = %v", check.Items)
+	}
+	d.backups.source.backend = statingBackend{Backend: sqlite.Backend, point: storage.RecoveryPoint{Replication: storage.ReplicationObserved, Lag: 3 * time.Second, Detail: "streaming to a standby"}}
+	if check = d.recoveryCheck(ctx); check.Status != runtime.CheckInfo || check.Code != "replication_observed" || !strings.Contains(check.Detail, "3s behind") {
+		t.Fatalf("observed: %+v", check)
+	}
+	d.backups.source.backend = statingBackend{Backend: sqlite.Backend, err: errors.New("server unreachable")}
+	if check = d.recoveryCheck(ctx); check.Status != runtime.CheckWarn || check.Code != "unavailable" {
+		t.Fatalf("failed: %+v", check)
+	}
+	d.backups.source.backend = statingBackend{Backend: sqlite.Backend, point: storage.RecoveryPoint{Replication: "unknown", Detail: "?"}}
+	if check = d.recoveryCheck(ctx); check.Status != runtime.CheckWarn || check.Code != "invalid" {
+		t.Fatalf("invalid: %+v", check)
+	}
+	d.backups.source.backend = struct{ storage.Backend }{sqlite.Backend}
+	if check = d.recoveryCheck(ctx); check.Status != runtime.CheckInfo || check.Code != "unstated" {
+		t.Fatalf("unstated: %+v", check)
+	}
+	d.o.BackupInterval = -1
+	if check = d.recoveryCheck(ctx); len(check.Items) != 1 || check.Items[0] != "scheduled backups are off" {
+		t.Fatalf("off: %+v", check)
+	}
+}
+
+type statingBackend struct {
+	storage.Backend
+	point storage.RecoveryPoint
+	err   error
+}
+
+func (b statingBackend) RecoveryPoint(context.Context, string) (storage.RecoveryPoint, error) {
+	return b.point, b.err
 }

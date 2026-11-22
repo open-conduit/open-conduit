@@ -21,6 +21,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Shipping bundles off the host. After a scheduled bundle is published the
@@ -222,6 +223,45 @@ func (d *daemon) backupCheck(context.Context) runtime.Check {
 		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: "not_yet_shipped", Detail: "no shipment to these destinations since the daemon started", Items: waiting}
 	}
 	return runtime.Check{Name: name, Status: runtime.CheckOK, Code: "shipped", Detail: "every backup destination holds the latest bundle", Items: landed}
+}
+
+// recoveryCheck is doctor's report of the recovery point: what the backend can
+// say about a continuous copy, and the newest scheduled bundle. How much loss
+// is acceptable is the operator's call, so it never warns about the answer.
+func (d *daemon) recoveryCheck(ctx context.Context) runtime.Check {
+	check := runtime.Check{Name: "recovery_point", Status: runtime.CheckInfo}
+	stater, ok := d.backups.source.backend.(storage.RecoveryStater)
+	if !ok {
+		check.Code, check.Detail = "unstated", "the storage backend doesn't state its recovery point"
+	} else {
+		point, err := stater.RecoveryPoint(ctx, d.backups.source.location)
+		switch {
+		case err != nil:
+			check.Status, check.Code, check.Detail = runtime.CheckWarn, "unavailable", "the storage backend couldn't state its recovery point: "+err.Error()
+		case !point.Valid():
+			check.Status, check.Code, check.Detail = runtime.CheckWarn, "invalid", "the storage backend stated an invalid recovery point"
+		default:
+			check.Code, check.Detail = "replication_"+string(point.Replication), point.Detail
+			if point.Replication == storage.ReplicationObserved {
+				check.Detail += fmt.Sprintf(" (%s behind)", point.Lag.Round(time.Second))
+			}
+		}
+	}
+	if d.o.BackupInterval < 0 {
+		check.Items = []string{"scheduled backups are off"}
+		return check
+	}
+	names, times, err := scheduledBundles(d.o.BackupDir)
+	switch {
+	case err != nil:
+		check.Items = []string{"the backup directory can't be read: " + err.Error()}
+	case len(names) == 0:
+		check.Items = []string{"no scheduled bundle yet"}
+	default:
+		last := len(names) - 1
+		check.Items = []string{fmt.Sprintf("newest scheduled bundle: %s, %s old", names[last], d.now().Sub(times[last]).Round(time.Minute))}
+	}
+	return check
 }
 
 // shipFailure says how far a shipment got.

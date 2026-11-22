@@ -549,6 +549,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return fmt.Errorf("artifacts: %w", err)
 	}
 	defer d.artifacts.Close()
+	d.backups.source = backend
 	if err = d.startBackups(backend.name, store); err != nil {
 		return fmt.Errorf("backups: %w", err)
 	}
@@ -816,7 +817,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	checks := append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.eventArchiveCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
+	checks := append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.recoveryCheck, d.eventArchiveCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
 	if d.policy != nil {
 		checks = append(checks, d.policyCheck)
 	}

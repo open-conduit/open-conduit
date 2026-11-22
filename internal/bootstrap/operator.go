@@ -459,7 +459,7 @@ func (d *daemon) reportedCode(kind, subject string) string {
 }
 
 // daemonChecks are the doctor checks only a running daemon makes.
-var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "backup_destinations", "github", "linear", "jira", "bitbucket", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
+var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "backup_destinations", "recovery_point", "github", "linear", "jira", "bitbucket", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party

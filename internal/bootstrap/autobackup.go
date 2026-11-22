@@ -36,7 +36,10 @@ const (
 
 type backupState struct {
 	// name is db's backend, which the bundle records.
-	name    string
+	name string
+	// source is the backend and location db was opened from, which doctor
+	// asks for the recovery point.
+	source  coordination
 	db      storage.Database
 	mu      sync.Mutex
 	running bool
