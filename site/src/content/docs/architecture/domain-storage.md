@@ -57,7 +57,7 @@ Claim assigns first-start time; terminal Execution writes assign finish time. Pa
 - any Event of unfinished Work, and the trigger, inputs and wake of its attempts, wherever they were routed;
 - anything past the oldest position an active Wait or dependency has yet to scan, because it could still wake it.
 
-**Open before anything retires Events:** a dependency declared without `FromNow` scans all accepted history, so that a state already met counts. The scan reads the live log inside a write transaction, so it would not see a retired Event, and a Wait on one would never wake. The guard can't prevent this, because the dependency doesn't exist yet when the Event is retired. The scan has to learn to catch up from the archive first.
+A dependency declared without `FromNow` scans all accepted history, so that a state already met counts, including one whose Event has been retired. It catches up from the archive: the subscription is installed first, which pins every Event after its checkpoint in the live log, so the archived records it needs can no longer change. They are read by correlation key outside any transaction and merged with the live log by sequence in the write transaction, so its filter sees whole records and no write waits on the archive. If the archive can't be read, the checkpoint stays where it is and the next pass reads again, because scanning the live log alone would pass an archived Event by for good.
 
 ## Event archive
 

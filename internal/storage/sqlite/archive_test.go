@@ -117,6 +117,24 @@ func (a weakenedArchive) TypeEvents(ctx context.Context, eventType string, scope
 	return a.EventArchive.TypeEvents(ctx, eventType, scopes, after, limit)
 }
 
+func (a weakenedArchive) CorrelationEvents(ctx context.Context, key domain.CorrelationKey, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if a.mode != "correlation" {
+		return a.EventArchive.CorrelationEvents(ctx, key, after, limit)
+	}
+	all, err := a.EventArchive.Events(ctx, after, 0)
+	if err != nil {
+		return nil, err
+	}
+	// Matches on the source alone.
+	out := slices.DeleteFunc(all, func(e domain.AcceptedEvent) bool {
+		return e.Event.CorrelationKey == nil || e.Event.CorrelationKey.Source != key.Source
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func TestWeakenedEventArchivesAreRejected(t *testing.T) {
 	for _, negative := range []struct{ mode, name, diagnostic string }{
 		{"payload", "keeps_the_whole_record", "archived record changed"},
@@ -127,6 +145,7 @@ func TestWeakenedEventArchivesAreRejected(t *testing.T) {
 		{"named", "work_events_follow_naming_and_routing", "work events"},
 		{"scope", "scope_and_type_reads_select_by_the_record", "scope events"},
 		{"type", "scope_and_type_reads_select_by_the_record", "type events"},
+		{"correlation", "correlation_events_select_by_the_key", "correlation events"},
 		{"forgets", "records_survive_reopen", "records after reopen"},
 	} {
 		t.Run(negative.mode, func(t *testing.T) {

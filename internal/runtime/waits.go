@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -1031,7 +1033,8 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 	if err = s.authorizeAlias(ctx, sub); err != nil {
 		return err
 	}
-	return s.transact(ctx, nil, func(tx storage.Tx) error {
+	key := identity(request.Namespace) + "/" + identity(request.ID)
+	if err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		for _, old := range scopes {
 			now, er := tx.Scope(old.ID)
 			if er != nil {
@@ -1041,7 +1044,6 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 				return storage.ErrConflict
 			}
 		}
-		key := identity(request.Namespace) + "/" + identity(request.ID)
 		var old subscription
 		er := getJSON(tx, subscriptionNamespace, key, &old)
 		if er == nil {
@@ -1063,13 +1065,108 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 		if er = putJSON(tx, subscriptionNamespace, key, sub); er != nil {
 			return er
 		}
-		// An unanswered filter leaves the subscription installed, stopped
-		// before that Event: the next pass asks again. The scan advances
-		// its own copy, so a rerun scans from the start again.
+		// With an archive the scan runs after this commit (below). Without
+		// one, an unanswered filter leaves the subscription installed,
+		// stopped before that Event: the next pass asks again. The scan
+		// advances its own copy, so a rerun scans from the start again.
+		if s.options.EventArchive != nil {
+			return nil
+		}
 		scanned := sub
-		_, er = s.reconcileSubscriptionInTx(tx, key, &scanned)
+		_, er = s.reconcileSubscriptionInTx(tx, key, &scanned, nil)
+		return er
+	}); err != nil {
+		return err
+	}
+	if s.options.EventArchive == nil {
+		return nil
+	}
+	// Installed, the subscription pins every Event after its checkpoint in
+	// the live log (RetirementGuard), so what it needs from the archive can
+	// no longer change. A failed archive read leaves it installed at its
+	// checkpoint, and the next pass reads again and reports it.
+	_, err = s.reconcileSubscription(ctx, key, sub)
+	if errors.Is(err, ErrDependencyArchiveUnavailable) {
+		return nil
+	}
+	return err
+}
+
+// ErrDependencyArchiveUnavailable is a dependency that couldn't read the
+// event archive. Its checkpoint stays put: scanning only the live log would
+// pass an archived Event by for good.
+var ErrDependencyArchiveUnavailable = errors.New("runtime: dependency could not read the event archive")
+
+// reconcileSubscription runs one authorized scan of an installed
+// subscription, with its source's archived Events read before the write
+// transaction so that no write waits on the archive.
+func (s *Scheduler) reconcileSubscription(ctx context.Context, key string, sub subscription) ([]*DependencyFilterError, error) {
+	var scopes []domain.Scope
+	if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		var er error
+		scopes, er = captureAliasScopesInTx(tx, sub.Request.SourceScopeID, sub.TargetScopeID)
+		return er
+	}); err != nil {
+		return nil, err
+	}
+	if err := s.authorizeAlias(ctx, sub); err != nil {
+		return nil, err
+	}
+	var archived []domain.AcceptedEvent
+	if s.options.EventArchive != nil {
+		var err error
+		if archived, err = s.options.EventArchive.CorrelationEvents(ctx, sub.Request.SourceKey, sub.Checkpoint, 0); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("%w: wait %s: %w", ErrDependencyArchiveUnavailable, sub.Request.WaitID, err)
+		}
+	}
+	var failed []*DependencyFilterError
+	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		failed = nil
+		for _, old := range scopes {
+			current, er := tx.Scope(old.ID)
+			if er != nil {
+				return er
+			}
+			if !reflect.DeepEqual(old, current) {
+				return storage.ErrConflict
+			}
+		}
+		var current subscription
+		if er := getJSON(tx, subscriptionNamespace, key, &current); er != nil {
+			return er
+		}
+		if !current.Active {
+			return nil
+		}
+		var er error
+		failed, er = s.reconcileSubscriptionInTx(tx, key, &current, archived)
 		return er
 	})
+	return failed, err
+}
+
+// mergeArchivedEvents adds to the live page the archived records after the
+// checkpoint, in sequence order. A record in both, from a pass that stopped
+// between copying and retiring, is answered from the live log.
+func mergeArchivedEvents(live, archived []domain.AcceptedEvent, checkpoint uint64) []domain.AcceptedEvent {
+	if len(archived) == 0 {
+		return live
+	}
+	held := make(map[uint64]bool, len(live))
+	for _, a := range live {
+		held[a.Sequence] = true
+	}
+	out := append(make([]domain.AcceptedEvent, 0, len(live)+len(archived)), live...)
+	for _, a := range archived {
+		if a.Sequence > checkpoint && !held[a.Sequence] {
+			out = append(out, a)
+		}
+	}
+	slices.SortFunc(out, func(a, b domain.AcceptedEvent) int { return cmp.Compare(a.Sequence, b.Sequence) })
+	return out
 }
 func (s *Scheduler) authorizeAlias(ctx context.Context, sub subscription) error {
 	if sub.Request.SourceScopeID == sub.TargetScopeID {
@@ -1144,43 +1241,17 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 			break
 		}
 		count++
-		var scopes []domain.Scope
 		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
-			var er error
-			scopes, er = captureAliasScopesInTx(tx, sub.Request.SourceScopeID, sub.TargetScopeID)
-			if er != nil {
-				return er
-			}
 			return putJSON(tx, waitNamespace, "subscription_cursor", row.Key)
 		}); err != nil {
 			return err
 		}
-		if err := s.authorizeAlias(ctx, sub); err != nil {
-			return err
+		failed, err := s.reconcileSubscription(ctx, row.Key, sub)
+		if errors.Is(err, ErrDependencyArchiveUnavailable) {
+			unanswered = append(unanswered, err)
+			continue
 		}
-		var failed []*DependencyFilterError
-		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
-			failed = nil
-			for _, old := range scopes {
-				current, er := tx.Scope(old.ID)
-				if er != nil {
-					return er
-				}
-				if !reflect.DeepEqual(old, current) {
-					return storage.ErrConflict
-				}
-			}
-			var current subscription
-			if er := getJSON(tx, subscriptionNamespace, row.Key, &current); er != nil {
-				return er
-			}
-			if !current.Active {
-				return nil
-			}
-			var er error
-			failed, er = s.reconcileSubscriptionInTx(tx, row.Key, &current)
-			return er
-		}); err != nil {
+		if err != nil {
 			return err
 		}
 		for _, f := range failed {
@@ -1209,8 +1280,9 @@ func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error
 // before it, so a later pass asks again rather than passing a one-time
 // occurrence (a merge) by, and failed names it (Held). Past the bounds
 // (unansweredPasses, unansweredFor) the Event is passed by instead, recorded
-// on the subscription and in failed.
-func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription) (failed []*DependencyFilterError, err error) {
+// on the subscription and in failed. archived is the source key's records
+// from the archive, read before this transaction.
+func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *subscription, archived []domain.AcceptedEvent) (failed []*DependencyFilterError, err error) {
 	wait, err := tx.Wait(sub.Request.WaitID)
 	if err != nil {
 		return nil, err
@@ -1227,7 +1299,7 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 	if err != nil {
 		return nil, err
 	}
-	for _, source := range all {
+	for _, source := range mergeArchivedEvents(all, archived, sub.Checkpoint) {
 		before := sub.Checkpoint
 		sub.Checkpoint = source.Sequence
 		if source.Event.CorrelationKey == nil || *source.Event.CorrelationKey != sub.Request.SourceKey {

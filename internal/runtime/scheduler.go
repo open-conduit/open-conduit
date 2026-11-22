@@ -107,6 +107,10 @@ type SchedulerOptions struct {
 	// later pass (ErrDependencyFilterUnavailable). A subscription with a
 	// filter and no AliasFilter never matches.
 	AliasFilter func(namespace string, filter domain.Payload, e domain.Event) (bool, error)
+	// EventArchive holds Events retired from the live log. A dependency
+	// catches up from it, read outside any transaction, so an already-met
+	// state still counts after its Event has left the live log.
+	EventArchive storage.EventArchive
 	// Toolbelt issues a fresh per-epoch credential after claim/recovery/resume
 	// for executors advertising a toolbelt transport other than none.
 	Toolbelt *Toolbelt
