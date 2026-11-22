@@ -127,6 +127,8 @@ func TestIncludedScopesStayBeneathTheirParent(t *testing.T) {
 		{"wider ceiling", `{"version":1,"scopes":[{"id":"web","name":"web","authorization":{"connections":[],"operations":["github.issue.comment"],"read_scopes":[]}}]}`, "includes/0/scopes/0/authorization/operations", ""},
 		{"duplicate id", `{"version":1,"scopes":[{"id":"home","name":"again"}]}`, "includes/0/scopes/0/id", "duplicate_id"},
 		{"version", `{"version":2,"scopes":[]}`, "includes/0/version", "unsupported_version"},
+		{"no scopes", `{"version":1}`, "includes/0/scopes", "missing_field"},
+		{"no version", `{"scopes":[]}`, "includes/0/version", "missing_field"},
 	}
 	for _, tc := range cases {
 		folder := filepath.Join(t.TempDir(), "web")
