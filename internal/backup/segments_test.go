@@ -193,6 +193,41 @@ func TestASegmentTheArchiveNoLongerMatchesIsNotReused(t *testing.T) {
 	}
 }
 
+// The same sequence can hold a different record once a daemon has gone on
+// from an earlier restore, so a segment is compared and not just counted.
+func TestASegmentWithADifferentRecordAtItsSequenceIsNotReused(t *testing.T) {
+	ctx := context.Background()
+	s := newArchiveState(t)
+	parent := t.TempDir()
+	earlier := bundleSegments(t, s.createIn(t, parent, "earlier", s.archive))
+	changed := s.whole
+	changed.Disposition = "reissued"
+	other, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(t.TempDir(), "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.PutEvents(ctx, []domain.AcceptedEvent{changed}); err != nil {
+		t.Fatal(err)
+	}
+	bundle := s.createIn(t, parent, "later", other)
+	if segments := bundleSegments(t, bundle); len(segments) != 1 || segments[0] == earlier[0] {
+		t.Fatalf("segments = %+v, reused %+v", segments, earlier)
+	}
+	destination, err := restoreArchive(t, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(destination, ArchiveDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if got, err := restored.Event(ctx, "gone"); err != nil || got.Disposition != "reissued" {
+		t.Fatalf("restored %+v, %v", got, err)
+	}
+}
+
 // A damaged segment isn't vouched for again: its records are written afresh.
 func TestADamagedSegmentIsWrittenAgain(t *testing.T) {
 	s := newArchiveState(t)
