@@ -747,6 +747,10 @@ The web setup assistant: a Claude Code session that looks at this machine and pr
 
 It declares no input schema.
 
+#### `setup.ask_secret`
+
+It declares no input schema.
+
 #### `setup.probe`
 
 It declares no input schema.
