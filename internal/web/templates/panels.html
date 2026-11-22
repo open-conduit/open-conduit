@@ -27,15 +27,17 @@ with choices, a choice is selected first and sent second, since an
 action's Event cannot be taken back. */}}
 {{define "action-control"}}
 {{- if .Secret}}
-<form method="post" action="/actions/secret" class="xaction" autocomplete="off">
+<form method="post" action="/actions/secret" class="xaction" enctype="multipart/form-data" autocomplete="off">
   <input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Return}}">
   {{- if .WorkID}}<input type="hidden" name="work" value="{{.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{.ScopeID}}">{{end}}
   <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}">
   <label class="field">
     <span>{{.Hint}}</span>
-    <span class="xaction-row"><input name="value" type="password" autocomplete="new-password" aria-describedby="secret-{{.ID}}"><button class="btn btn-primary">Store secret</button></span>
+    <span class="xaction-row"><input name="value" type="password" autocomplete="new-password" aria-describedby="secret-{{.ID}}"></span>
   </label>
-  <p class="xaction-note" id="secret-{{.ID}}">Stored as <code>{{.Secret}}</code>. The agent sees only that name. If it is already stored, leave this empty to use it.</p>
+  <label class="field"><span>Or choose a file, for a multi-line value such as a private key</span><input name="value_file" type="file" aria-describedby="secret-{{.ID}}"></label>
+  <button class="btn btn-primary">Store secret</button>
+  <p class="xaction-note" id="secret-{{.ID}}">Stored as <code>{{.Secret}}</code>. The agent sees only that name. If it is already stored, leave both empty to use it.</p>
 </form>
 {{- else}}
 <form method="post" action="/actions" class="xaction">
