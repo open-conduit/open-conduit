@@ -40,9 +40,12 @@ const (
 type Options struct {
 	Store     storage.Store
 	Artifacts storage.Artifacts
-	Now       func() time.Time
-	Control   *runtime.Control
-	Toolbelt  *runtime.Toolbelt
+	// History reads Events across the live log and an archive; its zero
+	// value reads the live log.
+	History  storage.EventHistory
+	Now      func() time.Time
+	Control  *runtime.Control
+	Toolbelt *runtime.Toolbelt
 	// Git is the toolbelt's git transport (NewGitTransport when nil).
 	Git        *GitTransport
 	Config     *ConfigService

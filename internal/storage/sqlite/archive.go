@@ -47,9 +47,11 @@ var (
 )
 
 var archiveIndexSchema = []string{
-	`CREATE TABLE records (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, period TEXT NOT NULL, work_id TEXT NOT NULL, routed_work_id TEXT NOT NULL)`,
+	`CREATE TABLE records (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, period TEXT NOT NULL, work_id TEXT NOT NULL, routed_work_id TEXT NOT NULL, scope_id TEXT NOT NULL, event_type TEXT NOT NULL)`,
 	`CREATE INDEX records_work ON records(work_id, sequence)`,
 	`CREATE INDEX records_routed_work ON records(routed_work_id, sequence)`,
+	`CREATE INDEX records_scope ON records(scope_id, sequence)`,
+	`CREATE INDEX records_type ON records(event_type, scope_id, sequence)`,
 	fmt.Sprintf(`PRAGMA user_version=%d`, archiveSchemaVersion),
 }
 
@@ -480,7 +482,7 @@ func (a *eventArchive) writePeriod(ctx context.Context, period string, events []
 		if err != nil {
 			return err
 		}
-		if _, err = conn.ExecContext(ctx, "INSERT INTO main.records(sequence,id,period,work_id,routed_work_id) VALUES(?,?,?,?,?)", e.Sequence, string(e.Event.ID), period, string(e.Event.WorkID), string(e.RoutedWorkID)); err != nil {
+		if _, err = conn.ExecContext(ctx, "INSERT INTO main.records(sequence,id,period,work_id,routed_work_id,scope_id,event_type) VALUES(?,?,?,?,?,?,?)", e.Sequence, string(e.Event.ID), period, string(e.Event.WorkID), string(e.RoutedWorkID), string(e.ScopeID), e.Event.Type); err != nil {
 			return mapError(err)
 		}
 		if _, err = conn.ExecContext(ctx, "INSERT INTO period.events(sequence,id,record) VALUES(?,?,?)", e.Sequence, string(e.Event.ID), b); err != nil {
@@ -520,6 +522,39 @@ func (a *eventArchive) WorkEvents(ctx context.Context, work domain.ID, after uin
 		return a.empty()
 	}
 	return a.page(ctx, "SELECT sequence,id,period FROM records WHERE (work_id=? OR routed_work_id=?) AND sequence>? ORDER BY sequence LIMIT ?", string(work), string(work), after, archiveLimit(limit))
+}
+
+// ScopeEvents implements storage.EventArchive.
+func (a *eventArchive) ScopeEvents(ctx context.Context, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if len(scopes) == 0 || after > 1<<63-1 {
+		return a.empty()
+	}
+	marks, args := archiveScopes(scopes)
+	args = append(args, after, archiveLimit(limit))
+	return a.page(ctx, "SELECT sequence,id,period FROM records WHERE scope_id IN ("+marks+") AND sequence>? ORDER BY sequence LIMIT ?", args...)
+}
+
+// TypeEvents implements storage.EventArchive.
+func (a *eventArchive) TypeEvents(ctx context.Context, eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if eventType == "" || after > 1<<63-1 || scopes != nil && len(scopes) == 0 {
+		return a.empty()
+	}
+	query, args := "SELECT sequence,id,period FROM records WHERE event_type=? AND sequence>?", []any{eventType, after}
+	if scopes != nil {
+		marks, scoped := archiveScopes(scopes)
+		query += " AND scope_id IN (" + marks + ")"
+		args = append(args, scoped...)
+	}
+	return a.page(ctx, query+" ORDER BY sequence LIMIT ?", append(args, archiveLimit(limit))...)
+}
+
+func archiveScopes(scopes []domain.ID) (string, []any) {
+	unique := slices.Compact(slices.Sorted(slices.Values(scopes)))
+	args := make([]any, len(unique))
+	for i, s := range unique {
+		args[i] = string(s)
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", len(unique)), ","), args
 }
 
 func archiveLimit(limit int) int {

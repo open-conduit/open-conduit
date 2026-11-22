@@ -52,6 +52,7 @@ func EventArchiveCases() []EventArchiveCase {
 		{"refuses_a_tombstone_or_unrouted_event_and_stores_none_of_the_batch", archiveRefuses},
 		{"reads_merge_periods_in_sequence_order", archiveOrder},
 		{"work_events_follow_naming_and_routing", archiveWorkEvents},
+		{"scope_and_type_reads_select_by_the_record", archiveScopeAndType},
 		{"records_survive_reopen", archiveReopen},
 	}
 }
@@ -233,6 +234,52 @@ func archiveWorkEvents(t *testing.T, h EventArchiveHarness) error {
 	}
 	if ids := archiveIDs(got); !reflect.DeepEqual(ids, []domain.ID{"routed"}) {
 		return fmt.Errorf("work events after a cursor: got %v, want routed", ids)
+	}
+	return nil
+}
+
+func archiveScopeAndType(t *testing.T, h EventArchiveHarness) error {
+	a, _, err := openArchive(t, h)
+	if err != nil {
+		return err
+	}
+	mine := archived("mine", 1, archiveMonth)
+	mine.Event.Type = "test.wanted"
+	theirs := archived("theirs", 2, archiveMonth.AddDate(0, 1, 0))
+	theirs.ScopeID, theirs.Event.Type = "other", "test.wanted"
+	unrecorded := archived("unrecorded", 3, archiveMonth)
+	unrecorded.ScopeID, unrecorded.Event.Type = "", "test.other"
+	if err = a.PutEvents(archiveCtx, []domain.AcceptedEvent{mine, theirs, unrecorded}); err != nil {
+		return err
+	}
+	for _, c := range []struct {
+		name string
+		read func() ([]domain.AcceptedEvent, error)
+		want []domain.ID
+	}{
+		{"scope events", func() ([]domain.AcceptedEvent, error) { return a.ScopeEvents(archiveCtx, []domain.ID{"scope"}, 0, 0) }, []domain.ID{"mine"}},
+		{"scope events with unrecorded", func() ([]domain.AcceptedEvent, error) {
+			return a.ScopeEvents(archiveCtx, []domain.ID{"scope", ""}, 0, 0)
+		}, []domain.ID{"mine", "unrecorded"}},
+		{"scope events after a cursor", func() ([]domain.AcceptedEvent, error) {
+			return a.ScopeEvents(archiveCtx, []domain.ID{"scope", ""}, 1, 1)
+		}, []domain.ID{"unrecorded"}},
+		{"no scopes", func() ([]domain.AcceptedEvent, error) { return a.ScopeEvents(archiveCtx, nil, 0, 0) }, []domain.ID{}},
+		{"type events", func() ([]domain.AcceptedEvent, error) { return a.TypeEvents(archiveCtx, "test.wanted", nil, 0, 0) }, []domain.ID{"mine", "theirs"}},
+		{"type events in a scope", func() ([]domain.AcceptedEvent, error) {
+			return a.TypeEvents(archiveCtx, "test.wanted", []domain.ID{"other"}, 0, 0)
+		}, []domain.ID{"theirs"}},
+		{"type events in no scopes", func() ([]domain.AcceptedEvent, error) {
+			return a.TypeEvents(archiveCtx, "test.wanted", []domain.ID{}, 0, 0)
+		}, []domain.ID{}},
+	} {
+		got, err := c.read()
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		if ids := archiveIDs(got); !reflect.DeepEqual(ids, c.want) {
+			return fmt.Errorf("%s: got %v, want %v", c.name, ids, c.want)
+		}
 	}
 	return nil
 }

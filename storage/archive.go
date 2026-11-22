@@ -42,6 +42,13 @@ type EventArchive interface {
 	// WorkEvents is Events restricted to one Work's Events: those naming it
 	// (Event.WorkID) and those routed to it (RoutedWorkID).
 	WorkEvents(ctx context.Context, work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// ScopeEvents is Events restricted to those whose recorded ScopeID is one
+	// of scopes, an empty ID standing for "not recorded", as Tx.ScopeEvents.
+	// No scopes is an empty page.
+	ScopeEvents(ctx context.Context, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// TypeEvents is Events restricted to one type and, when scopes is not
+	// nil, to those recorded in scopes, as Tx.TypeEvents.
+	TypeEvents(ctx context.Context, eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// Close releases the archive. Calls after it are ErrInvalid.
 	Close() error
 }
