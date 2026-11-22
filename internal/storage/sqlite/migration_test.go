@@ -19,6 +19,18 @@ func TestMigrationFailureRollsBack(t *testing.T) {
 	original := schema
 	schema = append(append([]string{}, schema[:len(schema)-1]...), "INTENTIONALLY INVALID SQL", schema[len(schema)-1])
 	defer func() { schema = original }()
+	// A new database is only published once migrated, so a failure leaves
+	// nothing at the path.
+	if _, err := Open(ctx, path); err == nil {
+		t.Fatal("migration failure accepted")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("a failed first open left a database: %v", err)
+	}
+	// An empty file already there is migrated in place, and rolls back.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Open(ctx, path); err == nil {
 		t.Fatal("migration failure accepted")
 	}

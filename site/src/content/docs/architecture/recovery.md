@@ -228,6 +228,8 @@ Recovery order:
 
 `TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
 
+`TestLiveDatabaseKeepsTheWALForAReplicator` (in `internal/storage/sqlite`) holds a read transaction as a WAL replicator does while the store commits, reclaims and rebuilds, and fails if the WAL restarts under it. `TestExclusiveLockingShutsOutAReplicator` is its negative control. `TestRebuildLeavesTheWALInPlace` fails on a truncating checkpoint of the live database, with one as its negative control. `TestNewDatabaseIsNeverVisibleEmpty` covers a replicator adding its tables: a database is published with its schema already in it, and an empty file given those tables is still refused.
+
 ## History
 
 :::note
