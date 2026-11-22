@@ -53,6 +53,7 @@ func EventArchiveCases() []EventArchiveCase {
 		{"reads_merge_periods_in_sequence_order", archiveOrder},
 		{"work_events_follow_naming_and_routing", archiveWorkEvents},
 		{"scope_and_type_reads_select_by_the_record", archiveScopeAndType},
+		{"correlation_events_select_by_the_key", archiveCorrelationEvents},
 		{"records_survive_reopen", archiveReopen},
 	}
 }
@@ -279,6 +280,44 @@ func archiveScopeAndType(t *testing.T, h EventArchiveHarness) error {
 		}
 		if ids := archiveIDs(got); !reflect.DeepEqual(ids, c.want) {
 			return fmt.Errorf("%s: got %v, want %v", c.name, ids, c.want)
+		}
+	}
+	return nil
+}
+
+func archiveCorrelationEvents(t *testing.T, h EventArchiveHarness) error {
+	a, _, err := openArchive(t, h)
+	if err != nil {
+		return err
+	}
+	key := domain.CorrelationKey{Source: "test", ExternalID: "thread"}
+	// Each differs from key in one field, so a read matching on half misses.
+	sameSource, sameID := domain.CorrelationKey{Source: "test", ExternalID: "other"}, domain.CorrelationKey{Source: "other", ExternalID: "thread"}
+	first, second := archived("first", 1, archiveMonth.AddDate(0, 1, 0)), archived("second", 4, archiveMonth)
+	first.Event.CorrelationKey, second.Event.CorrelationKey = &key, &key
+	source, id, none := archived("same-source", 2, archiveMonth), archived("same-id", 3, archiveMonth), archived("none", 5, archiveMonth)
+	source.Event.CorrelationKey, id.Event.CorrelationKey = &sameSource, &sameID
+	if err = a.PutEvents(archiveCtx, []domain.AcceptedEvent{second, none, id, source, first}); err != nil {
+		return err
+	}
+	for _, q := range []struct {
+		key   domain.CorrelationKey
+		after uint64
+		limit int
+		want  []domain.ID
+	}{
+		{key, 0, 0, []domain.ID{"first", "second"}},
+		{key, 0, 1, []domain.ID{"first"}},
+		{key, 1, 0, []domain.ID{"second"}},
+		{key, 4, 0, []domain.ID{}},
+		{domain.CorrelationKey{}, 0, 0, []domain.ID{}},
+	} {
+		got, err := a.CorrelationEvents(archiveCtx, q.key, q.after, q.limit)
+		if err != nil {
+			return err
+		}
+		if ids := archiveIDs(got); !reflect.DeepEqual(ids, q.want) {
+			return fmt.Errorf("correlation events for %v after %d limit %d: got %v, want %v", q.key, q.after, q.limit, ids, q.want)
 		}
 	}
 	return nil

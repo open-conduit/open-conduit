@@ -650,6 +650,8 @@ func errorCode(err error) string {
 		return "causal_rejected"
 	case errors.Is(err, runtime.ErrDependencyFilterUnavailable):
 		return "dependency_filter_unavailable"
+	case errors.Is(err, runtime.ErrDependencyArchiveUnavailable):
+		return "dependency_archive_unavailable"
 	case errors.Is(err, extension.ErrNotAdoptable), errors.Is(err, runtime.ErrExecutorCall):
 		return "executor_failed"
 	case errors.Is(err, extension.ErrUnsupported):

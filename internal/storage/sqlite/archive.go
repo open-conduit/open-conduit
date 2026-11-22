@@ -47,11 +47,12 @@ var (
 )
 
 var archiveIndexSchema = []string{
-	`CREATE TABLE records (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, period TEXT NOT NULL, work_id TEXT NOT NULL, routed_work_id TEXT NOT NULL, scope_id TEXT NOT NULL, event_type TEXT NOT NULL)`,
+	`CREATE TABLE records (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, period TEXT NOT NULL, work_id TEXT NOT NULL, routed_work_id TEXT NOT NULL, scope_id TEXT NOT NULL, event_type TEXT NOT NULL, correlation_source TEXT NOT NULL, correlation_id TEXT NOT NULL)`,
 	`CREATE INDEX records_work ON records(work_id, sequence)`,
 	`CREATE INDEX records_routed_work ON records(routed_work_id, sequence)`,
 	`CREATE INDEX records_scope ON records(scope_id, sequence)`,
 	`CREATE INDEX records_type ON records(event_type, scope_id, sequence)`,
+	`CREATE INDEX records_correlation ON records(correlation_source, correlation_id, sequence)`,
 	fmt.Sprintf(`PRAGMA user_version=%d`, archiveSchemaVersion),
 }
 
@@ -482,7 +483,11 @@ func (a *eventArchive) writePeriod(ctx context.Context, period string, events []
 		if err != nil {
 			return err
 		}
-		if _, err = conn.ExecContext(ctx, "INSERT INTO main.records(sequence,id,period,work_id,routed_work_id,scope_id,event_type) VALUES(?,?,?,?,?,?,?)", e.Sequence, string(e.Event.ID), period, string(e.Event.WorkID), string(e.RoutedWorkID), string(e.ScopeID), e.Event.Type); err != nil {
+		var key domain.CorrelationKey
+		if e.Event.CorrelationKey != nil {
+			key = *e.Event.CorrelationKey
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO main.records(sequence,id,period,work_id,routed_work_id,scope_id,event_type,correlation_source,correlation_id) VALUES(?,?,?,?,?,?,?,?,?)", e.Sequence, string(e.Event.ID), period, string(e.Event.WorkID), string(e.RoutedWorkID), string(e.ScopeID), e.Event.Type, key.Source, key.ExternalID); err != nil {
 			return mapError(err)
 		}
 		if _, err = conn.ExecContext(ctx, "INSERT INTO period.events(sequence,id,record) VALUES(?,?,?)", e.Sequence, string(e.Event.ID), b); err != nil {
@@ -546,6 +551,14 @@ func (a *eventArchive) TypeEvents(ctx context.Context, eventType string, scopes 
 		args = append(args, scoped...)
 	}
 	return a.page(ctx, query+" ORDER BY sequence LIMIT ?", append(args, archiveLimit(limit))...)
+}
+
+// CorrelationEvents implements storage.EventArchive.
+func (a *eventArchive) CorrelationEvents(ctx context.Context, key domain.CorrelationKey, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if key.Source == "" || key.ExternalID == "" || after > 1<<63-1 {
+		return a.empty()
+	}
+	return a.page(ctx, "SELECT sequence,id,period FROM records WHERE correlation_source=? AND correlation_id=? AND sequence>? ORDER BY sequence LIMIT ?", key.Source, key.ExternalID, after, archiveLimit(limit))
 }
 
 func archiveScopes(scopes []domain.ID) (string, []any) {

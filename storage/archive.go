@@ -49,6 +49,9 @@ type EventArchive interface {
 	// TypeEvents is Events restricted to one type and, when scopes is not
 	// nil, to those recorded in scopes, as Tx.TypeEvents.
 	TypeEvents(ctx context.Context, eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// CorrelationEvents is Events restricted to those carrying key as their
+	// CorrelationKey. An empty key is an empty page.
+	CorrelationEvents(ctx context.Context, key domain.CorrelationKey, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// Close releases the archive. Calls after it are ErrInvalid.
 	Close() error
 }
