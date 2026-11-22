@@ -759,9 +759,12 @@ type ArtifactTarget struct {
 // binding's runs is given, for the executor's doctor check of its
 // credential). Connection and Binding are not both set.
 type SecretResolveParams struct {
-	ScopeID    string   `json:"scope_id"`
-	Connection string   `json:"connection,omitempty"`
-	Binding    string   `json:"binding,omitempty"`
+	ScopeID    string `json:"scope_id"`
+	Connection string `json:"connection,omitempty"`
+	Binding    string `json:"binding,omitempty"`
+	// ProbeGrant is the grant probe.serve carried, for the secrets of the
+	// connection that probe runs through. It ends with the run.
+	ProbeGrant string   `json:"probe_grant,omitempty"`
 	Names      []string `json:"names"`
 }
 type SecretResolveResult struct {

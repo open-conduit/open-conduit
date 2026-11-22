@@ -216,11 +216,11 @@ func (d *daemon) dormantProbes(name string) []extension.SetupProbe {
 		probe := info.Name
 		p := extension.SetupProbe{Name: probe, Summary: info.Summary}
 		for _, a := range info.Args {
-			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required, Connection: a.Connection})
 		}
 		p.Run = func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
 			paths := extproc.StatePaths(d.o.StateDir, name)
-			r, err := extproc.Load(ctx, f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
+			r, err := extproc.Load(ctx, f, extproc.Deps{Now: time.Now, ProbeConnection: d.probeConnection(f.Manifest), ProbeSecrets: d.probeSecrets(f.Manifest)}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
 				PassEnv: func() []string { return d.packagePassEnv(name) }})
 			if err != nil {
 				return extension.ProbeResult{}, diagnosed(name, err)

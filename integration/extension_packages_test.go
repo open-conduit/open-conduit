@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1040,11 +1042,92 @@ func TestPackageSetupProbes(t *testing.T) {
 		t.Fatalf("probes: %v", probes)
 	}
 	repos, ok := probes["repos"]
-	if !ok || len(repos.Args) != 1 || !repos.Args[0].Required {
+	if !ok || len(repos.Args) != 2 || !repos.Args[0].Required || !repos.Args[1].Connection {
 		t.Fatalf("repos probe: %+v", repos)
 	}
 	if _, err := repos.Run(context.Background(), map[string]string{"owner": "not a login"}); err == nil || !strings.Contains(err.Error(), "owner is a GitHub login") {
 		t.Fatalf("a refused probe: %v", err)
+	}
+}
+
+// TestPackageProbeThroughAConnection runs the real GitHub package's repos
+// probe the way a setup session does, from another package through
+// probe.run. The host hands it only a connection the caller's scope grants,
+// its secret reaches GitHub and nothing else, and the grant ends with the
+// run. The negative control is a scope that doesn't grant the connection.
+func TestPackageProbeThroughAConnection(t *testing.T) {
+	useHostBinary(t)
+	const canary = "ghp_probe_canary_value"
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+canary {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"full_name":"octo/widgets"},{"full_name":"other/thing"}]`))
+	}))
+	defer api.Close()
+	cfg, _ := json.Marshal(map[string]string{"api_url": api.URL, "auth": "token"})
+	e := newExtEnv(t)
+	m := githubext.Manifest()
+	deps := e.deps()
+	deps.ProbeConnection = func(scope domain.ID, id string) (protocol.ConnectionEntry, bool) {
+		if scope != "granted" || id != "gh" {
+			return protocol.ConnectionEntry{}, false
+		}
+		return protocol.ConnectionEntry{ID: id, Type: "github", Config: cfg, Secrets: []string{"token"}}, true
+	}
+	var resolved atomic.Int32
+	deps.ProbeSecrets = func(_ context.Context, scope domain.ID, id string, names []string) (map[string]string, error) {
+		resolved.Add(1)
+		if scope != "granted" || id != "gh" || !slices.Equal(names, []string{"token"}) {
+			return nil, extension.ErrUnauthorized
+		}
+		return map[string]string{"token": canary}, nil
+	}
+	r := e.load(e.install(m, daemonBinary(t)), deps, e.options(m.Name))
+	probes := map[string]extension.SetupProbe{}
+	for _, p := range r.Probes() {
+		probes["github."+p.Name] = p
+	}
+	callerManifest := protocol.Manifest{Name: "caller", Version: "1.0.0", Protocol: m.Protocol, Command: []string{"./caller"}, Permissions: []string{protocol.PermissionProbes}}
+	caller, err := extproc.NewService(callerManifest, extproc.Deps{
+		Now: time.Now, Scopes: func() []domain.ID { return []domain.ID{"granted", "ungranted"} },
+		Probes: func() map[string]extension.SetupProbe { return probes }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(scope string) protocol.ProbeRunResult {
+		t.Helper()
+		raw, _ := json.Marshal(protocol.ProbeRunParams{Name: "github.repos", ScopeID: scope, Args: map[string]string{"owner": "octo", "connection": "gh"}})
+		out, err := caller.Handle(context.Background(), "probe.run", raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(protocol.ProbeRunResult)
+	}
+	got := run("granted")
+	if got.Error != "" || string(got.Output) != `{"repos":["octo/widgets"]}` {
+		t.Fatalf("through the connection: %+v", got)
+	}
+	if strings.Contains(string(got.Output)+got.Command+got.Error, canary) {
+		t.Fatalf("the secret reached the probe's result: %+v", got)
+	}
+	before := resolved.Load()
+	if refused := run("ungranted"); refused.Error == "" || len(refused.Output) != 0 {
+		t.Fatalf("a scope without the connection: %+v", refused)
+	}
+	if resolved.Load() != before {
+		t.Fatal("a refused run resolved a secret")
+	}
+	// A scope the caller isn't configured in is refused before any probe.
+	raw, _ := json.Marshal(protocol.ProbeRunParams{Name: "github.repos", ScopeID: "elsewhere", Args: map[string]string{"owner": "octo", "connection": "gh"}})
+	if _, err := caller.Handle(context.Background(), "probe.run", raw); err == nil {
+		t.Fatal("a caller spoke for a scope it isn't in")
+	}
+	// The package's own resolver has no grant once the run has ended.
+	stale, _ := json.Marshal(protocol.SecretResolveParams{ScopeID: "granted", Connection: "gh", ProbeGrant: "ended", Names: []string{"token"}})
+	if _, err := r.Service().Handle(context.Background(), "secret.resolve", stale); err == nil {
+		t.Fatal("secret.resolve honoured a grant no run holds")
 	}
 }
 

@@ -222,7 +222,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 		for _, pr := range s.SetupProbes() {
 			info := protocol.ProbeInfo{Name: pr.Name, Summary: pr.Summary}
 			for _, a := range pr.Args {
-				info.Args = append(info.Args, protocol.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+				info.Args = append(info.Args, protocol.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required, Connection: a.Connection})
 			}
 			p.Probes = append(p.Probes, info)
 		}

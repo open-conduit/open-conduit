@@ -1520,6 +1520,22 @@ func (s *Snapshot) ExtensionConnection(scope domain.ID, id string, entryTypes, c
 	return Connection{}, false
 }
 
+// GrantedConnection returns connection id of connTypes when scope is
+// enabled and its authorization grants it, whether or not an entry or a
+// binding there uses it yet: the authority a setup probe reads through.
+func (s *Snapshot) GrantedConnection(scope domain.ID, id string, connTypes map[string]bool) (Connection, bool) {
+	e, ok := s.Scopes[scope]
+	if !ok || !e.Enabled || id == "" || !slices.Contains(e.Authorization.Connections, id) {
+		return Connection{}, false
+	}
+	for _, c := range s.Connections {
+		if c.ID == id && connTypes[c.Type] {
+			return c, true
+		}
+	}
+	return Connection{}, false
+}
+
 // AuthorizeOperation is the current-ceiling check on every toolbelt call:
 // authority only narrows from the pinned grant.
 func (s *Snapshot) AuthorizeOperation(scope domain.ID, binding, operation string) error {

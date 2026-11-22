@@ -2,6 +2,8 @@ package extproc
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -117,7 +119,7 @@ func (s *Service) probeList() (protocol.ProbeListResult, error) {
 	for name, p := range s.deps.Probes() {
 		info := protocol.ProbeInfo{Name: name, Summary: p.Summary}
 		for _, a := range p.Args {
-			info.Args = append(info.Args, protocol.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+			info.Args = append(info.Args, protocol.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required, Connection: a.Connection})
 		}
 		out.Probes = append(out.Probes, info)
 	}
@@ -147,6 +149,20 @@ func (s *Service) probeRun(ctx context.Context, p protocol.ProbeRunParams) (prot
 			return protocol.ProbeRunResult{}, protocol.Errorf(protocol.CodeInvalid, "the probe takes no argument "+name)
 		}
 	}
+	for _, a := range probe.Args {
+		if !a.Connection || p.Args[a.Name] == "" {
+			continue
+		}
+		// The caller speaks only for a scope it is configured in; the
+		// probe's owner then checks that scope grants the connection.
+		if p.ScopeID == "" {
+			return protocol.ProbeRunResult{}, invalid("a probe through a connection needs scope_id")
+		}
+		if !s.allowedScopes()[domain.ID(p.ScopeID)] {
+			return protocol.ProbeRunResult{}, unauthorized("scope is not configured for this extension")
+		}
+		ctx = context.WithValue(ctx, probeScopeKey{}, domain.ID(p.ScopeID))
+	}
 	cx, cancel := context.WithTimeout(ctx, probeTimeout)
 	res, err := probe.Run(cx, p.Args)
 	cancel()
@@ -171,6 +187,69 @@ func (s *Service) probeRun(ctx context.Context, p protocol.ProbeRunParams) (prot
 	return out, nil
 }
 
+// probeScopeKey carries the scope probe.run checked to the probe's owner.
+type probeScopeKey struct{}
+
+// probeGrant is one running probe's access to one connection's secrets.
+type probeGrant struct {
+	scope      domain.ID
+	connection string
+}
+
+// errProbeConnection is a probe's fixed reason for a connection it can't
+// use, the same whether the connection is missing or not granted, so a
+// probe can't be used to find out which connections exist.
+var errProbeConnection = errors.New("this session's scope isn't authorized for that connection: add it to the scope's authorization.connections and apply")
+
+// grantProbeConnection fills params for a run through connection, when the
+// scope probe.run checked grants it and it is of a type this package
+// declares, and opens a grant on its secrets until the returned func runs.
+func (s *Service) grantProbeConnection(ctx context.Context, params *protocol.ProbeRunParams, connection string) (func(), error) {
+	scope, ok := ctx.Value(probeScopeKey{}).(domain.ID)
+	if !ok || s.deps.ProbeConnection == nil {
+		return nil, errProbeConnection
+	}
+	entry, ok := s.deps.ProbeConnection(scope, connection)
+	if !ok {
+		return nil, errProbeConnection
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, err
+	}
+	id := hex.EncodeToString(raw[:])
+	s.mu.Lock()
+	if s.probeGrants == nil {
+		s.probeGrants = map[string]probeGrant{}
+	}
+	s.probeGrants[id] = probeGrant{scope: scope, connection: entry.ID}
+	s.mu.Unlock()
+	params.ScopeID, params.Connection, params.Grant = string(scope), &entry, id
+	return func() {
+		s.mu.Lock()
+		delete(s.probeGrants, id)
+		s.mu.Unlock()
+	}, nil
+}
+
+// probeSecrets answers secret.resolve under a running probe's grant.
+func (s *Service) probeSecrets(ctx context.Context, p protocol.SecretResolveParams) (protocol.SecretResolveResult, error) {
+	s.mu.Lock()
+	g, ok := s.probeGrants[p.ProbeGrant]
+	s.mu.Unlock()
+	if !ok || string(g.scope) != p.ScopeID || g.connection != p.Connection || p.Binding != "" {
+		return protocol.SecretResolveResult{}, unauthorized("no running probe holds this connection")
+	}
+	if s.deps.ProbeSecrets == nil {
+		return protocol.SecretResolveResult{}, protocol.Errorf(protocol.CodeUnsupported, "probe secrets")
+	}
+	values, err := s.deps.ProbeSecrets(ctx, g.scope, g.connection, p.Names)
+	if err != nil {
+		return protocol.SecretResolveResult{}, err
+	}
+	return protocol.SecretResolveResult{Values: values}, nil
+}
+
 // Probes are the package's declared setup probes (provides.probes), by
 // their own names, each run through probe.serve. A probe that ran and
 // failed answers its reason, which comes back as the probe's error.
@@ -180,11 +259,22 @@ func (r *Remote) Probes() []extension.SetupProbe {
 		name := info.Name
 		p := extension.SetupProbe{Name: name, Summary: info.Summary}
 		for _, a := range info.Args {
-			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required, Connection: a.Connection})
 		}
 		p.Run = func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
+			params := protocol.ProbeRunParams{Name: name, Args: args}
+			for _, a := range info.Args {
+				if !a.Connection || args[a.Name] == "" {
+					continue
+				}
+				closeGrant, err := r.s.grantProbeConnection(ctx, &params, args[a.Name])
+				if err != nil {
+					return extension.ProbeResult{}, err
+				}
+				defer closeGrant()
+			}
 			var res protocol.ProbeRunResult
-			if err := r.p.Call(ctx, "probe.serve", protocol.ProbeRunParams{Name: name, Args: args}, &res); err != nil {
+			if err := r.p.Call(ctx, "probe.serve", params, &res); err != nil {
 				return extension.ProbeResult{}, err
 			}
 			if res.Error != "" {

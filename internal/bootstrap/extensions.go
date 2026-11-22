@@ -682,9 +682,11 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return runtime.CausalLimits{}
 		},
-		Scopes:         func() []domain.ID { return d.packageScopes(m) },
-		Secrets:        d.scopedSecrets(m.Name, extTypes, connTypes, containerTypes),
-		BindingSecrets: d.bindingSecrets(m),
+		Scopes:          func() []domain.ID { return d.packageScopes(m) },
+		Secrets:         d.scopedSecrets(m.Name, extTypes, connTypes, containerTypes),
+		BindingSecrets:  d.bindingSecrets(m),
+		ProbeConnection: d.probeConnection(m),
+		ProbeSecrets:    d.probeSecrets(m),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, []bool, error) {
 			accepted, added, err := d.ingress.Deliver(ctx, name, delivery)
 			if err == nil {
@@ -786,6 +788,62 @@ func (d *daemon) scopedSecrets(pkg string, extTypes, connTypes, containerTypes m
 		if !ok {
 			return nil, extension.ErrUnauthorized
 		}
+		out := map[string]string{}
+		for _, n := range names {
+			ref, ok := c.SecretRefs[n]
+			if !ok || ref == "" {
+				return nil, extension.ErrUnauthorized
+			}
+			v, err := resolver.ResolveNamed(ctx, n, ref)
+			if err != nil {
+				return nil, err
+			}
+			out[n] = v
+		}
+		return out, nil
+	}
+}
+
+// manifestConnTypes are the connection types a package declares.
+func manifestConnTypes(m protocol.Manifest) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range m.Provides.Connections {
+		out[c.Type] = true
+	}
+	return out
+}
+
+// probeConnection is a connection of one of m's types that scope grants,
+// as probe.serve carries it.
+func (d *daemon) probeConnection(m protocol.Manifest) func(scope domain.ID, id string) (protocol.ConnectionEntry, bool) {
+	connTypes := manifestConnTypes(m)
+	return func(scope domain.ID, id string) (protocol.ConnectionEntry, bool) {
+		s, _ := d.extensionSnapshot()
+		if s == nil {
+			return protocol.ConnectionEntry{}, false
+		}
+		c, ok := s.GrantedConnection(scope, id, connTypes)
+		if !ok {
+			return protocol.ConnectionEntry{}, false
+		}
+		return connectionEntry(c), true
+	}
+}
+
+// probeSecrets resolves a connection's secrets for m's probe running
+// through it, rechecking that the scope still grants the connection.
+func (d *daemon) probeSecrets(m protocol.Manifest) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+	pkg, connTypes := m.Name, manifestConnTypes(m)
+	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+		s, _ := d.extensionSnapshot()
+		if s == nil {
+			return nil, extension.ErrUnauthorized
+		}
+		c, ok := s.GrantedConnection(id, connection, connTypes)
+		if !ok {
+			return nil, extension.ErrUnauthorized
+		}
+		resolver := d.resolver.For(pkg)
 		out := map[string]string{}
 		for _, n := range names {
 			ref, ok := c.SecretRefs[n]

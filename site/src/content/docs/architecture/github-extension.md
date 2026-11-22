@@ -217,7 +217,7 @@ The body carries `<!-- open-conduit:agent work=<id> intent=<digest> -->`. If a p
 
 ## Setup probes
 
-For [setup sessions](../setup-sessions/) the extension offers two probes (`extension.SetupProbes`). `github.accounts` runs `gh auth status --json hosts` and returns each account's host, login, active flag, token source and state, never the token. `github.repos` runs `gh repo list OWNER` for an owner that must be a GitHub login, and returns repository names.
+For [setup sessions](../setup-sessions/) the extension offers two probes (`extension.SetupProbes`). `github.accounts` runs `gh auth status --json hosts` and returns each account's host, login, active flag, token source and state, never the token. `github.repos` runs `gh repo list OWNER` for an owner that must be a GitHub login, and returns repository names. Both take an optional `connection`, an applied connection the session's scope is authorized for, and then read through it with no `gh` on the machine: a token's login and the owner's repositories it can reach, or an App's bot login and the repositories its installation on that owner covers, with a metadata-only installation token revoked afterwards. An App behind a broker can't list repositories, because its broker mints tokens only for a repository named up front. A connection the host didn't grant is refused rather than falling back to `gh`, and GitHub's own error text never reaches the agent.
 
 ## Verification
 

@@ -140,7 +140,7 @@ func probes(h *sdk.Host) map[string]extension.SetupProbe {
 		name := info.Name
 		p := extension.SetupProbe{Name: name, Summary: info.Summary}
 		for _, a := range info.Args {
-			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required, Connection: a.Connection})
 		}
 		p.Run = func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
 			r, err := h.Probe(ctx, name, args)

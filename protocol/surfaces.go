@@ -568,6 +568,9 @@ type ProbeArg struct {
 	Name     string `json:"name"`
 	Summary  string `json:"summary,omitempty"`
 	Required bool   `json:"required,omitempty"`
+	// Connection marks an argument whose value is a connection ID
+	// (extension.ProbeArg.Connection).
+	Connection bool `json:"connection,omitempty"`
 }
 type ProbeInfo struct {
 	Name    string     `json:"name"`
@@ -580,6 +583,16 @@ type ProbeListResult struct {
 type ProbeRunParams struct {
 	Name string            `json:"name"`
 	Args map[string]string `json:"args,omitempty"`
+	// ScopeID is the scope the probe runs for, one the caller is configured
+	// in. A probe with a Connection argument needs it (probe.run), and
+	// probe.serve repeats it.
+	ScopeID string `json:"scope_id,omitempty"`
+	// Connection and Grant are set by the host on probe.serve for a run
+	// through a connection: the connection, without reference text, and
+	// the grant that lets secret.resolve read its secrets until the run
+	// ends.
+	Connection *ConnectionEntry `json:"connection,omitempty"`
+	Grant      string           `json:"grant,omitempty"`
 }
 
 // ProbeRunResult is a probe's output and the command it stands for. A probe

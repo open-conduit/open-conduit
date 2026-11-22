@@ -537,7 +537,14 @@ func (h *Host) Probes(ctx context.Context) ([]protocol.ProbeInfo, error) {
 // Probe runs one setup probe (permission probes). A probe that ran and
 // failed answers its reason in Error.
 func (h *Host) Probe(ctx context.Context, name string, args map[string]string) (protocol.ProbeRunResult, error) {
+	return h.ProbeIn(ctx, "", name, args)
+}
+
+// ProbeIn is Probe for a session in scope, which a probe that reads through
+// a connection needs: the host runs it only for a connection that scope's
+// authorization grants.
+func (h *Host) ProbeIn(ctx context.Context, scope domain.ID, name string, args map[string]string) (protocol.ProbeRunResult, error) {
 	var out protocol.ProbeRunResult
-	err := h.conn.Call(ctx, "probe.run", protocol.ProbeRunParams{Name: name, Args: args}, &out)
+	err := h.conn.Call(ctx, "probe.run", protocol.ProbeRunParams{Name: name, Args: args, ScopeID: string(scope)}, &out)
 	return out, err
 }

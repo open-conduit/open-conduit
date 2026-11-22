@@ -50,6 +50,12 @@ type Deps struct {
 	// binding's executor is one of the extension's own (secret.resolve with
 	// a binding). The host refuses any other binding or name.
 	BindingSecrets func(ctx context.Context, scope domain.ID, binding string, names []string) (map[string]string, error)
+	// ProbeConnection is connection as probe.serve carries it, when scope
+	// is enabled, its authorization grants the connection and the
+	// connection is of a type this package declares. ProbeSecrets resolves
+	// that connection's secrets, for a probe running through it.
+	ProbeConnection func(scope domain.ID, connection string) (protocol.ConnectionEntry, bool)
+	ProbeSecrets    func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
 	// CurrentLimits, when set, supplies the causal limits of the current
 	// configuration generation instead of Limits.
 	CurrentLimits func() runtime.CausalLimits
@@ -150,7 +156,10 @@ type Service struct {
 	sites      map[string]acquireSite
 	tunnels    map[string]func(string)
 	setups     map[string]extension.SetupHost
-	refused    int64
+	// probeGrants are the connections running probes read through, by
+	// grant (grantProbeConnection).
+	probeGrants map[string]probeGrant
+	refused     int64
 }
 
 // NewService returns the scoped service for a validated manifest.
@@ -393,6 +402,11 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		var p protocol.SecretResolveParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
+		}
+		// A probe's owner may have no entry in the scope it runs for, so
+		// its grant stands in for the configured-scope check.
+		if p.ProbeGrant != "" {
+			return s.probeSecrets(ctx, p)
 		}
 		if !s.allowedScopes()[domain.ID(p.ScopeID)] {
 			return nil, unauthorized("scope is not configured for this extension")
