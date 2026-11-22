@@ -15,6 +15,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/storage"
@@ -177,6 +178,10 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
+	policy, err := restorePolicy(o)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
 	target, choice, err := restoreTarget(o)
 	if err != nil {
 		return cli.BackupInfo{}, err
@@ -222,7 +227,7 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 			report.AlreadyRestored = true
 			return info, nil
 		}
-		return finishInPlace(ctx, lock, stateDir, o, info)
+		return finishInPlace(ctx, lock, stateDir, o, policy, info)
 	}
 
 	// Checked only now: a restart of `serve --restore` that restores nothing
@@ -251,7 +256,7 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	now := time.Now().UTC()
 	stamp := now.Format("20060102T150405Z")
 	stage := filepath.Join(stateDir, ".restore-"+stamp)
-	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o)); err != nil {
+	if err := backup.Restore(ctx, bundle, stage, trust, now, retentionExpired, restoreBackends, target, withStartConfig(ctx, recordChoiceWith(o.DatabaseLocation, choice), o, policy)); err != nil {
 		// Refused before the write: the record must not outlive it, or
 		// whatever is put at the location later would pass for a leftover.
 		if o.DatabaseLocation != "" {
@@ -290,7 +295,7 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if a := previous.Artifacts; a != nil && a.Location != "" && a.Location != filepath.Join(stateDir, "artifacts") {
 		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: a.Location, Note: "the replaced artifact store, which " + aside + " names: left where it is"})
 	}
-	return finishInPlace(ctx, lock, stateDir, o, info)
+	return finishInPlace(ctx, lock, stateDir, o, policy, info)
 }
 
 // keepsStorage refuses an in-place restore that would move the daemon off
@@ -564,7 +569,7 @@ func readRestored(stateDir string) (restoredRecord, bool) {
 
 // finishInPlace reconciles the restored directory with what stays from
 // after the bundle, and reports on it.
-func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, o cli.RestoreOptions, info cli.BackupInfo) (cli.BackupInfo, error) {
+func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, o cli.RestoreOptions, policy *config.Policy, info cli.BackupInfo) (cli.BackupInfo, error) {
 	report := info.InPlace
 	info.TokenFile = filepath.Join(stateDir, stagedToken)
 	_, store, err := openState(ctx, stateDir)
@@ -590,7 +595,7 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 		store.Close()
 		return info, err
 	}
-	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o))
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o), policy)
 	info.StartConfig = o.StartConfig
 	store.Close()
 	if err != nil {

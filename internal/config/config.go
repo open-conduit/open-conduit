@@ -228,9 +228,10 @@ func (s Settings) PackagePassEnv(name string) []string {
 type Budget struct {
 	Unit, Per, Period, Scope string
 	Max, WarnAt              float64
-	// Pinned is a budget the daemon's policy sets, in a Snapshot only: an
-	// operator's release doesn't pass it.
-	Pinned bool
+	// PinnedMax is the ceiling the daemon's policy sets on this ledger, in a
+	// Snapshot only; zero is none. Max may be lower, when the config's own
+	// limit is stricter: a release passes that limit but never this one.
+	PinnedMax float64
 }
 
 // DefaultBudgetWarnAt is the warning threshold of a budget that sets none.

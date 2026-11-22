@@ -93,7 +93,7 @@ func TestPolicyBudgetCantBeRemovedOrRaised(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Settings.Budgets) != 1 || !s.Settings.Budgets[0].Pinned || s.Settings.Budgets[0].Max != 10 {
+	if len(s.Settings.Budgets) != 1 || s.Settings.Budgets[0].PinnedMax != 10 || s.Settings.Budgets[0].Max != 10 {
 		t.Fatalf("a config without the budget: %+v", s.Settings.Budgets)
 	}
 	raised := `{"version":1,"settings":{"budgets":[{"unit":"usd","per":"all","max":50}]},"connections":[],"scopes":[{"id":"root","name":"Root"}]}`
@@ -104,8 +104,52 @@ func TestPolicyBudgetCantBeRemovedOrRaised(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Settings.Budgets) != 1 || stored.Settings.Budgets[0].Max != 10 || !stored.Settings.Budgets[0].Pinned {
+	if len(stored.Settings.Budgets) != 1 || stored.Settings.Budgets[0].Max != 10 || stored.Settings.Budgets[0].PinnedMax != 10 {
 		t.Fatalf("a stored raised budget: %+v", stored.Settings.Budgets)
+	}
+}
+
+func TestPolicyKeepsAStricterConfigBudgetApartFromItsCeiling(t *testing.T) {
+	reg := Registry{Policy: mustPolicy(t, `{"version":1,"budgets":[{"unit":"usd","per":"all","max":200}]}`)}
+	s, err := Validate([]byte(`{"version":1,"settings":{"budgets":[{"unit":"usd","per":"all","max":10}]},"connections":[],"scopes":[{"id":"root","name":"Root"}]}`), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := s.Settings.Budgets; len(b) != 1 || b[0].Max != 10 || b[0].PinnedMax != 200 {
+		t.Fatalf("budgets: %+v", b)
+	}
+}
+
+func TestPolicyFileReplaceableThroughItsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.json")
+	if err := os.WriteFile(path, []byte(`{"version":1}`), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := LoadPolicy(path); err != nil || !p.WritableByDaemon {
+		t.Fatalf("a read-only file in a writable directory: %+v %v", p, err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := LoadPolicy(link); err != nil || !p.WritableByDaemon {
+		t.Fatalf("a symlink in a writable directory: %+v %v", p, err)
+	}
+	for _, c := range []struct {
+		sticky          bool
+		dir, entry, uid uint32
+		want            bool
+	}{
+		{true, 0, 0, 501, true},    // /tmp, someone else's file
+		{true, 0, 501, 501, false}, // /tmp, our own file
+		{true, 501, 0, 501, false}, // our sticky directory
+		{true, 0, 7, 0, false},     // root ignores the sticky bit
+		{false, 0, 0, 501, false},  // not sticky
+	} {
+		if got := stickyProtects(c.sticky, c.dir, c.entry, c.uid); got != c.want {
+			t.Errorf("%+v: got %v", c, got)
+		}
 	}
 }
 

@@ -2,9 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
@@ -15,6 +17,16 @@ import (
 // is an error, never no policy.
 func offlinePolicy() (*config.Policy, error) {
 	return config.LoadPolicy(os.Getenv("OPEN_CONDUIT_POLICY"))
+}
+
+// restorePolicy is the policy a restore is checked against, however it was
+// supplied. It is loaded before the restore changes anything.
+func restorePolicy(o cli.RestoreOptions) (*config.Policy, error) {
+	p, err := config.LoadPolicy(o.PolicyPath)
+	if err != nil {
+		return nil, fmt.Errorf("policy %s: %w", o.PolicyPath, err)
+	}
+	return p, nil
 }
 
 // policyCheck is doctor's view of the daemon's policy: which file is in

@@ -137,7 +137,7 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 	}
 	cx, cancel := offlineCtx()
 	defer cancel()
-	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, DatabaseLocation: r.RestoreDatabaseLocation, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, ArtifactCommand: r.RestoreArtifactsCommand, StartConfig: r.RestoreStartConfig, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
+	info, err := o.env.State.RestoreInPlace(cx, r.Restore, r.StateDir, RestoreOptions{ConfigPath: r.ConfigPath, PolicyPath: r.PolicyPath, DatabaseLocation: r.RestoreDatabaseLocation, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, ArtifactCommand: r.RestoreArtifactsCommand, StartConfig: r.RestoreStartConfig, Once: true, TrustKeys: r.RestoreTrustKeys, AcceptUnsigned: r.RestoreAcceptUnsigned})
 	if err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: serve --restore: %s\n", err)
 		return false

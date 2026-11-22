@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -36,8 +37,10 @@ type PolicyLimits struct {
 type Policy struct {
 	// Path and Digest (SHA-256 of the file) identify what was loaded.
 	Path, Digest string
-	// WritableByDaemon says the daemon's own user could change the file, so
-	// it binds a config author but not code running as that user.
+	// WritableByDaemon says the daemon's own user could change what the path
+	// reads, by writing the file or replacing it or a directory or symlink
+	// on the way to it, so it binds a config author but not code running as
+	// that user.
 	WritableByDaemon bool
 
 	SecretSchemes, Executors, EntryTypes, PassEnv []string
@@ -91,8 +94,79 @@ func LoadPolicy(path string) (*Policy, error) {
 		return nil, err
 	}
 	p.Path = path
-	p.WritableByDaemon = syscall.Access(path, 2 /* W_OK */) == nil
+	p.WritableByDaemon = replaceableByDaemon(path)
 	return p, nil
+}
+
+const (
+	accessWrite      = 2 // W_OK
+	accessWriteEnter = 3 // W_OK|X_OK, what renaming an entry of a directory needs
+)
+
+// replaceableByDaemon reports whether this process could change what path
+// reads at the next start: by writing the file, or by replacing the file, a
+// symlink on the way to it, or a directory above any of them.
+func replaceableByDaemon(path string) bool {
+	if syscall.Access(path, accessWrite) == nil {
+		return true
+	}
+	seen := map[string]bool{}
+	var walk func(string) bool
+	walk = func(p string) bool {
+		p = filepath.Clean(p)
+		if seen[p] {
+			return false
+		}
+		seen[p] = true
+		info, err := os.Lstat(p)
+		if err != nil {
+			return true // can't tell, so don't report it safe
+		}
+		if parent := filepath.Dir(p); parent != p {
+			if entryReplaceable(parent, info) || walk(parent) {
+				return true
+			}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(p)
+			if err != nil {
+				return true
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(p), target)
+			}
+			return walk(target)
+		}
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	return err != nil || walk(abs)
+}
+
+// entryReplaceable reports whether this process can rename or remove the
+// entry of dir described by entry.
+func entryReplaceable(dir string, entry os.FileInfo) bool {
+	if syscall.Access(dir, accessWriteEnter) != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return true
+	}
+	return !stickyProtects(info.Mode()&os.ModeSticky != 0, ownerOf(info), ownerOf(entry), uint32(os.Getuid()))
+}
+
+// stickyProtects reports whether a sticky directory stops uid replacing an
+// entry: only the entry's owner, the directory's owner or root may.
+func stickyProtects(sticky bool, dirOwner, entryOwner, uid uint32) bool {
+	return sticky && uid != 0 && uid != dirOwner && uid != entryOwner
+}
+
+func ownerOf(info os.FileInfo) uint32 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return stat.Uid
+	}
+	return uint32(os.Getuid()) // unknown counts as ours, so it isn't reported safe
 }
 
 // ParsePolicy strictly decodes a policy document: an unknown field, a
@@ -208,6 +282,13 @@ func ValidateStored(data []byte, reg Registry) (*Snapshot, error) {
 		return nil, err
 	}
 	return validateDocument(doc, reg, policyMode{stored: true})
+}
+
+// PolicyRefused reports whether err is a validation failure with at least
+// one policy_denied diagnostic.
+func PolicyRefused(err error) bool {
+	var invalid *ValidationError
+	return errors.As(err, &invalid) && slices.ContainsFunc(invalid.Diagnostics, func(d Diagnostic) bool { return d.Code == PolicyDenied })
 }
 
 // policy reports one policy_denied diagnostic per offending pointer. It
@@ -360,7 +441,7 @@ func (p *Policy) clamp(s *Snapshot) {
 		}
 	}
 	for _, pinned := range p.Budgets {
-		pinned.Pinned = true
+		pinned.PinnedMax = pinned.Max
 		i := slices.IndexFunc(s.Settings.Budgets, func(b Budget) bool { return sameBudget(b, pinned) })
 		if i < 0 {
 			s.Settings.Budgets = append(s.Settings.Budgets, pinned)
@@ -371,6 +452,6 @@ func (p *Policy) clamp(s *Snapshot) {
 			s.PolicyClamps = append(s.PolicyClamps, fmt.Sprintf("a %s budget of %g runs at the policy's ceiling of %g", b.Unit, b.Max, pinned.Max))
 			b.Max = pinned.Max
 		}
-		b.Pinned = true
+		b.PinnedMax = pinned.Max
 	}
 }

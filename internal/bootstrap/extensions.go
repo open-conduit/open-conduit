@@ -354,11 +354,15 @@ func offlineExternal(reg *config.Registry, configPath, exclude string, data []by
 	o := &offlinePackages{}
 	// A package started to check a config starts with the grant that
 	// config gives it, as the daemon would start it.
-	grants := config.FileGrants(data)
+	grants := reg.Policy.FilterGrants(config.FileGrants(data))
 	// With no config file, the bundled packages still count: a first-party
 	// extension served by open-conduit itself (#428) validates its own
 	// config objects however the config is given.
-	found, _ := discoverPackages(configPath, exclude)
+	trust := filePolicy(configPath)
+	if reg.Policy != nil {
+		trust = configFilePolicy(configPath).withRoot(reg.Policy) // the policy this check was given
+	}
+	found, _ := discoverUnder(configPath, exclude, trust, nil)
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return o
 	}

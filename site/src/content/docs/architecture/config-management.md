@@ -92,13 +92,13 @@ Only `version` is required. A list that is absent leaves that thing unrestricted
 
 The host enforces it in three places, failing closed:
 
-- **Validation.** `config validate`, apply, first start, adoption, setup candidates and fragment applies report one `policy_denied` diagnostic per offending pointer. Commands that run without a daemon read `OPEN_CONDUIT_POLICY`.
+- **Validation.** `config validate`, apply, first start, adoption, setup candidates and fragment applies report one `policy_denied` diagnostic per offending pointer. Commands that run without a daemon read `OPEN_CONDUIT_POLICY`. A restore checks the restored or start config against the policy, from `serve --policy` or the variable alike, and an unreadable policy refuses it before anything changes.
 - **Use.** `Resolver` refuses a disallowed scheme with the safe code `policy_denied` on every resolve path, whichever generation the reference came from.
-- **Start.** A stored generation that breaks a rule doesn't start and says why, unless the config file fits the policy, in which case the file is adopted as for any stored generation that no longer validates. Package `pass_env` grants are filtered before packages start, and an installed package must pass the policy's `extension_trust` as well as any in the config.
+- **Start.** A stored generation that breaks a rule doesn't start and says why. Unlike a generation that stopped validating for another reason, it isn't replaced from the config file: that would decide for the operator what the daemon runs next. To replace it, start once under a policy that allows it, apply a config that fits, then put the policy back. Package `pass_env` grants are filtered before packages start, and an installed package must pass the policy's `extension_trust` as well as any in the config.
 
 A ceiling refuses a value the config writes, and clamps one it doesn't: a default above a ceiling, or a stored generation above a lowered one, runs at the ceiling without its text or hash changing, and doctor's `policy` check lists it. A team's submitted fragment answers only for its own scopes' limits, so lowering a ceiling doesn't block a root apply on a team's fragment or the reverse. `isolation: "required"` holds [`authorization.isolation`](#version-1-schema-and-inheritance) at every root scope. `GET /capacity` reports a pool's `ceiling`, and doctor shows the file's path and SHA-256 digest.
 
-Inside one OS account a policy guards against a config author, not against code already running as the daemon's user, which could rewrite a file it owns. Doctor warns when the daemon's user can write the file. Run it under another user, and pin `isolation`, so that agents can't reach it. Package processes aren't confined at all, so the policy can only admit or refuse them through `extension_trust`.
+Inside one OS account a policy guards against a config author, not against code already running as the daemon's user, which could rewrite a file it owns. Doctor warns when the daemon's user could change what the path reads, by writing the file or by replacing it, a symlink on the way to it, or a directory above them. Run it under another user, and pin `isolation`, so that agents can't reach it. Package processes aren't confined at all, so the policy can only admit or refuse them through `extension_trust`.
 
 ## Reload and execution snapshots
 

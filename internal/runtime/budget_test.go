@@ -339,7 +339,7 @@ func TestProductionSchedulerPinnedBudgetIsNotReleased(t *testing.T) {
 		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &cost, Currency: "USD"}}}, nil
 	}
 	o := schedulerDefaultOptions(f, e)
-	o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1, WarnAt: 0.5, Pinned: true}}
+	o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1, WarnAt: 0.5, PinnedMax: 1}}
 	s := newTestScheduler(t, f, o)
 	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{})
 	if err != nil {
@@ -379,4 +379,71 @@ func TestProductionSchedulerPinnedBudgetIsNotReleased(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// TestProductionSchedulerStricterConfigBudgetIsReleased: a config limit
+// below the policy's ceiling stays the operator's to release.
+func TestProductionSchedulerStricterConfigBudgetIsReleased(t *testing.T) {
+	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "stricter")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "stricter"}
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		cost := 2.0
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &cost, Currency: "USD"}}}, nil
+	}
+	o := schedulerDefaultOptions(f, e)
+	o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1, WarnAt: 0.5, PinnedMax: 3}}
+	s := newTestScheduler(t, f, o)
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	turn := func(next string) {
+		t.Helper()
+		a, err := s.Start(ctx, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireAccept(t, f, next, &key)
+		requireRoute(t, f.Driver, domain.ID(next))
+		if err := s.Observe(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revision := func() (rev domain.Revision) {
+		t.Helper()
+		routingRead(t, f, func(tx storage.Tx) error {
+			if _, held, err := runtime.HoldInTx(tx, work); err != nil || !held {
+				t.Fatalf("not held: %v", err)
+			}
+			w, err := tx.Work(work)
+			rev = w.Revision
+			return err
+		})
+		return rev
+	}
+	turn("stricter-2") // 2 used: over the config's 1, under the policy's 3
+	if _, err := s.Start(ctx, work); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("over the config's limit: %v", err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		if h, _, err := runtime.HoldInTx(tx, work); err != nil || strings.Contains(h.Reason, "policy") {
+			t.Fatalf("a hold at the config's own limit blames the policy: %+v %v", h, err)
+		}
+		return nil
+	})
+	if _, err := control.ReleaseWork(ctx, work, revision(), "one more", "stricter-release"); err != nil {
+		t.Fatalf("a release past the config's own limit: %v", err)
+	}
+	turn("stricter-3") // the pass carries it; 4 used, over the policy's 3
+	if _, err := s.Start(ctx, work); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("over the policy's ceiling: %v", err)
+	}
+	if _, err := control.ReleaseWork(ctx, work, revision(), "again", "stricter-release-2"); !errors.Is(err, runtime.ErrBudgetPinned) {
+		t.Fatalf("a release past the policy's ceiling: %v", err)
+	}
 }

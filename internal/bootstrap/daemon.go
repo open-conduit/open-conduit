@@ -830,7 +830,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 func budgets(in []config.Budget) []runtime.Budget {
 	out := make([]runtime.Budget, 0, len(in))
 	for _, b := range in {
-		out = append(out, runtime.Budget{Unit: b.Unit, Per: b.Per, Period: b.Period, ScopeID: domain.ID(b.Scope), Max: b.Max, WarnAt: b.WarnAt, Pinned: b.Pinned})
+		out = append(out, runtime.Budget{Unit: b.Unit, Per: b.Per, Period: b.Period, ScopeID: domain.ID(b.Scope), Max: b.Max, WarnAt: b.WarnAt, PinnedMax: b.PinnedMax})
 	}
 	return out
 }
