@@ -120,3 +120,16 @@ func TestRetirementGuardWithNothingWaiting(t *testing.T) {
 		t.Fatalf("blocked %q", got)
 	}
 }
+
+func TestArchiveKeepsAnEventWithoutARecordedScope(t *testing.T) {
+	tx := retirementTx{}
+	guard, err := NewRetirementGuardInTx(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.AcceptedEvent{Event: domain.Event{ID: "old"}, Sequence: 1, Routed: true, Disposition: "unmatched"}
+	why, err := archiveBlockedInTx(tx, guard, ArchivePolicy{}, a)
+	if err != nil || why != ArchiveKeptScopeUnrecorded {
+		t.Fatalf("got %q, %v, want the scope kept for", why, err)
+	}
+}
