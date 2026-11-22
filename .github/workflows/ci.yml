@@ -112,6 +112,24 @@ jobs:
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
+  # The supported WAL replication setup, against a real daemon and the pinned
+  # Litestream.
+  replication:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go
+        id: go
+        with:
+          cache: replication
+      - run: make drill-replication
+      - uses: actions/cache/save@v6
+        if: github.event_name == 'push' && !cancelled()
+        with:
+          path: ${{ steps.go.outputs.paths }}
+          key: ${{ steps.go.outputs.key }}
   integration:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -172,7 +190,7 @@ jobs:
   # its needs, not in the ruleset: a skipped job reports no result under a
   # matrix name, so requiring jobs directly blocks PRs that skip them.
   check:
-    needs: [changes, static, unit, rerun, integration, certify, ts-node22, cross-build, sandbox, container, docs-check, release-snapshot, workflows]
+    needs: [changes, static, unit, rerun, replication, integration, certify, ts-node22, cross-build, sandbox, container, docs-check, release-snapshot, workflows]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
