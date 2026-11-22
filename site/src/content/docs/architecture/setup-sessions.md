@@ -179,6 +179,7 @@ There is one playbook, rendered from a template as `{{bin}}` already is. Session
 | `config validate` and `config apply` | `setup.validate`, then asks the operator to review and apply in the page; `setup.applied` wakes it |
 | asks the owner to run `secret set` | `setup.ask_secret`; the page takes the value and the agent proposes `stored:NAME` |
 | uses `gh` for GitHub | with no `gh`, asks for the repository by `owner/name` and a token or App key, then lists repositories through the applied connection |
+| leaves the work scope on the machine's Claude login | with no Claude login, proposes the stored `anthropic-api-key` on the work scope and its agent binding, because the `model` grant reaches only the setup session |
 | suggests labelling a real issue to see it work | `setup.trace` with a sample, then asks the operator to run `doctor` with secrets checked |
 | ends when the owner closes the terminal | ends with the structured status `finished` and a summary |
 
@@ -207,7 +208,7 @@ Each step landed with its tests and the page amendments above:
 
 6. The move to an installed package in its own repository ([#243](https://github.com/open-conduit/open-conduit/issues/243)): core gained `entry_gated`, route binding checks, `setup.first_run`, package playbooks and bundled packages first ([#248](https://github.com/open-conduit/open-conduit/pull/248)); then the extension moved to open-conduit/extension-setup on `protocol/sdk`, and the release archive bundles it.
 
-Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the playbook giving the work scope it proposes a model credential. Until the playbook does, an operator with no Claude login has to ask the session for that change. With secrets checked, doctor's `claude-code-auth` check now tries each binding's credential, the Claude login included ([doctor](../observability-history/#doctor)); plain doctor still doesn't report sign-in state.
+Not built: naming scopes when a session starts and the operator's `doctor` action with secrets checked recorded as `setup.checks`. With secrets checked, doctor's `claude-code-auth` check now tries each binding's credential, the Claude login included ([doctor](../observability-history/#doctor)); plain doctor still doesn't report sign-in state.
 
 ## Decided in review
 

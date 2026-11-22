@@ -1121,8 +1121,8 @@ github.com/ncruces/go-strftime v0.1.9 h1:bY0MQC28UADQmHmaF5dgpLmImcShSi2kHU9XLdh
 github.com/ncruces/go-strftime v0.1.9/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/oklog/ulid v1.3.1 h1:EGfNDEx6MqHz8B3uNV6QAib1UR2Lm97sHi3ocA6ESJ4=
 github.com/oklog/ulid v1.3.1/go.mod h1:CirwcVhetQ6Lv90oh/F+FBtV6XMibvdAFo93nm5qn4U=
-github.com/open-conduit/extension-setup v0.1.1-0.20261122203215-5ed0fde9b0d0 h1:PYlndxXPp6sscM5bU0gmy9ZnQ3jHf7/AoQmFeKwx9YY=
-github.com/open-conduit/extension-setup v0.1.1-0.20261122203215-5ed0fde9b0d0/go.mod h1:p7/seOxvrcrFEuPYPh4DnbQBAE0iB0xhkP9HepNaEIc=
+github.com/open-conduit/extension-setup v0.1.1-0.20261122210717-c41362369968 h1:mI9ykzBHYGjAcAj9f+kWlLrSGEVHl8+rD7OjrBj1OwA=
+github.com/open-conduit/extension-setup v0.1.1-0.20261122210717-c41362369968/go.mod h1:p7/seOxvrcrFEuPYPh4DnbQBAE0iB0xhkP9HepNaEIc=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+1B0VhjKrZUs=

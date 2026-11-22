@@ -111,7 +111,7 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
-	github.com/open-conduit/extension-setup v0.1.1-0.20261122203215-5ed0fde9b0d0 // indirect
+	github.com/open-conduit/extension-setup v0.1.1-0.20261122210717-c41362369968 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
