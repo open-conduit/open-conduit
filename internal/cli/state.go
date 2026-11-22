@@ -171,6 +171,31 @@ type RestoreOptions struct {
 	AcceptUnsigned bool
 }
 
+// ReplicaOptions are `backup restore-replica`'s choices: a restore's, and
+// where copies of the file artifact store and event archive survive.
+type ReplicaOptions struct {
+	RestoreOptions
+	ArtifactsFrom string
+	ArchiveFrom   string
+}
+
+// ReplicaInfo is what a replica restore published and what it couldn't bring
+// back. Missing content is recorded as lost in the restored database, so later
+// backups go on working without it.
+type ReplicaInfo struct {
+	Path             string        `json:"path"`
+	TokenFile        string        `json:"token_file,omitempty"`
+	Scopes           []string      `json:"scopes,omitempty"`
+	Drained          bool          `json:"drained"`
+	Artifacts        int           `json:"artifacts"`
+	MissingArtifacts []string      `json:"missing_artifacts,omitempty"`
+	ArchivedEvents   int           `json:"archived_events"`
+	MissingEvents    []string      `json:"missing_events,omitempty"`
+	StartConfig      string        `json:"start_config,omitempty"`
+	ConfigGeneration uint64        `json:"config_generation,omitempty"`
+	ConfigProblems   []ConfigEntry `json:"config_problems,omitempty"`
+}
+
 // BackupOptions are `backup create`'s choices.
 type BackupOptions struct {
 	// ConfigPath is the config file whose settings.backup.signing_key signs
@@ -204,6 +229,9 @@ type StateOps struct {
 	// RestoreInPlace restores a bundle into stateDir itself, moving the
 	// state it replaces aside.
 	RestoreInPlace func(ctx context.Context, bundle, stateDir string, o RestoreOptions) (BackupInfo, error)
+	// RestoreReplica publishes a new state directory from a raw database
+	// replica, drained.
+	RestoreReplica func(ctx context.Context, replica, destination string, o ReplicaOptions) (ReplicaInfo, error)
 	// ListDestination names the complete bundles a configured destination
 	// holds, and FetchBundle downloads one into an absent directory,
 	// authenticating it.
@@ -223,9 +251,9 @@ func (o *operator) backup(args []string) int {
 		return usageError(o.errOut, "offline state commands are not available in this binary")
 	}
 	if len(args) < 2 {
-		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
+		return usageError(o.errOut, "expected backup keygen FILE | backup create DEST [--unsigned] | backup verify BUNDLE | backup restore BUNDLE (--to DIR | --in-place) [--start-config FILE] [--artifacts NAME --artifacts-location LOC] [--trust-key KEYS] [--accept-unsigned] [--config FILE] | backup restore-replica DATABASE --to DIR [--artifacts-from DIR | --artifacts NAME --artifacts-location LOC] [--archive-from DIR] [--start-config FILE] | backup list DESTINATION | backup fetch DESTINATION BUNDLE DIR [--trust-key KEYS] [--accept-unsigned]")
 	}
-	f := newFlags("backup", "to", "database-location", "artifacts", "artifacts-location", "artifacts-command", "config", "start-config", "trust-key")
+	f := newFlags("backup", "to", "database-location", "artifacts", "artifacts-location", "artifacts-command", "artifacts-from", "archive-from", "config", "start-config", "trust-key")
 	inPlace := f.fs.Bool("in-place", false, "")
 	unsigned := f.fs.Bool("unsigned", false, "")
 	acceptUnsigned := f.fs.Bool("accept-unsigned", false, "")
@@ -268,8 +296,23 @@ func (o *operator) backup(args []string) int {
 			return usageError(o.errOut, "backup restore needs --to DIR (an absent directory) or --in-place (the daemon's own state directory, with the daemon stopped)")
 		}
 		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
+	case "restore-replica":
+		if f.get("to") == "" {
+			return usageError(o.errOut, "backup restore-replica needs --to DIR (an absent directory)")
+		}
+		ro := ReplicaOptions{RestoreOptions: RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), DatabaseLocation: f.get("database-location"), ConfigPath: o.configPath(f.get("config")), PolicyPath: o.abs(o.env.Getenv("OPEN_CONDUIT_POLICY"))}}
+		if v := f.get("start-config"); v != "" {
+			ro.StartConfig = o.abs(v)
+		}
+		if v := f.get("artifacts-from"); v != "" {
+			ro.ArtifactsFrom = o.abs(v)
+		}
+		if v := f.get("archive-from"); v != "" {
+			ro.ArchiveFrom = o.abs(v)
+		}
+		return o.emit(o.env.State.RestoreReplica(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	}
-	return usageError(o.errOut, "expected backup keygen|create|verify|restore|list|fetch")
+	return usageError(o.errOut, "expected backup keygen|create|verify|restore|restore-replica|list|fetch")
 }
 
 // splitKeys reads a comma-separated --trust-key.

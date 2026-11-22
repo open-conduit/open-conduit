@@ -112,6 +112,68 @@ func (backend) Restore(ctx context.Context, snapshot, destination string, now ti
 	return Restore(ctx, snapshot, destination, now)
 }
 
+var _ storage.ReplicaRestorer = backend{}
+
+// RestoreReplica implements storage.ReplicaRestorer. Restore reads its source
+// immutable, which ignores a WAL, so frames a replicator left beside the file
+// are checkpointed into a private copy first. The copy is owner-only whatever
+// mode the replicator wrote the file with. Tables a replicator added stay.
+func (backend) RestoreReplica(ctx context.Context, replica, destination string, now time.Time) error {
+	if err := absolute(destination); err != nil {
+		return err
+	}
+	source, err := filepath.Abs(replica)
+	if err != nil {
+		return err
+	}
+	switch info, err := os.Stat(source); {
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("sqlite: replica %s is not a regular file: %w", source, storage.ErrInvalid)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(destination), ".sqlite-replica-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	copied := filepath.Join(tmp, "conduit.db")
+	if err := copyPrivate(source, copied); err != nil {
+		return err
+	}
+	switch err := copyPrivate(source+"-wal", copied+"-wal"); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		if err := absorbWAL(ctx, copied); err != nil {
+			return fmt.Errorf("sqlite: applying the replica's WAL: %w", err)
+		}
+	}
+	return Restore(ctx, copied, destination, now)
+}
+
+// absorbWAL checkpoints a private copy's WAL into its database file.
+func absorbWAL(ctx context.Context, path string) error {
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	var busy, log, done int
+	if err := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &log, &done); err != nil {
+		return err
+	}
+	if busy != 0 {
+		return errors.New("the checkpoint could not finish")
+	}
+	return nil
+}
+
 // ReadSnapshot restores the snapshot to a private file beside it and reads
 // that, so a snapshot of an older format is read as Open would raise it.
 func (backend) ReadSnapshot(ctx context.Context, snapshot string, now time.Time, read func(storage.Tx) error) error {

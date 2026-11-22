@@ -53,21 +53,33 @@ type retiredCover struct {
 }
 
 // next is the first tombstone not yet matched, nil when none is left.
+//
+// A tombstone a replica restore recorded as lost is passed over: no archive
+// can hold its record any more.
 func (c *retiredCover) next() (*domain.AcceptedEvent, error) {
-	if len(c.page) == 0 && !c.ended {
-		page, err := c.tx.Tombstones(c.after, archivePage)
+	for {
+		if len(c.page) == 0 && !c.ended {
+			page, err := c.tx.Tombstones(c.after, archivePage)
+			if err != nil {
+				return nil, err
+			}
+			c.page, c.ended = page, len(page) < archivePage
+			if len(page) > 0 {
+				c.after = page[len(page)-1].Sequence
+			}
+		}
+		if len(c.page) == 0 {
+			return nil, nil
+		}
+		lost, err := eventLost(c.tx, string(c.page[0].Event.ID))
 		if err != nil {
 			return nil, err
 		}
-		c.page, c.ended = page, len(page) < archivePage
-		if len(page) > 0 {
-			c.after = page[len(page)-1].Sequence
+		if !lost {
+			return &c.page[0], nil
 		}
+		c.page = c.page[1:]
 	}
-	if len(c.page) == 0 {
-		return nil, nil
-	}
-	return &c.page[0], nil
 }
 
 func (c *retiredCover) see(a domain.AcceptedEvent) error {

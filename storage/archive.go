@@ -70,13 +70,20 @@ func SameAcceptedEvent(a, b domain.AcceptedEvent) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// samePayload compares two payloads by value. No payload encodes as JSON null
+// and decodes back as the text "null", so the two are the same payload.
 func samePayload(a, b json.RawMessage) bool {
-	if len(a) == 0 || len(b) == 0 {
-		return len(a) == len(b)
+	if noPayload(a) || noPayload(b) {
+		return noPayload(a) && noPayload(b)
 	}
 	var x, y bytes.Buffer
 	if json.Compact(&x, a) != nil || json.Compact(&y, b) != nil {
 		return bytes.Equal(a, b)
 	}
 	return bytes.Equal(x.Bytes(), y.Bytes())
+}
+
+func noPayload(p json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(p)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }

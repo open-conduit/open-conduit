@@ -71,6 +71,16 @@ type Backend interface {
 	Writes() StoredVersion
 }
 
+// ReplicaRestorer is a Backend whose state can be continuously replicated by
+// some other system, and restored from what that system kept.
+type ReplicaRestorer interface {
+	// RestoreReplica publishes the replica at a previously absent
+	// destination, as Restore does a snapshot: verified, and with every
+	// Execution lease fenced. The replica is not changed, and any log the
+	// replicator left beside it is applied to a private copy first.
+	RestoreReplica(ctx context.Context, replica, destination string, now time.Time) error
+}
+
 // Database is open coordination state.
 type Database interface {
 	Store
