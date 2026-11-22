@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -196,8 +197,7 @@ func (a *countingArchiver) ArchiveEvents(context.Context, runtime.ArchivePolicy,
 // archiving is off, and reports a failure until one succeeds.
 func TestArchivePassIsBoundedAndReported(t *testing.T) {
 	ctx := context.Background()
-	d := backupDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
-	d.reportedAt = map[string]time.Time{}
+	d := rebuildDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
 	on := config.Settings{ArchiveFinishedDays: 30}
 	off := &countingArchiver{}
 	d.runArchivePass(ctx, off, config.Settings{})
@@ -222,5 +222,165 @@ func TestArchivePassIsBoundedAndReported(t *testing.T) {
 	d.runArchivePass(ctx, &countingArchiver{wrapAt: 1}, on)
 	if code := d.reportedCode("event_archive", ""); code != "" {
 		t.Fatalf("still reported after a good pass: %q", code)
+	}
+}
+
+func TestCompactionPolicy(t *testing.T) {
+	const mib = int64(1 << 20)
+	for name, c := range map[string]struct {
+		s    storage.Space
+		want int64
+	}{
+		"not incremental":         {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 500 * mib}, 0},
+		"under the margin":        {storage.Space{TotalBytes: 100 * mib, FreeBytes: 16 * mib, Incremental: true}, 0},
+		"above the margin":        {storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}, 24 * mib},
+		"margin follows the file": {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 60 * mib, Incremental: true}, 10 * mib},
+		"capped each pass":        {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 900 * mib, Incremental: true}, 64 * mib},
+	} {
+		if got := reclaimBytes(c.s); got != c.want {
+			t.Errorf("%s: reclaim %d MiB, want %d", name, got/mib, c.want/mib)
+		}
+	}
+	for name, c := range map[string]struct {
+		s    storage.Space
+		want bool
+	}{
+		"worth rebuilding":    {storage.Space{TotalBytes: 400 * mib, FreeBytes: 100 * mib}, true},
+		"too little free":     {storage.Space{TotalBytes: 100 * mib, FreeBytes: 50 * mib}, false},
+		"too small a share":   {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 100 * mib}, false},
+		"already incremental": {storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib, Incremental: true}, false},
+	} {
+		if got := rebuildDue(c.s); got != c.want {
+			t.Errorf("%s: rebuild %v", name, got)
+		}
+	}
+}
+
+type fakeCompactor struct {
+	space    storage.Space
+	asked    int64
+	rebuilds int
+	err      error
+}
+
+func (c *fakeCompactor) Space(context.Context) (storage.Space, error) { return c.space, nil }
+func (c *fakeCompactor) Reclaim(_ context.Context, n int64) (int64, error) {
+	c.asked = n
+	return n, c.err
+}
+func (c *fakeCompactor) Rebuild(context.Context) error {
+	c.rebuilds++
+	if c.err != nil {
+		return c.err
+	}
+	c.space = storage.Space{TotalBytes: c.space.TotalBytes - c.space.FreeBytes, Incremental: true}
+	return nil
+}
+
+func TestCompactionRunsAndFailsQuietly(t *testing.T) {
+	ctx := context.Background()
+	const mib = int64(1 << 20)
+	d := rebuildDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+	on := config.Settings{ArchiveFinishedDays: 30}
+	older := storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib}
+	off := &fakeCompactor{space: older}
+	d.rebuildAtStart(ctx, off, config.Settings{})
+	if off.rebuilds != 0 {
+		t.Fatal("rebuilt with archiving off")
+	}
+	rebuilt := &fakeCompactor{space: older}
+	d.rebuildAtStart(ctx, rebuilt, on)
+	if rebuilt.rebuilds != 1 {
+		t.Fatalf("rebuilds = %d", rebuilt.rebuilds)
+	}
+	failing := &fakeCompactor{space: storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}, err: storage.ErrCorrupt}
+	d.runCompaction(ctx, failing)
+	if failing.asked != 24*mib || d.reportedCode("database_compaction", "") == "" {
+		t.Fatalf("asked %d, reported %q", failing.asked, d.reportedCode("database_compaction", ""))
+	}
+	d.runCompaction(ctx, &fakeCompactor{space: storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}})
+	if code := d.reportedCode("database_compaction", ""); code != "" {
+		t.Fatalf("still reported: %q", code)
+	}
+}
+
+func rebuildDaemon(t *testing.T, now time.Time) *daemon {
+	t.Helper()
+	d := backupDaemon(t, now)
+	d.reportedAt = map[string]time.Time{}
+	db, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	d.coord = db
+	return d
+}
+
+// A rebuild that fails leaves a diagnostic and isn't repeated at the next
+// start. Without the record, the second start would rewrite the file again.
+func TestFailedRebuildIsReportedAndPaced(t *testing.T) {
+	ctx := context.Background()
+	const mib = int64(1 << 20)
+	now := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	d := rebuildDaemon(t, now)
+	d.now = func() time.Time { return now }
+	on := config.Settings{ArchiveFinishedDays: 30}
+	older := storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib}
+	failing := &fakeCompactor{space: older, err: errors.New("disk full")}
+	d.rebuildAtStart(ctx, failing, on)
+	code := d.reportedCode("database_rebuild", "")
+	if failing.rebuilds != 1 || code == "" {
+		t.Fatalf("rebuilds %d, reported %q", failing.rebuilds, code)
+	}
+	// The retention pass's own success doesn't hide it.
+	d.runCompaction(ctx, &fakeCompactor{space: older})
+	if d.reportedCode("database_rebuild", "") != code {
+		t.Fatal("compaction cleared the rebuild's diagnostic")
+	}
+	// A new process has no diagnostics, only the record.
+	d.reported, d.reportedAt = map[string]string{}, map[string]time.Time{}
+	now = now.Add(rebuildRetryAfter - time.Minute)
+	d.rebuildAtStart(ctx, failing, on)
+	if failing.rebuilds != 1 || d.reportedCode("database_rebuild", "") != code {
+		t.Fatalf("within the wait: rebuilds %d, reported %q", failing.rebuilds, d.reportedCode("database_rebuild", ""))
+	}
+	now = now.Add(2 * time.Minute)
+	failing.err = nil
+	d.rebuildAtStart(ctx, failing, on)
+	if failing.rebuilds != 2 || d.reportedCode("database_rebuild", "") != "" {
+		t.Fatalf("after the wait: rebuilds %d, reported %q", failing.rebuilds, d.reportedCode("database_rebuild", ""))
+	}
+	if _, found, err := d.rebuildAttempt(ctx); err != nil || found {
+		t.Fatalf("record after success: %v %v", found, err)
+	}
+}
+
+// A process that dies during the rewrite leaves its attempt on record.
+func TestInterruptedRebuildIsPaced(t *testing.T) {
+	ctx := context.Background()
+	const mib = int64(1 << 20)
+	now := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	d := rebuildDaemon(t, now)
+	if err := d.recordRebuild(ctx, rebuildRecord{Attempted: now.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeCompactor{space: storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib}}
+	d.rebuildAtStart(ctx, c, config.Settings{ArchiveFinishedDays: 30})
+	if c.rebuilds != 0 || d.reportedCode("database_rebuild", "") != rebuildInterrupted {
+		t.Fatalf("rebuilds %d, reported %q", c.rebuilds, d.reportedCode("database_rebuild", ""))
+	}
+}
+
+// storedSettings reads what the rebuild needs before any package runs, and
+// the rebuild comes before the first thing that can start one.
+func TestRebuildPrecedesPackages(t *testing.T) {
+	src, err := os.ReadFile("daemon.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuild, open := bytes.Index(src, []byte("d.rebuildAtStart(")), bytes.Index(src, []byte("d.openExtensions(ctx)"))
+	if rebuild < 0 || open < 0 || rebuild > open {
+		t.Fatalf("rebuild at %d, packages open at %d", rebuild, open)
 	}
 }

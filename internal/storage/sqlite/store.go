@@ -314,6 +314,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	// Only takes effect before the first table, which is what this is about
+	// to write, so a new database can return free space while in use.
+	if _, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA auto_vacuum=%d", autoVacuumIncremental)); err != nil {
+		return err
+	}
 	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}

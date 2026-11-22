@@ -167,9 +167,11 @@ type daemon struct {
 	coord      storage.Store
 	artifacts  storage.ArtifactStore
 	// events is the event archive, which holds what the live log retired.
-	events  storage.EventArchive
-	backups backupState
-	duties  dutyClock
+	events storage.EventArchive
+	// compactor gives the database\'s free space back, when its backend can.
+	compactor storage.Compactor
+	backups   backupState
+	duties    dutyClock
 	// retaining is set while a retention pass runs. startup is this start's
 	// timing, recorded once its first pass is done.
 	retaining     atomic.Bool
@@ -461,6 +463,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	defer archive.Close()
 	d.events = archive
+	if c, ok := store.(storage.Compactor); ok {
+		d.compactor = c
+	}
 
 	logFile, err := openLog(o.LifecycleLog)
 	if err != nil {
@@ -526,6 +531,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer stopProbes()
+	// Before anything else can write: a rebuild holds the write lock throughout,
+	// and packages write from their handshake.
+	d.rebuildAtStart(ctx, d.compactor, d.storedSettings(ctx))
 	// The store is the state directory's chosen artifact backend; an
 	// unknown one stops the daemon rather than open an empty store.
 	if _, d.artifacts, err = openArtifacts(context.Background(), o.StateDir); err != nil {
