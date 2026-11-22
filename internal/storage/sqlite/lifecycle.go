@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -141,14 +142,11 @@ func (backend) RestoreReplica(ctx context.Context, replica, destination string, 
 	}
 	defer os.RemoveAll(tmp)
 	copied := filepath.Join(tmp, "conduit.db")
-	if err := copyPrivate(source, copied); err != nil {
+	content, err := copyDatabase(source, copied)
+	if err != nil {
 		return err
 	}
-	switch err := copyPrivate(source+"-wal", copied+"-wal"); {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return err
-	default:
+	if content.hasWAL {
 		if err := absorbWAL(ctx, copied); err != nil {
 			return fmt.Errorf("sqlite: applying the replica's WAL: %w", err)
 		}
@@ -225,24 +223,73 @@ func (b backend) Inspect(ctx context.Context, location string) (storage.Inspecti
 	return i, nil
 }
 
+// inspectAttempts is how many copies are taken looking for two in a row with
+// the same content.
+const inspectAttempts = 5
+
+// inspectCopied is a test seam, called after each copy.
+var inspectCopied = func(string) {}
+
+// inspect copies the database and its WAL. The daemon's lock doesn't stop a
+// replicator checkpointing the file while it is read, and a copy torn that way
+// reads as corruption, so a copy is used only once the one before it had the
+// same content. Size and modification time can't show this: a checkpoint
+// writes pages in place, and a write within one clock tick leaves the time
+// alone. The -shm is left behind: it only indexes the WAL, SQLite rebuilds it,
+// and a stale copy could point at frames from before a checkpoint.
 func inspect(ctx context.Context, abs string) (inspection, error) {
-	tmp, err := os.MkdirTemp("", "oc-sqlite-inspect-")
-	if err != nil {
-		return inspection{}, err
-	}
-	copied := filepath.Join(tmp, "conduit.db")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := copyPrivate(abs+suffix, copied+suffix); err != nil && !(suffix != "" && errors.Is(err, os.ErrNotExist)) {
+	var previous databaseContent
+	for attempt := range inspectAttempts {
+		if err := ctx.Err(); err != nil {
+			return inspection{}, err
+		}
+		tmp, err := os.MkdirTemp("", "oc-sqlite-inspect-")
+		if err != nil {
+			return inspection{}, err
+		}
+		copied := filepath.Join(tmp, "conduit.db")
+		content, err := copyDatabase(abs, copied)
+		if err != nil {
 			os.RemoveAll(tmp)
 			return inspection{}, err
 		}
+		inspectCopied(abs)
+		if attempt == 0 || content != previous {
+			previous = content
+			os.RemoveAll(tmp)
+			continue
+		}
+		s, err := Open(ctx, copied)
+		if err != nil {
+			os.RemoveAll(tmp)
+			return inspection{}, err
+		}
+		return inspection{s: s, dir: tmp}, nil
 	}
-	s, err := Open(ctx, copied)
-	if err != nil {
-		os.RemoveAll(tmp)
-		return inspection{}, err
+	return inspection{}, fmt.Errorf("sqlite: %s kept changing while it was read: stop whatever is writing to it (a replicator, say) and check again", abs)
+}
+
+// databaseContent identifies the bytes of a database and its WAL, if any.
+type databaseContent struct {
+	db, wal [sha256.Size]byte
+	hasWAL  bool
+}
+
+// copyDatabase copies a database and its WAL, if any, and returns what it read.
+func copyDatabase(src, dst string) (databaseContent, error) {
+	var content databaseContent
+	var err error
+	if content.db, err = copyPrivate(src, dst); err != nil {
+		return databaseContent{}, err
 	}
-	return inspection{s: s, dir: tmp}, nil
+	switch content.wal, err = copyPrivate(src+"-wal", dst+"-wal"); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return databaseContent{}, err
+	default:
+		content.hasWAL = true
+	}
+	return content, nil
 }
 
 // inspection is an opened private copy. Only its Viewer side is offered:
@@ -265,18 +312,26 @@ func (i inspection) Close() error {
 	return errors.Join(i.s.Close(), os.RemoveAll(i.dir), i.lock.Close())
 }
 
-func copyPrivate(src, dst string) error {
+// copyPrivate copies src to a new private file and returns the hash of the
+// bytes it read.
+func copyPrivate(src, dst string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return sum, err
 	}
 	defer in.Close()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
-		return err
+		return sum, err
 	}
-	_, err = io.Copy(out, in)
-	return errors.Join(err, out.Close())
+	hash := sha256.New()
+	_, err = io.Copy(io.MultiWriter(out, hash), in)
+	if err = errors.Join(err, out.Close()); err != nil {
+		return sum, err
+	}
+	hash.Sum(sum[:0])
+	return sum, nil
 }
 
 // OpenPrior reads the stored versions over a query_only connection, which

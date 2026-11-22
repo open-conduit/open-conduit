@@ -16,7 +16,7 @@ TEST_TIMEOUT ?= 20m
 INTEGRATION_SHARDS ?= 4
 INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill bench-history bench-backlog bench-extension load-ingress load-scheduler load-contention load-recovery load-idle load-soak protocol-prototype packages certify release-snapshot ts-deps ts-check ts-scaffold-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-rerun test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image image check check-static cross-build smoke smoke-run drill drill-replication bench-history bench-backlog bench-extension load-ingress load-scheduler load-contention load-recovery load-idle load-soak protocol-prototype packages certify release-snapshot ts-deps ts-check ts-scaffold-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -191,6 +191,13 @@ cross-build:
 # Stage 02 gate evidence: real daemon kill/restart drills (also part of test).
 drill:
 	$(GO) test -race -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration
+
+# The supported WAL replication setup against a real daemon and the pinned
+# Litestream, built into bin/ so it adds nothing to go.mod.
+LITESTREAM_VERSION ?= v0.5.18
+drill-replication:
+	GOBIN='$(CURDIR)/bin/litestream-$(LITESTREAM_VERSION)' CGO_ENABLED=0 $(GO) install github.com/benbjohnson/litestream/cmd/litestream@$(LITESTREAM_VERSION)
+	OPEN_CONDUIT_LITESTREAM='$(CURDIR)/bin/litestream-$(LITESTREAM_VERSION)/litestream' $(GO) test -race -timeout $(TEST_TIMEOUT) -count=1 -v -run '^TestDaemonReplicationDrill$$' ./integration
 
 # #36 history growth: routing, the idle routing pass, Poll and the Work list
 # against 1k, 10k and 50k retained events on real SQLite. Not part of check.

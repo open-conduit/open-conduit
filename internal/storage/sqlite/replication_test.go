@@ -216,3 +216,75 @@ func TestNewDatabaseIsNeverVisibleEmpty(t *testing.T) {
 		t.Fatal("negative control: Open accepted an unversioned database with tables")
 	}
 }
+
+// TestInspectRetakesACopyTornByAWriter changes the file's bytes between copies,
+// as a replicator's checkpoint would, keeping its size and modification time so
+// only the content shows it. A file that never settles is the negative control:
+// it is refused, never read torn.
+func TestInspectRetakesACopyTornByAWriter(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copies, writes := 0, byte(0)
+	// Offset 72 is in the header's reserved space, so the file stays readable.
+	rewrite := func() {
+		writes++
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err = f.WriteAt([]byte{writes}, 72); err != nil {
+			t.Error(err)
+		}
+		if err = f.Close(); err != nil {
+			t.Error(err)
+		}
+		if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { inspectCopied = func(string) {} }()
+	inspectCopied = func(string) {
+		copies++
+		if copies == 1 {
+			rewrite()
+		}
+	}
+	i, err := inspect(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = i.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(i.dir); err != nil {
+		t.Fatal(err)
+	}
+	if copies != 3 {
+		t.Fatalf("took %d copies, want 3: the changed one and two that agree", copies)
+	}
+	copies = 0
+	inspectCopied = func(string) {
+		copies++
+		rewrite()
+	}
+	if i, err := inspect(ctx, path); err == nil {
+		i.s.Close()
+		os.RemoveAll(i.dir)
+		t.Fatal("negative control: read a file that never stopped changing")
+	}
+	if copies != inspectAttempts {
+		t.Fatalf("took %d copies, want %d", copies, inspectAttempts)
+	}
+}
