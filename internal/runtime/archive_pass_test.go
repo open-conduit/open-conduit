@@ -28,11 +28,14 @@ func (a refusingArchive) PutEvents(ctx context.Context, events []domain.Accepted
 	return a.EventArchive.PutEvents(ctx, events)
 }
 
+// unownedSource is a correlation source no route opens Work for.
+const unownedSource = "fixture/unowned"
+
 func passFixture(t *testing.T) (conformance.RuntimeFixture, storage.EventArchive) {
 	t.Helper()
-	// An Event with no correlation key matches no route, so it opens no Work.
+	// An Event with no key, or an unowned one, matches no route and opens no Work.
 	f := waitFixture(t, "reopen", waitOptionsWith(false, routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
-		if in.Event.Event.CorrelationKey == nil {
+		if k := in.Event.Event.CorrelationKey; k == nil || k.Source == unownedSource {
 			return extension.RouteDecision{Reason: "no key"}, nil
 		}
 		return routingDecision(in)
@@ -180,5 +183,115 @@ func TestArchivePassRotatesThroughTheLog(t *testing.T) {
 	}
 	if !readEvent(t, f, first).Retired || !readEvent(t, f, second).Retired {
 		t.Fatal("a one-Event page did not reach every Event")
+	}
+}
+
+// afterCopyArchive runs after once the copy is durable, in the gap between
+// the pass's copy and the transaction that retires.
+type afterCopyArchive struct {
+	storage.EventArchive
+	after func([]domain.AcceptedEvent)
+}
+
+func (a afterCopyArchive) PutEvents(ctx context.Context, events []domain.AcceptedEvent) error {
+	err := a.EventArchive.PutEvents(ctx, events)
+	if err == nil {
+		a.after(events)
+	}
+	return err
+}
+
+func TestArchivePassKeepsAnEventADependencyNeedsAfterTheCopy(t *testing.T) {
+	ctx := context.Background()
+	f, archive := passFixture(t)
+	_, ref, target := waitForWork(t, f, "late-waiter", false)
+	source := domain.CorrelationKey{Source: unownedSource, ExternalID: "needed"}
+	e := routingEvent(f, "unmatched-needed", &source)
+	e.Type = "fixture.ready"
+	if err := f.Driver.Accept(e); err != nil {
+		t.Fatal(err)
+	}
+	requireRoute(t, f.Driver, e.ID)
+	wait := domain.Wait{ID: "late-wait", AfterSequence: readEvent(t, f, e.ID).Sequence, Match: domain.EventMatch{Keys: []domain.CorrelationKey{target}, Types: []string{"fixture.alias"}}}
+	if err := f.Driver.Wait(ref, wait, false); err != nil {
+		t.Fatal(err)
+	}
+	var s *runtime.Scheduler
+	subscribed := false
+	s = archiveScheduler(t, f, func(o *runtime.SchedulerOptions) {
+		// A filter that can't answer holds the dependency before the Event.
+		o.AliasFilter = func(string, domain.Payload, domain.Event) (bool, error) {
+			return false, errors.New("filter unreachable")
+		}
+		o.EventArchive = afterCopyArchive{archive, func([]domain.AcceptedEvent) {
+			if subscribed {
+				return
+			}
+			subscribed = true
+			request := runtime.SubscriptionRequest{ID: "late-dependency", WaitID: wait.ID, SourceScopeID: "routing-scope", SourceKey: source, Types: []string{"fixture.ready"}, TargetKey: target, AliasType: "fixture.alias", Filter: &domain.Payload{Schema: "fixture.filter.v1", Data: []byte(`{}`)}}
+			if err := s.Subscribe(ctx, request); err != nil {
+				t.Error(err)
+			}
+		}}
+	})
+	pass, err := s.ArchiveEvents(ctx, everything(f), 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !subscribed {
+		t.Fatal("the pass copied nothing, so the re-check was not reached")
+	}
+	if readEvent(t, f, e.ID).Retired {
+		t.Fatal("retired an Event a dependency began to need after the copy")
+	}
+	if pass.Archived != 0 || pass.Kept[runtime.RetireBlockedWaitScan] != 1 {
+		t.Fatalf("pass = %+v, want the Event kept for the dependency's scan", pass)
+	}
+}
+
+func TestArchivePassKeepsAnEventThatChangedAfterTheCopy(t *testing.T) {
+	f, archive := passFixture(t)
+	id := acceptUnmatched(t, f, "unmatched-changed")
+	s := archiveScheduler(t, f, func(o *runtime.SchedulerOptions) {
+		o.EventArchive = afterCopyArchive{archive, func(events []domain.AcceptedEvent) {
+			// The pass compares the live record with what it copied, so a
+			// copy that differs stands for a live record that moved on.
+			events[0].Event.Type = "fixture.moved-on"
+		}}
+	})
+	pass, err := s.ArchiveEvents(context.Background(), everything(f), 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readEvent(t, f, id).Retired {
+		t.Fatal("retired an Event that differs from the archive's copy")
+	}
+	if pass.Archived != 0 || pass.Kept[runtime.ArchiveKeptChanged] != 1 {
+		t.Fatalf("pass = %+v, want the Event kept as changed", pass)
+	}
+}
+
+func TestArchivePassKeepsAConflictAndMovesTheRestOfThePage(t *testing.T) {
+	ctx := context.Background()
+	f, archive := passFixture(t)
+	conflicting, other := acceptUnmatched(t, f, "unmatched-conflict"), acceptUnmatched(t, f, "unmatched-other")
+	different := readEvent(t, f, conflicting)
+	different.Event.Data = domain.Payload{Schema: "fixture.private.v1", Data: []byte(`{"message":"a different copy"}`)}
+	if err := archive.PutEvents(ctx, []domain.AcceptedEvent{different}); err != nil {
+		t.Fatal(err)
+	}
+	s := archiveScheduler(t, f, func(o *runtime.SchedulerOptions) { o.EventArchive = archive })
+	pass, err := s.ArchiveEvents(ctx, everything(f), 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readEvent(t, f, conflicting).Retired {
+		t.Fatal("retired an Event the archive holds differently")
+	}
+	if !readEvent(t, f, other).Retired {
+		t.Fatal("one conflict held up the rest of the page")
+	}
+	if pass.Archived != 1 || pass.Kept[runtime.ArchiveKeptConflict] != 1 {
+		t.Fatalf("pass = %+v, want one moved and one kept as a conflict", pass)
 	}
 }
