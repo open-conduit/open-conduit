@@ -4,6 +4,7 @@ package bootstrap
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -22,3 +23,7 @@ func (d *daemon) passed() {}
 // reads it from the environment, as the integration tests' negative
 // control for starting only the packages the config uses (fault_inject.go).
 func startAll() bool { return false }
+
+// daemonClock is the daemon's clock. The faultinject build can run it ahead
+// (OPEN_CONDUIT_CLOCK_SKEW), so a test can age history without waiting.
+func daemonClock() func() time.Time { return time.Now }
