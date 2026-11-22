@@ -154,8 +154,20 @@ Afterwards:
 
 - A scheduled bundle a newer binary took may hold records the older one refuses (`records_newer`); to go back a release, use the `pre-upgrade-<time>` bundle.
 - Clients read the new `operator.token`.
-- Work that happened after the bundle is re-derived from the services when reconcile runs, apart from declared one-shot deliveries. Attempts running at backup time are recovered or retried, never adopted.
+- Reconcile re-reads the services, so what they still hold comes back: issues, PRs, comments and other state an extension can list. [What it can't re-derive](#what-a-restore-to-an-earlier-point-loses) is lost. Attempts running at backup time are recovered or retried, never adopted.
 - Keep `before-restore-*/` until the restored instance has run for a while, then delete it. It holds the replaced database, so the state directory needs room for a second copy of it while the restore runs.
+
+### What a restore to an earlier point loses
+
+Everything committed after the bundle is gone from the database. Reconcile brings back only what an outside service still holds. It can't bring back:
+
+- Declared one-shot deliveries: `github.delivery`, `schedule.webhook` and Slack's push-only families.
+- Operator and human input: `core.manual` and `core.action` Events, and decisions.
+- Child Work an agent created.
+- Credentials issued with `auth add`.
+- Executor continuity kept in KV.
+
+Work that finished after the bundle runs again. An effect guarded the way [GitHub comments](../github-extension/) are (an `attempted` record, then a marker search) isn't repeated. An effect with no such guard can happen twice.
 
 ### In a container
 
@@ -200,7 +212,7 @@ Per scope it also gives Work by state, live executions, active waits, and `drain
 Recovery order:
 
 1. Copy the whole state directory aside (daemon stopped).
-2. If `database` fails, restore the newest bundle that `backup verify` accepts in place (`backup restore BUNDLE --in-place`), and start. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
+2. If `database` fails, restore the newest bundle that `backup verify` accepts in place (`backup restore BUNDLE --in-place`), and start. Reconcile then re-reads the services, which brings back what they still hold but not [everything committed after the bundle](#what-a-restore-to-an-earlier-point-loses).
 3. If only artifacts are missing, the coordination state is sound. The run content of those executions is lost; take a fresh bundle once `state check` passes.
 4. A stale socket or lock needs nothing: start the daemon.
 
@@ -215,6 +227,8 @@ Recovery order:
 `TestDaemonDrainAndMove` (in `integration`) drains a real daemon with a Work parked, moves its state to a new directory tree and starts another on it: a wake during the drain launches nothing until the new daemon runs it, and a timer due across the move fires once. With the drain's guards removed it fails. `TestDaemonRestoreOntoAnotherPath` bundles a drained daemon and restores it under another path with `--start-config` and an empty Claude config directory: the one Work is still listed and its next turn starts from the handoff note. `TestRestoreStartsOnTheGivenConfig` refuses a start config that doesn't validate or drops a scope with open Work, publishing nothing, with a restore without one as its negative control. `TestPortabilityNamesEveryItem` covers a fixture with one of each non-portable item and no secret text in the report. `TestMovedWorkspaceKeepsItsWork` and `TestMovedWorktreeThatCantReattachIsKept` (in `extensions/git`) cover workspaces carried with the directory. `TestDockerClaudeSessionSurvivesAMove` (in `integration`, with real Docker) moves a state directory to a new tree and resumes the contained session from its carried home, and `TestRefileSession*` (in `extensions/claudecode`) leaves a path that still exists and refuses a link planted at the transcript, its source or its destination. `TestServeRestoreStartConfigAppliesOnce` publishes `serve --restore`'s start config once, never again on a restart. No automated drill crosses operating systems or users.
 
 `TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
+
+`TestLiveDatabaseKeepsTheWALForAReplicator` (in `internal/storage/sqlite`) holds a read transaction as a WAL replicator does while the store commits, reclaims and rebuilds, and fails if the WAL restarts under it. `TestExclusiveLockingShutsOutAReplicator` is its negative control. `TestRebuildLeavesTheWALInPlace` fails on a truncating checkpoint of the live database, with one as its negative control. `TestNewDatabaseIsNeverVisibleEmpty` covers a replicator adding its tables: a database is published with its schema already in it, and an empty file given those tables is still refused.
 
 ## History
 

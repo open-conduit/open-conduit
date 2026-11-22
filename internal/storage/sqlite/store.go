@@ -110,8 +110,7 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	} else {
-		f, e := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
-		if e != nil {
+		if e = createDatabase(ctx, abs); e != nil {
 			if !os.IsExist(e) {
 				return nil, e
 			}
@@ -122,8 +121,6 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 			if !privateFile(info) {
 				return nil, fmt.Errorf("sqlite: database must be a private regular file")
 			}
-		} else if e = f.Close(); e != nil {
-			return nil, e
 		}
 	}
 	u := url.URL{Scheme: "file", Path: abs}
@@ -197,6 +194,42 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	s.readers.SetMaxOpenConns(readerConns)
 	ok = true
 	return s, nil
+}
+
+// createDatabase publishes a new database with its schema already in it, at a
+// path that must be absent (os.ErrExist otherwise). Nothing watching the path,
+// such as a WAL replicator that adds its own tables to any database it finds,
+// can catch the file empty: migrate would then refuse it for good as an
+// unversioned nonempty database.
+func createDatabase(ctx context.Context, abs string) error {
+	f, err := os.CreateTemp(filepath.Dir(abs), ".conduit-new-*")
+	if err != nil {
+		return err
+	}
+	temporary := f.Name()
+	defer func() { os.Remove(temporary); os.Remove(temporary + "-journal") }()
+	if err = f.Close(); err != nil {
+		return err
+	}
+	u := url.URL{Scheme: "file", Path: temporary}
+	q := u.Query()
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", "synchronous(FULL)")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(1)
+	err = (&Store{db: db, path: temporary}).migrate(ctx)
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return publishFile(temporary, abs)
 }
 
 // checkRecordFormat refuses a database whose records a newer binary wrote. A

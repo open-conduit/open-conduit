@@ -78,7 +78,10 @@ func (s *Store) Reclaim(ctx context.Context, bytes int64) (int64, error) {
 	return before.FreeBytes - after.FreeBytes, nil
 }
 
-// Rebuild implements storage.Compactor.
+// Rebuild implements storage.Compactor. Its checkpoint is passive, like every
+// checkpoint on a live database: RESTART and TRUNCATE wait for readers, so
+// with a WAL replicator holding its read transaction they would stall this
+// connection for the whole busy timeout and then do nothing.
 func (s *Store) Rebuild(ctx context.Context) error {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -92,7 +95,7 @@ func (s *Store) Rebuild(ctx context.Context) error {
 		return fmt.Errorf("sqlite: vacuum: %w", err)
 	}
 	var busy, log, done int
-	if err = conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &log, &done); err != nil {
+	if err = conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &log, &done); err != nil {
 		return fmt.Errorf("sqlite: checkpoint: %w", err)
 	}
 	return nil
