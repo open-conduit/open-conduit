@@ -13,10 +13,11 @@
   {{- if $d.Refused}}
   <div class="empty"><h2>This needs the admin role</h2><p>{{$d.Refused}}</p></div>
   {{- else if eq $d.Tab "secrets"}}
-  <form method="post" action="/secrets" class="admin-form" autocomplete="off">
+  <form method="post" action="/secrets" class="admin-form" enctype="multipart/form-data" autocomplete="off">
     <input type="hidden" name="csrf" value="{{$csrf}}">
     <label class="field"><span>Name</span><input name="name" required spellcheck="false" autocomplete="off"></label>
-    <label class="field"><span>Value</span><input name="value" type="password" required autocomplete="new-password"></label>
+    <label class="field"><span>Value</span><input name="value" type="password" autocomplete="new-password"></label>
+    <label class="field"><span>Or a file, for a multi-line value</span><input name="value_file" type="file"></label>
     <label class="field"><span>Store</span><select name="store"><option value="">Keyring, else file</option><option value="keyring">Keyring</option><option value="file">Secrets file</option></select></label>
     <button type="submit" class="btn btn-primary">Store secret</button>
   </form>

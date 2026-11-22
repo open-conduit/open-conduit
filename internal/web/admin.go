@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/open-conduit/open-conduit/client"
 )
@@ -62,14 +65,90 @@ func (s *Server) secretsPage(w http.ResponseWriter, r *http.Request) {
 	s.adminRender(w, r, "Secrets", adminView{Tab: "secrets", Secrets: list}, err)
 }
 
+// maxSecretForm bounds a form carrying a secret: the largest value the store
+// takes (64 KiB) and the rest of the form.
+const maxSecretForm = 80 << 10
+
+// secretForm parses a form that may carry a secret before anything else
+// reads it. The body is capped below the memory allowed for parsing, so an
+// uploaded value is never spooled to a temporary file.
+func (s *Server) secretForm(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxSecretForm)
+		err := r.ParseForm()
+		if err == nil {
+			err = r.ParseMultipartForm(2 * maxSecretForm)
+		}
+		if r.MultipartForm != nil {
+			defer r.MultipartForm.RemoveAll()
+		}
+		if err != nil && !errors.Is(err, http.ErrNotMultipart) {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "that value is too large: a secret can be at most 64 KiB", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "could not read the form", http.StatusBadRequest)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// secretValue is the value a secret form carries, typed or from a chosen
+// file, and what is wrong with it if it can't be stored. A password box
+// removes line breaks from what is pasted into it, so a multi-line value
+// such as a PEM key comes from a file. A file's trailing line ending is
+// dropped, as open-conduit secret set drops it. The problem never quotes
+// the value.
+func secretValue(r *http.Request) (value, problem string) {
+	typed := r.PostFormValue("value")
+	var file *multipart.FileHeader
+	if r.MultipartForm != nil {
+		// A browser sends an unused file input as an empty, unnamed part.
+		if files := r.MultipartForm.File["value_file"]; len(files) > 0 && (files[0].Filename != "" || files[0].Size > 0) {
+			file = files[0]
+		}
+	}
+	if file == nil {
+		if strings.Contains(typed, "-----BEGIN ") && !strings.Contains(typed, "\n") {
+			return "", "That looks like a multi-line key, and this box removes its line breaks. Choose the key's file instead."
+		}
+		return typed, ""
+	}
+	if typed != "" {
+		return "", "Enter a value or choose a file, not both."
+	}
+	f, err := file.Open()
+	if err != nil {
+		return "", "Could not read that file."
+	}
+	defer f.Close()
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return "", "Could not read that file."
+	}
+	if !utf8.Valid(b) {
+		return "", "That file isn't text, so it can't be stored as a secret."
+	}
+	value = strings.TrimRight(string(b), "\r\n")
+	if value == "" {
+		return "", "That file is empty."
+	}
+	return value, ""
+}
+
 // storeSecret stores the form's value. Only the name is ever repeated.
 func (s *Server) storeSecret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := call(r)
 	defer cancel()
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	value := r.PostFormValue("value")
-	if name == "" || value == "" {
-		flash(w, "A secret needs a name and a value.", true)
+	value, problem := secretValue(r)
+	if problem == "" && (name == "" || value == "") {
+		problem = "A secret needs a name and a value."
+	}
+	if problem != "" {
+		flash(w, problem, true)
 		http.Redirect(w, r, "/secrets", http.StatusSeeOther)
 		return
 	}
@@ -105,13 +184,18 @@ func (s *Server) answerSecret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := call(r)
 	defer cancel()
 	t := client.ActionTarget{ScopeID: r.PostFormValue("scope"), WorkID: r.PostFormValue("work")}
-	provider, id, value := r.PostFormValue("provider"), r.PostFormValue("action"), r.PostFormValue("value")
+	provider, id := r.PostFormValue("provider"), r.PostFormValue("action")
 	fail := func(text string) {
 		flash(w, text, true)
 		http.Redirect(w, r, back(r), http.StatusSeeOther)
 	}
 	if (t.ScopeID == "") == (t.WorkID == "") {
 		http.Error(w, "an action needs a scope or Work", http.StatusBadRequest)
+		return
+	}
+	value, problem := secretValue(r)
+	if problem != "" {
+		fail(problem)
 		return
 	}
 	offered, err := s.src.Actions(ctx, t)

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +42,78 @@ func TestSecretValueNeverComesBack(t *testing.T) {
 	f.adminRefused = true
 	w = do(h, "POST", "/secrets", url.Values{"csrf": {s.csrf}, "name": {secretCanary}, "value": {secretCanary}}, s)
 	assertNoCanary(t, w.Header(), w.Body.String())
+}
+
+// postSecretFile posts a secret form as a browser does, with a file part.
+func postSecretFile(t *testing.T, h http.Handler, s *Server, target string, fields map[string]string, filename, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	session := testSession(s)
+	var body bytes.Buffer
+	m := multipart.NewWriter(&body)
+	_ = m.WriteField("csrf", s.sessionToken(session))
+	for k, v := range fields {
+		_ = m.WriteField(k, v)
+	}
+	part, err := m.CreateFormFile("value_file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte(content))
+	_ = m.Close()
+	req := httptest.NewRequest("POST", target, &body)
+	req.Host = "open-conduit.localhost:7420"
+	req.Header.Set("Content-Type", m.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// A multi-line value survives from a file on both forms, and what can't be
+// stored faithfully is refused without quoting it.
+func TestSecretFromAFileKeepsItsLines(t *testing.T) {
+	f, s, h := setup(t)
+	pem := "-----BEGIN PRIVATE KEY-----\n" + secretCanary + "\n-----END PRIVATE KEY-----"
+	w := postSecretFile(t, h, s, "/secrets", map[string]string{"name": "app_key"}, "key.pem", pem+"\r\n")
+	if w.Code != http.StatusSeeOther || !slices.Equal(f.stored, []string{"app_key=" + pem}) {
+		t.Fatalf("store: %d %q", w.Code, f.stored)
+	}
+	assertNoCanary(t, w.Header(), w.Body.String())
+
+	f.stored = nil
+	f.actions = map[string][]client.Action{"wrk_1": {{Provider: "setup", ID: "give_key", Label: "App key", Prompt: "Choose the key", Secret: "app_key"}}}
+	w = postSecretFile(t, h, s, "/actions/secret", map[string]string{"work": "wrk_1", "provider": "setup", "action": "give_key"}, "key.pem", pem+"\n")
+	if !slices.Equal(f.stored, []string{"app_key=" + pem}) || len(f.invoked) != 1 || f.invoked[0].in != "app_key" {
+		t.Fatalf("action: %q %+v", f.stored, f.invoked)
+	}
+	assertNoCanary(t, w.Header(), w.Body.String())
+
+	f.stored = nil
+	for name, c := range map[string]struct{ typed, file string }{
+		"both":   {"typed", pem},
+		"binary": {"", "\xff\xfe" + secretCanary},
+		"empty":  {"", "\r\n"},
+	} {
+		w := postSecretFile(t, h, s, "/secrets", map[string]string{"name": "app_key", "value": c.typed}, "key.pem", c.file)
+		if len(f.stored) != 0 {
+			t.Fatalf("%s: stored %q", name, f.stored)
+		}
+		assertNoCanary(t, w.Header(), w.Body.String())
+	}
+
+	// A PEM key flattened by a password box is refused, not stored broken.
+	flat := strings.ReplaceAll(pem, "\n", "")
+	w = do(h, "POST", "/secrets", url.Values{"csrf": {s.csrf}, "name": {"app_key"}, "value": {flat}}, s)
+	if len(f.stored) != 0 {
+		t.Fatalf("stored a flattened key: %q", f.stored)
+	}
+	assertNoCanary(t, w.Header(), w.Body.String())
+
+	// Past the cap the form is refused and nothing is stored.
+	w = postSecretFile(t, h, s, "/secrets", map[string]string{"name": "app_key"}, "key.pem", strings.Repeat("x", maxSecretForm+1))
+	if w.Code != http.StatusRequestEntityTooLarge || len(f.stored) != 0 {
+		t.Fatalf("oversize: %d %d stored", w.Code, len(f.stored))
+	}
 }
 
 func assertNoCanary(t *testing.T, header http.Header, body string) {
