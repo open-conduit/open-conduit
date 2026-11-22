@@ -129,6 +129,8 @@ func Declared() []extension.Operation {
 			Input: extension.InputSchema[workflowRunInput]()},
 		{Name: OpChecks, Summary: "Show the state of every check on a PR's head commit, with links to failing ones.",
 			Input: extension.InputSchema[checksInput]()},
+		{Name: OpChecksLog, Summary: "Read the failing part of a GitHub Actions job's log on a PR's head, or save the whole log to a file.",
+			Input: extension.InputSchema[checksLogInput]()},
 		{Name: OpUpload, Summary: "Upload a file to this Work's issue tracker and get a link to put in a comment.",
 			Input: extension.InputSchema[uploadInput]()},
 		{Name: OpFetch, Summary: "Download a file a comment or link points to on GitHub, signed in, to a path you choose.",
@@ -282,6 +284,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRResolve, Handler: pr(t.prResolve)},
 			{Name: OpPRReview, Handler: pr(t.prReview)},
 			{Name: OpChecks, Handler: pr(t.checks)},
+			{Name: OpChecksLog, Handler: pr(t.checksLog)},
 			// Landing work binds any Work: the rules are checked here,
 			// whoever asks.
 			{Name: OpPRMerge, Handler: pr(t.prMerge)},
@@ -1486,30 +1489,11 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	if in.Number <= 0 && !b.ownRepo(src) {
-		// Only the Work's own issue has PRs to default to.
-		return nil, refuse("missing_field", "number (the PR) is required outside this Work's own issue")
+	p, err := t.checksPull(ctx, b, src, in.Number)
+	if err != nil {
+		return nil, err
 	}
 	repo, c := src.Settings.Repo, src.Client
-	var p rawPull
-	if in.Number > 0 {
-		if p, err = c.Pull(ctx, repo, in.Number); err != nil {
-			return nil, err
-		}
-	} else {
-		pulls, err := t.issuePulls(ctx, b)
-		if err != nil {
-			return nil, err
-		}
-		for _, x := range pulls {
-			if x.State == "open" {
-				p = x
-			}
-		}
-		if p.Number == 0 {
-			return nil, refuse("no_open_pr", "the issue has no open PR")
-		}
-	}
 	runs, statuses, from, err := c.CheckState(ctx, repo, p.Head.SHA)
 	if err != nil {
 		return nil, err
@@ -1573,6 +1557,32 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 		}
 	}
 	return out, nil
+}
+
+// checksPull is the PR a checks call reads: the one numbered, else the open
+// PR of the Work's own issue.
+func (t *Tools) checksPull(ctx context.Context, b *bound, src Source, number int) (rawPull, error) {
+	if number > 0 {
+		return src.Client.Pull(ctx, src.Settings.Repo, number)
+	}
+	if !b.ownRepo(src) {
+		// Only the Work's own issue has PRs to default to.
+		return rawPull{}, refuse("missing_field", "number (the PR) is required outside this Work's own issue")
+	}
+	pulls, err := t.issuePulls(ctx, b)
+	if err != nil {
+		return rawPull{}, err
+	}
+	var p rawPull
+	for _, x := range pulls {
+		if x.State == "open" {
+			p = x
+		}
+	}
+	if p.Number == 0 {
+		return rawPull{}, refuse("no_open_pr", "the issue has no open PR")
+	}
+	return p, nil
 }
 
 func nonNil(s []string) []string {

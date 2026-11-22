@@ -130,6 +130,7 @@ Work a GitHub issue: read it, comment, open and edit its PRs, answer their revie
 | `github.pr.review` | 2 |
 | `github.pr.resolve` | 3 |
 | `github.pr.edit` | 4 |
+| `github.checks.log` | 5 |
 
 ### `@github.holds`
 
@@ -162,6 +163,7 @@ Review GitHub PRs: read them and their checks, comment, reply in and resolve thr
 | `github.attachment.upload` | 1 |
 | `github.attachment.get` | 1 |
 | `github.wait` | 1 |
+| `github.checks.log` | 2 |
 
 ### `@github.workspace`
 
@@ -317,6 +319,17 @@ Show the state of every check on a PR's head commit, with links to failing ones.
 | --- | --- | --- | --- |
 | `number` | integer |  | the PR whose checks to read; defaults to the open PR of this Work's issue, and is required for any other |
 | `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
+
+#### `github.checks.log`
+
+Read the failing part of a GitHub Actions job's log on a PR's head, or save the whole log to a file.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `check` | string |  | the failed check's name as github.checks shows it; may be left out when exactly one GitHub Actions job failed |
+| `number` | integer |  | the PR whose check to read; defaults to the open PR of this Work's issue, and is required for any other |
+| `repo` | string |  | the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one |
+| `save_to` | string |  | a path the os client saves the whole log to (its last 50 MB), instead of returning the failing part |
 
 #### `github.context`
 

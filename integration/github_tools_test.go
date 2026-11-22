@@ -1194,6 +1194,43 @@ func TestGitHubChecksWithoutTheChecksPermission(t *testing.T) {
 	})
 }
 
+// An agent reads a failed job's log through the toolbelt: the failing part
+// by default, the whole log to a file, and a clear refusal when the job is
+// ambiguous, unfinished or not readable.
+func TestGitHubChecksLog(t *testing.T) {
+	e := newToolsEnv(t)
+	_, w := e.claim("Red CI", "", "bug")
+	pr := e.fake.OpenPull("Change", "", "agent/issue-1", "h1", ghAlice)
+	e.fake.SetCheck("h1", "build", "completed", "success")
+	e.fake.SetCheck("h1", "test", "completed", "failure")
+	e.fake.SetJobLog("h1", "test", []byte("2026-11-21T10:00:00.000Z --- FAIL: TestThing\n2026-11-21T10:00:01.000Z ##[error]Process completed with exit code 1.\n"))
+	a := e.start(w.ID)
+	out := e.must(a, gh.OpChecksLog, "", map[string]any{"number": pr})
+	if out["check"] != "test" || out["truncated"] != false || !strings.Contains(fmt.Sprint(out["log"]), "--- FAIL: TestThing") {
+		t.Fatalf("log: %v", out)
+	}
+	saved := e.must(a, gh.OpChecksLog, "", map[string]any{"number": pr, "save_to": "test.log"})
+	if raw, err := base64.StdEncoding.DecodeString(fmt.Sprint(saved["base64"])); err != nil || !strings.HasPrefix(string(raw), "2026-11-21T10:00:00.000Z --- FAIL") || saved["save_to"] != "test.log" {
+		t.Fatalf("saved log: %v %v", saved, err)
+	}
+	if _, err := e.call(a, gh.OpChecksLog, "", map[string]any{"number": pr, "check": "nope"}); err == nil || !strings.Contains(err.Error(), "no GitHub Actions job") {
+		t.Fatalf("unknown check: %v", err)
+	}
+	e.fake.SetCheck("h1", "lint", "completed", "failure")
+	if _, err := e.call(a, gh.OpChecksLog, "", map[string]any{"number": pr}); err == nil || !strings.Contains(err.Error(), "lint, test") {
+		t.Fatalf("two failed jobs: %v", err)
+	}
+	e.fake.SetCheck("h1", "slow", "in_progress", "")
+	if _, err := e.call(a, gh.OpChecksLog, "", map[string]any{"number": pr, "check": "slow"}); err == nil || !strings.Contains(err.Error(), "still in_progress") {
+		t.Fatalf("running job: %v", err)
+	}
+	e.fake.RefuseCheckRuns(false)
+	if _, err := e.call(a, gh.OpChecksLog, "", map[string]any{"number": pr, "check": "test"}); err == nil || !strings.Contains(err.Error(), "Actions read") {
+		t.Fatalf("refused: %v", err)
+	}
+	e.finish(a, nil)
+}
+
 // A tool comment or issue whose response is lost is never written twice:
 // the call reports it pending, and the projector confirms it by marker.
 func TestGitHubToolWritesWithLostResponsesAreRecovered(t *testing.T) {

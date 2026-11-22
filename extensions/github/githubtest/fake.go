@@ -892,6 +892,24 @@ func (s *Server) SetCheck(sha, name, status, conclusion string) {
 	s.checks[sha] = append(s.checks[sha], r)
 }
 
+// SetJobLog gives the Actions job behind a named check on sha a log, which
+// GET /actions/jobs/<id>/logs redirects to, as GitHub does. The check must
+// exist.
+func (s *Server) SetJobLog(sha, name string, log []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.checks[sha] {
+		if r.Name == name {
+			s.fileData[jobLogFile(r.ID)] = log
+		}
+	}
+}
+
+// covers reports whether a token's level on a permission allows reading.
+func covers(level string) bool { return level == "read" || level == "write" || level == "admin" }
+
+func jobLogFile(id int64) string { return "job-" + strconv.FormatInt(id, 10) + ".log" }
+
 // RerunCheck re-runs a named check on sha, as GitHub does: a new run with
 // its own ID, in progress, in place of the finished one.
 func (s *Server) RerunCheck(sha, name string) {
@@ -1343,6 +1361,8 @@ var (
 	// reFile is a file ServeFile serves: /files/<name>,
 	// /user-attachments/files/<name> or /<owner>/<repo>/files/<name>.
 	reGitRefs = regexp.MustCompile(`^/([^/]+/[^/]+)\.git/info/refs$`)
+	reJobLogs = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs$`)
+	reRunJobs = regexp.MustCompile(`^/actions/runs/(\d+)/jobs$`)
 	reFile    = regexp.MustCompile(`^/(?:(user-attachments|[^/]+/[^/]+)/)?files/(.+)$`)
 )
 
@@ -1491,6 +1511,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.NotFound(w, r)
+		return
+	}
+	if m := reJobLogs.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodGet {
+		s.fileReads = append(s.fileReads, Write{Method: r.Method, Path: r.URL.Path, Token: token})
+		if scope, scoped := s.scopes[token]; s.refuseActions || !s.readAllowed(token, m[1]) || scoped && scope.Permissions != nil && !covers(scope.Permissions["actions"]) {
+			http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
+			return
+		}
+		file := jobLogFile(int64(atoi(m[2])))
+		if _, ok := s.fileData[file]; !ok {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, s.URL+"/files/"+file, http.StatusFound)
 		return
 	}
 	var body json.RawMessage
@@ -2159,6 +2193,25 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 				"run_started_at": ts(c.Started), "updated_at": ts(c.Started)})
 		}
 		return http.StatusOK, map[string]any{"total_count": len(runs), "workflow_runs": runs}
+	}
+	if x := reRunJobs.FindStringSubmatch(rest); x != nil && get {
+		if s.refuseActions {
+			return http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"}
+		}
+		jobs := []map[string]any{}
+		for _, runs := range s.checks {
+			for _, c := range runs {
+				if c.ID != int64(atoi(x[1])) {
+					continue
+				}
+				var conclusion any
+				if c.Conclusion != "" {
+					conclusion = c.Conclusion
+				}
+				jobs = append(jobs, map[string]any{"id": c.ID, "name": c.Name, "status": c.Status, "conclusion": conclusion, "html_url": s.URL + "/job/" + strconv.FormatInt(c.ID, 10)})
+			}
+		}
+		return http.StatusOK, map[string]any{"total_count": len(jobs), "jobs": jobs}
 	}
 	if x := reCheckRuns.FindStringSubmatch(rest); x != nil && get && s.refuseRuns {
 		return http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"}
