@@ -103,6 +103,20 @@ func (a weakenedArchive) WorkEvents(ctx context.Context, work domain.ID, after u
 	return out, err
 }
 
+func (a weakenedArchive) ScopeEvents(ctx context.Context, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if a.mode == "scope" {
+		return a.EventArchive.Events(ctx, after, limit)
+	}
+	return a.EventArchive.ScopeEvents(ctx, scopes, after, limit)
+}
+
+func (a weakenedArchive) TypeEvents(ctx context.Context, eventType string, scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if a.mode == "type" {
+		return a.EventArchive.ScopeEvents(ctx, append(scopes, "scope", "other", ""), after, limit)
+	}
+	return a.EventArchive.TypeEvents(ctx, eventType, scopes, after, limit)
+}
+
 func TestWeakenedEventArchivesAreRejected(t *testing.T) {
 	for _, negative := range []struct{ mode, name, diagnostic string }{
 		{"payload", "keeps_the_whole_record", "archived record changed"},
@@ -111,6 +125,8 @@ func TestWeakenedEventArchivesAreRejected(t *testing.T) {
 		{"tombstone", "refuses_a_tombstone_or_unrouted_event_and_stores_none_of_the_batch", "archiving a tombstone"},
 		{"time", "reads_merge_periods_in_sequence_order", "out of sequence order"},
 		{"named", "work_events_follow_naming_and_routing", "work events"},
+		{"scope", "scope_and_type_reads_select_by_the_record", "scope events"},
+		{"type", "scope_and_type_reads_select_by_the_record", "type events"},
 		{"forgets", "records_survive_reopen", "records after reopen"},
 	} {
 		t.Run(negative.mode, func(t *testing.T) {

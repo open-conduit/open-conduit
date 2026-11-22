@@ -33,9 +33,12 @@ type Armer interface {
 // optional only for a CLI-time process (setup), which has no coordination
 // store: KV, state and event methods then refuse as unsupported.
 type Deps struct {
-	Store  storage.Store
-	Now    func() time.Time
-	Limits runtime.CausalLimits
+	Store storage.Store
+	// History serves the state reads of Events across the live log and an
+	// archive; its zero value reads the live log.
+	History storage.EventHistory
+	Now     func() time.Time
+	Limits  runtime.CausalLimits
 	// Scopes returns the scopes whose current configuration uses the
 	// extension. State reads, event.accept, timers, secrets and work.cancel
 	// are limited to them.
@@ -843,7 +846,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if p.Source == "" || p.DeliveryID == "" {
 				return notFound
 			}
-			a, err := tx.EventByDelivery(p.Source, p.DeliveryID)
+			a, err := s.deps.History.EventByDelivery(ctx, tx, p.Source, p.DeliveryID)
 			if err != nil {
 				return err
 			}
@@ -861,7 +864,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			}
 			out = protocol.StateSequenceResult{Sequence: seq}
 		case "state.event":
-			a, err := tx.Event(domain.ID(p.ID))
+			a, err := s.deps.History.Event(ctx, tx, domain.ID(p.ID))
 			if err != nil {
 				return err
 			}
@@ -881,7 +884,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 				scopes = append(scopes, id)
 			}
 			list, err := scopedEvents(tx, allowed, p, func(after uint64, limit int) ([]domain.AcceptedEvent, error) {
-				return tx.ScopeEvents(scopes, after, limit)
+				return s.deps.History.ScopeEvents(ctx, tx, scopes, after, limit)
 			})
 			if err != nil {
 				return err
@@ -896,7 +899,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if p.ID != "" {
 				var err error
 				list, err = scopedEvents(tx, allowed, p, func(after uint64, limit int) ([]domain.AcceptedEvent, error) {
-					return tx.WorkEvents(domain.ID(p.ID), after, limit)
+					return s.deps.History.WorkEvents(ctx, tx, domain.ID(p.ID), after, limit)
 				})
 				if err != nil {
 					return err

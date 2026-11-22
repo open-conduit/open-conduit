@@ -426,9 +426,11 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 		}
 		// A Work's events, and a scope's (with those whose scope isn't
 		// recorded yet), are read through their index, not the log.
-		page := func(after uint64) ([]domain.AcceptedEvent, error) { return tx.Events(after, 200) }
+		page := func(after uint64) ([]domain.AcceptedEvent, error) { return s.o.History.Events(c.ctx, tx, after, 200) }
 		if work := q.filters["work_id"]; work != "" {
-			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.WorkEvents(domain.ID(work), after, 200) }
+			page = func(after uint64) ([]domain.AcceptedEvent, error) {
+				return s.o.History.WorkEvents(c.ctx, tx, domain.ID(work), after, 200)
+			}
 		} else if typ := q.filters["type"]; typ != "" {
 			// A type's events are read through its index, so following
 			// one (the usage feed) costs the same however long the log.
@@ -438,15 +440,19 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 			} else if c.reach != nil {
 				within = append(c.scopes(), "")
 			}
-			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.TypeEvents(typ, within, after, 200) }
+			page = func(after uint64) ([]domain.AcceptedEvent, error) {
+				return s.o.History.TypeEvents(c.ctx, tx, typ, within, after, 200)
+			}
 		} else if scope := q.filters["scope_id"]; scope != "" {
 			page = func(after uint64) ([]domain.AcceptedEvent, error) {
-				return tx.ScopeEvents([]domain.ID{domain.ID(scope), ""}, after, 200)
+				return s.o.History.ScopeEvents(c.ctx, tx, []domain.ID{domain.ID(scope), ""}, after, 200)
 			}
 		} else if c.reach != nil {
 			// Only the scopes the operator's grants cover.
 			within := append(c.scopes(), "")
-			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.ScopeEvents(within, after, 200) }
+			page = func(after uint64) ([]domain.AcceptedEvent, error) {
+				return s.o.History.ScopeEvents(c.ctx, tx, within, after, 200)
+			}
 		}
 		for {
 			batch, e := page(after)
@@ -499,7 +505,7 @@ func (s *Server) getEvent(c *call) (int, any, error) {
 	}
 	var out any
 	err = s.read(c.ctx, func(tx storage.Tx) error {
-		a, e := tx.Event(domain.ID(c.params[0]))
+		a, e := s.o.History.Event(c.ctx, tx, domain.ID(c.params[0]))
 		if e != nil {
 			return e
 		}
