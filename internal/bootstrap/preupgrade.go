@@ -91,6 +91,11 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 		return "", fmt.Errorf("artifacts: %w", err)
 	}
 	defer files.Close()
+	events, closeEvents, err := openEventArchive(ctx, d.o.StateDir)
+	if err != nil {
+		return "", fmt.Errorf("event archive: %w", err)
+	}
+	defer closeEvents()
 	// The key is read as backup create reads it, since packages aren't
 	// running yet. One that can't be had doesn't cost the way back: a restore
 	// can accept the unsigned bundle explicitly.
@@ -104,7 +109,7 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 	stage := filepath.Join(d.o.BackupDir, ".conduit-snapshot-upgrade-"+stamp)
 	defer os.RemoveAll(stage)
 	build := d.o.Version + " (" + d.o.Commit + ")"
-	if err := backup.CreatePrior(ctx, stage, key, backendName, prior, files, build, retentionExpired, now, lastBuild); err != nil {
+	if err := backup.CreatePrior(ctx, stage, key, backendName, prior, files, events, build, retentionExpired, now, lastBuild); err != nil {
 		return "", err
 	}
 	within := d.upgradeVerifyDir()
@@ -197,6 +202,11 @@ func (d *daemon) pruneUpgradeBundles() {
 			continue
 		}
 		d.log.Info("pre-upgrade bundle pruned", "path", path)
+	}
+	// The state lock is held and the loop hasn't started, so no bundle is
+	// being written. With backups off this is the only prune there is.
+	if _, err := backup.PruneSegments(d.o.BackupDir); err != nil {
+		d.log.Warn("backup segments not pruned", "error", err)
 	}
 }
 

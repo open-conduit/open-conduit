@@ -32,9 +32,11 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/internal/telemetry"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/storage"
@@ -164,8 +166,10 @@ type daemon struct {
 	owner      string
 	coord      storage.Store
 	artifacts  storage.ArtifactStore
-	backups    backupState
-	duties     dutyClock
+	// events is the event archive, which holds what the live log retired.
+	events  storage.EventArchive
+	backups backupState
+	duties  dutyClock
 	// retaining is set while a retention pass runs. startup is this start's
 	// timing, recorded once its first pass is done.
 	retaining     atomic.Bool
@@ -451,6 +455,12 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	defer store.Close()
 	d.recordBuild(ctx, store)
+	archive, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(o.StateDir, backup.ArchiveDir))
+	if err != nil {
+		return fmt.Errorf("event archive: %w", err)
+	}
+	defer archive.Close()
+	d.events = archive
 
 	logFile, err := openLog(o.LifecycleLog)
 	if err != nil {
@@ -756,7 +766,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	if c.scheduler, err = runtime.NewScheduler(d.coord, d.now, c.router, runtime.SchedulerOptions{
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
-		Executors: executors, HistoricalExecutors: history,
+		Executors: executors, HistoricalExecutors: history, EventArchive: d.eventArchive(),
 		GlobalLimit: set.Concurrency, ExecutorPools: pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), AdmissionLimits: admissionLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
@@ -775,7 +785,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	c.control = control
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, History: storage.EventHistory{Archive: d.eventArchive()}, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Extensions: d.installedExtensions, ExtensionKind: d.packageNamed, Toolbelt: belt, Git: d.git, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Secrets: &config.SecretStore{File: d.resolver.SecretsFile}, Verifiers: d.verifier, StartVerifier: d.startVerifier, Checks: d.checks(), Releases: d.o.Releases,
 		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Annotators: d.annotators, Actions: d.actions, Observer: d.pipeline, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, StartTerminal: StartTerminal, Live: d.live, Nudge: d.poke, Components: d.healthComponents, Phase: d.phase, Quiescence: d.quiescence, Drain: daemonDrain{d}, Portability: d.portability, RequestServed: d.requestServed, Diagnostic: func(code string) { d.report("audit", "", code); d.clear("audit", "") }}); err != nil {
 		return nil, err
 	}
@@ -789,7 +799,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.filesystemCheck, d.webhookCheck, d.backupCheck, d.eventArchiveCheck, d.resourceCheck, d.executorStateCheck, d.capacityCheck, d.loopCheck, d.transactionsCheck, d.metricsCheck, d.extensionCheck, d.trustCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency
@@ -926,6 +936,15 @@ func (d *daemon) pruneReported() {
 			delete(d.reportedAt, key)
 		}
 	}
+}
+
+// eventArchive is the open event archive, a nil interface when there is none
+// (a daemon built by a test), which every reader treats as no archive.
+func (d *daemon) eventArchive() storage.EventArchive {
+	if d.events == nil {
+		return nil
+	}
+	return d.events
 }
 
 // keptFinished converts settings.kept_finished_days to a duration, capped at

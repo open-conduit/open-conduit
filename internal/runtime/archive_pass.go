@@ -12,6 +12,7 @@ import (
 const (
 	archiveNamespace = "core.archive"
 	archiveCursorKey = "cursor"
+	archiveRecordKey = "record"
 )
 
 // Why the archive pass left an Event live, beside RetirementGuard's reasons.
@@ -35,6 +36,27 @@ type ArchivePass struct {
 	Scanned, Archived int
 	Kept              map[string]int
 	Wrapped           bool
+}
+
+// ArchiveRecord is the trail the live database keeps of the archive passes:
+// when one last ran, how many Events have moved, and why Events stayed live.
+// Lap counts the current trip over the log and LastLap the last whole one, so
+// the reasons (a Wait pinning old Events, say) are of the whole log rather
+// than whichever page ran last.
+type ArchiveRecord struct {
+	At       time.Time
+	Archived uint64
+	Lap      map[string]int `json:",omitempty"`
+	LastLap  map[string]int `json:",omitempty"`
+}
+
+// ArchiveRecordInTx reads the trail; none yet is the zero record.
+func ArchiveRecordInTx(tx storage.Tx) (ArchiveRecord, error) {
+	var r ArchiveRecord
+	if err := getJSON(tx, archiveNamespace, archiveRecordKey, &r); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return ArchiveRecord{}, err
+	}
+	return r, nil
 }
 
 // ArchiveEvents moves up to limit Events' worth of finished history to the
@@ -120,7 +142,26 @@ func (s *Scheduler) ArchiveEvents(ctx context.Context, policy ArchivePolicy, lim
 		if !pass.Wrapped {
 			next = page[len(page)-1].Sequence
 		}
-		return putJSON(tx, archiveNamespace, archiveCursorKey, next)
+		if er = putJSON(tx, archiveNamespace, archiveCursorKey, next); er != nil {
+			return er
+		}
+		record, er := ArchiveRecordInTx(tx)
+		if er != nil {
+			return er
+		}
+		record.At, record.Archived = s.now().UTC(), record.Archived+uint64(retired)
+		if record.Lap == nil {
+			record.Lap = map[string]int{}
+		}
+		for _, counts := range []map[string]int{kept, late} {
+			for why, n := range counts {
+				record.Lap[why] += n
+			}
+		}
+		if pass.Wrapped {
+			record.LastLap, record.Lap = record.Lap, nil
+		}
+		return putJSON(tx, archiveNamespace, archiveRecordKey, record)
 	}); err != nil {
 		return ArchivePass{}, err
 	}

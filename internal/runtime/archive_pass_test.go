@@ -295,3 +295,42 @@ func TestArchivePassKeepsAConflictAndMovesTheRestOfThePage(t *testing.T) {
 		t.Fatalf("pass = %+v, want one moved and one kept as a conflict", pass)
 	}
 }
+
+// The live database keeps what moved and, for the last whole trip over the
+// log, why the rest stayed.
+func TestArchivePassLeavesATrail(t *testing.T) {
+	ctx := context.Background()
+	f, archive := passFixture(t)
+	acceptUnmatched(t, f, "trail-old")
+	s := archiveScheduler(t, f, func(o *runtime.SchedulerOptions) { o.EventArchive = archive })
+	read := func() runtime.ArchiveRecord {
+		t.Helper()
+		var r runtime.ArchiveRecord
+		if err := f.Store.Transact(ctx, storage.Guard{Now: f.Clock.Now()}, func(tx storage.Tx) error {
+			var err error
+			r, err = runtime.ArchiveRecordInTx(tx)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if r := read(); r.Archived != 0 || !r.At.IsZero() {
+		t.Fatalf("record before any pass: %+v", r)
+	}
+	if _, err := s.ArchiveEvents(ctx, everything(f), 200); err != nil {
+		t.Fatal(err)
+	}
+	if r := read(); r.Archived != 1 || !r.At.Equal(f.Clock.Now()) {
+		t.Fatalf("record after the pass: %+v", r)
+	}
+	acceptUnmatched(t, f, "trail-recent")
+	recent := runtime.ArchivePolicy{FinishedBefore: f.Clock.Now().Add(-time.Hour), UnmatchedBefore: f.Clock.Now().Add(-time.Hour)}
+	if _, err := s.ArchiveEvents(ctx, recent, 200); err != nil {
+		t.Fatal(err)
+	}
+	r := read()
+	if r.Archived != 1 || r.LastLap[runtime.ArchiveKeptRecent] == 0 || len(r.Lap) != 0 {
+		t.Fatalf("record after a pass that kept an Event: %+v", r)
+	}
+}

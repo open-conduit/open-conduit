@@ -1443,3 +1443,29 @@ func TestAdmissionLimitOptIn(t *testing.T) {
 		t.Fatalf("a scope widened settings.admission_limit: %v", got)
 	}
 }
+
+func TestArchiveHorizonSettings(t *testing.T) {
+	doc := func(settings string) []byte {
+		return []byte(`{"version":1,"settings":{` + settings + `},"connections":[],"scopes":[{"id":"org","name":"org"}]}`)
+	}
+	parsed, err := ParseFile(doc(`"archive_finished_days":30,"archive_unmatched_days":7`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Settings.ArchiveFinishedDays != 30 || parsed.Settings.ArchiveUnmatchedDays != 7 {
+		t.Fatalf("settings = %+v", parsed.Settings)
+	}
+	unset, err := ParseFile(doc(``))
+	if err != nil || unset.Settings.ArchiveFinishedDays != 0 {
+		t.Fatalf("unset: %+v, %v", unset, err)
+	}
+	for name, settings := range map[string]string{
+		"unmatched alone":          `"archive_unmatched_days":7`,
+		"unmatched longer":         `"archive_finished_days":7,"archive_unmatched_days":30`,
+		"zero is not a way to off": `"archive_finished_days":0`,
+	} {
+		if _, err := ParseFile(doc(settings)); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+}

@@ -675,7 +675,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		return s
 	}
 	return extproc.Deps{
-		Store: d.coord, Now: d.now,
+		Store: d.coord, Now: d.now, History: storage.EventHistory{Archive: d.eventArchive()},
 		CurrentLimits: func() runtime.CausalLimits {
 			if s := snapshot(); s != nil {
 				return runtime.CausalLimits{MaxDepth: s.Settings.CausalMaxDepth, PerMinute: s.Settings.CausalPerMinute}

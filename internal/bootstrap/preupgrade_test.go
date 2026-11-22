@@ -158,7 +158,7 @@ func TestUpgradeBundleOfAStoreFromBeforeTombstones(t *testing.T) {
 	}
 	defer files.Close()
 	bundle := filepath.Join(t.TempDir(), "bundle")
-	if err := backup.CreatePrior(ctx, bundle, nil, c.name, prior, files, "v2", retentionExpired, upgradeStart, lastBuild); err != nil {
+	if err := backup.CreatePrior(ctx, bundle, nil, c.name, prior, files, nil, "v2", retentionExpired, upgradeStart, lastBuild); err != nil {
 		t.Fatalf("the upgrade bundle failed: %v", err)
 	}
 }
