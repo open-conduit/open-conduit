@@ -38,7 +38,7 @@ func TestToolsetsCoverThePlaybook(t *testing.T) {
 	}
 	// github.pr.edit joined in version 4, so a list from before it is
 	// recognisably version 3's.
-	if v := byName[gh.ToolsetAuthor]; v.Version() != 4 || slices.Contains(v.At(3), "github.pr.edit") {
+	if v := byName[gh.ToolsetAuthor]; v.Version() != 5 || !slices.Contains(v.At(5), gh.OpChecksLog) || slices.Contains(v.At(4), gh.OpChecksLog) || slices.Contains(v.At(3), "github.pr.edit") {
 		t.Fatalf("author toolset versions: %+v", v)
 	}
 }

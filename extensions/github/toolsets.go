@@ -33,7 +33,8 @@ func since(v int, names ...string) []extension.ToolsetOperation {
 
 // Toolsets are the GitHub extension's published toolsets. The author
 // toolset's versions follow the operations' releases: github.pr.review
-// joined in 2, github.pr.resolve in 3 and github.pr.edit in 4.
+// joined in 2, github.pr.resolve in 3, github.pr.edit in 4 and
+// github.checks.log in 5; github.checks.log joined the reviewer's in 2.
 func Toolsets() []extension.Toolset {
 	author := since(1, extension.ReadContext, extension.Wait, extension.DeclareOutcome,
 		"github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
@@ -42,12 +43,15 @@ func Toolsets() []extension.Toolset {
 	author = append(author, since(2, "github.pr.review")...)
 	author = append(author, since(3, "github.pr.resolve")...)
 	author = append(author, since(4, "github.pr.edit")...)
+	author = append(author, since(5, OpChecksLog)...)
+	reviewer := since(1, extension.ReadContext, extension.Wait, extension.DeclareOutcome,
+		"github.context", "github.issue.view", "github.pr.list", "github.pr.view", "github.pr.comment", "github.pr.reply",
+		"github.pr.resolve", "github.pr.review", "github.checks", "github.attachment.upload", "github.attachment.get", "github.wait")
+	reviewer = append(reviewer, since(2, OpChecksLog)...)
 	return []extension.Toolset{
 		{Name: ToolsetAuthor, Summary: "Work a GitHub issue: read it, comment, open and edit its PRs, answer their reviews and wait on them.", Operations: author},
 		{Name: ToolsetReviewer, Summary: "Review GitHub PRs: read them and their checks, comment, reply in and resolve threads, and submit reviews.",
-			Operations: since(1, extension.ReadContext, extension.Wait, extension.DeclareOutcome,
-				"github.context", "github.issue.view", "github.pr.list", "github.pr.view", "github.pr.comment", "github.pr.reply",
-				"github.pr.resolve", "github.pr.review", "github.checks", "github.attachment.upload", "github.attachment.get", "github.wait")},
+			Operations: reviewer},
 		{Name: ToolsetWorkspace, Summary: "Push from a git workspace: git signs in through Open Conduit with a short-lived token it never sees.", Operations: since(1, OpGitCredential)},
 		{Name: ToolsetHold, Summary: "Run held issues: read and settle holds.", Operations: since(1, extension.Emit, "github.hold.status", "github.hold")},
 	}

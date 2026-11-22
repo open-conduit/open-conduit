@@ -3,13 +3,16 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
@@ -147,7 +150,7 @@ func TestAttachmentTokenCoversTrackerAndCodeRepository(t *testing.T) {
 	fake.AddApp("42", &key.PublicKey)
 	cfg, _ := ParseConnection([]byte(`{"api_url":"` + fake.URL + `","auth":"app","app_id":"42"}`))
 	c, _ := NewClient(cfg, secrets(map[string]string{SecretAppPrivateKey: pemText}), ClientOptions{})
-	tok, done, err := c.fetchToken(context.Background(), []string{"octo/widgets", "octo/docs"})
+	tok, done, err := c.fetchToken(context.Background(), []string{"octo/widgets", "octo/docs"}, readPermissions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +162,7 @@ func TestAttachmentTokenCoversTrackerAndCodeRepository(t *testing.T) {
 	if _, valid := fake.Scope(tok); valid {
 		t.Fatal("the attachment token was not revoked")
 	}
-	if _, _, err := c.fetchToken(context.Background(), []string{"octo/widgets", "other/docs"}); err == nil {
+	if _, _, err := c.fetchToken(context.Background(), []string{"octo/widgets", "other/docs"}, readPermissions); err == nil {
 		t.Fatal("a token was minted across owners")
 	}
 }
@@ -207,5 +210,100 @@ func TestFetchDoesNotSignImageProxyLinks(t *testing.T) {
 	}
 	if len(rt.seen) != 4 {
 		t.Fatalf("hosts fetched: %v", rt.seen)
+	}
+}
+
+// A job's log is read with a token for that one repository holding Actions
+// read and nothing else, revoked afterwards.
+func TestJobLogMintsAnActionsReadTokenForOneRepository(t *testing.T) {
+	fake := githubtest.New("octo/widgets")
+	defer fake.Close()
+	key, pemText := rsaKey(t)
+	fake.AddApp("42", &key.PublicKey)
+	fake.SetCheck("h1", "test", "completed", "failure")
+	jobs := func(c *Client) []ActionsJob {
+		t.Helper()
+		got, err := c.HeadJobs(context.Background(), "octo/widgets", "h1")
+		if err != nil || len(got) != 1 {
+			t.Fatalf("jobs: %+v %v", got, err)
+		}
+		return got
+	}
+	fake.SetJobLog("h1", "test", []byte("the log"))
+	cfg, _ := ParseConnection([]byte(`{"api_url":"` + fake.URL + `","auth":"app","app_id":"42"}`))
+	c, err := NewClient(cfg, secrets(map[string]string{SecretAppPrivateKey: pemText}), ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, size, err := c.JobLog(context.Background(), "octo/widgets", jobs(c)[0].ID)
+	if err != nil || string(log) != "the log" || size != 7 {
+		t.Fatalf("log: %q %d %v", log, size, err)
+	}
+	reads := fake.FileReads()
+	if len(reads) == 0 {
+		t.Fatal("no log read")
+	}
+	if _, valid := fake.Scope(reads[0].Token); valid {
+		t.Fatal("the log token was not revoked")
+	}
+	tok, _, err := c.who.Load().read.(*appToken).scoped(context.Background(), "octo/widgets", actionsReadPermissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, _ := fake.Scope(tok)
+	if !slices.Equal(scope.Repositories, []string{"widgets"}) || !maps.Equal(scope.Permissions, map[string]string{"actions": "read"}) {
+		t.Fatalf("log token scope: %+v", scope)
+	}
+	// Negative control: a token with the attachment scope has no Actions
+	// read, so the fake refuses it as GitHub would.
+	other, _, err := c.who.Load().read.(*appToken).scoped(context.Background(), "octo/widgets", readPermissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, fake.URL+"/repos/octo/widgets/actions/jobs/"+strconv.FormatInt(jobs(c)[0].ID, 10)+"/logs", nil)
+	req.Header.Set("Authorization", "token "+other)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a token without Actions read got %d", res.StatusCode)
+	}
+}
+
+func TestLogExcerpt(t *testing.T) {
+	stamp := "2026-11-21T10:00:00.1234567Z "
+	if got, cut := logExcerpt([]byte("\xef\xbb\xbf"+stamp+"one\r\n"+stamp+"two\n"), 100); got != "one\ntwo" || cut {
+		t.Fatalf("a short log: %q %v", got, cut)
+	}
+	var b strings.Builder
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&b, "%sline %d\n", stamp, i)
+		if i == 2000 {
+			fmt.Fprintf(&b, "%s--- FAIL: TestThing\n%s##[error]Process completed with exit code 1.\n", stamp, stamp)
+		}
+	}
+	got, cut := logExcerpt([]byte(b.String()), 8<<10)
+	if !cut || !strings.Contains(got, "--- FAIL: TestThing") || !strings.Contains(got, "##[error]") || !strings.Contains(got, "lines left out") || strings.Contains(got, "line 4999") || strings.Contains(got, stamp) {
+		t.Fatalf("around the error: %v\n%s", cut, got)
+	}
+	// With no error marker the end is kept.
+	got, cut = logExcerpt([]byte(strings.ReplaceAll(b.String(), "##[error]", "")), 8<<10)
+	if !cut || !strings.Contains(got, "line 4999") || strings.Contains(got, "line 10\n") {
+		t.Fatalf("the end: %v\n%s", cut, got)
+	}
+	// The limit holds, keeping the end, and never splits a character.
+	got, cut = logExcerpt([]byte(strings.Repeat("é", 4000)+"\n##[error]end"), 1000)
+	if !cut || len(got) > 1000 || !strings.HasSuffix(got, "##[error]end") || !utf8.ValidString(got) {
+		t.Fatalf("the limit: %d %v", len(got), cut)
+	}
+}
+
+func TestReadTailKeepsTheEnd(t *testing.T) {
+	data := strings.Repeat("a", 300<<10) + "end"
+	got, size, err := readTail(strings.NewReader(data), 100<<10)
+	if err != nil || size != int64(len(data)) || len(got) != 100<<10 || !strings.HasSuffix(string(got), "end") {
+		t.Fatalf("tail: %d %d %v", len(got), size, err)
 	}
 }

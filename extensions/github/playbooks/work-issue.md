@@ -1,7 +1,7 @@
 ---
 name: work-issue
 description: Work a GitHub issue in turns under Open Conduit. The first turn reads the issue and does what it asks in the issue's own workspace, opening a PR when it changes the repository or answering on the issue when it doesn't; later turns, started by Open Conduit, act on new comments, check results and merges. Started by Open Conduit as /open-conduit:work-issue <number>.
-operations: [github.context, github.issue.view, github.issue.comment, github.issue.list, github.issue.create, github.pr.list, github.pr.create, github.pr.edit, github.pr.view, github.pr.comment, github.pr.reply, github.pr.resolve, github.pr.review, github.checks, github.attachment.upload, github.attachment.get, github.wait]
+operations: [github.context, github.issue.view, github.issue.comment, github.issue.list, github.issue.create, github.pr.list, github.pr.create, github.pr.edit, github.pr.view, github.pr.comment, github.pr.reply, github.pr.resolve, github.pr.review, github.checks, github.checks.log, github.attachment.upload, github.attachment.get, github.wait]
 ---
 
 # Work an issue
@@ -30,6 +30,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.pr.resolve` | `number`, `comment_id` | resolve the inline review thread that comment is in, once its point is addressed |
 | `github.pr.review` | `number`, `event`, `body`, `comments`? | submit one review: `event` is `approve`, `request_changes` or `comment`, with inline `comments` as `{path, line, side?, body}` on lines of the diff. It is posted as this connection's GitHub account, not the owner's |
 | `github.checks` | `number`? | every check on the PR's head, with links |
+| `github.checks.log` | `check`?, `number`?, `save_to`? | the failing part of a GitHub Actions job's log on the PR's head (`check` may be left out when one job failed); with `save_to`, the whole log saved to that path |
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
 | `github.attachment.get` | `url`, `save_to`, `project`? | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it); `project` for one posted in another project |
 | `github.wait` | `conditions`?, `until`?, `reason` | park the issue until something happens or a time comes (see Waiting) |
@@ -129,7 +130,7 @@ The message lists what happened since your last turn, each under its own heading
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
   - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA. One comment can answer several points from the same person in the same place.
   - Resolve a review thread with `github.pr.resolve` and a `comment_id` in it only if you opened the thread, once its point is addressed. Whoever raised a point resolves it, so leave another agent's or a person's thread for them.
-- **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.
+- **Checks failed**: `github.checks` names each failing check. Read its log with `github.checks.log` (a check from another CI keeps its log at the link `github.checks` gives), reproduce it locally, fix it, push, and end with `building`.
 - **Checks passed**: if you opened the PR as a draft and its work is done, mark it ready for review with `github.pr.edit` and `"draft": false`, rather than asking someone to. If the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
 - **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
 - **No checks ran**: the repo has no CI. Treat the PR as checked once what the rules say must pass has passed locally, and report as in step 5.

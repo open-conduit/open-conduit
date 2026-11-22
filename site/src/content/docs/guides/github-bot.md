@@ -36,6 +36,7 @@ On GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub
   - **Contents:** Read and write
   - **Issues:** Read and write
   - **Pull requests:** Read and write
+  - **Actions:** Read-only, so agents can read a failed job's log (`github.checks.log`)
   - **Metadata:** Read-only (GitHub sets this one itself)
 - **Where can this GitHub App be installed?** Only on this account.
 

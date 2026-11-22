@@ -474,18 +474,19 @@ func (c *Client) ParseFetchLink(link string) (FetchLink, error) {
 
 // fetchToken is the token a signed fetch is sent with, and what to call
 // once the fetch is done. A sign-in App mints one read-only for just the
-// repositories given (readPermissions), revoked afterwards, so a link can
+// repositories given (perms: readPermissions, or actionsReadPermissions for
+// a job's log), revoked afterwards, so a link can
 // never reach another repository the installation covers. A token
 // connection has nothing to mint: its own token goes, and the repository
 // check before the fetch is what bounds it.
-func (c *Client) fetchToken(ctx context.Context, repos []string) (string, func(), error) {
+func (c *Client) fetchToken(ctx context.Context, repos []string, perms map[string]string) (string, func(), error) {
 	read := c.who.Load().read
 	app, ok := read.(*appToken)
 	if !ok {
 		tok, err := read.token(ctx, repos[0])
 		return tok, func() {}, err
 	}
-	tok, _, err := app.scopedTo(ctx, repos, readPermissions)
+	tok, _, err := app.scopedTo(ctx, repos, perms)
 	if err != nil {
 		return "", nil, err
 	}
@@ -503,24 +504,45 @@ func (c *Client) fetchToken(ctx context.Context, repos []string) (string, func()
 // without the Authorization header once they leave the host (the signed
 // storage link an attachment ends at).
 func (c *Client) Fetch(ctx context.Context, repos []string, link FetchLink) ([]byte, string, error) {
+	res, done, err := c.openFetch(ctx, repos, link, readPermissions)
+	if err != nil {
+		return nil, "", err
+	}
+	defer done()
+	data, err := io.ReadAll(io.LimitReader(res.Body, MaxFetch+1))
+	if err != nil {
+		return nil, "", errors.New("github: fetch: reading the body failed")
+	}
+	if len(data) > MaxFetch {
+		return nil, "", fmt.Errorf("github: fetch exceeds %d MB", MaxFetch>>20)
+	}
+	return data, res.Header.Get("Content-Type"), nil
+}
+
+// openFetch starts a fetch, signed in with perms when the link is signed.
+// The caller reads the response and calls done, which closes it and revokes
+// the token.
+func (c *Client) openFetch(ctx context.Context, repos []string, link FetchLink, perms map[string]string) (*http.Response, func(), error) {
 	if link.URL == nil || len(repos) == 0 {
-		return nil, "", ErrForeignLink
+		return nil, nil, ErrForeignLink
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.URL.String(), nil)
 	if err != nil {
-		return nil, "", ErrForeignLink
+		return nil, nil, ErrForeignLink
 	}
+	revoke := func() {}
 	if link.Signed {
-		tok, done, err := c.fetchToken(ctx, repos)
+		tok, done, err := c.fetchToken(ctx, repos, perms)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
-		defer done()
+		revoke = done
 		// A fetch skips the transport (its redirects leave GitHub), so an
 		// API link checks the budget it would spend here.
 		if link.URL.Host == c.tr.apiHost {
 			if limit := c.tr.pausedFor(c.tr.budgets.of(tokenDigest(tok))); limit != nil {
-				return nil, "", limit
+				revoke()
+				return nil, nil, limit
 			}
 		}
 		req.Header.Set("Authorization", "token "+tok)
@@ -539,23 +561,83 @@ func (c *Client) Fetch(ctx context.Context, repos []string, link FetchLink) ([]b
 	}}
 	res, err := client.Do(req)
 	if err != nil {
+		revoke()
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, nil, ctx.Err()
 		}
-		return nil, "", errors.New("github: fetch: transport failure")
+		return nil, nil, errors.New("github: fetch: transport failure")
 	}
-	defer res.Body.Close()
 	if res.StatusCode >= 300 {
-		return nil, "", &StatusError{Status: res.StatusCode, Message: "fetch refused"}
+		res.Body.Close()
+		revoke()
+		return nil, nil, &StatusError{Status: res.StatusCode, Message: "fetch refused"}
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, MaxFetch+1))
+	return res, func() { res.Body.Close(); revoke() }, nil
+}
+
+// ActionsJob is one GitHub Actions job of a workflow run. Its name is the
+// check's name.
+type ActionsJob struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	HTMLURL    string `json:"html_url"`
+}
+
+// HeadJobs are the latest attempt's jobs of every workflow run on a commit.
+func (c *Client) HeadJobs(ctx context.Context, repo, sha string) ([]ActionsJob, error) {
+	runs, err := c.workflowRuns(ctx, repo, sha)
 	if err != nil {
-		return nil, "", errors.New("github: fetch: reading the body failed")
+		return nil, err
 	}
-	if len(data) > MaxFetch {
-		return nil, "", fmt.Errorf("github: fetch exceeds %d MB", MaxFetch>>20)
+	var jobs []ActionsJob
+	for _, r := range runs {
+		for n := 1; ; n++ {
+			var page struct {
+				TotalCount int          `json:"total_count"`
+				Jobs       []ActionsJob `json:"jobs"`
+			}
+			if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/actions/runs/%d/jobs?filter=latest&per_page=100&page=%d", r.ID, n), nil, &page); err != nil {
+				return nil, err
+			}
+			jobs = append(jobs, page.Jobs...)
+			if len(page.Jobs) < 100 || n*100 >= page.TotalCount {
+				break
+			}
+			if n == 20 {
+				return nil, errors.New("github: workflow jobs exceed the page bound")
+			}
+		}
 	}
-	return data, res.Header.Get("Content-Type"), nil
+	return jobs, nil
+}
+
+// actionsReadPermissions is what a job log's token is minted with.
+var actionsReadPermissions = map[string]string{"actions": "read"}
+
+// JobLog reads a job's log, its last MaxFetch bytes, and its whole size. An
+// App's token is minted for this repository with Actions read alone and
+// revoked afterwards; GitHub redirects to a signed storage link, which the
+// token is not sent to.
+func (c *Client) JobLog(ctx context.Context, repo string, job int64) ([]byte, int64, error) {
+	u, err := url.Parse(c.api + repoPath(repo, "/actions/jobs/%d/logs", job))
+	if err != nil {
+		return nil, 0, err
+	}
+	res, done, err := c.openFetch(ctx, []string{repo}, FetchLink{URL: u, Repo: repo, Signed: true}, actionsReadPermissions)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer done()
+	log, size, err := readTail(res.Body, MaxFetch)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		return nil, 0, errors.New("github: job log: reading the body failed")
+	}
+	return log, size, nil
 }
 
 // BehindBase is how many of base's commits head lacks (GET compare
