@@ -225,24 +225,79 @@ func (b backend) Inspect(ctx context.Context, location string) (storage.Inspecti
 	return i, nil
 }
 
+// inspectAttempts is how many times a copy that changed while it was read is
+// taken again.
+const inspectAttempts = 5
+
+// inspectCopied is a test seam, called after each copy and before it is
+// checked against the source.
+var inspectCopied = func(string) {}
+
+// inspect copies the database and its WAL. The daemon's lock doesn't stop a
+// replicator checkpointing the file while it is read, and a copy torn that way
+// reads as corruption, so one that changed is taken again. The -shm is left
+// behind: it only indexes the WAL, SQLite rebuilds it, and a stale copy could
+// point at frames from before a checkpoint.
 func inspect(ctx context.Context, abs string) (inspection, error) {
-	tmp, err := os.MkdirTemp("", "oc-sqlite-inspect-")
-	if err != nil {
-		return inspection{}, err
-	}
-	copied := filepath.Join(tmp, "conduit.db")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := copyPrivate(abs+suffix, copied+suffix); err != nil && !(suffix != "" && errors.Is(err, os.ErrNotExist)) {
+	for range inspectAttempts {
+		if err := ctx.Err(); err != nil {
+			return inspection{}, err
+		}
+		before, err := fileState(abs)
+		if err != nil {
+			return inspection{}, err
+		}
+		tmp, err := os.MkdirTemp("", "oc-sqlite-inspect-")
+		if err != nil {
+			return inspection{}, err
+		}
+		copied := filepath.Join(tmp, "conduit.db")
+		for _, suffix := range []string{"", "-wal"} {
+			if err := copyPrivate(abs+suffix, copied+suffix); err != nil && !(suffix != "" && errors.Is(err, os.ErrNotExist)) {
+				os.RemoveAll(tmp)
+				return inspection{}, err
+			}
+		}
+		inspectCopied(abs)
+		after, err := fileState(abs)
+		if err != nil {
 			os.RemoveAll(tmp)
 			return inspection{}, err
 		}
+		if before != after {
+			os.RemoveAll(tmp)
+			continue
+		}
+		s, err := Open(ctx, copied)
+		if err != nil {
+			os.RemoveAll(tmp)
+			return inspection{}, err
+		}
+		return inspection{s: s, dir: tmp}, nil
 	}
-	s, err := Open(ctx, copied)
+	return inspection{}, fmt.Errorf("sqlite: %s kept changing while it was read: stop whatever is writing to it (a replicator, say) and check again", abs)
+}
+
+// databaseFiles is the size and modification time of a database and its WAL.
+type databaseFiles struct {
+	size, walSize   int64
+	mtime, walMtime int64
+}
+
+func fileState(abs string) (databaseFiles, error) {
+	info, err := os.Stat(abs)
 	if err != nil {
-		os.RemoveAll(tmp)
-		return inspection{}, err
+		return databaseFiles{}, err
 	}
-	return inspection{s: s, dir: tmp}, nil
+	state := databaseFiles{size: info.Size(), mtime: info.ModTime().UnixNano()}
+	switch wal, err := os.Stat(abs + "-wal"); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return databaseFiles{}, err
+	default:
+		state.walSize, state.walMtime = wal.Size(), wal.ModTime().UnixNano()
+	}
+	return state, nil
 }
 
 // inspection is an opened private copy. Only its Viewer side is offered:

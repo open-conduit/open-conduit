@@ -216,3 +216,58 @@ func TestNewDatabaseIsNeverVisibleEmpty(t *testing.T) {
 		t.Fatal("negative control: Open accepted an unversioned database with tables")
 	}
 }
+
+// TestInspectRetakesACopyTornByAWriter changes the file during the first copy,
+// as a replicator's checkpoint would, and the inspection takes it again. A file
+// that never settles is the negative control: it is refused, never read torn.
+func TestInspectRetakesACopyTornByAWriter(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	copies := 0
+	stamp := time.Unix(1_000_000, 0)
+	touch := func(string) {
+		copies++
+		stamp = stamp.Add(time.Second)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { inspectCopied = func(string) {} }()
+	inspectCopied = func(p string) {
+		if copies == 0 {
+			touch(p)
+			return
+		}
+		copies++
+	}
+	i, err := inspect(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = i.s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(i.dir); err != nil {
+		t.Fatal(err)
+	}
+	if copies != 2 {
+		t.Fatalf("took %d copies, want 2", copies)
+	}
+	copies = 0
+	inspectCopied = touch
+	if i, err := inspect(ctx, path); err == nil {
+		i.s.Close()
+		os.RemoveAll(i.dir)
+		t.Fatal("negative control: read a file that never stopped changing")
+	}
+	if copies != inspectAttempts {
+		t.Fatalf("took %d copies, want %d", copies, inspectAttempts)
+	}
+}

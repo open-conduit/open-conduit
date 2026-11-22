@@ -217,7 +217,7 @@ An upgrade needs no backup step: the first start on a newer format [keeps a veri
 
 ## Corrupted-state diagnosis
 
-Run `open-conduit state check [--json]` with the daemon stopped. It examines the database through its backend's `Inspect`, which changes nothing (SQLite's opens a private copy), so diagnosis never changes the state. It reports:
+Run `open-conduit state check [--json]` with the daemon stopped. It examines the database through its backend's `Inspect`, which changes nothing (SQLite's opens a private copy), so diagnosis never changes the state. A copy that a replicator changed while it was read is taken again, and a file that never settles is refused rather than reported as corrupt. It reports:
 
 | Check | Meaning |
 | --- | --- |
@@ -251,6 +251,8 @@ Recovery order:
 `TestLiveDatabaseKeepsTheWALForAReplicator` (in `internal/storage/sqlite`) holds a read transaction as a WAL replicator does while the store commits, reclaims and rebuilds, and fails if the WAL restarts under it. `TestExclusiveLockingShutsOutAReplicator` is its negative control. `TestRebuildLeavesTheWALInPlace` fails on a truncating checkpoint of the live database, with one as its negative control. `TestNewDatabaseIsNeverVisibleEmpty` covers a replicator adding its tables: a database is published with its schema already in it, and an empty file given those tables is still refused.
 
 `TestReplicaRestoresWhatSurvived` (in `internal/bootstrap`) restores a world-readable replica holding a replicator's table, with its artifacts and archive: the lease is fenced, the directory starts drained and a bundle of it verifies. `TestReplicaReportsWhatIsMissing` restores the same replica with neither, and it still passes `state check` and can be backed up. Removing the record of what was lost is its negative control, which the backup refuses. `TestReplicaIsDrainedBeforeItIsPublished` stops the restore just after publishing and finds the directory drained. `TestReplicaAppliesTheWALBesideIt` keeps a commit that exists only in the WAL.
+
+`TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file during a state check's copy, with a file that never settles as its negative control.
 
 ## History
 
