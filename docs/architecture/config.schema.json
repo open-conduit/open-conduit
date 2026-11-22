@@ -177,6 +177,18 @@
             }
           }
         },
+        "archive_finished_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "Days after a Work finishes before its Events may move from the live database to the event archive, where they stay readable and are covered by backups. Unset, nothing is archived. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
+        },
+        "archive_unmatched_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "Days before an Event that opened no Work may move to the event archive. Needs archive_finished_days and can't be longer; unset, it is archive_finished_days. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
+        },
         "kept_finished_days": {
           "type": "integer",
           "minimum": 1,

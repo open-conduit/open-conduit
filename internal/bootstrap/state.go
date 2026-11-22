@@ -75,6 +75,11 @@ func BackupState(ctx context.Context, stateDir, destination, build string, o cli
 		return cli.BackupInfo{}, err
 	}
 	defer files.Close()
+	events, closeEvents, err := openEventArchive(ctx, stateDir)
+	if err != nil {
+		return cli.BackupInfo{}, err
+	}
+	defer closeEvents()
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
@@ -90,7 +95,7 @@ func BackupState(ctx context.Context, stateDir, destination, build string, o cli
 	}
 	if prior != nil {
 		defer prior.Close()
-		if err := backup.CreatePrior(ctx, destination, key, pending.name, prior, files, build, retentionExpired, time.Now(), lastBuild); err != nil {
+		if err := backup.CreatePrior(ctx, destination, key, pending.name, prior, files, events, build, retentionExpired, time.Now(), lastBuild); err != nil {
 			return cli.BackupInfo{}, err
 		}
 		return bundleInfo(destination)
@@ -100,10 +105,26 @@ func BackupState(ctx context.Context, stateDir, destination, build string, o cli
 		return cli.BackupInfo{}, err
 	}
 	defer store.Close()
-	if err := backup.Create(ctx, destination, key, c.name, store, files, build, retention(time.Now)); err != nil {
+	if err := backup.CreateWithArchive(ctx, destination, key, c.name, store, files, events, build, retention(time.Now)); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
+}
+
+// openEventArchive opens the state directory's event archive for a backup,
+// nil when it has none, without creating one. Its close is always callable.
+func openEventArchive(ctx context.Context, stateDir string) (storage.EventArchive, func(), error) {
+	path := filepath.Join(stateDir, backup.ArchiveDir)
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, func() {}, nil
+	} else if err != nil {
+		return nil, nil, err
+	}
+	events, err := sqlite.ArchiveBackend.Open(ctx, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return events, func() { _ = events.Close() }, nil
 }
 
 // retentionExpired tells the backup package which Executions' content the

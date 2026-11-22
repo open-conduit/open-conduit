@@ -132,6 +132,12 @@ type Settings struct {
 	// KeptFinishedDays is how long a finished Work's runs keep their
 	// content (logs, artifacts, executor state) after it last changed.
 	KeptFinishedDays int
+	// ArchiveFinishedDays is how long after a Work finishes its Events may
+	// leave the live log for the event archive; zero leaves them there.
+	ArchiveFinishedDays int
+	// ArchiveUnmatchedDays is the same for Events that opened no Work; zero
+	// is ArchiveFinishedDays.
+	ArchiveUnmatchedDays int
 	// Webhooks is the stored webhook listener and tunnel (settings.webhooks);
 	// serve flags override it for one run. Zero means reconcile-only.
 	Webhooks Webhooks
@@ -670,14 +676,15 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil, BackupSettings{}, nil}
+	s := Settings{4, 0, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, 0, 0, Webhooks{}, nil, nil, BackupSettings{}, nil}
 	fields := []struct {
 		key string
 		dst *int
 	}{{"concurrency", &s.Concurrency}, {"admission_limit", &s.AdmissionLimit}, {"reconcile_seconds", &s.ReconcileSeconds},
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
-		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays}}
+		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays},
+		{"archive_finished_days", &s.ArchiveFinishedDays}, {"archive_unmatched_days", &s.ArchiveUnmatchedDays}}
 	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions", "backup", "extension_trust"}
 	for _, f := range fields {
 		names = append(names, f.key)
@@ -689,6 +696,12 @@ func (c *checker) settings(n *node) Settings {
 		if v, ok := c.integer(n.field(f.key), ptr("settings", f.key)); ok {
 			*f.dst = v
 		}
+	}
+	switch {
+	case s.ArchiveUnmatchedDays > 0 && s.ArchiveFinishedDays == 0:
+		c.fail("settings/archive_unmatched_days", "invalid_value", "needs archive_finished_days, which turns archiving on")
+	case s.ArchiveUnmatchedDays > s.ArchiveFinishedDays:
+		c.fail("settings/archive_unmatched_days", "invalid_value", "must not be longer than archive_finished_days")
 	}
 	if r := n.field("retry_delays_seconds"); r != nil && c.typed(r, "settings/retry_delays_seconds", kArray, "array") {
 		if len(r.items) > 100 {
@@ -1370,6 +1383,13 @@ func (d *Document) normalized(redact bool) any {
 	// written before it keep their generation hash.
 	if s.KeptFinishedDays != DefaultKeptFinishedDays {
 		settings["kept_finished_days"] = s.KeptFinishedDays
+	}
+	// Likewise the archive horizons, which are off unless set.
+	if s.ArchiveFinishedDays != 0 {
+		settings["archive_finished_days"] = s.ArchiveFinishedDays
+	}
+	if s.ArchiveUnmatchedDays != 0 {
+		settings["archive_unmatched_days"] = s.ArchiveUnmatchedDays
 	}
 	// Only a stored listener joins the hash, so configurations without one
 	// keep their generation hash.

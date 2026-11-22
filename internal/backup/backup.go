@@ -210,14 +210,16 @@ func CreateWithArchive(ctx context.Context, destination string, key ed25519.Priv
 // retention hold, so the caller must hold the state directory's lock, which
 // keeps the retention sweep from running. Its manifest's Build carries the
 // label Inspect reads as PreUpgrade. fromBuild reads, from the snapshot, the
-// build that last ran on the state ("" when it recorded none).
-func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, prior storage.Prior, files storage.ArtifactStore, build string, expired Expired, now time.Time, fromBuild func(storage.Tx) (string, error)) error {
+// build that last ran on the state ("" when it recorded none). events is the
+// state's event archive, nil when it has none; a state with retired Events
+// can't be bundled without it.
+func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, prior storage.Prior, files storage.ArtifactStore, events storage.EventArchive, build string, expired Expired, now time.Time, fromBuild func(storage.Tx) (string, error)) error {
 	if backend == "" || files == nil || prior == nil {
 		return storage.ErrInvalid
 	}
 	stored := prior.Stored()
 	_, err := publish(ctx, destination, func(stage string) error {
-		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, nil, expired, now.UTC(), func(tx storage.Tx) (string, error) {
+		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, events, expired, now.UTC(), func(tx storage.Tx) (string, error) {
 			from, err := fromBuild(tx)
 			if err != nil {
 				return "", err

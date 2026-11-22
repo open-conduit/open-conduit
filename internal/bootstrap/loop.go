@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -142,6 +144,7 @@ func (d *daemon) retentionPass(ctx context.Context, c *components) bool {
 	} else {
 		d.dutyRan(ctx, dutyRetention, d.now().Add(d.o.RetentionInterval))
 	}
+	d.archiveEvents(ctx, c)
 	d.collectArtifacts(ctx, c)
 	d.pruneReported()
 	if c.toolbelt != nil {
@@ -155,6 +158,104 @@ func (d *daemon) retentionPass(ctx context.Context, c *components) bool {
 		}
 	}
 	return true
+}
+
+// archivePages bounds how many pages of the live log one retention pass
+// looks at, so a long backlog moves over several passes and never holds up
+// the host loop.
+const archivePages = 10
+
+// archiveEvents moves finished history to the event archive when
+// settings.archive_finished_days turns it on, and leaves a trail of what
+// moved and what stayed.
+func (d *daemon) archiveEvents(ctx context.Context, c *components) {
+	if d.events == nil || d.configs == nil {
+		return
+	}
+	if s, _ := d.configs.Current(); s != nil {
+		d.runArchivePass(ctx, c.scheduler, s.Settings)
+	}
+}
+
+// eventArchiver is the runtime's archive pass.
+type eventArchiver interface {
+	ArchiveEvents(context.Context, runtime.ArchivePolicy, int) (runtime.ArchivePass, error)
+}
+
+// archivePolicy is what the settings let leave the live log at now, and
+// whether they turn archiving on.
+func archivePolicy(s config.Settings, now time.Time) (runtime.ArchivePolicy, bool) {
+	if s.ArchiveFinishedDays == 0 {
+		return runtime.ArchivePolicy{}, false
+	}
+	unmatched := s.ArchiveUnmatchedDays
+	if unmatched == 0 {
+		unmatched = s.ArchiveFinishedDays
+	}
+	return runtime.ArchivePolicy{FinishedBefore: now.Add(-keptFinished(s.ArchiveFinishedDays)), UnmatchedBefore: now.Add(-keptFinished(unmatched))}, true
+}
+
+func (d *daemon) runArchivePass(ctx context.Context, archiver eventArchiver, s config.Settings) {
+	policy, on := archivePolicy(s, d.now())
+	if !on {
+		return
+	}
+	var scanned, archived int
+	kept := map[string]int{}
+	for range archivePages {
+		pass, err := archiver.ArchiveEvents(ctx, policy, passLimit)
+		if err != nil {
+			if ctx.Err() == nil {
+				d.report("event_archive", "", errorCode(err))
+			}
+			break
+		}
+		d.clear("event_archive", "")
+		scanned += pass.Scanned
+		archived += pass.Archived
+		for why, n := range pass.Kept {
+			kept[why] += n
+		}
+		if pass.Wrapped {
+			break
+		}
+	}
+	if scanned == 0 {
+		return
+	}
+	d.log.Info("event archive pass", "scanned", scanned, "archived", archived, "kept", kept)
+	d.capture(ctx, "events.archived", map[string]any{"scanned": scanned, "archived": archived, "kept": kept})
+}
+
+// eventArchiveCheck is doctor's view of the archive pass, from the record the
+// live database keeps. It says what the last full pass over the log left
+// live and why, which is how a Wait pinning old Events shows up.
+func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
+	const name = "event_archive"
+	if d.configs == nil || d.coord == nil {
+		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: "off", Detail: "the event archive isn't in use"}
+	}
+	s, _ := d.configs.Current()
+	if s == nil || s.Settings.ArchiveFinishedDays == 0 {
+		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: "off", Detail: "settings.archive_finished_days is unset, so Events stay in the live database"}
+	}
+	var r runtime.ArchiveRecord
+	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		var err error
+		r, err = runtime.ArchiveRecordInTx(tx)
+		return err
+	}); err != nil {
+		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: errorCode(err), Detail: "can't read the archive record"}
+	}
+	if code := d.reportedCode("event_archive", ""); code != "" {
+		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the last archive pass failed; %d Events archived so far", r.Archived)}
+	}
+	items := make([]string, 0, len(r.LastLap))
+	for why, n := range r.LastLap {
+		items = append(items, fmt.Sprintf("%s: %d", why, n))
+	}
+	slices.Sort(items)
+	return runtime.Check{Name: name, Status: runtime.CheckOK, Code: "archiving", Detail: fmt.Sprintf("%d Events archived; the last full pass left these live", r.Archived), Items: items}
 }
 
 // toolbeltGrace is how long a revoked or expired token, a finished
