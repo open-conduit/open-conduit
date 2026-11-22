@@ -175,6 +175,8 @@ A backend registers itself under a name with `storage.RegisterBackend` from its 
 
 The routing, wait and recovery rules in [B04](../runtime-semantics/) (successor identity, ordered multi-key attachment, subscription aliases, timeout arbitration, retry eligibility and causal bounds) apply above the storage boundary; Claim alone does not enforce eligibility.
 
+A backend whose state another system replicates continuously can also implement `storage.ReplicaRestorer`: `RestoreReplica` publishes what that system kept at an absent destination, verified and fenced as `Restore` does a snapshot, without changing the replica ([restoring from a replica](../recovery/#restoring-from-a-replica)).
+
 ## Evidence
 
 Run `go test -race ./...` and `go vet ./...` from the repository root; no external service is needed.

@@ -265,8 +265,13 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 					return storage.ErrConflict
 				}
 				refs[ref.ID] = ref
-				// A ref shared with an unexpired Execution must be copied.
-				live[ref.ID] = live[ref.ID] || !gone
+				lost, err := ArtifactLost(tx, ref.ID)
+				if err != nil {
+					return err
+				}
+				// A ref shared with an unexpired Execution must be copied,
+				// unless a replica restore recorded its content as lost.
+				live[ref.ID] = !lost && (live[ref.ID] || !gone)
 			}
 		}
 		return nil
@@ -595,7 +600,11 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 					if captured[ref.ID] == ref {
 						continue
 					}
-					if gone && omitted[ref.ID] == ref {
+					lost, err := ArtifactLost(tx, ref.ID)
+					if err != nil {
+						return err
+					}
+					if (gone || lost) && omitted[ref.ID] == ref {
 						continue
 					}
 					return fmt.Errorf("backup: referenced artifact omitted or changed")

@@ -30,7 +30,7 @@ import (
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {
-	return &cli.StateOps{ListDestination: ListDestination, FetchBundle: FetchBundle, Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
+	return &cli.StateOps{ListDestination: ListDestination, FetchBundle: FetchBundle, Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, RestoreReplica: RestoreReplica, Check: CheckState, RecoverOperator: RecoverOperator}
 }
 
 // locked opens a stopped instance's state directory under its daemon lock.
@@ -239,6 +239,71 @@ func RestoreState(ctx context.Context, bundle, destination string, o cli.Restore
 	return info, err
 }
 
+// replicaDrainReason is why a directory restored from a replica starts
+// drained. Nothing in a replica shows that the host it came from has stopped.
+const replicaDrainReason = "restored from a replica: run drain end once the old host is stopped for good"
+
+// RestoreReplica publishes a new state directory from a raw database replica
+// (never over an existing one). It fences every lease, writes a fresh operator
+// credential and leaves the directory drained, and reports the artifacts and
+// retired Events it couldn't bring back.
+func RestoreReplica(ctx context.Context, replica, destination string, o cli.ReplicaOptions) (cli.ReplicaInfo, error) {
+	info := cli.ReplicaInfo{Path: destination, Drained: true}
+	policy, err := restorePolicy(o.RestoreOptions)
+	if err != nil {
+		return info, err
+	}
+	target, choice, err := restoreTarget(o.RestoreOptions)
+	if err != nil {
+		return info, err
+	}
+	if o.ArtifactsFrom != "" && target.ArtifactLocation != "" {
+		return info, fmt.Errorf("--artifacts-from copies into the restored directory's file store, so it can't be combined with --artifacts-location, which keeps using that store")
+	}
+	if target.Database != "" {
+		return info, fmt.Errorf("a replica restores into the new directory: --database-location doesn't apply")
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return info, err
+	}
+	now := time.Now().UTC()
+	source := backup.ReplicaSource{Database: replica, Artifacts: o.ArtifactsFrom, Archive: o.ArchiveFrom}
+	report, err := backup.RestoreReplica(ctx, source, destination, now, retentionExpired, sqlite.Name, restoreBackends, target, withStartConfig(ctx, recordChoiceWith("", choice), o.RestoreOptions, policy))
+	if err != nil {
+		return info, err
+	}
+	info.Artifacts, info.MissingArtifacts = report.Artifacts, report.MissingArtifacts
+	info.ArchivedEvents, info.MissingEvents = report.ArchivedEvents, report.MissingEvents
+	if err := os.Chmod(destination, 0o700); err != nil {
+		return info, err
+	}
+	token := filepath.Join(destination, "private", "operator.token")
+	if err := RecoverOperator(ctx, destination, token); err != nil {
+		return info, err
+	}
+	info.TokenFile = token
+	_, store, err := openState(ctx, destination)
+	if err != nil {
+		return info, err
+	}
+	defer store.Close()
+	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		if _, err := runtime.BeginDrainInTx(tx, now, drainOrigin(destination), replicaDrainReason); err != nil {
+			return err
+		}
+		_, err := tx.AppendAudit(domain.AuditRecord{Actor: "system:restore", Action: "core.replica.restored", Outcome: domain.AuditOK})
+		return err
+	}); err != nil {
+		return info, err
+	}
+	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
+		return info, err
+	}
+	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o.RestoreOptions), policy)
+	info.StartConfig = o.StartConfig
+	return info, err
+}
+
 // restoreConfigPath is the config file whose packages the restored
 // generation is checked against.
 func restoreConfigPath(o cli.RestoreOptions) string {
@@ -418,9 +483,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		}
 		return s
 	}
-	var refs, missing, timerCount int
+	var refs, missing, lostRefs, timerCount int
 	err = store.View(ctx, func(tx storage.Tx) error {
-		scopes, refs, missing, timerCount = map[string]*cli.ScopeState{}, 0, 0, 0
+		scopes, refs, missing, lostRefs, timerCount = map[string]*cli.ScopeState{}, 0, 0, 0, 0
 		ss, err := tx.ListScopes()
 		if err != nil {
 			return err
@@ -457,6 +522,13 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 					continue
 				}
 				for _, ref := range x.AllArtifacts() {
+					// A replica restore already reported this content as lost.
+					if lost, err := backup.ArtifactLost(tx, ref.ID); err != nil {
+						return err
+					} else if lost {
+						lostRefs++
+						continue
+					}
 					refs++
 					rc, err := files.Open(ctx, ref)
 					if err != nil {
@@ -499,6 +571,9 @@ func checkState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 	default:
 		add("artifacts", "ok", "complete", fmt.Sprintf("%s store: %d referenced artifacts present", art.name, refs))
 		files.Close()
+	}
+	if lostRefs > 0 {
+		add("artifacts_lost", "info", "lost_in_restore", fmt.Sprintf("%d artifact references point at content a replica restore couldn't bring back", lostRefs))
 	}
 	add("timers", "info", "durable", fmt.Sprintf("%d durable timers (schedule slots, waits' timeouts, retries) resume on start", timerCount))
 	ids := make([]string, 0, len(scopes))

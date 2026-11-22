@@ -179,6 +179,26 @@ open-conduit serve --restore /backups/conduit-20261102T090000Z
 
 Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. With an artifact store outside the volume, name the empty store the bundle's artifacts go to with `--restore-artifacts NAME --restore-artifacts-location LOC`, as `--artifacts` and `--artifacts-location` do for `backup restore`. To start on a config for this machine rather than the bundle's generation, as a move to a new path needs, add `--restore-start-config FILE`, which does what `--start-config` does: a config that doesn't validate, or drops a scope with open Work, stops the start with nothing published. It applies only when the bundle is restored, so a restart never puts it back over a config applied since. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
 
+## Restoring from a replica
+
+A replica is a copy of the database that another system kept, such as a WAL replicator. `backup restore-replica` turns one into a new state directory, with the checks a bundle gets:
+
+```sh
+open-conduit backup restore-replica /recovered/conduit.db --to ~/oc-restored \
+  --artifacts-from /recovered/artifacts --archive-from /recovered/archive
+open-conduit --data-dir ~/oc-restored serve
+open-conduit --data-dir ~/oc-restored drain end    # once the old host is stopped for good
+```
+
+- **The replica is not changed.** A WAL beside it is applied to a private copy, and the restored file is owner-only whatever mode the replicator wrote. Tables a replicator added to the database stay in it.
+- **It verifies and fences.** A file that isn't a database, fails its integrity check or was written by a newer binary is refused, and nothing is published. Every lease is fenced, and a fresh operator token replaces the old one.
+- **It starts drained.** Nothing in a replica shows that the host it came from has stopped, so no attempt starts until you run `drain end`. A restore from a bundle ends the drain instead, because a bundle is a point you chose to go back to.
+- **The config is checked as for a bundle,** against the installed packages and the daemon's policy. `--start-config FILE` starts on a config for this machine.
+- **Artifacts and archived Events are separate from the database,** so a WAL replica doesn't carry them. `--artifacts-from` copies a surviving file store and `--archive-from` a surviving event archive. With an artifact store outside the host, `--artifacts NAME --artifacts-location LOC` keeps using it and checks that each object is there. An archived record later than the replica is left out, because the restored daemon will issue that sequence again.
+- **What's missing is reported, not fatal.** `missing_artifacts` and `missing_events` name what couldn't be brought back. The restored database records them as lost, so `state check` passes and later bundles omit them. An artifact store that can't be reached fails the restore instead, since an outage isn't a loss.
+
+It writes a new directory only, so there is no `--in-place` form.
+
 ## SQLite migration recovery
 
 Schema migrations run inside one immediate transaction at open (`internal/storage/sqlite`). A failure rolls back and leaves the database unchanged ("migration rolled back"). Open refuses these cases, each before it changes the database:
@@ -229,6 +249,8 @@ Recovery order:
 `TestUpgradeBundleRestoresOnTheOlderBinary` (in `internal/bootstrap`) simulates the format step: the bundle holds the old format and is restored and opened by the older binary, which refuses the raised live database (the negative control). `TestScheduledRotationKeepsTheUpgradeBundle` runs ten days of scheduled bundles past it, and `TestUpgradeRefusesWithoutABundle` refuses a read-only backup directory with the database left at its old format. The lifecycle suite's `open_prior_preserves_older_state_unchanged` proves the contract for every backend, with a backend that raises the format first as its negative control.
 
 `TestLiveDatabaseKeepsTheWALForAReplicator` (in `internal/storage/sqlite`) holds a read transaction as a WAL replicator does while the store commits, reclaims and rebuilds, and fails if the WAL restarts under it. `TestExclusiveLockingShutsOutAReplicator` is its negative control. `TestRebuildLeavesTheWALInPlace` fails on a truncating checkpoint of the live database, with one as its negative control. `TestNewDatabaseIsNeverVisibleEmpty` covers a replicator adding its tables: a database is published with its schema already in it, and an empty file given those tables is still refused.
+
+`TestReplicaRestoresWhatSurvived` (in `internal/bootstrap`) restores a world-readable replica holding a replicator's table, with its artifacts and archive: the lease is fenced, the directory starts drained and a bundle of it verifies. `TestReplicaReportsWhatIsMissing` restores the same replica with neither, and it still passes `state check` and can be backed up. Removing the record of what was lost is its negative control, which the backup refuses. `TestReplicaAppliesTheWALBesideIt` keeps a commit that exists only in the WAL.
 
 ## History
 
