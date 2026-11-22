@@ -148,6 +148,49 @@ func TestBackupRefusesTombstonesItCannotBack(t *testing.T) {
 	}
 }
 
+// The walk has to notice a gap with later records after it, and a record
+// that isn't the Event the database retired at that sequence.
+func TestBackupRefusesAnArchiveThatMissesATombstoneMidway(t *testing.T) {
+	ctx := context.Background()
+	s := newArchiveState(t)
+	var kept domain.AcceptedEvent
+	if err := s.db.Transact(ctx, storage.Guard{Now: archiveNow}, func(tx storage.Tx) error {
+		var err error
+		kept, err = tx.Event("kept")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	other := s.whole
+	other.Event.ID, other.Event.DeliveryID = "other", "other"
+	for name, c := range map[string]struct {
+		held []domain.AcceptedEvent
+		want string
+	}{
+		"gap before a later record": {[]domain.AcceptedEvent{kept}, "not in the event archive"},
+		"another Event there":       {[]domain.AcceptedEvent{other, kept}, "different Event"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			archive, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(t.TempDir(), "archive"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer archive.Close()
+			if err := archive.PutEvents(ctx, c.held); err != nil {
+				t.Fatal(err)
+			}
+			bundle := filepath.Join(t.TempDir(), "bundle")
+			err = CreateWithArchive(ctx, bundle, nil, DefaultBackend, s.db, s.files, archive, "v1", kvRetention())
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v, want %q", err, c.want)
+			}
+			if _, statErr := os.Lstat(bundle); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatal("published a bundle that lost a payload")
+			}
+		})
+	}
+}
+
 func TestRestoreRefusesABundleWhoseArchiveDoesNotStandUp(t *testing.T) {
 	s := newArchiveState(t)
 	edit := func(t *testing.T, bundle string, change func(*manifest)) {

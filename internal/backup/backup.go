@@ -235,8 +235,7 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 	var refs map[string]domain.ArtifactRef
 	var live map[string]bool
 	var build string
-	var retired []retiredEvent
-	var through uint64
+	var archived *archiveManifest
 	// References are read from the snapshot's own state, not the live
 	// database, so the bundle copies exactly what its snapshot names.
 	err := snapshot(ctx, database, func(tx storage.Tx) error {
@@ -245,10 +244,9 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 		if build, err = buildOf(tx); err != nil {
 			return err
 		}
-		if retired, err = retiredInSnapshot(tx); err != nil {
-			return err
-		}
-		if through, err = tx.LatestSequence(); err != nil {
+		// The snapshot is taken by now. An Event is archived before it is
+		// retired, so the archive holds what its tombstones stand for.
+		if archived, err = writeBundleArchive(ctx, filepath.Join(stage, ArchiveFile), events, tx); err != nil {
 			return err
 		}
 		xs, err := tx.ListExecutions("")
@@ -279,12 +277,7 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 		return err
 	}
 	defer output.Close()
-	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now}
-	// After the snapshot: an Event is archived before it is retired, so the
-	// archive now holds everything the snapshot's tombstones stand for.
-	if m.Archive, err = writeBundleArchive(ctx, filepath.Join(stage, ArchiveFile), events, through, retired); err != nil {
-		return err
-	}
+	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now, Archive: archived}
 	// Sorting makes manifests reproducible apart from their creation time.
 	for _, ref := range sortedRefs(refs) {
 		if !live[ref.ID] {
@@ -585,14 +578,10 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		for _, item := range m.Artifacts {
 			captured[item.Ref.ID] = item.Ref
 		}
-		var retired []retiredEvent
-		var through uint64
 		err := backend.ReadSnapshot(ctx, database, now, func(tx storage.Tx) error {
-			var err error
-			if retired, err = retiredInSnapshot(tx); err != nil {
-				return err
-			}
-			if through, err = tx.LatestSequence(); err != nil {
+			// Before a named database is written, so a bundle whose archive
+			// doesn't stand behind its tombstones leaves that location alone.
+			if err := restoreBundleArchive(ctx, archiveCopy, m.Archive, target.EventArchive, filepath.Join(stage, ArchiveDir), tx); err != nil {
 				return err
 			}
 			xs, err := tx.ListExecutions("")
@@ -617,11 +606,6 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			return nil
 		})
 		if err != nil {
-			return err
-		}
-		// Before a named database is written, so a bundle whose archive
-		// doesn't stand behind its tombstones leaves that location untouched.
-		if err := restoreBundleArchive(ctx, archiveCopy, m.Archive, target.EventArchive, filepath.Join(stage, ArchiveDir), through, retired); err != nil {
 			return err
 		}
 		location := target.Database

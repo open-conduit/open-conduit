@@ -2,17 +2,14 @@ package backup
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/storage"
@@ -46,77 +43,75 @@ type archiveManifest struct {
 	Through uint64
 }
 
-// retiredEvent identifies a tombstone. The ID is hashed so that the list
-// costs little however much history has been retired.
-type retiredEvent struct {
-	sequence, id uint64
+// retiredCover walks a snapshot's tombstones beside records in sequence
+// order, checking each tombstone's record is among them. It holds one page,
+// so its memory doesn't follow how much history has been retired.
+type retiredCover struct {
+	tx    storage.Tx
+	page  []domain.AcceptedEvent
+	after uint64
+	ended bool
 }
 
-func retiredID(id domain.ID) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(id))
-	return h.Sum64()
-}
-
-// retiredInSnapshot lists the snapshot's tombstones in sequence order.
-func retiredInSnapshot(tx storage.Tx) ([]retiredEvent, error) {
-	var out []retiredEvent
-	var after domain.ID
-	for {
-		page, err := tx.Tombstones(after, archivePage)
+// next is the first tombstone not yet matched, nil when none is left.
+func (c *retiredCover) next() (*domain.AcceptedEvent, error) {
+	if len(c.page) == 0 && !c.ended {
+		page, err := c.tx.Tombstones(c.after, archivePage)
 		if err != nil {
 			return nil, err
 		}
-		for _, a := range page {
-			out = append(out, retiredEvent{a.Sequence, retiredID(a.Event.ID)})
+		c.page, c.ended = page, len(page) < archivePage
+		if len(page) > 0 {
+			c.after = page[len(page)-1].Sequence
 		}
-		if len(page) < archivePage {
-			break
-		}
-		after = page[len(page)-1].Event.ID
 	}
-	slices.SortFunc(out, func(a, b retiredEvent) int { return cmp.Compare(a.sequence, b.sequence) })
-	return out, nil
-}
-
-// retiredCover checks, over records in sequence order, that each tombstone's
-// record is among them.
-type retiredCover struct {
-	retired []retiredEvent
+	if len(c.page) == 0 {
+		return nil, nil
+	}
+	return &c.page[0], nil
 }
 
 func (c *retiredCover) see(a domain.AcceptedEvent) error {
-	if len(c.retired) > 0 && c.retired[0].sequence < a.Sequence {
-		return c.missing()
+	head, err := c.next()
+	if err != nil || head == nil {
+		return err
 	}
-	if len(c.retired) > 0 && c.retired[0].sequence == a.Sequence {
-		if c.retired[0].id != retiredID(a.Event.ID) {
+	switch {
+	case head.Sequence < a.Sequence:
+		return missingRecord(head)
+	case head.Sequence == a.Sequence:
+		if head.Event.ID != a.Event.ID {
 			return fmt.Errorf("backup: the event archive holds a different Event at sequence %d than the database retired: %w", a.Sequence, storage.ErrConflict)
 		}
-		c.retired = c.retired[1:]
+		c.page = c.page[1:]
 	}
 	return nil
 }
 
 func (c *retiredCover) done() error {
-	if len(c.retired) > 0 {
-		return c.missing()
+	head, err := c.next()
+	if err != nil || head == nil {
+		return err
 	}
-	return nil
+	return missingRecord(head)
 }
 
-func (c *retiredCover) missing() error {
-	return fmt.Errorf("backup: %d retired Events are not in the event archive, the first at sequence %d: their payloads would be lost: %w", len(c.retired), c.retired[0].sequence, storage.ErrInvalid)
+func missingRecord(a *domain.AcceptedEvent) error {
+	return fmt.Errorf("backup: retired Event %s (sequence %d) is not in the event archive, so its payload would be lost: %w", a.Event.ID, a.Sequence, storage.ErrInvalid)
 }
 
-// writeBundleArchive writes events' records through the snapshot's latest
-// sequence to path, and fails unless they cover every tombstone. With no
-// records it writes nothing and returns nil, so the bundle stays one an
-// older binary reads.
-func writeBundleArchive(ctx context.Context, path string, events storage.EventArchive, through uint64, retired []retiredEvent) (_ *archiveManifest, err error) {
-	cover := retiredCover{retired: retired}
+// writeBundleArchive writes events' records through the latest sequence of
+// the snapshot tx reads to path, and fails unless they cover every
+// tombstone. With no records it writes nothing and returns nil, so the
+// bundle stays one an older binary reads.
+func writeBundleArchive(ctx context.Context, path string, events storage.EventArchive, tx storage.Tx) (_ *archiveManifest, err error) {
+	cover := retiredCover{tx: tx}
 	if events == nil {
 		return nil, cover.done()
+	}
+	through, err := tx.LatestSequence()
+	if err != nil {
+		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -178,12 +173,16 @@ reading:
 }
 
 // restoreBundleArchive checks the private copy at path against its manifest
-// and the snapshot's tombstones and imports it at location. Without an
-// archive in the bundle, the snapshot must have no tombstones.
-func restoreBundleArchive(ctx context.Context, path string, m *archiveManifest, backend storage.EventArchiveBackend, location string, through uint64, retired []retiredEvent) (err error) {
-	cover := retiredCover{retired: retired}
+// and the tombstones of the snapshot tx reads, and imports it at location.
+// Without an archive in the bundle, the snapshot must have no tombstones.
+func restoreBundleArchive(ctx context.Context, path string, m *archiveManifest, backend storage.EventArchiveBackend, location string, tx storage.Tx) (err error) {
+	cover := retiredCover{tx: tx}
 	if m == nil {
 		return cover.done()
+	}
+	through, err := tx.LatestSequence()
+	if err != nil {
+		return err
 	}
 	if m.Through != through {
 		return fmt.Errorf("backup: the event archive was taken through sequence %d but the database is at %d", m.Through, through)

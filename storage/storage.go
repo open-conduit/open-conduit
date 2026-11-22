@@ -168,10 +168,11 @@ type Tx interface {
 	// is nil, and any change is ErrConflict. Retiring it again is nil, an
 	// unrouted Event is ErrInvalid and an unknown one ErrNotFound.
 	RetireEvent(eventID domain.ID) error
-	// Tombstones lists tombstones in ID order, exclusively after after,
-	// at most limit (zero is all), so a backup can prove the archive holds
-	// what each stands for.
-	Tombstones(after domain.ID, limit int) ([]domain.AcceptedEvent, error)
+	// Tombstones lists what RetireEvent left, in sequence order, exclusively
+	// after after, at most limit (zero is all), so a backup can walk it
+	// beside the archive and prove the archive holds what each stands for.
+	// A store from before tombstones existed has none.
+	Tombstones(after uint64, limit int) ([]domain.AcceptedEvent, error)
 	ListWorks() ([]domain.Work, error)
 	// LiveWorks is ListWorks restricted to Work that has not finished
 	// (State not Terminal), in ID order. Like UnroutedEvents, its cost

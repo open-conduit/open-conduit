@@ -400,7 +400,12 @@ var indexes = []string{
 	// format 9 keeps a binary that doesn't read it from opening the store
 	// and accepting a retired delivery again.
 	`CREATE TABLE IF NOT EXISTS event_tombstones (id TEXT PRIMARY KEY, source TEXT NOT NULL, delivery_id TEXT NOT NULL, record BLOB NOT NULL, UNIQUE(source,delivery_id))`,
+	`CREATE INDEX IF NOT EXISTS event_tombstones_sequence ON event_tombstones(` + tombstoneSequence + `)`,
 }
+
+// tombstoneSequence reads a tombstone's sequence from its record, so
+// listing them in order needs an index and no change to the table.
+const tombstoneSequence = `json_extract(CAST(record AS TEXT),'$.Sequence')`
 
 // executionRefs selects (artifact ID, attempt ID) for every ref the record
 // of the attempt named row holds, latest or earlier: NEW in a trigger, or

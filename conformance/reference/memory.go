@@ -224,14 +224,14 @@ func (t *transaction) RetireEvent(id domain.ID) error {
 }
 
 // Tombstones implements storage.Tx.
-func (t *transaction) Tombstones(after domain.ID, limit int) ([]domain.AcceptedEvent, error) {
+func (t *transaction) Tombstones(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	out := []domain.AcceptedEvent{}
-	for id, v := range t.data.Retired {
-		if id > after {
+	for _, v := range t.data.Retired {
+		if v.Sequence > after {
 			out = append(out, copyOf(v))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Event.ID < out[j].Event.ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].Sequence < out[j].Sequence })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

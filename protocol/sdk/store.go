@@ -615,7 +615,7 @@ func (t *storeTx) PutWork(domain.Work, domain.Revision) error           { return
 func (t *storeTx) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
 func (t *storeTx) SetExecutionExecutor(domain.ID, string) error         { return ErrReadOnly }
 func (t *storeTx) RetireEvent(domain.ID) error                          { return ErrReadOnly }
-func (t *storeTx) Tombstones(domain.ID, int) ([]domain.AcceptedEvent, error) {
+func (t *storeTx) Tombstones(uint64, int) ([]domain.AcceptedEvent, error) {
 	return nil, ErrReadOnly
 }
 func (t *storeTx) PublishFinishedArtifacts(domain.ID, []domain.ArtifactRef) error {

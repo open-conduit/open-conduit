@@ -51,7 +51,7 @@ type hidesRetiredTx struct{ storage.Tx }
 func (b hidesRetired) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(hidesRetiredTx{tx}) })
 }
-func (hidesRetiredTx) Tombstones(domain.ID, int) ([]domain.AcceptedEvent, error) {
+func (hidesRetiredTx) Tombstones(uint64, int) ([]domain.AcceptedEvent, error) {
 	return []domain.AcceptedEvent{}, nil
 }
 
