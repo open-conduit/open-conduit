@@ -270,6 +270,24 @@ func retiredEvents(s storage.Store) error {
 	}); err != nil {
 		return err
 	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		held, err := tx.Tombstones(0, 0)
+		if err != nil {
+			return err
+		}
+		if len(held) != 1 || held[0].Event.ID != "gone" || !held[0].Retired || len(held[0].Event.Data.Data) != 0 {
+			return fmt.Errorf("retired events: got %+v, want the one tombstone", held)
+		}
+		if held, err = tx.Tombstones(held[0].Sequence, 0); err != nil {
+			return err
+		}
+		if len(held) != 0 {
+			return fmt.Errorf("retired events after a cursor: got %+v, want none", held)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	return retiredReferences(s, c)
 }
 

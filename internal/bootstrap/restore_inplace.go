@@ -45,9 +45,11 @@ const (
 
 // replaced are what an in-place restore moves aside whenever present: the
 // coordination state (SQLite's database and its side files), the file
-// store, the storage choice, the restore record and the operator token.
-// Anything else the stage holds is moved aside too.
-var replaced = []string{"conduit.db", "conduit.db-wal", "conduit.db-shm", "conduit.db-journal", "conduit.db.lock", "artifacts", storageFile, restoredFile, stagedToken}
+// store, the event archive, the storage choice, the restore record and the
+// operator token. The archive always moves: one left behind could hold later
+// sequences than the restored log, which would then be reissued to new
+// Events. Anything else the stage holds is moved aside too.
+var replaced = []string{"conduit.db", "conduit.db-wal", "conduit.db-shm", "conduit.db-journal", "conduit.db.lock", "artifacts", backup.ArchiveDir, storageFile, restoredFile, stagedToken}
 
 // swapJournal is restoreJournal. Paths are relative to the state directory
 // (Aside's items) or the stage (In).

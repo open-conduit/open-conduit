@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/localfs"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -155,7 +156,7 @@ func verifyUpgradeBundle(ctx context.Context, bundle, dir string, now time.Time)
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	return backup.Restore(ctx, bundle, filepath.Join(tmp, "state"), backup.Trust{}, now, retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend}, recordChoice)
+	return backup.Restore(ctx, bundle, filepath.Join(tmp, "state"), backup.Trust{}, now, retentionExpired, restoreBackends, backup.Target{Artifacts: artifacts.Backend, EventArchive: sqlite.ArchiveBackend}, recordChoice)
 }
 
 // upgradeBundles are the pre-upgrade bundles in dir, oldest first, with their

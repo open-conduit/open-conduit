@@ -48,6 +48,10 @@ type manifest struct {
 	// Omitted lists references whose content retention expired. Their bytes
 	// are not in the bundle; restore accepts them only on expired Executions.
 	Omitted []domain.ArtifactRef `json:",omitempty"`
+	// Archive describes the bundle's copy of the event archive. A bundle
+	// with one is refused by a binary that can't restore it, as it should
+	// be; one without stays readable by older binaries.
+	Archive *archiveManifest `json:",omitempty"`
 }
 
 // Expired reports whether retention has expired an Execution's content. The
@@ -169,6 +173,14 @@ const snapshotName = "conduit.db"
 // then publishes nothing. With a key, the manifest is signed (sign.go); nil
 // publishes an unsigned bundle.
 func Create(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, build string, retention Retention) error {
+	return CreateWithArchive(ctx, destination, key, backend, db, files, nil, build, retention)
+}
+
+// CreateWithArchive is Create for a daemon with an event archive: the bundle
+// also holds the archive's records up to the snapshot's latest sequence
+// (archive.go). Create refuses a snapshot with retired Events, whose payloads
+// only the archive holds.
+func CreateWithArchive(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, events storage.EventArchive, build string, retention Retention) error {
 	if backend == "" || files == nil {
 		return storage.ErrInvalid
 	}
@@ -188,7 +200,7 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 		if err != nil {
 			return err
 		}
-		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return recordsBuild(build, stored.Records), nil })
+		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, events, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return recordsBuild(build, stored.Records), nil })
 	})
 	return err
 }
@@ -205,7 +217,7 @@ func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey
 	}
 	stored := prior.Stored()
 	_, err := publish(ctx, destination, func(stage string) error {
-		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, expired, now.UTC(), func(tx storage.Tx) (string, error) {
+		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, nil, expired, now.UTC(), func(tx storage.Tx) (string, error) {
 			from, err := fromBuild(tx)
 			if err != nil {
 				return "", err
@@ -218,17 +230,23 @@ func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey
 
 // compose writes a bundle into stage from a snapshot. buildOf names its build
 // from the snapshot's own state.
-func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend string, snapshot func(context.Context, string, func(storage.Tx) error) error, schema uint32, files storage.ArtifactStore, expired Expired, now time.Time, buildOf func(storage.Tx) (string, error)) error {
+func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend string, snapshot func(context.Context, string, func(storage.Tx) error) error, schema uint32, files storage.ArtifactStore, events storage.EventArchive, expired Expired, now time.Time, buildOf func(storage.Tx) (string, error)) error {
 	database := filepath.Join(stage, snapshotName)
 	var refs map[string]domain.ArtifactRef
 	var live map[string]bool
 	var build string
+	var archived *archiveManifest
 	// References are read from the snapshot's own state, not the live
 	// database, so the bundle copies exactly what its snapshot names.
 	err := snapshot(ctx, database, func(tx storage.Tx) error {
 		refs, live = map[string]domain.ArtifactRef{}, map[string]bool{}
 		var err error
 		if build, err = buildOf(tx); err != nil {
+			return err
+		}
+		// The snapshot is taken by now. An Event is archived before it is
+		// retired, so the archive holds what its tombstones stand for.
+		if archived, err = writeBundleArchive(ctx, filepath.Join(stage, ArchiveFile), events, tx); err != nil {
 			return err
 		}
 		xs, err := tx.ListExecutions("")
@@ -259,7 +277,7 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 		return err
 	}
 	defer output.Close()
-	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now}
+	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now, Archive: archived}
 	// Sorting makes manifests reproducible apart from their creation time.
 	for _, ref := range sortedRefs(refs) {
 		if !live[ref.ID] {
@@ -387,6 +405,10 @@ type Target struct {
 	Database         string
 	Artifacts        storage.ArtifactBackend
 	ArtifactLocation string
+	// EventArchive is the backend a bundle's event archive is restored
+	// into, at ArchiveDir in the restored directory. A bundle holding an
+	// archive is refused without one.
+	EventArchive storage.EventArchiveBackend
 }
 
 // Restore verifies all bundle bytes before publishing a new isolated state
@@ -453,6 +475,21 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	}
 	if hash != m.DatabaseSHA256 {
 		return fmt.Errorf("backup: database digest mismatch")
+	}
+	// The archive is read once into a private copy too, for the same reason.
+	var archiveCopy string
+	if m.Archive != nil {
+		if target.EventArchive == nil {
+			return fmt.Errorf("backup: the bundle holds an event archive this restore has nowhere to put: %w", storage.ErrInvalid)
+		}
+		archiveCopy = filepath.Join(private, ArchiveFile)
+		hash, err := copyDigest(ctx, filepath.Join(bundle, ArchiveFile), archiveCopy)
+		if err != nil {
+			return err
+		}
+		if hash != m.Archive.SHA256 {
+			return fmt.Errorf("backup: event archive digest mismatch")
+		}
 	}
 	// Read-only: verifying or restoring a bundle never changes it, so a
 	// bundle taken by an older binary stays one that binary can restore.
@@ -542,6 +579,11 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			captured[item.Ref.ID] = item.Ref
 		}
 		err := backend.ReadSnapshot(ctx, database, now, func(tx storage.Tx) error {
+			// Before a named database is written, so a bundle whose archive
+			// doesn't stand behind its tombstones leaves that location alone.
+			if err := restoreBundleArchive(ctx, archiveCopy, m.Archive, target.EventArchive, filepath.Join(stage, ArchiveDir), tx); err != nil {
+				return err
+			}
 			xs, err := tx.ListExecutions("")
 			if err != nil {
 				return err

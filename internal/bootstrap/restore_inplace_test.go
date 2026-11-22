@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
@@ -148,6 +149,15 @@ func TestRestoreInPlace(t *testing.T) {
 	ctx := context.Background()
 	f := newInPlaceFixture(t)
 	config := filepath.Join(t.TempDir(), "config.json")
+	// An archive from after the bundle could hold sequences the restored
+	// log will issue again, so it never stays in place.
+	laterArchive := filepath.Join(f.state, backup.ArchiveDir, "index.db")
+	if err := os.MkdirAll(filepath.Dir(laterArchive), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(laterArchive, []byte("later"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	info, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{ConfigPath: config})
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +165,9 @@ func TestRestoreInPlace(t *testing.T) {
 	r := info.InPlace
 	if r == nil || r.AlreadyRestored {
 		t.Fatalf("report = %+v", r)
+	}
+	if exists(laterArchive) || !exists(filepath.Join(r.MovedAside, backup.ArchiveDir, "index.db")) {
+		t.Fatalf("the later archive was not moved aside: %v", r.MovedItems)
 	}
 	if got := executions(t, f.state); !slices.Equal(got, []domain.ID{"x-before"}) {
 		t.Fatalf("restored executions = %v, want the bundle's", got)

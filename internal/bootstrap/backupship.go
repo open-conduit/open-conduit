@@ -553,14 +553,14 @@ func fetchBundle(ctx context.Context, v extension.BackupDestination, t extension
 	return info, nil
 }
 
-// fetchablePath is a path a bundle holds: its manifest, signature, database
-// or a file of its artifact store.
+// fetchablePath is a path a bundle holds: its manifest, signature, database,
+// event archive or a file of its artifact store.
 func fetchablePath(p string) bool {
 	if !extension.ValidBackupPath(p) {
 		return false
 	}
 	switch p {
-	case extension.BackupManifest, "manifest.sig", "conduit.db":
+	case extension.BackupManifest, "manifest.sig", "conduit.db", backup.ArchiveFile:
 		return true
 	}
 	return strings.HasPrefix(p, "artifacts/")

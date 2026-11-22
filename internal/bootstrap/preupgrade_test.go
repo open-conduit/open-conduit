@@ -124,6 +124,45 @@ func TestUpgradeBundleRestoresOnTheOlderBinary(t *testing.T) {
 }
 
 // The label fits a manifest a binary from before it reads: no new field.
+// A database from before tombstones has no table for them, and its upgrade
+// bundle is read as it stands, so the bundle must still be made.
+func TestUpgradeBundleOfAStoreFromBeforeTombstones(t *testing.T) {
+	ctx := context.Background()
+	state := olderState(t)
+	db, err := sql.Open("sqlite", filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='event_tombstones'").Scan(&tables); err != nil || tables != 1 {
+		t.Fatalf("the fixture should start with the table: %d, %v", tables, err)
+	}
+	if _, err := db.Exec("DROP TABLE event_tombstones"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := coordinationOf(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := c.backend.OpenPrior(ctx, c.location)
+	if err != nil || prior == nil {
+		t.Fatalf("open prior: %v, %v", prior, err)
+	}
+	defer prior.Close()
+	files, err := artifacts.Open(filepath.Join(state, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.Close()
+	bundle := filepath.Join(t.TempDir(), "bundle")
+	if err := backup.CreatePrior(ctx, bundle, nil, c.name, prior, files, "v2", retentionExpired, upgradeStart, lastBuild); err != nil {
+		t.Fatalf("the upgrade bundle failed: %v", err)
+	}
+}
+
 func TestUpgradeBundleManifestHasNoNewField(t *testing.T) {
 	state := olderState(t)
 	d := upgradeDaemon(state, upgradeStart)

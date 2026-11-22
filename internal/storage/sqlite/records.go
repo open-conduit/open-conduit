@@ -54,6 +54,27 @@ func (t *transaction) RetireEvent(id domain.ID) error {
 	_, err = t.exec("DELETE FROM events WHERE id=?", id)
 	return err
 }
+func (t *transaction) Tombstones(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if after > 1<<63-1 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	// A snapshot of an older store is read as it stands, so it may predate
+	// the table, and then it has no tombstones.
+	var tables int
+	if err := t.queryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='event_tombstones'").Scan(&tables); err != nil {
+		return nil, mapError(err)
+	}
+	if tables == 0 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	return list[domain.AcceptedEvent](t, "SELECT record FROM event_tombstones WHERE "+tombstoneSequence+">? ORDER BY "+tombstoneSequence+" LIMIT ?", after, limit)
+}
 func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	if !t.live {
 		return nil, storage.ErrInvalid

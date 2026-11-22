@@ -210,7 +210,7 @@ func restoreTarget(o cli.RestoreOptions) (backup.Target, *artifactsChoice, error
 		if o.ArtifactLocation != "" || o.ArtifactCommand != "" {
 			return backup.Target{}, nil, fmt.Errorf("an artifact location or command needs its backend (--artifacts NAME)")
 		}
-		return backup.Target{Database: o.DatabaseLocation, Artifacts: artifacts.Backend}, nil, nil
+		return backup.Target{Database: o.DatabaseLocation, Artifacts: artifacts.Backend, EventArchive: sqlite.ArchiveBackend}, nil, nil
 	}
 	choice := &artifactsChoice{Backend: o.ArtifactBackend, Location: o.ArtifactLocation, Command: o.ArtifactCommand}
 	if o.ArtifactLocation == "" && o.ArtifactBackend != artifacts.BackendName {
@@ -224,7 +224,7 @@ func restoreTarget(o cli.RestoreOptions) (backup.Target, *artifactsChoice, error
 		// The default store: nothing to record.
 		choice = nil
 	}
-	return backup.Target{Database: o.DatabaseLocation, Artifacts: b, ArtifactLocation: o.ArtifactLocation}, choice, nil
+	return backup.Target{Database: o.DatabaseLocation, Artifacts: b, ArtifactLocation: o.ArtifactLocation, EventArchive: sqlite.ArchiveBackend}, choice, nil
 }
 
 // recordChoice writes a restored directory's storage choice when its

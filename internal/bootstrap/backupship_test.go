@@ -15,10 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // memoryDestination is a destination in memory, whose answers a test can
@@ -342,6 +346,68 @@ func TestFetchAuthenticatesTheBundle(t *testing.T) {
 }
 
 // What a destination says about a bundle's files is untrusted.
+// A bundle that holds the event archive survives the trip to a destination
+// and back, so a host that lost its disk can still restore retired payloads.
+func TestFetchBringsBackTheEventArchive(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	c, store, err := openState(ctx, f.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var record domain.AcceptedEvent
+	if err := store.Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "archive-scope", Name: "archive-scope"}, 0); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		e := domain.Event{ID: "archived", Type: "fixture.seen", Source: "fixture", DeliveryID: "archived", OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "fixture.v1", Data: []byte(`{"kept":"in the archive"}`)}}
+		if _, _, err := tx.AcceptEvent(e); err != nil {
+			return err
+		}
+		if err := tx.MarkRouted(e.ID, "", "unmatched"); err != nil {
+			return err
+		}
+		var err error
+		record, err = tx.Event(e.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(t.TempDir(), "archive"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if err := archive.PutEvents(ctx, []domain.AcceptedEvent{record}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error { return tx.RetireEvent(record.Event.ID) }); err != nil {
+		t.Fatal(err)
+	}
+	files, err := artifacts.Open(filepath.Join(f.state, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.Close()
+	source := filepath.Join(t.TempDir(), "bundle")
+	if err := backup.CreateWithArchive(ctx, source, nil, c.name, store, files, archive, "test", retention(time.Now)); err != nil {
+		t.Fatal(err)
+	}
+	m := newMemoryDestination()
+	if _, _, err := putBundle(ctx, shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}, source, "conduit-1", shipStallLimit); err != nil {
+		t.Fatal(err)
+	}
+	fetched := filepath.Join(t.TempDir(), "fetched")
+	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, "conduit-1", fetched, cli.RestoreOptions{ConfigPath: filepath.Join(t.TempDir(), "absent.json"), AcceptUnsigned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(fetched, backup.ArchiveFile)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFetchRefusesWhatADestinationCantMean(t *testing.T) {
 	ctx := context.Background()
 	for _, path := range []string{"../escape", "artifacts/../../escape", "/etc/passwd", "private/operator.token", "artifacts//x"} {
