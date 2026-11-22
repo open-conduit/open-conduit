@@ -79,6 +79,7 @@ var hostDuties = []hostDuty{
 	{Name: "shipment_stall", Why: "bounds an upload in flight, which is itself a reason not to stop"},
 	{Name: "tunnel_restart", Why: "restarts this process's tunnel child"},
 	{Name: "terminal_hangup", Why: "ends an operator's terminal on this process"},
+	{Name: "database_rebuild", Why: "tried only at a start, from a time kept in storage; a stopped daemon owes nothing"},
 }
 
 // dutyRecord is a durable duty's schedule. Deferred is when an overdue duty

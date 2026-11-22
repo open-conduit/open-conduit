@@ -531,6 +531,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer stopProbes()
+	// Before anything else can write: a rebuild holds the write lock throughout,
+	// and packages write from their handshake.
+	d.rebuildAtStart(ctx, d.compactor, d.storedSettings(ctx))
 	// The store is the state directory's chosen artifact backend; an
 	// unknown one stops the daemon rather than open an empty store.
 	if _, d.artifacts, err = openArtifacts(context.Background(), o.StateDir); err != nil {
@@ -640,7 +643,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.poke()
 	}
 
-	d.rebuildAtStart(ctx, d.compactor, snapshot.Settings)
 	tokenPath := filepath.Join(o.StateDir, "private", "operator.token")
 	if err = management.BootstrapOperator(ctx, d.coord, d.now, tokenPath); err != nil && !errors.Is(err, management.ErrCredentialExists) {
 		return err
