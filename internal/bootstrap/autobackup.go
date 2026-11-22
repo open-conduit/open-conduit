@@ -265,6 +265,16 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		}
 		d.log.Info("backup pruned", "path", filepath.Join(d.o.BackupDir, oldest))
 	}
+	// Every bundle in the directory counts, pre-upgrade ones included. One
+	// that can't be read might need any segment, so nothing is removed then,
+	// and the bundle just published stands either way.
+	removed, err := backup.PruneSegments(d.o.BackupDir)
+	if err != nil {
+		d.log.Warn("backup segments not pruned", "error", err)
+	}
+	for _, name := range removed {
+		d.log.Info("backup segment pruned", "segment", name)
+	}
 	return nil
 }
 

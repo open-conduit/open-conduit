@@ -403,8 +403,41 @@ func TestFetchBringsBackTheEventArchive(t *testing.T) {
 	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, "conduit-1", fetched, cli.RestoreOptions{ConfigPath: filepath.Join(t.TempDir(), "absent.json"), AcceptUnsigned: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(fetched, backup.ArchiveFile)); err != nil {
+	segments, err := backup.SegmentNames(fetched)
+	if err != nil || len(segments) != 1 {
+		t.Fatalf("segments = %v, %v", segments, err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(fetched), segments[0], backup.ArchiveFile)); err != nil {
 		t.Fatal(err)
+	}
+	// A segment is stored under its own name with no manifest, so it is
+	// never offered as a bundle.
+	if listed, err := m.List(ctx, extension.BackupTarget{}); err != nil || !slices.Equal(listed, []string{"conduit-1"}) {
+		t.Fatalf("listed = %v, %v", listed, err)
+	}
+	target := shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}
+	if held, err := holdsBundle(ctx, target, source, "conduit-1", shipStallLimit); err != nil || !held {
+		t.Fatalf("holds = %v, %v", held, err)
+	}
+	// A destination's own retention can expire a segment a bundle needs.
+	delete(m.files, segments[0]+"/"+backup.ArchiveFile)
+	if held, err := holdsBundle(ctx, target, source, "conduit-1", shipStallLimit); err != nil || held {
+		t.Fatalf("a bundle missing a segment counted as held: %v, %v", held, err)
+	}
+	parent := t.TempDir()
+	_, err = fetchBundle(ctx, m, extension.BackupTarget{}, "conduit-1", filepath.Join(parent, "fetched"), cli.RestoreOptions{ConfigPath: filepath.Join(t.TempDir(), "absent.json"), AcceptUnsigned: true})
+	if err == nil || !strings.Contains(err.Error(), "missing at the destination") {
+		t.Fatalf("fetch without its segment: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(parent, "fetched")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("published a bundle without its segment")
+	}
+	// The next shipment puts it back.
+	if _, _, err := putBundle(ctx, target, source, "conduit-1", shipStallLimit); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := holdsBundle(ctx, target, source, "conduit-1", shipStallLimit); err != nil || !held {
+		t.Fatalf("after reshipping: %v, %v", held, err)
 	}
 }
 

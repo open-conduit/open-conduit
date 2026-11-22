@@ -48,7 +48,7 @@ type manifest struct {
 	// Omitted lists references whose content retention expired. Their bytes
 	// are not in the bundle; restore accepts them only on expired Executions.
 	Omitted []domain.ArtifactRef `json:",omitempty"`
-	// Archive describes the bundle's copy of the event archive. A bundle
+	// Archive names the event archive segments the bundle needs. A bundle
 	// with one is refused by a binary that can't restore it, as it should
 	// be; one without stays readable by older binaries.
 	Archive *archiveManifest `json:",omitempty"`
@@ -177,8 +177,8 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 }
 
 // CreateWithArchive is Create for a daemon with an event archive: the bundle
-// also holds the archive's records up to the snapshot's latest sequence
-// (archive.go). Create refuses a snapshot with retired Events, whose payloads
+// also names the archive's records up to the snapshot's latest sequence, in
+// segments stored beside it (archive.go). Create refuses a snapshot with retired Events, whose payloads
 // only the archive holds.
 func CreateWithArchive(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, events storage.EventArchive, build string, retention Retention) error {
 	if backend == "" || files == nil {
@@ -246,7 +246,7 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 		}
 		// The snapshot is taken by now. An Event is archived before it is
 		// retired, so the archive holds what its tombstones stand for.
-		if archived, err = writeBundleArchive(ctx, filepath.Join(stage, ArchiveFile), events, tx); err != nil {
+		if archived, err = writeBundleArchive(ctx, filepath.Dir(stage), events, tx); err != nil {
 			return err
 		}
 		xs, err := tx.ListExecutions("")
@@ -476,19 +476,15 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 	if hash != m.DatabaseSHA256 {
 		return fmt.Errorf("backup: database digest mismatch")
 	}
-	// The archive is read once into a private copy too, for the same reason.
-	var archiveCopy string
+	// The archive's segments are read once into private copies too, for the
+	// same reason.
+	var archiveCopies []string
 	if m.Archive != nil {
 		if target.EventArchive == nil {
 			return fmt.Errorf("backup: the bundle holds an event archive this restore has nowhere to put: %w", storage.ErrInvalid)
 		}
-		archiveCopy = filepath.Join(private, ArchiveFile)
-		hash, err := copyDigest(ctx, filepath.Join(bundle, ArchiveFile), archiveCopy)
-		if err != nil {
+		if archiveCopies, err = copyBundleSegments(ctx, bundle, private, m.Archive); err != nil {
 			return err
-		}
-		if hash != m.Archive.SHA256 {
-			return fmt.Errorf("backup: event archive digest mismatch")
 		}
 	}
 	// Read-only: verifying or restoring a bundle never changes it, so a
@@ -581,7 +577,7 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		err := backend.ReadSnapshot(ctx, database, now, func(tx storage.Tx) error {
 			// Before a named database is written, so a bundle whose archive
 			// doesn't stand behind its tombstones leaves that location alone.
-			if err := restoreBundleArchive(ctx, archiveCopy, m.Archive, target.EventArchive, filepath.Join(stage, ArchiveDir), tx); err != nil {
+			if err := restoreBundleArchive(ctx, archiveCopies, m.Archive, target.EventArchive, filepath.Join(stage, ArchiveDir), tx); err != nil {
 				return err
 			}
 			xs, err := tx.ListExecutions("")
