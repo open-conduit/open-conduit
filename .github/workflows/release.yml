@@ -6,7 +6,9 @@
 # GitHub release with the generated notes and, when the HOMEBREW_TAP_TOKEN secret
 # is set, updates the open-conduit/homebrew-tap cask. Before GoReleaser, the
 # release pushes the container gateway image to GHCR
-# (scripts/publish-gateway.sh), and the binaries pin it by digest. With no
+# (scripts/publish-gateway.sh), and the binaries pin it by digest. After
+# GoReleaser, it pushes the daemon's image, built from the Linux archives
+# (scripts/publish-image.sh). With no
 # feat, fix or breaking commit since the last tag, it releases nothing. The full checks
 # run first, on the exact commit being released. Releases are built with the
 # current stable Go, not the go.mod minimum, which no longer gets security fixes
@@ -21,7 +23,8 @@ on:
         default: false
 permissions:
   contents: write
-  # The container gateway image, ghcr.io/open-conduit/open-conduit-gateway.
+  # The container images: ghcr.io/open-conduit/open-conduit-gateway and the
+  # daemon's, ghcr.io/open-conduit/open-conduit.
   packages: write
   # Keyless cosign signing of checksums.txt (.goreleaser.yaml's signs).
   id-token: write

@@ -433,7 +433,7 @@ Each launch's container gets a gateway container, created and started with it an
 
 **What the gateway doesn't do.** It doesn't inspect TLS, so an allowed host can receive anything the container can read, including its token and its binding's secrets. Keep `network.allow` to the hosts the work needs.
 
-**Platforms.** Linux is checked in CI by the `container` job on the runner's own Docker Engine, with a second pass of the gateway, shell and git credential tests in the tcp forward mode macOS uses. macOS isolation is checked by a local `make container-test` run on OrbStack, posted on each PR that touches the provider or the gateway, not in CI. Docker Desktop is unverified until someone runs `make container-test` on it; doctor names it when it finds it.
+**Platforms.** Linux is checked in CI by the `container` job on the runner's own Docker Engine, with a second pass of the gateway, shell, git credential and codex tests in the tcp forward mode macOS uses. macOS isolation is checked by a local `make container-test` run on OrbStack, posted on each PR that touches the provider or the gateway, not in CI. Docker Desktop is unverified until someone runs `make container-test` on it; doctor names it when it finds it.
 
 ### The gateway contract
 

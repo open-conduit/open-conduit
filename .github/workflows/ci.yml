@@ -271,7 +271,7 @@ jobs:
           cache: container
       - run: docker version
       - run: make container-test
-      - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell|TestDockerGitCredential'
+      - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell|TestDockerGitCredential|TestDockerCodex'
         env:
           OPEN_CONDUIT_CONTAINER_FORWARD: tcp
       - uses: actions/cache/save@v6
