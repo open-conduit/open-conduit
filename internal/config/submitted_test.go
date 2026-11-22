@@ -94,6 +94,8 @@ func TestSubmittedFragmentDiagnosticsNameTheirSide(t *testing.T) {
 		{"wider ceiling", `{"version":1,"scopes":[{"id":"web","name":"web","authorization":{"connections":[],"operations":["github.issue.comment"],"read_scopes":[]}}]}`, "fragment/scopes/0/authorization/operations", ""},
 		{"duplicate id", `{"version":1,"scopes":[{"id":"home","name":"again"}]}`, "fragment/scopes/0/id", "duplicate_id"},
 		{"not json", `{`, "fragment", ""},
+		{"no scopes", `{"version":1}`, "fragment/scopes", "missing_field"},
+		{"no version", `{"scopes":[]}`, "fragment/version", "missing_field"},
 	}
 	for _, tc := range cases {
 		_, err := ApplyFragment(root.Normalized, "web", []byte(tc.fragment), includeRegistry())

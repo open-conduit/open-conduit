@@ -217,11 +217,12 @@ func (c *checker) fragmentScopes(data []byte, path, parent string) (scopes []Sco
 	if root == nil || !c.object(root, path, []string{"version", "scopes"}) {
 		return nil
 	}
-	if v := root.field("version"); c.typed(v, path+"/version", kNumber, "integer") && v.num.String() != "1" {
+	// c.object has reported a missing version or scopes.
+	if v := root.field("version"); v != nil && c.typed(v, path+"/version", kNumber, "integer") && v.num.String() != "1" {
 		c.fail(path+"/version", "unsupported_version", "version must be exactly 1")
 	}
 	list := root.field("scopes")
-	if !c.typed(list, path+"/scopes", kArray, "array") {
+	if list == nil || !c.typed(list, path+"/scopes", kArray, "array") {
 		return nil
 	}
 	ids := map[string]bool{}
