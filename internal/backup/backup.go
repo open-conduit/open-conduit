@@ -282,7 +282,7 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 	m := manifest{Version: 1, Schema: schema, Build: build, CreatedAt: now}
 	// After the snapshot: an Event is archived before it is retired, so the
 	// archive now holds everything the snapshot's tombstones stand for.
-	if m.Archive, err = writeBundleArchive(ctx, filepath.Join(stage, archiveName), events, through, retired); err != nil {
+	if m.Archive, err = writeBundleArchive(ctx, filepath.Join(stage, ArchiveFile), events, through, retired); err != nil {
 		return err
 	}
 	// Sorting makes manifests reproducible apart from their creation time.
@@ -489,8 +489,8 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		if target.EventArchive == nil {
 			return fmt.Errorf("backup: the bundle holds an event archive this restore has nowhere to put: %w", storage.ErrInvalid)
 		}
-		archiveCopy = filepath.Join(private, archiveName)
-		hash, err := copyDigest(ctx, filepath.Join(bundle, archiveName), archiveCopy)
+		archiveCopy = filepath.Join(private, ArchiveFile)
+		hash, err := copyDigest(ctx, filepath.Join(bundle, ArchiveFile), archiveCopy)
 		if err != nil {
 			return err
 		}

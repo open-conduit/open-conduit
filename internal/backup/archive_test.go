@@ -168,7 +168,7 @@ func TestRestoreRefusesABundleWhoseArchiveDoesNotStandUp(t *testing.T) {
 	}
 	t.Run("altered", func(t *testing.T) {
 		bundle := s.create(t, s.archive)
-		path := filepath.Join(bundle, archiveName)
+		path := filepath.Join(bundle, ArchiveFile)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

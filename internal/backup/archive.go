@@ -30,15 +30,15 @@ import (
 // sequence with a different new Event.
 
 const (
-	// archiveName is the archive's file in a bundle.
-	archiveName = "events.ndjson"
+	// ArchiveFile is the archive's file in a bundle.
+	ArchiveFile = "events.ndjson"
 	// ArchiveDir is the event archive's directory in a state directory.
 	ArchiveDir = "archive"
 	// archivePage is how many records one archive read or write handles.
 	archivePage = 500
 )
 
-// archiveManifest is the manifest's description of archiveName.
+// archiveManifest is the manifest's description of ArchiveFile.
 type archiveManifest struct {
 	SHA256  string
 	Records uint64
