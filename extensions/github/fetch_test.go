@@ -307,3 +307,27 @@ func TestReadTailKeepsTheEnd(t *testing.T) {
 		t.Fatalf("tail: %d %d %v", len(got), size, err)
 	}
 }
+
+// A job github.checks reports as failed is a failed job here too, whatever
+// the conclusion, both when check is left out and between two of one name.
+func TestPickJobUsesTheChecksDefinitionOfFailed(t *testing.T) {
+	for conclusion := range badConclusions {
+		got, err := pickJob([]ActionsJob{{ID: 1, Name: "build", Conclusion: "success"}, {ID: 2, Name: "test", Conclusion: conclusion}}, "", 5)
+		if err != nil || got.ID != 2 {
+			t.Fatalf("%s, check left out: %+v %v", conclusion, got, err)
+		}
+		got, err = pickJob([]ActionsJob{{ID: 3, Name: "test", Conclusion: conclusion}, {ID: 4, Name: "test", Conclusion: "success"}}, "test", 5)
+		if err != nil || got.ID != 3 {
+			t.Fatalf("%s, a recurring name: %+v %v", conclusion, got, err)
+		}
+	}
+	for _, conclusion := range []string{"action_required", "startup_failure"} {
+		if !badConclusions[conclusion] {
+			t.Fatalf("%s is no longer a failure, so this test no longer covers it", conclusion)
+		}
+	}
+	// Negative control: a job that passed is not picked as the failed one.
+	if _, err := pickJob([]ActionsJob{{ID: 1, Name: "build", Conclusion: "success"}}, "", 5); err == nil || !strings.Contains(err.Error(), "no GitHub Actions job has failed") {
+		t.Fatalf("no failed job: %v", err)
+	}
+}

@@ -93,11 +93,9 @@ func actionsRefusal(repo string, err error) error {
 	return err
 }
 
-// failedJob reports whether a job's conclusion is one github.checks counts
-// as a failure of the job itself.
-func failedJob(j ActionsJob) bool {
-	return j.Conclusion == "failure" || j.Conclusion == "timed_out" || j.Conclusion == "cancelled"
-}
+// failedJob reports whether github.checks counts a job's conclusion as a
+// failure.
+func failedJob(j ActionsJob) bool { return badConclusions[j.Conclusion] }
 
 // pickJob is the job a call means. A name can recur on one head (two
 // workflows, or a push and a pull_request run): a failed one is what the
