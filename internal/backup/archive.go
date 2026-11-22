@@ -113,6 +113,11 @@ func writeBundleArchive(ctx context.Context, path string, events storage.EventAr
 	if err != nil {
 		return nil, err
 	}
+	// A snapshot's read can run again after a transient failure, so an
+	// earlier attempt's file may be here. It says nothing about this one.
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
