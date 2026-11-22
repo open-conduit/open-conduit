@@ -205,8 +205,8 @@ func (d *daemon) pruneUpgradeBundles() {
 	}
 	// The state lock is held and the loop hasn't started, so no bundle is
 	// being written. With backups off this is the only prune there is.
-	if _, err := backup.PruneSegments(d.o.BackupDir); err != nil {
-		d.log.Warn("backup segments not pruned", "error", err)
+	if _, err := backup.PruneShared(d.o.BackupDir); err != nil {
+		d.log.Warn("backup segments and objects not pruned", "error", err)
 	}
 }
 

@@ -441,6 +441,120 @@ func TestFetchBringsBackTheEventArchive(t *testing.T) {
 	}
 }
 
+// Shipping a later scheduled bundle sends only the artifacts the destination
+// lacks, and a fetch brings back the ones the bundle names.
+func TestShipmentSendsOnlyNewArtifacts(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	c, store, err := openState(ctx, f.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	files, err := artifacts.Open(filepath.Join(f.state, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.Close()
+	attach := func(id, content string) {
+		t.Helper()
+		w, err := files.Create(ctx, "text/plain")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(w, content); err != nil {
+			t.Fatal(err)
+		}
+		ref, err := w.Commit(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+			if err := tx.PutScope(domain.Scope{ID: domain.ID("ship-" + id), Name: "ship-" + id}, 0); err != nil {
+				return err
+			}
+			e := domain.Event{ID: domain.ID("ship-" + id), Type: "fixture.seen", Source: "fixture", DeliveryID: "ship-" + id, OccurredAt: now, ReceivedAt: now}
+			if _, _, err := tx.AcceptEvent(e); err != nil {
+				return err
+			}
+			if err := tx.PutWork(domain.Work{ID: domain.ID("ship-" + id), Kind: "fixture.work", State: domain.WorkReady, ScopeID: domain.ID("ship-" + id)}, 0); err != nil {
+				return err
+			}
+			return tx.PutExecution(domain.Execution{ID: domain.ID("ship-" + id), WorkID: domain.ID("ship-" + id), ExecutorBinding: "shell", State: domain.ExecutionPending, Attempt: 1, TriggerID: e.ID, Artifacts: []domain.ArtifactRef{ref}}, 0)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent := t.TempDir()
+	create := func(name string) string {
+		t.Helper()
+		bundle := filepath.Join(parent, name)
+		if err := backup.CreateScheduled(ctx, bundle, nil, c.name, store, files, nil, "test", retention(time.Now)); err != nil {
+			t.Fatal(err)
+		}
+		return bundle
+	}
+	objects := func(m *memoryDestination) int {
+		n := 0
+		for _, p := range m.order {
+			if p == backup.ObjectFile {
+				n++
+			}
+		}
+		return n
+	}
+	m := newMemoryDestination()
+	target := shipTarget{cfg: config.BackupDestination{Name: "offsite"}, d: m}
+	attach("one", "first artifact")
+	first := create("conduit-1")
+	if _, _, err := putBundle(ctx, target, first, "conduit-1", shipStallLimit); err != nil {
+		t.Fatal(err)
+	}
+	sent := objects(m)
+	attach("two", "second artifact")
+	second := create("conduit-2")
+	if held, err := holdsBundle(ctx, target, second, "conduit-2", shipStallLimit); err != nil || held {
+		t.Fatalf("holds = %v, %v", held, err)
+	}
+	if _, _, err := putBundle(ctx, target, second, "conduit-2", shipStallLimit); err != nil {
+		t.Fatal(err)
+	}
+	if got := objects(m) - sent; got != 1 {
+		t.Fatalf("the second shipment sent %d objects, want the 1 new one", got)
+	}
+	if listed, err := m.List(ctx, extension.BackupTarget{}); err != nil || !slices.Equal(listed, []string{"conduit-1", "conduit-2"}) {
+		t.Fatalf("listed = %v, %v", listed, err)
+	}
+	options := cli.RestoreOptions{ConfigPath: filepath.Join(t.TempDir(), "absent.json"), AcceptUnsigned: true}
+	fetched := filepath.Join(t.TempDir(), "fetched")
+	info, err := fetchBundle(ctx, m, extension.BackupTarget{}, "conduit-2", fetched, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Artifacts < 2 {
+		t.Fatalf("fetched %d artifacts", info.Artifacts)
+	}
+	shared, err := backup.SharedParts(second)
+	if err != nil || len(shared) < 2 {
+		t.Fatalf("shared = %v, %v", shared, err)
+	}
+	// A destination's own retention can expire an object a bundle needs.
+	delete(m.files, shared[0].Name+"/"+shared[0].File)
+	if held, err := holdsBundle(ctx, target, second, "conduit-2", shipStallLimit); err != nil || held {
+		t.Fatalf("a bundle missing an object counted as held: %v, %v", held, err)
+	}
+	if _, err := fetchBundle(ctx, m, extension.BackupTarget{}, "conduit-2", filepath.Join(t.TempDir(), "fetched"), options); err == nil || !strings.Contains(err.Error(), "missing at the destination") {
+		t.Fatalf("fetch without its object: %v", err)
+	}
+	if _, _, err := putBundle(ctx, target, second, "conduit-2", shipStallLimit); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := holdsBundle(ctx, target, second, "conduit-2", shipStallLimit); err != nil || !held {
+		t.Fatalf("after reshipping: %v, %v", held, err)
+	}
+}
+
 func TestFetchRefusesWhatADestinationCantMean(t *testing.T) {
 	ctx := context.Background()
 	for _, path := range []string{"../escape", "artifacts/../../escape", "/etc/passwd", "private/operator.token", "artifacts//x"} {

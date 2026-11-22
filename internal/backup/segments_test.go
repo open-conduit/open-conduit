@@ -304,7 +304,7 @@ func TestPruneKeepsWhatABundleNames(t *testing.T) {
 	if slices.ContainsFunc(bundleSegments(t, second), func(e segmentEntry) bool { return e.name() == onlyFirst }) {
 		t.Fatal("fixture: the bundles should not share this segment")
 	}
-	removed, err := PruneSegments(parent)
+	removed, err := PruneShared(parent)
 	if err != nil || len(removed) != 1 || removed[0] == onlyFirst || removed[0] == bundleSegments(t, second)[0].name() {
 		t.Fatalf("pruned %v, %v, want only the segment no bundle names", removed, err)
 	}
@@ -312,13 +312,13 @@ func TestPruneKeepsWhatABundleNames(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(first, "manifest.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := PruneSegments(parent); err == nil || len(removed) != 0 {
+	if removed, err := PruneShared(parent); err == nil || len(removed) != 0 {
 		t.Fatalf("pruned %v, %v past an unreadable manifest", removed, err)
 	}
 	if err := os.RemoveAll(first); err != nil {
 		t.Fatal(err)
 	}
-	removed, err = PruneSegments(parent)
+	removed, err = PruneShared(parent)
 	if err != nil || !slices.Equal(removed, []string{onlyFirst}) {
 		t.Fatalf("pruned %v, %v, want %s", removed, err, onlyFirst)
 	}

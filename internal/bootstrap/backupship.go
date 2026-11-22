@@ -262,41 +262,42 @@ func storedFiles(ctx context.Context, t shipTarget, name string, limit time.Dura
 }
 
 // bundlePart is a stored name and the files it should hold: the bundle, or
-// an event archive segment it needs.
+// an event archive segment or artifact object it needs.
 type bundlePart struct {
 	name, dir string
 	files     []extension.BackupFile
-	segment   bool
+	shared    bool
 }
 
-// bundleParts are what a destination needs to restore a bundle: its segments,
-// then the bundle, so its manifest lands only once everything it names has.
-// A segment missing here fails the shipment rather than shipping a bundle
+// bundleParts are what a destination needs to restore a bundle: its shared
+// parts, then the bundle, so its manifest lands only once everything it names
+// has. A part missing here fails the shipment rather than shipping a bundle
 // that can't be restored.
 func bundleParts(dir, name string) ([]bundlePart, error) {
 	files, err := bundleFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-	segments, err := backup.SegmentNames(dir)
+	shared, err := backup.SharedParts(dir)
 	if err != nil {
 		return nil, err
 	}
-	parts := make([]bundlePart, 0, len(segments)+1)
-	for _, s := range segments {
-		segmentDir := filepath.Join(filepath.Dir(dir), s)
-		info, err := os.Stat(filepath.Join(segmentDir, backup.ArchiveFile))
+	parts := make([]bundlePart, 0, len(shared)+1)
+	for _, s := range shared {
+		partDir := filepath.Join(filepath.Dir(dir), s.Name)
+		info, err := os.Stat(filepath.Join(partDir, s.File))
 		if err != nil {
-			return nil, fmt.Errorf("backup: bundle %s needs event archive segment %s: %w", name, s, err)
+			return nil, fmt.Errorf("backup: bundle %s needs %s: %w", name, s.Name, err)
 		}
-		parts = append(parts, bundlePart{name: s, dir: segmentDir, segment: true, files: []extension.BackupFile{{Path: backup.ArchiveFile, Size: info.Size()}}})
+		parts = append(parts, bundlePart{name: s.Name, dir: partDir, shared: true, files: []extension.BackupFile{{Path: s.File, Size: info.Size()}}})
 	}
 	return append(parts, bundlePart{name: name, dir: dir, files: files}), nil
 }
 
-// putBundle stores a bundle and the segments it needs, and checks that the
-// destination holds every file at its size before calling it shipped. A
-// segment is immutable, so one already there isn't sent again.
+// putBundle stores a bundle and the shared parts it needs, and checks that the
+// destination holds every file at its size before calling it shipped. A shared
+// part is immutable, so one already there isn't sent again, and what it asked
+// about and found there isn't asked about a second time.
 func putBundle(ctx context.Context, t shipTarget, dir, name string, limit time.Duration) (int, int64, error) {
 	parts, err := bundleParts(dir, name)
 	if err != nil {
@@ -309,17 +310,19 @@ func putBundle(ctx context.Context, t shipTarget, dir, name string, limit time.D
 	target := destinationTarget(t.cfg)
 	var total int64
 	done, sent := 0, 0
+	var written []bundlePart
 	for _, p := range parts {
-		if p.segment {
+		if p.shared {
 			stored, err := storedFiles(ctx, t, p.name, limit)
 			if err != nil {
-				return 0, 0, &shipFailure{done, count, fmt.Errorf("checking segment %s: %w", p.name, err)}
+				return 0, 0, &shipFailure{done, count, fmt.Errorf("checking %s: %w", p.name, err)}
 			}
 			if firstMissing(p.files, stored) < 0 {
 				done += len(p.files)
 				continue
 			}
 		}
+		written = append(written, p)
 		for _, f := range p.files {
 			r, err := os.Open(filepath.Join(p.dir, filepath.FromSlash(f.Path)))
 			if err != nil {
@@ -337,7 +340,7 @@ func putBundle(ctx context.Context, t shipTarget, dir, name string, limit time.D
 			total += f.Size
 		}
 	}
-	for _, p := range parts {
+	for _, p := range written {
 		stored, err := storedFiles(ctx, t, p.name, limit)
 		if err != nil {
 			return 0, 0, &shipFailure{count, count, fmt.Errorf("checking what was stored: %w", err)}
@@ -349,15 +352,16 @@ func putBundle(ctx context.Context, t shipTarget, dir, name string, limit time.D
 	return sent, total, nil
 }
 
-// holdsBundle asks whether a destination already has this bundle whole,
-// segments included, so one whose segment its own retention expired is
-// shipped again. It costs one question per stored name.
+// holdsBundle asks whether a destination already has this bundle whole, shared
+// parts included, so one whose part its own retention expired is shipped
+// again. It asks about the bundle first: a new one isn't there, which settles
+// it in one question however many parts it names.
 func holdsBundle(ctx context.Context, t shipTarget, dir, name string, limit time.Duration) (bool, error) {
 	parts, err := bundleParts(dir, name)
 	if err != nil {
 		return false, err
 	}
-	for _, p := range parts {
+	for _, p := range slices.Backward(parts) {
 		stored, err := storedFiles(ctx, t, p.name, limit)
 		if err != nil {
 			return false, err
@@ -594,14 +598,14 @@ func fetchBundle(ctx context.Context, v extension.BackupDestination, t extension
 			return cli.BackupInfo{}, err
 		}
 	}
-	// The manifest is authentic by now, so the segments it names are the ones
-	// to bring back. They go beside the bundle, where a restore looks.
-	segments, err := backup.SegmentNames(stage)
+	// The manifest is authentic by now, so the parts it names are the ones to
+	// bring back. They go beside the bundle, where a restore looks.
+	shared, err := backup.SharedParts(stage)
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	for _, s := range segments {
-		if err := fetchSegment(ctx, v, t, s, parent); err != nil {
+	for _, s := range shared {
+		if err := fetchPart(ctx, v, t, s, parent); err != nil {
 			return cli.BackupInfo{}, err
 		}
 	}
@@ -625,30 +629,30 @@ func fetchBundle(ctx context.Context, v extension.BackupDestination, t extension
 	return info, nil
 }
 
-// fetchSegment brings one event archive segment into parent unless an intact
-// copy is there. Its name is its digest, so the bytes are checked against it
-// before it is published, and one the destination lacks fails the fetch.
-func fetchSegment(ctx context.Context, v extension.BackupDestination, t extension.BackupTarget, name, parent string) error {
-	if backup.HoldsSegment(ctx, parent, name) {
+// fetchPart brings one shared part into parent unless an intact copy is
+// there. Its name is its digest, so the bytes are checked against it before it
+// is published, and one the destination lacks fails the fetch.
+func fetchPart(ctx context.Context, v extension.BackupDestination, t extension.BackupTarget, part backup.SharedPart, parent string) error {
+	if backup.HoldsPart(ctx, parent, part.Name) {
 		return nil
 	}
-	files, err := v.Files(ctx, t, name)
+	files, err := v.Files(ctx, t, part.Name)
 	if err != nil {
 		return err
 	}
-	i := slices.IndexFunc(files, func(f extension.BackupFile) bool { return f.Path == backup.ArchiveFile })
+	i := slices.IndexFunc(files, func(f extension.BackupFile) bool { return f.Path == part.File })
 	if i < 0 || files[i].Size < 0 {
-		return fmt.Errorf("backup: event archive segment %s is missing at the destination, so this bundle can't be restored from it", name)
+		return fmt.Errorf("backup: %s is missing at the destination, so this bundle can't be restored from it", part.Name)
 	}
 	stage, err := os.MkdirTemp(parent, ".conduit-snapshot-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if err := fetchFile(ctx, v, t, name, files[i], stage); err != nil {
+	if err := fetchFile(ctx, v, t, part.Name, files[i], stage); err != nil {
 		return err
 	}
-	return backup.AdoptSegment(ctx, parent, name, stage)
+	return backup.AdoptPart(ctx, parent, part.Name, stage)
 }
 
 // fetchablePath is a path a bundle holds: its manifest, signature, database

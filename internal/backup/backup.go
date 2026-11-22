@@ -48,6 +48,10 @@ type manifest struct {
 	// Omitted lists references whose content retention expired. Their bytes
 	// are not in the bundle; restore accepts them only on expired Executions.
 	Omitted []domain.ArtifactRef `json:",omitempty"`
+	// SharedArtifacts are artifacts held as objects beside the bundle
+	// (objects.go) instead of in it. A bundle with any is refused by a binary
+	// that can't restore it; one without stays readable by older binaries.
+	SharedArtifacts []entry `json:",omitempty"`
 	// Archive names the event archive segments the bundle needs. A bundle
 	// with one is refused by a binary that can't restore it, as it should
 	// be; one without stays readable by older binaries.
@@ -181,6 +185,18 @@ func Create(ctx context.Context, destination string, key ed25519.PrivateKey, bac
 // segments stored beside it (archive.go). Create refuses a snapshot with retired Events, whose payloads
 // only the archive holds.
 func CreateWithArchive(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, events storage.EventArchive, build string, retention Retention) error {
+	return create(ctx, destination, key, backend, db, files, events, build, retention, false)
+}
+
+// CreateScheduled is CreateWithArchive for a bundle that stays in a directory
+// of bundles: its artifacts are objects stored once beside it (objects.go), so
+// it costs the database plus what is new. Moving it alone would leave them
+// behind, so a bundle made to be carried elsewhere uses CreateWithArchive.
+func CreateScheduled(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, events storage.EventArchive, build string, retention Retention) error {
+	return create(ctx, destination, key, backend, db, files, events, build, retention, true)
+}
+
+func create(ctx context.Context, destination string, key ed25519.PrivateKey, backend string, db storage.Database, files storage.ArtifactStore, events storage.EventArchive, build string, retention Retention, share bool) error {
 	if backend == "" || files == nil {
 		return storage.ErrInvalid
 	}
@@ -200,7 +216,7 @@ func CreateWithArchive(ctx context.Context, destination string, key ed25519.Priv
 		if err != nil {
 			return err
 		}
-		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, events, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return recordsBuild(build, stored.Records), nil })
+		return compose(ctx, stage, key, backend, db.Snapshot, db.SchemaVersion(), files, events, share, retention.Expired, retention.now(), func(storage.Tx) (string, error) { return recordsBuild(build, stored.Records), nil })
 	})
 	return err
 }
@@ -219,7 +235,7 @@ func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey
 	}
 	stored := prior.Stored()
 	_, err := publish(ctx, destination, func(stage string) error {
-		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, events, expired, now.UTC(), func(tx storage.Tx) (string, error) {
+		return compose(ctx, stage, key, backend, prior.Snapshot, stored.Schema, files, events, false, expired, now.UTC(), func(tx storage.Tx) (string, error) {
 			from, err := fromBuild(tx)
 			if err != nil {
 				return "", err
@@ -232,7 +248,7 @@ func CreatePrior(ctx context.Context, destination string, key ed25519.PrivateKey
 
 // compose writes a bundle into stage from a snapshot. buildOf names its build
 // from the snapshot's own state.
-func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend string, snapshot func(context.Context, string, func(storage.Tx) error) error, schema uint32, files storage.ArtifactStore, events storage.EventArchive, expired Expired, now time.Time, buildOf func(storage.Tx) (string, error)) error {
+func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend string, snapshot func(context.Context, string, func(storage.Tx) error) error, schema uint32, files storage.ArtifactStore, events storage.EventArchive, share bool, expired Expired, now time.Time, buildOf func(storage.Tx) (string, error)) error {
 	database := filepath.Join(stage, snapshotName)
 	var refs map[string]domain.ArtifactRef
 	var live map[string]bool
@@ -289,6 +305,14 @@ func compose(ctx context.Context, stage string, key ed25519.PrivateKey, backend 
 	for _, ref := range sortedRefs(refs) {
 		if !live[ref.ID] {
 			m.Omitted = append(m.Omitted, ref)
+			continue
+		}
+		if share {
+			e, err := storeObject(ctx, filepath.Dir(stage), files, ref)
+			if err != nil {
+				return err
+			}
+			m.SharedArtifacts = append(m.SharedArtifacts, e)
 			continue
 		}
 		r, err := files.Open(ctx, ref)
@@ -501,6 +525,13 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 		return err
 	}
 	defer input.Close()
+	if err := checkObjects(m.SharedArtifacts); err != nil {
+		return err
+	}
+	shelf, err := filepath.Abs(filepath.Dir(bundle))
+	if err != nil {
+		return err
+	}
 	// A store outside the directory is opened and checked here, and emptied
 	// again when the restore fails before the directory is published; one
 	// inside it goes with the staged directory. Once the directory is
@@ -534,7 +565,7 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			output = staged
 		}
 		seen := map[string]bool{}
-		for _, item := range m.Artifacts {
+		restoreItem := func(item entry, open func() (io.ReadCloser, error)) error {
 			if seen[item.Ref.ID] {
 				return fmt.Errorf("backup: duplicate artifact")
 			}
@@ -546,7 +577,7 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			if item.Ref.SHA256 != "" && item.Ref.SHA256 != item.SHA256 {
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
-			r, err := input.Open(ctx, item.Ref)
+			r, err := open()
 			if err != nil {
 				return err
 			}
@@ -568,6 +599,17 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			if item.Ref.SHA256 == "" && hex.EncodeToString(h.Sum(nil)) != item.SHA256 {
 				return fmt.Errorf("backup: artifact digest mismatch")
 			}
+			return nil
+		}
+		for _, item := range m.Artifacts {
+			if err := restoreItem(item, func() (io.ReadCloser, error) { return input.Open(ctx, item.Ref) }); err != nil {
+				return err
+			}
+		}
+		for _, item := range m.SharedArtifacts {
+			if err := restoreItem(item, func() (io.ReadCloser, error) { return openObject(shelf, item) }); err != nil {
+				return err
+			}
 		}
 		omitted := map[string]domain.ArtifactRef{}
 		for _, ref := range m.Omitted {
@@ -578,8 +620,10 @@ func Restore(ctx context.Context, bundle, destination string, trust Trust, now t
 			omitted[ref.ID] = ref
 		}
 		captured := map[string]domain.ArtifactRef{}
-		for _, item := range m.Artifacts {
-			captured[item.Ref.ID] = item.Ref
+		for _, items := range [][]entry{m.Artifacts, m.SharedArtifacts} {
+			for _, item := range items {
+				captured[item.Ref.ID] = item.Ref
+			}
 		}
 		err := backend.ReadSnapshot(ctx, database, now, func(tx storage.Tx) error {
 			// Before a named database is written, so a bundle whose archive
@@ -886,7 +930,7 @@ func Inspect(bundle string) (Info, error) {
 	if preUpgrade == nil {
 		build, _ = parseRecords(build)
 	}
-	return Info{PreUpgrade: preUpgrade, Records: m.records(), Backend: m.backend(), Schema: m.Schema, Build: build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
+	return Info{PreUpgrade: preUpgrade, Records: m.records(), Backend: m.backend(), Schema: m.Schema, Build: build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts) + len(m.SharedArtifacts), Omitted: len(m.Omitted), DatabaseSHA256: m.DatabaseSHA256}, nil
 }
 
 // openEmpty opens the store a restore imports into and refuses one that
