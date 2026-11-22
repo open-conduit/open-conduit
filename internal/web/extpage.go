@@ -68,6 +68,10 @@ type extSession struct {
 	Panels []panelView
 	// Compose is the action the message box sends.
 	Compose *actionView
+	// Awaited are the actions the Work waits for a person to take that
+	// neither a panel beside the conversation nor the message box draws,
+	// such as a request for a secret, which the message box must never send.
+	Awaited []actionView
 	Changes *changeReview
 	// Doctor is the daemon's checks once a change was applied.
 	Doctor *client.Doctor
@@ -306,6 +310,11 @@ func (s *Server) pageSession(ctx context.Context, p *page, v workView, d *extPag
 		if a, ok := d.action(actions, v.ScopeID, id); ok && a.Secret == "" {
 			ss.Compose = av(a)
 			break
+		}
+	}
+	for _, a := range unshown(actions, ss.Panels) {
+		if a.Awaited && d.offers(a, v.ScopeID) && (ss.Compose == nil || a.ID != ss.Compose.ID) {
+			ss.Awaited = append(ss.Awaited, *av(a))
 		}
 	}
 	cand, err := s.src.WorkConfigCandidate(ctx, v.ID)
