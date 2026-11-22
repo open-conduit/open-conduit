@@ -203,32 +203,53 @@ func (f *pull) finished() bool {
 // pulling it by digest when it is missing and pulls are on, and logging
 // the pull. A pull already in flight on the context is joined, not
 // repeated, and runs to its own deadline (PullTimeout) even if the caller
-// stops waiting. A failed pull is tried again on the next call: before the
-// next launch, or the next time the daemon applies its config.
+// stops waiting. A caller whose check found the image missing before another
+// caller's pull succeeded looks again instead of pulling. A failed pull is
+// tried again on the next call: before the next launch, or the next time the
+// daemon applies its config.
 func (p *Provider) EnsureGateway(ctx context.Context, dctx string) error {
 	_, err := p.ensureGateway(ctx, dctx)
 	return err
 }
 
 func (p *Provider) ensureGateway(ctx context.Context, dctx string) (string, error) {
-	code, err := p.gatewayPresent(ctx, dctx)
-	if code != "gateway_missing" || !p.pullable() {
-		return code, err
+	for {
+		before := p.finishedPull(dctx)
+		code, err := p.gatewayPresent(ctx, dctx)
+		if code != "gateway_missing" || !p.pullable() {
+			return code, err
+		}
+		p.mu.Lock()
+		f := p.pulls[dctx]
+		if f != nil && f != before && f.finished() && f.err == nil {
+			// A pull succeeded after this check began, so its answer is
+			// stale: look again rather than pull again.
+			p.mu.Unlock()
+			continue
+		}
+		if f == nil || f.finished() {
+			f = &pull{done: make(chan struct{})}
+			p.pulls[dctx] = f
+			go p.pull(context.WithoutCancel(ctx), dctx, f)
+		}
+		p.mu.Unlock()
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return "gateway_missing", fmt.Errorf("the gateway image %s is not there yet: %w", p.o.Gateway, ctx.Err())
+		}
+		return p.gatewayPresent(ctx, dctx)
 	}
+}
+
+// finishedPull is the context's latest pull if it has finished, else nil.
+func (p *Provider) finishedPull(dctx string) *pull {
 	p.mu.Lock()
-	f := p.pulls[dctx]
-	if f == nil || f.finished() {
-		f = &pull{done: make(chan struct{})}
-		p.pulls[dctx] = f
-		go p.pull(context.WithoutCancel(ctx), dctx, f)
+	defer p.mu.Unlock()
+	if f := p.pulls[dctx]; f != nil && f.finished() {
+		return f
 	}
-	p.mu.Unlock()
-	select {
-	case <-f.done:
-	case <-ctx.Done():
-		return "gateway_missing", fmt.Errorf("the gateway image %s is not there yet: %w", p.o.Gateway, ctx.Err())
-	}
-	return p.gatewayPresent(ctx, dctx)
+	return nil
 }
 
 func (p *Provider) pull(ctx context.Context, dctx string, f *pull) {
