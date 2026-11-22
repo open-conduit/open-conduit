@@ -80,37 +80,10 @@ func SegmentNames(bundle string) ([]string, error) {
 	return names, nil
 }
 
-// HoldsSegment reports whether parent has an intact copy of a named segment.
-func HoldsSegment(ctx context.Context, parent, name string) bool {
-	digest, ok := strings.CutPrefix(name, segmentPrefix)
-	if !ok || !segmentName.MatchString(name) {
-		return false
-	}
-	got, err := digestFile(ctx, filepath.Join(parent, name, ArchiveFile))
-	return err == nil && got == digest
-}
-
-// AdoptSegment publishes the segment file in dir as name in parent, once its
-// bytes match the digest the name carries.
-func AdoptSegment(ctx context.Context, parent, name, dir string) error {
-	digest, ok := strings.CutPrefix(name, segmentPrefix)
-	if !ok || !segmentName.MatchString(name) {
-		return fmt.Errorf("backup: %q is not a segment name: %w", name, storage.ErrInvalid)
-	}
-	got, err := digestFile(ctx, filepath.Join(dir, ArchiveFile))
-	if err != nil {
-		return err
-	}
-	if got != digest {
-		return fmt.Errorf("backup: event archive digest mismatch in segment %s", name)
-	}
-	return publishSegment(ctx, parent, name, dir)
-}
-
-// publishSegment moves dir to name in parent. The name is the content, so an
-// intact copy already there is the same segment; a damaged one is replaced.
-func publishSegment(ctx context.Context, parent, name, dir string) error {
-	if HoldsSegment(ctx, parent, name) {
+// publishPart moves dir to name in parent. The name is the content, so an
+// intact copy already there is the same part; a damaged one is replaced.
+func publishPart(ctx context.Context, parent, name, dir string) error {
+	if HoldsPart(ctx, parent, name) {
 		return os.RemoveAll(dir)
 	}
 	target := filepath.Join(parent, name)
@@ -126,9 +99,10 @@ func publishSegment(ctx context.Context, parent, name, dir string) error {
 	return syncParent(parent)
 }
 
-// PruneSegments removes the segments in dir that no bundle there names. A
-// bundle it can't read might need any of them, so it then removes nothing.
-func PruneSegments(dir string) ([]string, error) {
+// PruneShared removes the segments and objects in dir that no bundle there
+// names. A bundle it can't read might need any of them, so it then removes
+// nothing.
+func PruneShared(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -137,29 +111,29 @@ func PruneSegments(dir string) ([]string, error) {
 		return nil, err
 	}
 	needed := map[string]bool{}
-	var segments []string
+	var stored []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if segmentName.MatchString(e.Name()) {
-			segments = append(segments, e.Name())
+		if _, _, ok := partFile(e.Name()); ok {
+			stored = append(stored, e.Name())
 			continue
 		}
 		bundle := filepath.Join(dir, e.Name())
 		if _, err := os.Lstat(filepath.Join(bundle, "manifest.json")); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		names, err := SegmentNames(bundle)
+		parts, err := SharedParts(bundle)
 		if err != nil {
 			return nil, fmt.Errorf("backup: reading %s: %w", e.Name(), err)
 		}
-		for _, n := range names {
-			needed[n] = true
+		for _, p := range parts {
+			needed[p.Name] = true
 		}
 	}
 	var removed []string
-	for _, s := range segments {
+	for _, s := range stored {
 		if needed[s] {
 			continue
 		}
@@ -180,7 +154,7 @@ func newestSegments(parent string) []segmentEntry {
 	}
 	var newest *manifest
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || segmentName.MatchString(e.Name()) {
+		if _, _, shared := partFile(e.Name()); !e.IsDir() || strings.HasPrefix(e.Name(), ".") || shared {
 			continue
 		}
 		m, err := readManifest(filepath.Join(parent, e.Name(), "manifest.json"))
@@ -399,7 +373,7 @@ func (w *segmentWriter) finish(ctx context.Context) (_ segmentEntry, err error) 
 		return segmentEntry{}, err
 	}
 	s := segmentEntry{SHA256: hex.EncodeToString(w.hash.Sum(nil)), Records: w.records}
-	if err := publishSegment(ctx, w.parent, s.name(), w.dir); err != nil {
+	if err := publishPart(ctx, w.parent, s.name(), w.dir); err != nil {
 		return segmentEntry{}, err
 	}
 	return s, nil

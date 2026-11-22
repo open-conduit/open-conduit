@@ -237,7 +237,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return nil
 	}
-	if err := backup.CreateWithArchive(ctx, destination, d.signingKey(ctx), d.backups.name, d.backups.db, d.artifacts, d.eventArchive(), d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
+	if err := backup.CreateScheduled(ctx, destination, d.signingKey(ctx), d.backups.name, d.backups.db, d.artifacts, d.eventArchive(), d.o.Version+" ("+d.o.Commit+")", retention(d.now)); err != nil {
 		return err
 	}
 	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
@@ -266,14 +266,14 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		d.log.Info("backup pruned", "path", filepath.Join(d.o.BackupDir, oldest))
 	}
 	// Every bundle in the directory counts, pre-upgrade ones included. One
-	// that can't be read might need any segment, so nothing is removed then,
+	// that can't be read might need any stored part, so nothing is removed then,
 	// and the bundle just published stands either way.
-	removed, err := backup.PruneSegments(d.o.BackupDir)
+	removed, err := backup.PruneShared(d.o.BackupDir)
 	if err != nil {
-		d.log.Warn("backup segments not pruned", "error", err)
+		d.log.Warn("backup segments and objects not pruned", "error", err)
 	}
 	for _, name := range removed {
-		d.log.Info("backup segment pruned", "segment", name)
+		d.log.Info("backup part pruned", "part", name)
 	}
 	return nil
 }
