@@ -19,6 +19,8 @@ import (
 //     Messages is the conversation, the rest stand beside it;
 //   - one message box that sends the first of Compose the entry offers on
 //     the session, its choices as buttons;
+//   - each action the Work awaits that neither a panel nor the message box
+//     draws, with its own control (a secret's takes the value privately);
 //   - the session's configuration change set, when the extension proposes
 //     one (ConfigCandidate): each change's before and after, approve and
 //     reject, and Apply, which only the operator can do.

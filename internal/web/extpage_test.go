@@ -201,6 +201,35 @@ func changesOf(t *testing.T, body string) string {
 	return body[start:end]
 }
 
+// A request for a secret the Work awaits gets its private control on the
+// page even though no panel places it, and the message box never sends it.
+func TestPageDrawsAnAwaitedSecretNoPanelPlaces(t *testing.T) {
+	f, s := pageFake(t)
+	session(f)
+	f.actions[sessionID] = []client.Action{
+		{Provider: "desk/jot", ID: "message", Label: "Send the agent a message", Prompt: "your message"},
+		{Provider: "desk/jot", ID: "secret", Label: "Store the secret", Prompt: "the value", Secret: "github-token", Awaited: true},
+		{Provider: "desk/other", ID: "foreign", Label: "Not this page's", Prompt: "x", Secret: "other", Awaited: true},
+	}
+	body := get(t, s, notesHref)
+	for _, want := range []string{`action="/actions/secret"`, `name="action" value="secret"`, `type="password"`, `name="value_file" type="file"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `value="foreign"`) {
+		t.Fatalf("another provider's request on this page:\n%s", body)
+	}
+	if bench, form := strings.Index(body, `data-live="page-bench"`), strings.Index(body, `action="/actions/secret"`); form < bench {
+		t.Fatalf("the control is outside the redrawn bench, so a request arriving live would not appear (%d < %d)", form, bench)
+	}
+	// Placed by a panel, it is drawn once.
+	f.panels[sessionID][0].Sections[0].Actions = []client.Action{f.actions[sessionID][1]}
+	if n := strings.Count(get(t, s, notesHref), `action="/actions/secret"`); n != 1 {
+		t.Fatalf("a panel's secret control drawn %d times", n)
+	}
+}
+
 func TestPageReviewsTheCandidate(t *testing.T) {
 	f, s := candidateFake(t)
 	body := changesOf(t, get(t, s, notesHref))

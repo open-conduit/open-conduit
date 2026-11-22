@@ -27,16 +27,28 @@ import (
 	"github.com/open-conduit/open-conduit/protocol/examples/runner"
 )
 
+// setupGuideExample is the guide's first JSON block, its example config.
+func setupGuideExample(t *testing.T, guide string) string {
+	t.Helper()
+	const open, closing = "```json\n", "\n```\n"
+	_, rest, ok := strings.Cut(guide, open)
+	if !ok {
+		t.Fatal("no example config in the guide")
+	}
+	example, _, ok := strings.Cut(rest, closing)
+	if !ok {
+		t.Fatal("the guide's example config is not closed")
+	}
+	return example
+}
+
 // The setup guide's example configuration is a valid Open Conduit config
 // for the executors, handlers, operations and providers the daemon
 // registers (bootstrap's registry), so an agent following it writes one
 // that `config validate` accepts.
 func TestSetupGuideExampleConfigValidates(t *testing.T) {
 	g := setupPlaybook(t, "open-conduit")
-	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
-	if start < 0 || end < 0 {
-		t.Fatal("no example config in the guide")
-	}
+	example := setupGuideExample(t, g)
 	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +71,7 @@ func TestSetupGuideExampleConfigValidates(t *testing.T) {
 		Resources:      map[string]bool{gitws.Type: true},
 		ResourceConfig: map[string]func(json.RawMessage) error{gitws.Type: gitws.ValidateConfig},
 	}
-	if _, err := config.Validate([]byte(g[start+8:end]), reg); err != nil {
+	if _, err := config.Validate([]byte(example), reg); err != nil {
 		t.Fatalf("the setup guide's example config is invalid: %v", err)
 	}
 }
@@ -70,8 +82,7 @@ func TestSetupGuideExampleConfigValidates(t *testing.T) {
 func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 	releaseLayout(t)
 	g := setupPlaybook(t, "open-conduit")
-	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
-	if diags, err := bootstrap.ValidateConfig([]byte(g[start+8 : end])); err != nil || len(diags) != 0 {
+	if diags, err := bootstrap.ValidateConfig([]byte(setupGuideExample(t, g))); err != nil || len(diags) != 0 {
 		t.Fatalf("setup guide example: %v %v", diags, err)
 	}
 	var doc []byte

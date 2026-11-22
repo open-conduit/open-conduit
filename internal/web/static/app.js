@@ -306,8 +306,9 @@
   // ---- Live regions ----
   // A [data-live] region is redrawn from the same URL every few seconds while
   // the tab is visible, unless something in it has focus, a dialog or menu
-  // is open, a checkbox in it is ticked or the operator picked a radio or
-  // select option in it: a refresh never takes what the operator is doing
+  // is open, a checkbox in it is ticked, the operator picked a radio or
+  // select option in it, or a password or file input in it holds a value: a
+  // refresh never takes what the operator is doing
   // away. A running turn's transcript [data-conv] is followed by work.js.
   // Each redraw ends with a live:redrawn event on the document.
   const live = [...document.querySelectorAll("[data-live]:not([data-conv])")];
@@ -322,6 +323,9 @@
       if (document.hidden || document.querySelector("dialog[open], details.menu-wrap[open]")) return;
       if (live.some((r) => r.contains(document.activeElement) && typing(document.activeElement))) return;
       if (live.some((r) => r.querySelector("input[type=checkbox]:checked") || r.dataset.changed)) return;
+      // A secret typed or a file chosen, even with focus elsewhere, is not
+      // in the redrawn HTML, so a redraw would silently drop it.
+      if (live.some((r) => [...r.querySelectorAll("input[type=password], input[type=file]")].some((i) => i.value))) return;
       try {
         const res = await fetch(location.href, { credentials: "same-origin" });
         if (!res.ok) return;

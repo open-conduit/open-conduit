@@ -68,6 +68,7 @@ box stays out of them, so typing never holds back what the agent says. */}}
           <li><span></span><b>Scope</b><span><a href="/config?scope={{.W.ScopeID}}">{{.Scope}}</a></span></li>
           <li><span></span><b>Turns</b><span>{{len .W.Turns}}</span></li>
         </ul>
+        {{- range .Awaited}}{{template "action-control" .}}{{end}}
         {{- range .Panels}}{{template "panel" .}}{{end}}
         {{- with .Changes}}
         <h2 class="section-rule">Changes</h2>
