@@ -224,3 +224,85 @@ func TestArchivePassIsBoundedAndReported(t *testing.T) {
 		t.Fatalf("still reported after a good pass: %q", code)
 	}
 }
+
+func TestCompactionPolicy(t *testing.T) {
+	const mib = int64(1 << 20)
+	for name, c := range map[string]struct {
+		s    storage.Space
+		want int64
+	}{
+		"not incremental":         {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 500 * mib}, 0},
+		"under the margin":        {storage.Space{TotalBytes: 100 * mib, FreeBytes: 16 * mib, Incremental: true}, 0},
+		"above the margin":        {storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}, 24 * mib},
+		"margin follows the file": {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 60 * mib, Incremental: true}, 10 * mib},
+		"capped each pass":        {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 900 * mib, Incremental: true}, 64 * mib},
+	} {
+		if got := reclaimBytes(c.s); got != c.want {
+			t.Errorf("%s: reclaim %d MiB, want %d", name, got/mib, c.want/mib)
+		}
+	}
+	for name, c := range map[string]struct {
+		s    storage.Space
+		want bool
+	}{
+		"worth rebuilding":    {storage.Space{TotalBytes: 400 * mib, FreeBytes: 100 * mib}, true},
+		"too little free":     {storage.Space{TotalBytes: 100 * mib, FreeBytes: 50 * mib}, false},
+		"too small a share":   {storage.Space{TotalBytes: 1000 * mib, FreeBytes: 100 * mib}, false},
+		"already incremental": {storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib, Incremental: true}, false},
+	} {
+		if got := rebuildDue(c.s); got != c.want {
+			t.Errorf("%s: rebuild %v", name, got)
+		}
+	}
+}
+
+type fakeCompactor struct {
+	space    storage.Space
+	asked    int64
+	rebuilds int
+	err      error
+}
+
+func (c *fakeCompactor) Space(context.Context) (storage.Space, error) { return c.space, nil }
+func (c *fakeCompactor) Reclaim(_ context.Context, n int64) (int64, error) {
+	c.asked = n
+	return n, c.err
+}
+func (c *fakeCompactor) Rebuild(context.Context) error {
+	c.rebuilds++
+	if c.err != nil {
+		return c.err
+	}
+	c.space = storage.Space{TotalBytes: c.space.TotalBytes - c.space.FreeBytes, Incremental: true}
+	return nil
+}
+
+func TestCompactionRunsAndFailsQuietly(t *testing.T) {
+	ctx := context.Background()
+	const mib = int64(1 << 20)
+	d := backupDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+	d.reportedAt = map[string]time.Time{}
+	on := config.Settings{ArchiveFinishedDays: 30}
+	older := storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib}
+	off := &fakeCompactor{space: older}
+	d.rebuildAtStart(ctx, off, config.Settings{})
+	if off.rebuilds != 0 {
+		t.Fatal("rebuilt with archiving off")
+	}
+	rebuilt := &fakeCompactor{space: older}
+	d.rebuildAtStart(ctx, rebuilt, on)
+	if rebuilt.rebuilds != 1 {
+		t.Fatalf("rebuilds = %d", rebuilt.rebuilds)
+	}
+	// A rebuild that fails doesn't stop the start.
+	d.rebuildAtStart(ctx, &fakeCompactor{space: older, err: errors.New("disk full")}, on)
+	failing := &fakeCompactor{space: storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}, err: storage.ErrCorrupt}
+	d.runCompaction(ctx, failing)
+	if failing.asked != 24*mib || d.reportedCode("database_compaction", "") == "" {
+		t.Fatalf("asked %d, reported %q", failing.asked, d.reportedCode("database_compaction", ""))
+	}
+	d.runCompaction(ctx, &fakeCompactor{space: storage.Space{TotalBytes: 100 * mib, FreeBytes: 40 * mib, Incremental: true}})
+	if code := d.reportedCode("database_compaction", ""); code != "" {
+		t.Fatalf("still reported: %q", code)
+	}
+}

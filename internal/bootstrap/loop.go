@@ -145,6 +145,7 @@ func (d *daemon) retentionPass(ctx context.Context, c *components) bool {
 		d.dutyRan(ctx, dutyRetention, d.now().Add(d.o.RetentionInterval))
 	}
 	d.archiveEvents(ctx, c)
+	d.compactDatabase(ctx)
 	d.collectArtifacts(ctx, c)
 	d.pruneReported()
 	if c.toolbelt != nil {
@@ -225,6 +226,90 @@ func (d *daemon) runArchivePass(ctx context.Context, archiver eventArchiver, s c
 	}
 	d.log.Info("event archive pass", "scanned", scanned, "archived", archived, "kept", kept)
 	d.capture(ctx, "events.archived", map[string]any{"scanned": scanned, "archived": archived, "kept": kept})
+}
+
+// How the database's free space is given back. SQLite reuses free pages
+// before growing, so a margin stays free rather than being returned and
+// allocated again, and one pass moves a bounded amount so it never holds
+// writes up for long.
+const (
+	compactKeepFree  = 16 << 20
+	compactPassLimit = 64 << 20
+	rebuildMinFree   = 64 << 20
+	rebuildFreeShare = 4 // at least a quarter of the file
+	compactKeepShare = 20
+)
+
+// reclaimBytes is how much of a database's free space one pass returns.
+func reclaimBytes(s storage.Space) int64 {
+	if !s.Incremental {
+		return 0
+	}
+	return min(max(s.FreeBytes-max(compactKeepFree, s.TotalBytes/compactKeepShare), 0), compactPassLimit)
+}
+
+// rebuildDue says a database that can't return space while running holds
+// enough free space to justify the one rewrite that lets it.
+func rebuildDue(s storage.Space) bool {
+	return !s.Incremental && s.FreeBytes >= rebuildMinFree && s.FreeBytes*rebuildFreeShare >= s.TotalBytes
+}
+
+// compactDatabase returns free space to the disk once archiving is on.
+func (d *daemon) compactDatabase(ctx context.Context) {
+	if d.compactor == nil || d.configs == nil {
+		return
+	}
+	if s, _ := d.configs.Current(); s == nil || s.Settings.ArchiveFinishedDays == 0 {
+		return
+	}
+	d.runCompaction(ctx, d.compactor)
+}
+
+func (d *daemon) runCompaction(ctx context.Context, c storage.Compactor) {
+	space, err := c.Space(ctx)
+	if err == nil {
+		var returned int64
+		if want := reclaimBytes(space); want > 0 {
+			if returned, err = c.Reclaim(ctx, want); err == nil && returned > 0 {
+				d.log.Info("database space returned", "bytes", returned, "file_bytes", space.TotalBytes-returned)
+				d.capture(ctx, "database.compacted", map[string]any{"kind": "incremental", "bytes": returned, "file_bytes": space.TotalBytes - returned})
+			}
+		}
+	}
+	if err != nil {
+		if ctx.Err() == nil {
+			d.report("database_compaction", "", errorCode(err))
+		}
+		return
+	}
+	d.clear("database_compaction", "")
+}
+
+// rebuildAtStart makes a database from before incremental compaction able to
+// return space, when archiving has left enough free to be worth it. It runs
+// before the daemon serves, because it holds up every write until it is done.
+// Free pages are reused meanwhile, so a failure (a disk without room for the
+// copy, say) costs nothing but the space: it is logged, and the start goes on.
+func (d *daemon) rebuildAtStart(ctx context.Context, c storage.Compactor, s config.Settings) {
+	if c == nil || s.ArchiveFinishedDays == 0 {
+		return
+	}
+	space, err := c.Space(ctx)
+	if err == nil && rebuildDue(space) {
+		d.log.Info("rebuilding the database to return free space; writes wait until it finishes", "file_bytes", space.TotalBytes, "free_bytes", space.FreeBytes)
+		if err = c.Rebuild(ctx); err == nil {
+			after, spaceErr := c.Space(ctx)
+			if spaceErr != nil {
+				err = spaceErr
+			} else {
+				d.log.Info("database rebuilt", "file_bytes", after.TotalBytes)
+				d.capture(ctx, "database.compacted", map[string]any{"kind": "rebuild", "bytes": space.TotalBytes - after.TotalBytes, "file_bytes": after.TotalBytes})
+			}
+		}
+	}
+	if err != nil && ctx.Err() == nil {
+		d.log.Warn("database not rebuilt: free space stays in the file and is reused", "error", err)
+	}
 }
 
 // eventArchiveCheck is doctor's view of the archive pass, from the record the
