@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,7 +27,9 @@ func gatewayDocker(t *testing.T, o Options) (p *Provider, dir string, logs func(
 	dir = t.TempDir()
 	script := `d=` + dir + `
 case "$3" in
-image) [ -f "$d/have" ] && echo sha256:x && exit 0; echo "No such image" >&2; exit 1;;
+image) [ -f "$d/have" ] && echo sha256:x && exit 0
+  if [ -p "$d/entered" ] && mkdir "$d/gated" 2>/dev/null; then echo > "$d/entered"; read _ < "$d/release"; fi
+  echo "No such image" >&2; exit 1;;
 pull) echo "$4 $5" >> "$d/pulls"; [ -f "$d/fail" ] && { echo "net/http: TLS handshake timeout" >&2; exit 1; }; touch "$d/have";;
 info) echo 'daemon-1|28.0.0|linux';;
 network) if [ "$4" = inspect ]; then echo 'false|172.30.0.0/16 172.30.0.1;'; fi;;
@@ -110,6 +113,76 @@ func TestGatewayPullFailureIsRetried(t *testing.T) {
 	_ = os.Remove(filepath.Join(dir, "fail"))
 	if err := p.EnsureGateway(context.Background(), "default"); err != nil || len(pulls(t, dir)) != 2 {
 		t.Fatalf("retry: %v %q", err, pulls(t, dir))
+	}
+}
+
+// TestGatewayCheckPredatingAPull forces the race in issue #879: one caller's
+// image check finds the image missing and is held there while another
+// caller's pull finishes. A successful pull satisfies the held caller, with
+// no second pull. A failed one doesn't, so the held caller tries again.
+func TestGatewayCheckPredatingAPull(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fail  bool
+		pulls int
+	}{
+		{name: "successful pull is not repeated", pulls: 1},
+		{name: "failed pull is retried", fail: true, pulls: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, dir, _ := gatewayDocker(t, Options{})
+			entered, release := filepath.Join(dir, "entered"), filepath.Join(dir, "release")
+			for _, fifo := range []string{entered, release} {
+				if out, err := exec.Command("mkfifo", fifo).CombinedOutput(); err != nil {
+					t.Fatalf("mkfifo: %v: %s", err, out)
+				}
+			}
+			if tc.fail {
+				if err := os.WriteFile(filepath.Join(dir, "fail"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			held := make(chan error, 1)
+			go func() { held <- p.EnsureGateway(context.Background(), "default") }()
+			// The held caller's check has seen the image missing.
+			if _, err := os.ReadFile(entered); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.EnsureGateway(context.Background(), "default"); (err != nil) != tc.fail {
+				t.Fatalf("the other caller: %v", err)
+			}
+			if got := pulls(t, dir); len(got) != 1 {
+				t.Fatalf("pulls before release %q, want one", got)
+			}
+			if err := os.WriteFile(release, []byte("\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-held; (err != nil) != tc.fail {
+				t.Fatalf("the held caller: %v", err)
+			}
+			if got := pulls(t, dir); len(got) != tc.pulls {
+				t.Fatalf("pulls %q, want %d", got, tc.pulls)
+			}
+		})
+	}
+}
+
+// TestGatewayRemovedAfterAPullIsPulledAgain is the control on the fix for
+// issue #879: a pull that finished before the check began says nothing about
+// that check, so an image removed since then is pulled again.
+func TestGatewayRemovedAfterAPullIsPulledAgain(t *testing.T) {
+	p, dir, _ := gatewayDocker(t, Options{})
+	if err := p.EnsureGateway(context.Background(), "default"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "have")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EnsureGateway(context.Background(), "default"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pulls(t, dir); len(got) != 2 {
+		t.Fatalf("pulls %q, want a second after the image was removed", got)
 	}
 }
 
