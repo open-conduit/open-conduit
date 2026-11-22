@@ -154,8 +154,20 @@ Afterwards:
 
 - A scheduled bundle a newer binary took may hold records the older one refuses (`records_newer`); to go back a release, use the `pre-upgrade-<time>` bundle.
 - Clients read the new `operator.token`.
-- Work that happened after the bundle is re-derived from the services when reconcile runs, apart from declared one-shot deliveries. Attempts running at backup time are recovered or retried, never adopted.
+- Reconcile re-reads the services, so what they still hold comes back: issues, PRs, comments and other state an extension can list. [What it can't re-derive](#what-a-restore-to-an-earlier-point-loses) is lost. Attempts running at backup time are recovered or retried, never adopted.
 - Keep `before-restore-*/` until the restored instance has run for a while, then delete it. It holds the replaced database, so the state directory needs room for a second copy of it while the restore runs.
+
+### What a restore to an earlier point loses
+
+Everything committed after the bundle is gone from the database. Reconcile brings back only what an outside service still holds. It can't bring back:
+
+- Declared one-shot deliveries: `github.delivery`, `schedule.webhook` and Slack's push-only families.
+- Operator and human input: `core.manual` and `core.action` Events, and decisions.
+- Child Work an agent created.
+- Credentials issued with `auth add`.
+- Executor continuity kept in KV.
+
+Work that finished after the bundle runs again. An effect guarded the way [GitHub comments](../github-extension/) are (an `attempted` record, then a marker search) isn't repeated. An effect with no such guard can happen twice.
 
 ### In a container
 
@@ -200,7 +212,7 @@ Per scope it also gives Work by state, live executions, active waits, and `drain
 Recovery order:
 
 1. Copy the whole state directory aside (daemon stopped).
-2. If `database` fails, restore the newest bundle that `backup verify` accepts in place (`backup restore BUNDLE --in-place`), and start. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
+2. If `database` fails, restore the newest bundle that `backup verify` accepts in place (`backup restore BUNDLE --in-place`), and start. Reconcile then re-reads the services, which brings back what they still hold but not [everything committed after the bundle](#what-a-restore-to-an-earlier-point-loses).
 3. If only artifacts are missing, the coordination state is sound. The run content of those executions is lost; take a fresh bundle once `state check` passes.
 4. A stale socket or lock needs nothing: start the daemon.
 
