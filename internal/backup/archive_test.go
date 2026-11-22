@@ -211,7 +211,11 @@ func TestRestoreRefusesABundleWhoseArchiveDoesNotStandUp(t *testing.T) {
 	}
 	t.Run("altered", func(t *testing.T) {
 		bundle := s.create(t, s.archive)
-		path := filepath.Join(bundle, ArchiveFile)
+		names, err := SegmentNames(bundle)
+		if err != nil || len(names) != 1 {
+			t.Fatalf("segments = %v, %v", names, err)
+		}
+		path := filepath.Join(filepath.Dir(bundle), names[0], ArchiveFile)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
