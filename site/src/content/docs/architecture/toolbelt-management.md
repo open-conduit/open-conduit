@@ -123,7 +123,7 @@ A grant names operations, but an extension's agents need them by role: an issue'
 2. Save the file atomically (same-directory 0600 temp, fsync, rename, parent fsync, `.last-good` backup).
 3. Publish the generation, its normalized snapshot and changed scope records in one transaction.
 
-A crash before that commit keeps the old generation, and a disk edit alone never changes running behavior. Removing or reparenting a scope with nonterminal Work returns `scope_in_use`. `OnApply` lets the host rebuild generation-pinned components. Toolbelt grants are the pinned binding operations, plus those of the [binding grants](../config-management/#binding-grants) the attempt's Work took, intersected with the current ceiling.
+A crash before that commit keeps the old generation, and a disk edit alone never changes running behavior. Removing or reparenting a scope with nonterminal Work returns `scope_in_use`, naming the scope and its open Work. The check covers what the publish changes: a stored scope the committed generation already lacks isn't being removed, so its open Work doesn't block a publish or the daemon's start. That Work can't launch, and stays visible and cancellable through the usual controls. `OnApply` lets the host rebuild generation-pinned components. Toolbelt grants are the pinned binding operations, plus those of the [binding grants](../config-management/#binding-grants) the attempt's Work took, intersected with the current ceiling.
 
 ## Local management API
 

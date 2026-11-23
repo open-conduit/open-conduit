@@ -214,6 +214,7 @@ func mapError(err error) *apiError {
 	var api *apiError
 	var invalid *config.ValidationError
 	var refusal *extension.OperationError
+	var inUse *ScopeInUseError
 	switch {
 	case errors.As(err, &api):
 		return api
@@ -240,8 +241,8 @@ func mapError(err error) *apiError {
 		return fail(409, "idempotency_conflict", "request identity reused with a different request")
 	case errors.Is(err, ErrGenerationConflict):
 		return fail(409, "generation_conflict", "expected generation is stale")
-	case errors.Is(err, ErrScopeInUse):
-		return fail(409, "scope_in_use", "scope has nonterminal work; drain it first")
+	case errors.As(err, &inUse):
+		return fail(409, "scope_in_use", inUse.Detail())
 	case errors.Is(err, runtime.ErrBudgetPinned):
 		return fail(409, config.PolicyDenied, "the daemon's policy sets a budget this Work is over, and a release doesn't pass it; only the person running the daemon can raise it")
 	case errors.Is(err, runtime.ErrGateHold):

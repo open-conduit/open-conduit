@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +113,67 @@ func TestStoredAdmissionDefaultIsDropped(t *testing.T) {
 		}
 		if len(audits(t, store)) != 0 {
 			t.Fatal("a chosen value was published again")
+		}
+	})
+	// A scope an earlier generation already dropped can still hold open Work.
+	// The migration doesn't remove it, so it must not stop the daemon; the
+	// Work stays cancellable. Removing a scope the committed generation does
+	// contain is still refused, naming the scope and the Work (the negative
+	// control).
+	t.Run("stale scope with open Work", func(t *testing.T) {
+		store, openConfig := open(t)
+		parse := func(text string) *config.Snapshot {
+			t.Helper()
+			s, err := config.Validate([]byte(text), registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}
+		putScopes := func(s *config.Snapshot) {
+			t.Helper()
+			if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+				for _, scope := range s.DomainScopes() {
+					if err := tx.PutScope(scope, 0); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		putWork := func(id, scope domain.ID) {
+			t.Helper()
+			if err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+				return tx.PutWork(domain.Work{ID: id, ScopeID: scope, Kind: "manual.task", State: domain.WorkReady}, 0)
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		putScopes(parse(`{"version":1,"settings":{},"connections":[],"scopes":[{"id":"eng","name":"eng"},{"id":"gone","name":"gone"}]}`))
+		putWork("work-stale", "gone")
+		commit(t, store, 1, doc("10"))
+
+		c := openConfig()
+		if s, gen := c.Current(); gen != 2 || s.Settings.AdmissionLimit != 0 {
+			t.Fatalf("generation %d, limit %d after the upgrade", gen, s.Settings.AdmissionLimit)
+		}
+
+		putWork("work-live", "eng")
+		without := []byte(`{"version":1,"settings":{},"connections":[],"scopes":[{"id":"other","name":"other"}]}`)
+		candidate, err := c.Validate(without)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, gen := c.Current()
+		_, _, err = c.Apply(ctx, without, candidate.FileHash, gen, nil)
+		var inUse *management.ScopeInUseError
+		if !errors.Is(err, management.ErrScopeInUse) || !errors.As(err, &inUse) || inUse.Scope != "eng" || len(inUse.Work) != 1 || inUse.Work[0] != "work-live" {
+			t.Fatalf("removing a scope with open Work: %v", err)
+		}
+		if !strings.Contains(err.Error(), "eng") || !strings.Contains(err.Error(), "work-live") {
+			t.Fatalf("the refusal doesn't name the scope and Work: %v", err)
 		}
 	})
 }
