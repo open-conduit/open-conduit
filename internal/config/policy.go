@@ -3,12 +3,14 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -454,4 +456,52 @@ func (p *Policy) clamp(s *Snapshot) {
 		}
 		b.PinnedMax = pinned.Max
 	}
+}
+
+// UnregisteredNames are the registered names (extension types, handlers,
+// executors, providers) that doc uses and err reports as missing, for telling
+// an operator what to install. It reads only those fields, so a value that
+// could be a secret reference is never echoed.
+func UnregisteredNames(doc []byte, err error) []string {
+	var invalid *ValidationError
+	if !errors.As(err, &invalid) {
+		return nil
+	}
+	var root any
+	if json.Unmarshal(doc, &root) != nil {
+		return nil
+	}
+	var names []string
+	for _, d := range invalid.Diagnostics {
+		parts := strings.Split(d.Path, "/")
+		switch parts[len(parts)-1] {
+		case "type", "handler", "executor", "provider":
+		default:
+			continue
+		}
+		if d.Code != "unknown_registration" {
+			continue
+		}
+		at := root
+		for _, part := range parts {
+			switch node := at.(type) {
+			case map[string]any:
+				at = node[part]
+			case []any:
+				i, err := strconv.Atoi(part)
+				if err != nil || i < 0 || i >= len(node) {
+					at = nil
+				} else {
+					at = node[i]
+				}
+			default:
+				at = nil
+			}
+		}
+		if name, ok := at.(string); ok && name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }

@@ -53,6 +53,9 @@ type Options struct {
 	// AcceptPolicy accepts running shared state under a policy other than
 	// the one it last ran under: this policy's digest, or "none".
 	AcceptPolicy string
+	// AdoptConfig accepts replacing this stored generation of shared state,
+	// which doesn't validate here, with the config file. 0 accepts nothing.
+	AdoptConfig uint64
 	// Socket defaults to StateDir/management.sock.
 	Socket string
 	// ToolbeltDir contains the `os` binary (default: beside the executable).
@@ -188,8 +191,11 @@ type daemon struct {
 	// sharedState is set when this daemon holds its state under the instance
 	// lease, so a successor on another host may take it over.
 	sharedState bool
-	backups     backupState
-	duties      dutyClock
+	// servableConfig is the stored generation refuseUnservableConfig last
+	// found this host can serve.
+	servableConfig uint64
+	backups        backupState
+	duties         dutyClock
 	// retaining is set while a retention pass runs. startup is this start's
 	// timing, recorded once its first pass is done.
 	retaining     atomic.Bool
@@ -659,7 +665,12 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = logDrainInForce(ctx, d.coord, d.now(), d.log, o.StateDir, leased); err != nil {
 		return err
 	}
-	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {
+	if d.sharedState {
+		d.configs, err = management.OpenHeldConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc, o.AdoptConfig, d.refusedPackages())
+	} else {
+		d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc)
+	}
+	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	if a := d.configs.Adopted; a != nil {

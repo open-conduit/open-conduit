@@ -208,6 +208,9 @@ func (d *daemon) prepareToOpen(ctx context.Context) error {
 	if err := refuseUnadmittedPolicy(ctx, d.o.StateDir, d.policy, d.o.AcceptPolicy); err != nil {
 		return err
 	}
+	if err := d.refuseUnservableConfig(ctx); err != nil {
+		return err
+	}
 	return d.preserveBeforeUpgrade(ctx)
 }
 
@@ -217,6 +220,27 @@ func (d *daemon) prepareToOpen(ctx context.Context) error {
 // retried as a transient failure, except state this binary can't open at all,
 // which Open refuses in its own words.
 func refuseUnadmittedPolicy(ctx context.Context, stateDir string, policy *config.Policy, accept string) error {
+	have := heldPolicy(policy)
+	var refused error
+	err := viewSharedState(ctx, stateDir, func(tx storage.Tx) error {
+		_, decided := decidePolicy(tx, have, accept)
+		if errors.Is(decided, ErrPolicyChanged) {
+			refused = decided
+			return nil
+		}
+		return decided
+	})
+	if refused != nil {
+		return refused
+	}
+	return err
+}
+
+// viewSharedState reads shared state in place, changing nothing. It does
+// nothing for state that isn't shared or doesn't exist yet, or that this binary
+// can't open at all, which Open refuses in its own words. A read that fails is
+// transient, so a standby asks again.
+func viewSharedState(ctx context.Context, stateDir string, read func(storage.Tx) error) error {
 	c, err := coordinationOf(stateDir)
 	if err != nil {
 		return err
@@ -232,25 +256,14 @@ func refuseUnadmittedPolicy(ctx context.Context, stateDir string, policy *config
 	if !ok {
 		return nil
 	}
-	have := heldPolicy(policy)
-	var refused error
-	err = shared.ViewInPlace(ctx, c.location, func(tx storage.Tx) error {
-		_, decided := decidePolicy(tx, have, accept)
-		if errors.Is(decided, ErrPolicyChanged) {
-			refused = decided
-			return nil
-		}
-		return decided
-	})
+	err = shared.ViewInPlace(ctx, c.location, read)
 	switch {
-	case refused != nil:
-		return refused
 	case err == nil, errors.Is(err, os.ErrNotExist), errors.Is(err, storage.ErrSchemaNewer), errors.Is(err, storage.ErrRecordsNewer):
 		return nil
 	case ctx.Err() != nil:
 		return ctx.Err()
 	default:
-		return fmt.Errorf("reading the state's policy: %v: %w", err, storage.ErrTransient)
+		return fmt.Errorf("reading the shared state: %v: %w", err, storage.ErrTransient)
 	}
 }
 

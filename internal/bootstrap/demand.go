@@ -508,18 +508,11 @@ func (d *daemon) startingPackages(ctx context.Context) []string {
 // packages' manifests alone, so no package starts for it; nil when there
 // is none or it doesn't validate that way.
 func (d *daemon) manifestSnapshot(ctx context.Context) *config.Snapshot {
-	reg := registry(nil)
-	reg.Executors = map[string]extension.Executor{}
 	var xs []*installed
 	for _, c := range d.catalogued() {
-		x := &installed{m: c.m, dir: c.dir}
-		xs = append(xs, x)
-		x.providerTypes(&reg)
-		for _, e := range c.m.Provides.Executors {
-			reg.Executors[e.Name] = manifestExecutor{decl: e}
-		}
+		xs = append(xs, &installed{m: c.m, dir: c.dir})
 	}
-	packageRegistry(&reg, xs)
+	reg := manifestRegistry(xs)
 	reg.Policy = d.policy
 	generation, normalized, err := management.StoredGeneration(ctx, d.coord, d.now)
 	var s *config.Snapshot
@@ -539,6 +532,21 @@ func (d *daemon) manifestSnapshot(ctx context.Context) *config.Snapshot {
 		return nil
 	}
 	return s
+}
+
+// manifestRegistry is the host's registrations and what xs declare, validated
+// from their manifests alone, so no package is asked.
+func manifestRegistry(xs []*installed) config.Registry {
+	reg := registry(nil)
+	reg.Executors = map[string]extension.Executor{}
+	for _, x := range xs {
+		x.providerTypes(&reg)
+		for _, e := range x.m.Provides.Executors {
+			reg.Executors[e.Name] = manifestExecutor{decl: e}
+		}
+	}
+	packageRegistry(&reg, xs)
+	return reg
 }
 
 // startWanted starts the packages next, the generation about to be built,

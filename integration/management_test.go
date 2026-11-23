@@ -764,6 +764,71 @@ func TestManagementAdoptsFileOverInvalidStoredGeneration(t *testing.T) {
 	}
 }
 
+// On shared state the same generation and a valid file don't adopt: this host
+// may only be missing what the others have. Only naming the generation does,
+// and that is audited. The unshared OpenConfig above is the control.
+func TestManagementHeldConfigAdoptsOnlyWhenNamed(t *testing.T) {
+	ctx := context.Background()
+	clock := conformance.NewClock()
+	state := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	path := filepath.Join(state, "config.json")
+	withOld := strings.Replace(managementConfig, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes"`, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait", "ext.removed"], "read_scopes"`, 1)
+	if withOld == managementConfig {
+		t.Fatal("fixture replace failed")
+	}
+	if err = config.SaveAtomic(path, []byte(withOld)); err != nil {
+		t.Fatal(err)
+	}
+	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
+	having := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.removed"}}
+	if _, err = management.OpenHeldConfig(ctx, db, clock.Now, having, path, nil, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = config.SaveAtomic(path, []byte(managementConfig)); err != nil {
+		t.Fatal(err)
+	}
+	lacking := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}}
+	for _, accept := range []uint64{0, 2} {
+		_, err = management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, accept, nil)
+		if !errors.Is(err, management.ErrStoredConfigRefused) || !strings.Contains(err.Error(), "ext.removed") || !strings.Contains(err.Error(), "--adopt-config 1") {
+			t.Fatalf("accepting %d: %v", accept, err)
+		}
+		if generation, _, err := management.StoredGeneration(ctx, db, clock.Now); err != nil || generation != 1 {
+			t.Fatalf("accepting %d left generation %d: %v", accept, generation, err)
+		}
+	}
+	// Under the lease too, a package that is here but refused isn't "missing".
+	_, err = management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, 0, []string{"widgets: untrusted_package"})
+	if !errors.Is(err, management.ErrStoredConfigRefused) || !strings.Contains(err.Error(), "widgets: untrusted_package") || strings.Contains(err.Error(), "--adopt-config") {
+		t.Fatalf("a refused package: %v", err)
+	}
+	adopted, err := management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, gen := adopted.Current(); gen != 2 || adopted.Adopted == nil {
+		t.Fatalf("adopted generation %d %+v", gen, adopted.Adopted)
+	}
+	var records []domain.AuditRecord
+	if err = db.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+		var err error
+		records, err = tx.AuditRecords(0, 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(records, func(r domain.AuditRecord) bool {
+		return r.Action == management.AuditActionConfigAdopted && r.Detail["replaced_generation"] == "1" && r.Detail["generation"] == "2"
+	}) {
+		t.Fatalf("no audit of the adoption: %+v", records)
+	}
+}
+
 func TestManagementPaginationAndRequestValidation(t *testing.T) {
 	h := newManagementHarness(t)
 	ctx := context.Background()
