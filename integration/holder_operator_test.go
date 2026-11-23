@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -128,6 +129,23 @@ func TestHolderOperatorRecoverOverridesATakeover(t *testing.T) {
 		if f.read("a") != retired {
 			t.Fatal("the retired file was replaced after the recover")
 		}
+	}
+}
+
+// The key is made once and every later instance reads the same one.
+func TestSharedCursorKeyIsTheStores(t *testing.T) {
+	f := newHolderFixture(t)
+	ctx := context.Background()
+	first, err := management.SharedCursorKey(ctx, f.store, f.now)
+	if err != nil || len(first) != 32 {
+		t.Fatalf("the first key: %d bytes, %v", len(first), err)
+	}
+	second, err := management.SharedCursorKey(ctx, f.store, f.now)
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("a later instance read a different key: %v", err)
+	}
+	if other, err := management.SharedCursorKey(ctx, newHolderFixture(t).store, f.now); err != nil || bytes.Equal(first, other) {
+		t.Fatalf("another store's key: %v", err)
 	}
 }
 

@@ -451,11 +451,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = restoreInterrupted(o.StateDir); err != nil {
 		return err
 	}
-	// List cursors are signed with a key kept in the state directory, so a
-	// client's cursor survives a restart.
-	if d.cursorKey, err = management.CursorKey(filepath.Join(o.StateDir, "private", "cursor.key")); err != nil {
-		return err
-	}
 	// Executions get the toolbelt through a link this daemon re-points, so
 	// one still running when an upgrade removes the old install finds the
 	// new `os` once the daemon restarts on it.
@@ -588,6 +583,17 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}()
 	coord := storage.Retry(faultStore(store, d.log), d.retryPolicy())
 	if d.coord, err = runtime.Instrument(coord, runtime.TelemetryOptions{Observer: d.pipeline, Diagnostic: func(code string) { d.report("telemetry", "", code) }}); err != nil {
+		return err
+	}
+	// List cursors are signed with a key that outlives this process, so a
+	// client's cursor survives a restart. On shared state it is in the store,
+	// so one survives a takeover too.
+	if d.sharedState {
+		d.cursorKey, err = management.SharedCursorKey(ctx, d.coord, d.now)
+	} else {
+		d.cursorKey, err = management.CursorKey(filepath.Join(o.StateDir, "private", "cursor.key"))
+	}
+	if err != nil {
 		return err
 	}
 	// Before anything else can write: a rebuild holds the write lock throughout,
