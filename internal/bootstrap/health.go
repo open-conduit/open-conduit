@@ -25,12 +25,16 @@ const DefaultStallAfter = 2 * time.Minute
 // healthState is the daemon's own account of whether it is alive and
 // ready, which GET /v1/health and the probe listener both read.
 type healthState struct {
-	// phase is management.PhaseStarting until the host loop completes its
-	// first pass, then PhaseRunning, and PhaseStopping once the loop has
-	// returned.
+	// phase is management.PhaseStandby while another instance holds the
+	// state, PhaseStarting until the host loop completes its first pass, then
+	// PhaseRunning, and PhaseStopping once the loop has returned or another
+	// instance has taken the state over.
 	phase atomic.Value
 	// lastPass is when the host loop last completed a pass (UnixNano).
 	lastPass atomic.Int64
+	// superseded is set once another instance holds the state, after which
+	// this one accepts no more ingress.
+	superseded atomic.Bool
 }
 
 func (d *daemon) phase() string {
@@ -142,8 +146,9 @@ func (d *daemon) healthComponents(ctx context.Context) map[string]string {
 }
 
 // alive is /livez: the process answers and its host loop is not stalled.
-// A daemon still starting, or stopping, is alive; a startup probe on
-// /readyz covers a start that never finishes.
+// A daemon that is a standby, still starting, or stopping is alive; a startup
+// probe on /readyz covers a start that never finishes, except where a standby
+// is expected, since a standby is never ready.
 func (d *daemon) alive() (bool, string) {
 	if d.phase() != management.PhaseRunning {
 		return true, "ok"
@@ -211,9 +216,9 @@ func (d *daemon) probeHandler() http.Handler {
 }
 
 // startProbes binds the probe listener on Options.ProbeAddr (off when
-// empty). It is bound before the packages start, so an orchestrator sees
-// the daemon starting, and stopped last, so it sees it stopping. A failed
-// bind stops the start.
+// empty). It is bound before the daemon waits for the state, so an
+// orchestrator sees a standby or a start, and stopped last, so it sees it
+// stopping. A failed bind stops the start.
 func (d *daemon) startProbes() (func(), error) {
 	if d.o.ProbeAddr == "" {
 		return func() {}, nil

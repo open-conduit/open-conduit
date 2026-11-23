@@ -471,17 +471,28 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}); err != nil {
 		return err
 	}
+	// The probe listener answers from here on, so an orchestrator sees a
+	// standby as alive and not ready rather than restarting it. It is the only
+	// listener a standby opens, and it reads no state until the daemon runs.
+	stopProbes, err := d.startProbes()
+	if err != nil {
+		return err
+	}
+	defer stopProbes()
 	// The state directory's storage choice selects the backend.
 	// On state other hosts can reach, a live holder makes this daemon a
 	// standby, here, until it releases the lease or lets it expire.
 	// Opening raises the stored format, after which an older binary refuses
 	// the database: a bundle of it as it stands is kept first, once no other
 	// instance is changing it.
-	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.preserveBeforeUpgrade)
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.preserveBeforeUpgrade, func() {
+		d.health.phase.Store(management.PhaseStandby)
+	})
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	d.health.phase.CompareAndSwap(management.PhaseStandby, management.PhaseStarting)
 	if held, ok := store.(*heldDatabase); ok {
 		// Superseded, this daemon has no authority left: it stops, and
 		// comes back as a standby if something restarts it.
@@ -495,6 +506,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 		}()
 		held.onLost(func(cause error) {
 			d.log.Error("another instance took over this state; stopping")
+			// Ingress belongs to the successor from now on: refuse it and
+			// report unready at once, not when the loop has wound down.
+			d.health.superseded.Store(true)
+			d.health.phase.Store(management.PhaseStopping)
 			lose(cause)
 		})
 		//duty:instance_renewal
@@ -573,13 +588,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.coord, err = runtime.Instrument(coord, runtime.TelemetryOptions{Observer: d.pipeline, Diagnostic: func(code string) { d.report("telemetry", "", code) }}); err != nil {
 		return err
 	}
-	// The probe listener answers from here on: starting until the host
-	// loop's first pass, stopping once it has returned.
-	stopProbes, err := d.startProbes()
-	if err != nil {
-		return err
-	}
-	defer stopProbes()
 	// Before anything else can write: a rebuild holds the write lock throughout,
 	// and packages write from their handshake.
 	d.rebuildAtStart(ctx, d.compactor, d.storedSettings(ctx))

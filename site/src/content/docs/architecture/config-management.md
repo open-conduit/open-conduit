@@ -207,14 +207,14 @@ Errors use `{ "error": { "code": "...", "message": "safe summary", "request_id":
 
 ## Probes
 
-`serve --probe-addr HOST:PORT` opens a probe listener for an orchestrator, which can't present a bearer token over a Unix socket. It is a separate TCP server, like the webhook listener, and serves `GET` and `HEAD` on two paths with no credential, each answering with one word and no other detail; every other path is `404`, and it never mounts `/v1`. It binds before the packages start, so it answers `starting` from the beginning, and closes only after the daemon has stopped. It is off without the flag.
+`serve --probe-addr HOST:PORT` opens a probe listener for an orchestrator, which can't present a bearer token over a Unix socket. It is a separate TCP server, like the webhook listener, and serves `GET` and `HEAD` on two paths with no credential, each answering with one word and no other detail; every other path is `404`, and it never mounts `/v1`. It binds before the daemon waits for the state, so it answers from the beginning, including on a standby, and closes only after the daemon has stopped. It is off without the flag.
 
 | Path | `200` when | `503` body |
 | --- | --- | --- |
-| `/livez` | the daemon is starting or stopping, or its host loop completed a pass within the stall window (2 minutes, `bootstrap.DefaultStallAfter`); body `ok` | `stalled`: the loop is stuck, for instance behind a call that ignores its bound |
-| `/readyz` | the daemon is running and storage answers within 2 seconds, so it can accept and persist what it is sent; body `ready` | `starting`, `stopping` or `not_ready` (storage doesn't answer) |
+| `/livez` | the daemon is a standby, starting or stopping, or its host loop completed a pass within the stall window (2 minutes, `bootstrap.DefaultStallAfter`); body `ok` | `stalled`: the loop is stuck, for instance behind a call that ignores its bound |
+| `/readyz` | the daemon is running and storage answers within 2 seconds, so it can accept and persist what it is sent; body `ready` | `standby` (another instance holds the state), `starting`, `stopping` or `not_ready` (storage doesn't answer) |
 
-A degraded daemon is still ready. A package that failed to start, a generation that didn't build in this process, reconcile lag and a slow host loop all leave it accepting webhooks durably and serving everything else. Taking it out of service would only refuse deliveries at the load balancer, and a restart forced by a startup probe would end the runs the rest of the daemon was serving without fixing, say, a missing binary. `/v1/health` (`degraded`) and doctor report each of them. A start that never finishes is caught by a startup probe on `/readyz`, since `/livez` passes while the daemon starts.
+A degraded daemon is still ready. A package that failed to start, a generation that didn't build in this process, reconcile lag and a slow host loop all leave it accepting webhooks durably and serving everything else. Taking it out of service would only refuse deliveries at the load balancer, and a restart forced by a startup probe would end the runs the rest of the daemon was serving without fixing, say, a missing binary. `/v1/health` (`degraded`) and doctor report each of them. A start that never finishes is caught by a startup probe on `/readyz`, since `/livez` passes while the daemon starts. A standby is never ready, so where one is expected, point the startup probe at `/livez`, or the orchestrator restarts the standby when the probe's threshold runs out. That gives up the check on a start that never finishes.
 
 ## Local setup and editing
 

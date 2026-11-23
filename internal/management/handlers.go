@@ -45,19 +45,21 @@ func (s *Server) phase() string {
 	return s.o.Phase()
 }
 
-// The daemon's phases (Options.Phase): starting until its host loop has
-// completed a pass, running, and stopping once its shutdown has begun.
+// The daemon's phases (Options.Phase): standby while another instance holds
+// the state, starting until its host loop has completed a pass, running, and
+// stopping once its shutdown has begun.
 const (
+	PhaseStandby  = "standby"
 	PhaseStarting = "starting"
 	PhaseRunning  = "running"
 	PhaseStopping = "stopping"
 )
 
-// HealthState is GET /health's state: the phase while the daemon is
-// starting or stopping, and otherwise ready when every component is ready
+// HealthState is GET /health's state: the phase while the daemon is a
+// standby, starting or stopping, and otherwise ready when every component is ready
 // and degraded when any is not.
 func HealthState(phase string, components map[string]string) string {
-	if phase == PhaseStarting || phase == PhaseStopping {
+	if phase == PhaseStandby || phase == PhaseStarting || phase == PhaseStopping {
 		return phase
 	}
 	for _, v := range components {
