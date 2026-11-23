@@ -84,14 +84,26 @@ type Adoption struct {
 var ErrStoredConfigRefused = errors.New("this daemon can't serve the shared state's stored configuration")
 
 // RefuseStoredConfig is the refusal of a stored generation on shared state,
-// because of cause, naming what the generation uses that this host lacks and
-// how an operator replaces it.
-func RefuseStoredConfig(generation uint64, normalized []byte, cause error) error {
+// because of cause. refused describes packages installed on this host that it
+// won't run. With any, the fix is on this host, so the refusal says why and
+// doesn't suggest --adopt-config, which would change the config for every host
+// because one host has a broken package. Which package a broken manifest would
+// have provided can't be known, so any refusal counts. The flag still works for
+// an operator who means it.
+func RefuseStoredConfig(generation uint64, normalized []byte, cause error, refused []string) error {
 	if config.PolicyRefused(cause) {
 		return policyRefusal(generation, cause)
 	}
+	names := config.UnregisteredNames(normalized, cause)
+	if len(refused) > 0 {
+		needs := ""
+		if len(names) > 0 {
+			needs = "; it uses " + strings.Join(names, ", ")
+		}
+		return fmt.Errorf("%w: generation %d doesn't validate here%s: %w; this host refused installed packages, so repair them here: %s", ErrStoredConfigRefused, generation, needs, cause, strings.Join(refused, "; "))
+	}
 	needs := ""
-	if names := config.UnregisteredNames(normalized, cause); len(names) > 0 {
+	if len(names) > 0 {
 		needs = "; it uses " + strings.Join(names, ", ") + ", which this host doesn't have"
 	}
 	return fmt.Errorf("%w: generation %d doesn't validate here%s: %w; install what it needs on this host, or replace it for every host with this host's config file using --adopt-config %d", ErrStoredConfigRefused, generation, needs, cause, generation)
@@ -109,8 +121,16 @@ const AuditActionConfigAdopted = "core.config.adopted"
 // OpenHeldConfig is OpenConfig for shared state. A generation that doesn't
 // validate may mean only that this host lacks something the others have, so it
 // is never replaced from this host's file unless accept names that generation.
-func OpenHeldConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, accept uint64) (*ConfigService, error) {
-	return openConfigChecked(ctx, store, now, registry, path, def, &accept)
+// refused describes installed packages this host won't run (RefuseStoredConfig).
+func OpenHeldConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, accept uint64, refused []string) (*ConfigService, error) {
+	return openConfigChecked(ctx, store, now, registry, path, def, &heldConfig{accept: accept, refused: refused})
+}
+
+// heldConfig is how a daemon on shared state opens the stored generation.
+type heldConfig struct {
+	// accept is the generation an operator accepts replacing, 0 for none.
+	accept  uint64
+	refused []string
 }
 
 // OpenConfig restores the committed generation. With no activation record it
@@ -126,7 +146,7 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	return openConfigChecked(ctx, store, now, registry, path, def, nil)
 }
 
-func openConfigChecked(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *uint64) (*ConfigService, error) {
+func openConfigChecked(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *heldConfig) (*ConfigService, error) {
 	c, err := openConfig(ctx, store, now, registry, path, def, held)
 	if err != nil {
 		return nil, err
@@ -137,9 +157,8 @@ func openConfigChecked(ctx context.Context, store storage.Store, now func() time
 	return c, nil
 }
 
-// openConfig opens the committed generation. held is set on shared state, to
-// the generation an operator accepts replacing (0 for none).
-func openConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *uint64) (*ConfigService, error) {
+// openConfig opens the committed generation. held is set on shared state.
+func openConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *heldConfig) (*ConfigService, error) {
 	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
 	if def != nil {
 		if s, err := config.Validate(def, registry); err == nil {
@@ -180,8 +199,8 @@ func openConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		if held == nil {
 			return c.adopt(ctx, active.Generation, normalized, err, nil)
 		}
-		if *held != active.Generation {
-			return nil, RefuseStoredConfig(active.Generation, normalized, err)
+		if held.accept != active.Generation {
+			return nil, RefuseStoredConfig(active.Generation, normalized, err, held.refused)
 		}
 		stored := active.Generation
 		return c.adopt(ctx, stored, normalized, err, func(tx storage.Tx, generation uint64, hash string) error {

@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -29,7 +31,19 @@ func (d *daemon) refuseUnservableConfig(ctx context.Context) error {
 	if generation == 0 || generation == d.servableConfig || generation == d.o.AdoptConfig {
 		return nil
 	}
-	found, _ := discoverUnder(d.o.ConfigPath, "", documentPolicy(normalized).withRoot(d.policy), nil)
+	found, errs := discoverUnder(d.o.ConfigPath, "", documentPolicy(normalized).withRoot(d.policy), nil)
+	var refused []string
+	for _, err := range errs {
+		name, _, _ := strings.Cut(err.Error(), ":")
+		refused = append(refused, extproc.Diagnose(name, err, extproc.Paths{}).String())
+	}
+	// A conflict refuses them all when the daemon catalogues them.
+	if err := extproc.CheckConflicts(found, takenNames(registry(nil))); err != nil {
+		for _, f := range found {
+			refused = append(refused, extproc.Diagnose(f.Manifest.Name, err, extproc.Paths{}).String())
+		}
+		found = nil
+	}
 	xs := make([]*installed, 0, len(found))
 	for _, f := range found {
 		xs = append(xs, &installed{m: f.Manifest, dir: f.Dir})
@@ -37,8 +51,20 @@ func (d *daemon) refuseUnservableConfig(ctx context.Context) error {
 	reg := manifestRegistry(xs)
 	reg.Policy = d.policy
 	if _, err := config.ValidateStored(normalized, reg); err != nil {
-		return management.RefuseStoredConfig(generation, normalized, err)
+		return management.RefuseStoredConfig(generation, normalized, err, refused)
 	}
 	d.servableConfig = generation
 	return nil
+}
+
+// refusedPackages describes the installed packages this daemon won't run, in
+// the diagnostics doctor shows.
+func (d *daemon) refusedPackages() []string {
+	d.external.mu.Lock()
+	defer d.external.mu.Unlock()
+	var out []string
+	for _, diag := range d.external.failed {
+		out = append(out, diag.String())
+	}
+	return out
 }

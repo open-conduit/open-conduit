@@ -786,7 +786,7 @@ func TestManagementHeldConfigAdoptsOnlyWhenNamed(t *testing.T) {
 	}
 	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
 	having := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.removed"}}
-	if _, err = management.OpenHeldConfig(ctx, db, clock.Now, having, path, nil, 0); err != nil {
+	if _, err = management.OpenHeldConfig(ctx, db, clock.Now, having, path, nil, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = config.SaveAtomic(path, []byte(managementConfig)); err != nil {
@@ -794,7 +794,7 @@ func TestManagementHeldConfigAdoptsOnlyWhenNamed(t *testing.T) {
 	}
 	lacking := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}}
 	for _, accept := range []uint64{0, 2} {
-		_, err = management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, accept)
+		_, err = management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, accept, nil)
 		if !errors.Is(err, management.ErrStoredConfigRefused) || !strings.Contains(err.Error(), "ext.removed") || !strings.Contains(err.Error(), "--adopt-config 1") {
 			t.Fatalf("accepting %d: %v", accept, err)
 		}
@@ -802,7 +802,12 @@ func TestManagementHeldConfigAdoptsOnlyWhenNamed(t *testing.T) {
 			t.Fatalf("accepting %d left generation %d: %v", accept, generation, err)
 		}
 	}
-	adopted, err := management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, 1)
+	// Under the lease too, a package that is here but refused isn't "missing".
+	_, err = management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, 0, []string{"widgets: untrusted_package"})
+	if !errors.Is(err, management.ErrStoredConfigRefused) || !strings.Contains(err.Error(), "widgets: untrusted_package") || strings.Contains(err.Error(), "--adopt-config") {
+		t.Fatalf("a refused package: %v", err)
+	}
+	adopted, err := management.OpenHeldConfig(ctx, db, clock.Now, lacking, path, nil, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

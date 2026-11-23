@@ -666,7 +666,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	if d.sharedState {
-		d.configs, err = management.OpenHeldConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc, o.AdoptConfig)
+		d.configs, err = management.OpenHeldConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc, o.AdoptConfig, d.refusedPackages())
 	} else {
 		d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc)
 	}
