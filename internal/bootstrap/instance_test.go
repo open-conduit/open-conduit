@@ -36,6 +36,10 @@ func (sharedSQLite) OpenPrior(ctx context.Context, location string) (storage.Pri
 	return sqlite.OpenPriorUnowned(ctx, location)
 }
 
+func (sharedSQLite) ViewInPlace(ctx context.Context, location string, read func(storage.Tx) error) error {
+	return sqlite.ViewUnowned(ctx, location, read)
+}
+
 func init() { storage.RegisterBackend(sharedTestBackend, sharedSQLite{sqlite.Backend}) }
 
 // sharedState is a state directory on the shared backend, and its database.

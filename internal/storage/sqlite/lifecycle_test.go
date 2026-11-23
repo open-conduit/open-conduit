@@ -227,11 +227,24 @@ func (sharedOpen) Inspect(ctx context.Context, location string) (storage.Inspect
 func (sharedOpen) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
 	return sqlite.OpenPriorUnowned(ctx, location)
 }
+func (sharedOpen) ViewInPlace(ctx context.Context, location string, read func(storage.Tx) error) error {
+	return sqlite.ViewUnowned(ctx, location, read)
+}
 
 // sharedButOwned says its location is shared and still refuses a second opener.
 type sharedButOwned struct{ storage.Backend }
 
 func (sharedButOwned) SharesLocation(string) bool { return true }
+func (sharedButOwned) ViewInPlace(ctx context.Context, location string, read func(storage.Tx) error) error {
+	return sqlite.ViewUnowned(ctx, location, read)
+}
+
+// sharedViewBlind reports success from ViewInPlace without reading the state.
+type sharedViewBlind struct{ sharedOpen }
+
+func (sharedViewBlind) ViewInPlace(context.Context, string, func(storage.Tx) error) error {
+	return nil
+}
 
 // sharedNoLease is shared, with a database that has no instance lease.
 type sharedNoLease struct{ sharedOpen }
@@ -576,6 +589,10 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// A shared location with nothing to keep one writer.
 		name: "shared_location_without_a_lease", failing: "one_owner_at_a_time", want: "no instance lease",
 		backend: sharedNoLease{sharedOpen{sqlite.Backend}},
+	}, {
+		// A standby's read in place doesn't see what the holder committed.
+		name: "shared_view_misses_a_commit", failing: "one_owner_at_a_time", want: "read in place",
+		backend: sharedViewBlind{sharedOpen{sqlite.Backend}},
 	}, {
 		// Open raises the stored format under a live holder.
 		name: "upgrade_under_a_live_holder", failing: "instance_upgrade_waits_for_the_holder", want: "raised under a live holder",

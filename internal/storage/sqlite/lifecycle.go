@@ -381,6 +381,53 @@ func InspectUnowned(ctx context.Context, location string) (storage.Inspection, e
 	return i, nil
 }
 
+// ViewUnowned is storage.SharedBackend's ViewInPlace for a backend that shares
+// the location under the lease. It reads over a query_only connection, so it
+// costs one read transaction however large the database is, and a holder's
+// commits don't disturb it as they would a copy.
+func ViewUnowned(ctx context.Context, location string, read func(storage.Tx) error) error {
+	switch present, err := (backend{}).Present(ctx, location); {
+	case err != nil:
+		return err
+	case !present:
+		return fmt.Errorf("sqlite: no database at %s: %w", location, os.ErrNotExist)
+	}
+	db, err := queryOnlyDB(location)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var schema uint32
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
+		return mapError(err)
+	}
+	switch {
+	case schema == 0:
+		// Created but not yet migrated: nothing is stored in it.
+		return fmt.Errorf("sqlite: no schema at %s: %w", location, os.ErrNotExist)
+	case schema > SchemaVersion:
+		return fmt.Errorf("sqlite: %w (schema %d; this binary supports %d)", storage.ErrSchemaNewer, schema, SchemaVersion)
+	}
+	records, err := storedRecordFormat(ctx, db)
+	if err != nil {
+		return err
+	}
+	if records > recordFormat {
+		return fmt.Errorf("sqlite: %w (format %d; this binary writes %d)", storage.ErrRecordsNewer, records, recordFormat)
+	}
+	return (&Store{db: db, readers: db, path: location}).View(ctx, read)
+}
+
+// queryOnlyDB opens location for reading in place.
+func queryOnlyDB(location string) (*sql.DB, error) {
+	u := url.URL{Scheme: "file", Path: location}
+	q := u.Query()
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
+	q.Add("_pragma", "query_only(1)")
+	u.RawQuery = q.Encode()
+	return sql.Open("sqlite", u.String())
+}
+
 func (b backend) openPrior(ctx context.Context, location string, exclusive bool) (storage.Prior, error) {
 	switch present, err := b.Present(ctx, location); {
 	case err != nil:
@@ -395,12 +442,7 @@ func (b backend) openPrior(ctx context.Context, location string, exclusive bool)
 			return nil, err
 		}
 	}
-	u := url.URL{Scheme: "file", Path: location}
-	q := u.Query()
-	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
-	q.Add("_pragma", "query_only(1)")
-	u.RawQuery = q.Encode()
-	db, err := sql.Open("sqlite", u.String())
+	db, err := queryOnlyDB(location)
 	if err != nil {
 		if lock != nil {
 			lock.Close()

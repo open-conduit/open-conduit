@@ -700,7 +700,29 @@ func sharedOwners(ctx context.Context, h LifecycleHarness, location string) erro
 	if err != nil {
 		return fmt.Errorf("a standby could not inspect a shared location: %w", err)
 	}
-	return i.Close()
+	if err := i.Close(); err != nil {
+		return err
+	}
+	// A standby reads the holder's latest commit in place.
+	want := []byte("committed")
+	if err := db.Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		return tx.Put("conformance.shared", "view", want)
+	}); err != nil {
+		return err
+	}
+	var got []byte
+	err = h.Backend.(storage.SharedBackend).ViewInPlace(ctx, location, func(tx storage.Tx) error {
+		var err error
+		got, err = tx.Get("conformance.shared", "view")
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("a standby could not read a shared location in place: %w", err)
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("a standby's read in place saw %q, want the holder's commit %q", got, want)
+	}
+	return nil
 }
 
 // oneOwner: while a Database or an Inspection owns state, neither Open nor

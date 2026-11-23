@@ -200,10 +200,11 @@ func (d *daemon) prepareToOpen(ctx context.Context) error {
 	return d.preserveBeforeUpgrade(ctx)
 }
 
-// refuseUnadmittedPolicy decides admission from a read of the state that
-// changes nothing. admitPolicy decides again under the lease. A read that
-// fails is retried as a transient failure, except state this binary can't open
-// at all, which Open refuses in its own words.
+// refuseUnadmittedPolicy decides admission from a read of the state in place,
+// which changes nothing and is cheap enough for a standby to repeat on each
+// retry. admitPolicy decides again under the lease. A read that fails is
+// retried as a transient failure, except state this binary can't open at all,
+// which Open refuses in its own words.
 func refuseUnadmittedPolicy(ctx context.Context, stateDir string, policy *config.Policy, accept string) error {
 	c, err := coordinationOf(stateDir)
 	if err != nil {
@@ -216,26 +217,30 @@ func refuseUnadmittedPolicy(ctx context.Context, stateDir string, policy *config
 	if err != nil || !present {
 		return err
 	}
-	inspection, err := c.backend.Inspect(ctx, c.location)
-	switch {
-	case err == nil:
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, storage.ErrSchemaNewer), errors.Is(err, storage.ErrRecordsNewer):
+	shared, ok := c.backend.(storage.SharedBackend)
+	if !ok {
 		return nil
-	case errors.Is(err, storage.ErrInstanceHeld):
-		// Raising a private copy waits for the holder too, so this daemon
-		// is a standby until it can read the state.
-		return err
+	}
+	have := heldPolicy(policy)
+	var refused error
+	err = shared.ViewInPlace(ctx, c.location, func(tx storage.Tx) error {
+		_, decided := decidePolicy(tx, have, accept)
+		if errors.Is(decided, ErrPolicyChanged) {
+			refused = decided
+			return nil
+		}
+		return decided
+	})
+	switch {
+	case refused != nil:
+		return refused
+	case err == nil, errors.Is(err, os.ErrNotExist), errors.Is(err, storage.ErrSchemaNewer), errors.Is(err, storage.ErrRecordsNewer):
+		return nil
 	case ctx.Err() != nil:
 		return ctx.Err()
 	default:
 		return fmt.Errorf("reading the state's policy: %v: %w", err, storage.ErrTransient)
 	}
-	defer inspection.Close()
-	have := heldPolicy(policy)
-	return inspection.View(ctx, func(tx storage.Tx) error {
-		_, err := decidePolicy(tx, have, accept)
-		return err
-	})
 }
 
 // policyName is a digest as --accept-policy takes it.
