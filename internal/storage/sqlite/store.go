@@ -165,7 +165,7 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	if err = checkRecordFormat(ctx, db); err != nil {
 		return nil, err
 	}
-	if err = s.raiseRecordFormat(ctx); err != nil {
+	if err = s.prepareUpgrade(ctx); err != nil {
 		return nil, err
 	}
 
@@ -249,15 +249,17 @@ type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// raiseRecordFormat raises the stored format, never lowers it, and only in a
-// transaction that finds no live holder: a running older binary would drop
-// the new fields from whatever it rewrote. A holder past its expiry may still
-// renew, so the same transaction ends its tenure and it can't come back to
-// write over the raised format. Its owner and epoch stay, so the same owner
-// can still adopt its attempts.
-func (s *Store) raiseRecordFormat(ctx context.Context) error {
+// prepareUpgrade raises the stored format, never lowers it, and clears the way
+// for any pending rewrite, only in a transaction that finds no live holder: a
+// running older binary would drop the new fields from whatever it rewrote, or
+// go on writing records in the shape a rewrite just replaced.
+func (s *Store) prepareUpgrade(ctx context.Context) error {
 	stored, err := storedRecordFormat(ctx, s.db)
-	if err != nil || stored >= recordFormat {
+	if err != nil {
+		return err
+	}
+	pending, err := s.rewritesPending(ctx)
+	if err != nil || stored >= recordFormat && !pending {
 		return err
 	}
 	conn, err := s.db.Conn(ctx)
@@ -269,27 +271,58 @@ func (s *Store) raiseRecordFormat(ctx context.Context) error {
 		return mapError(err)
 	}
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	return raiseAndCommit(ctx, conn)
+}
+
+// raiseAndCommit finishes a write transaction open on conn: it admits the
+// upgrade, raises the format and commits.
+func raiseAndCommit(ctx context.Context, conn *sql.Conn) error {
 	// Recheck under the write lock: two binaries can open together.
-	if err = checkRecordFormat(ctx, conn); err != nil {
+	if err := checkRecordFormat(ctx, conn); err != nil {
 		return err
 	}
+	if err := admitUpgrade(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO metadata VALUES ('record_format',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER)`, fmt.Sprint(recordFormat)); err != nil {
+		return mapError(err)
+	}
+	_, err := conn.ExecContext(ctx, "COMMIT")
+	return mapError(err)
+}
+
+// admitUpgrade is the check an upgrade's write transaction makes under the
+// write lock. A live holder refuses it. A holder past its expiry may still
+// renew, so its tenure ends here and it can't come back to write over the
+// upgrade. Its owner and epoch stay, so the same owner can still adopt its
+// attempts.
+func admitUpgrade(ctx context.Context, conn *sql.Conn) error {
 	expiry, err := recordedExpiry(ctx, conn)
 	if err != nil {
 		return mapError(err)
 	}
-	if expiry.Valid {
-		if expiry.Int64 > time.Now().UnixNano() {
-			return fmt.Errorf("sqlite: not raising the record format under a live instance: %w", storage.ErrInstanceHeld)
-		}
-		if _, err = conn.ExecContext(ctx, `UPDATE instance_lease SET expires_at=NULL WHERE id=1`); err != nil {
-			return mapError(err)
-		}
+	if !expiry.Valid {
+		return nil
 	}
-	if _, err = conn.ExecContext(ctx, `INSERT INTO metadata VALUES ('record_format',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER)`, fmt.Sprint(recordFormat)); err != nil {
-		return mapError(err)
+	if expiry.Int64 > time.Now().UnixNano() {
+		return fmt.Errorf("sqlite: not upgrading the state under a live instance: %w", storage.ErrInstanceHeld)
 	}
-	_, err = conn.ExecContext(ctx, "COMMIT")
+	_, err = conn.ExecContext(ctx, `UPDATE instance_lease SET expires_at=NULL WHERE id=1`)
 	return mapError(err)
+}
+
+// rewritesPending reports whether any rewrite has yet to run.
+func (s *Store) rewritesPending(ctx context.Context) (bool, error) {
+	for _, r := range rewrites {
+		var done int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM metadata WHERE key=?", r.key).Scan(&done); err != nil {
+			return false, err
+		}
+		if done == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // storedRecordFormat is the format the database holds: 1 without the entry.
@@ -577,11 +610,15 @@ func (s *Store) rewrite(ctx context.Context, r struct{ key, statement string }) 
 	}
 	defer conn.Close()
 	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return err
+		return mapError(err)
 	}
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
 	// Recheck under the write lock: two processes can open the store together.
 	if err = conn.QueryRowContext(ctx, "SELECT count(*) FROM metadata WHERE key=?", r.key).Scan(&done); err != nil || done > 0 {
+		return err
+	}
+	// An instance may have taken the state since prepareUpgrade looked.
+	if err = admitUpgrade(ctx, conn); err != nil {
 		return err
 	}
 	if _, err = conn.ExecContext(ctx, r.statement); err != nil {

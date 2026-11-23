@@ -387,8 +387,17 @@ func (b backend) openPrior(ctx context.Context, location string, exclusive bool)
 		}
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	// One connection stays pinned for the write position, and the other
+	// reads and takes the snapshot.
+	db.SetMaxOpenConns(2)
 	p := &prior{s: &Store{db: db, readers: db, path: location}, lock: lock}
+	if p.pin, err = db.Conn(ctx); err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	// Read first, so a commit after any read below is seen by Raise.
+	if err = p.pin.QueryRowContext(ctx, "PRAGMA data_version").Scan(&p.position); err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
 	var schema uint32
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return nil, errors.Join(err, p.Close())
@@ -422,6 +431,33 @@ type prior struct {
 	s      *Store
 	lock   *os.File
 	stored storage.StoredVersion
+	// pin is the connection position was read on: PRAGMA data_version
+	// changes when another connection commits, and means nothing across
+	// connections.
+	pin      *sql.Conn
+	position int64
+}
+
+var _ storage.PriorRaiser = (*prior)(nil)
+
+// Raise implements storage.PriorRaiser. The comparison and the raise share one
+// write transaction on the pinned connection, so nothing can commit between
+// them.
+func (p *prior) Raise(ctx context.Context) error {
+	for _, pragma := range []string{"PRAGMA query_only=0", "PRAGMA synchronous=FULL", "BEGIN IMMEDIATE"} {
+		if _, err := p.pin.ExecContext(ctx, pragma); err != nil {
+			return mapError(err)
+		}
+	}
+	defer p.pin.ExecContext(context.Background(), "ROLLBACK")
+	var now int64
+	if err := p.pin.QueryRowContext(ctx, "PRAGMA data_version").Scan(&now); err != nil {
+		return mapError(err)
+	}
+	if now != p.position {
+		return fmt.Errorf("sqlite: %w", storage.ErrStateMoved)
+	}
+	return raiseAndCommit(ctx, p.pin)
 }
 
 func (p *prior) Stored() storage.StoredVersion { return p.stored }
@@ -429,7 +465,14 @@ func (p *prior) Snapshot(ctx context.Context, path string, read func(storage.Tx)
 	return p.s.snapshot(ctx, path, read, p.stored.Schema)
 }
 func (p *prior) Close() error {
-	err := p.s.db.Close()
+	var err error
+	if p.pin != nil {
+		err = p.pin.Close()
+		if errors.Is(err, sql.ErrConnDone) {
+			err = nil
+		}
+	}
+	err = errors.Join(err, p.s.db.Close())
 	if p.lock != nil {
 		err = errors.Join(err, p.lock.Close())
 	}

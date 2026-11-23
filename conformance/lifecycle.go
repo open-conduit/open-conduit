@@ -52,6 +52,9 @@ type LifecycleHarness struct {
 	// Corrupt damages the closed state at location in a way that a full
 	// integrity check finds, even if opening it does not.
 	Corrupt func(t *testing.T, location string)
+	// CommitOutside commits a change to the state at location, which a Prior
+	// may hold, as another instance would, without raising its versions.
+	CommitOutside func(t *testing.T, location string)
 	// ExpireInstance makes the instance lease at location, which may be
 	// open, already past its expiry, so no case waits on a real clock.
 	ExpireInstance func(t *testing.T, location string)
@@ -98,6 +101,7 @@ func LifecycleCases() []LifecycleCase {
 		{"instance_restore_ends_the_tenure", instanceRestore},
 		{"instance_upgrade_waits_for_the_holder", instanceUpgradeWaits},
 		{"instance_refuses_newer_state", instanceRefusesNewer},
+		{"instance_raise_refuses_moved_state", instanceRaiseRefusesMoved},
 	}
 }
 
@@ -149,6 +153,74 @@ func instanceUpgradeWaits(t *testing.T, h LifecycleHarness) error {
 	}
 	if stored != h.Backend.Writes() {
 		return fmt.Errorf("the state is at %+v after Open, want %+v", stored, h.Backend.Writes())
+	}
+	next, ok := raised.(storage.InstanceLeaser)
+	if !ok {
+		return errors.New("the database has no instance lease")
+	}
+	if err := next.RenewInstance(ctx, old, instanceTTL); !errors.Is(err, storage.ErrInstanceFenced) {
+		return fmt.Errorf("the expired holder renewed onto the raised format: %v", err)
+	}
+	return nil
+}
+
+// instanceRaiseRefusesMoved: a commit between preserving older state and raising
+// it refuses the raise, so what was preserved is never silently behind. With
+// nothing moved it raises, and ends an expired holder's tenure.
+func instanceRaiseRefusesMoved(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, location, _, _, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	old, err := leaser.AcquireInstance(ctx, "old", instanceTTL)
+	if err != nil {
+		db.Close()
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	h.Older(t, location)
+	h.ExpireInstance(t, location)
+	raise := func(between func()) error {
+		p, err := h.Backend.OpenPrior(ctx, location)
+		if err != nil {
+			return fmt.Errorf("open prior: %w", err)
+		}
+		if p == nil {
+			return errors.New("older state did not report a prior")
+		}
+		defer p.Close()
+		r, ok := p.(storage.PriorRaiser)
+		if !ok {
+			return errors.New("the backend's Prior can't raise what it preserved")
+		}
+		if err := p.Snapshot(ctx, filepath.Join(t.TempDir(), "snapshot"), nil); err != nil {
+			return err
+		}
+		if between != nil {
+			between()
+		}
+		return r.Raise(ctx)
+	}
+	if err := raise(func() { h.CommitOutside(t, location) }); !errors.Is(err, storage.ErrStateMoved) {
+		return fmt.Errorf("raised over a commit made after the state was preserved: %v", err)
+	}
+	if err := raise(nil); err != nil {
+		return fmt.Errorf("raising unmoved state: %w", err)
+	}
+	raised, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	defer raised.Close()
+	stored, err := raised.Stored(ctx)
+	if err != nil {
+		return err
+	}
+	if stored != h.Backend.Writes() {
+		return fmt.Errorf("the state is at %+v after Raise, want %+v", stored, h.Backend.Writes())
 	}
 	next, ok := raised.(storage.InstanceLeaser)
 	if !ok {

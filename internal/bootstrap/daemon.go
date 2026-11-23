@@ -100,6 +100,9 @@ type Options struct {
 	// on shared state (default instanceTTL, instanceRenewEvery and
 	// instanceRetry). Tests shorten them.
 	instanceLease, instanceRenew, instanceRetry time.Duration
+	// afterUpgradeBundle, in tests, runs between keeping a pre-upgrade bundle
+	// and raising the state it preserved.
+	afterUpgradeBundle func()
 	// WebhookAddr enables the webhook listener on this TCP address (for
 	// example 127.0.0.1:8787). Empty falls back to settings.webhooks, and
 	// with neither the daemon is reconcile-only.

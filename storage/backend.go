@@ -17,6 +17,10 @@ var (
 	// one would drop the fields it doesn't know from every record it
 	// rewrites. Nothing was changed.
 	ErrRecordsNewer = errors.New("stored records are newer than this binary writes")
+	// ErrStateMoved refuses to raise state that has changed since it was
+	// preserved, so the preserved copy would miss committed writes. Nothing
+	// was changed. The caller preserves it again.
+	ErrStateMoved = errors.New("stored state changed since it was preserved")
 	// ErrInUse refuses state another Database or Inspection, in this
 	// process or another, already owns.
 	ErrInUse = errors.New("coordination state is in use by another owner")
@@ -40,10 +44,11 @@ var (
 // relative path) is refused with ErrInvalid. A SharedBackend's shared location
 // is the exception: the instance lease guarantees its one writer instead.
 //
-// Open raises the stored versions only in a transaction that finds no live
-// instance holder, and ends any expired holder's tenure in that transaction,
-// so no instance runs on a format it doesn't know. With a live holder it
-// returns ErrInstanceHeld and changes nothing.
+// Open raises the stored versions, and runs any one-time rewrite of stored
+// records, only in a transaction that finds no live instance holder, and ends
+// any expired holder's tenure in that transaction, so no instance runs on
+// records it doesn't expect. With a live holder it returns ErrInstanceHeld and
+// changes nothing.
 type Backend interface {
 	// Present reports whether state exists at location, without creating
 	// or changing anything.
@@ -137,6 +142,22 @@ type RecoveryStater interface {
 	// RecoveryPoint states the recovery point of the state at location. It
 	// changes nothing there, and may be called while a Database has it open.
 	RecoveryPoint(ctx context.Context, location string) (RecoveryPoint, error)
+}
+
+// PriorRaiser is a Prior that can raise the state it holds, and only if that
+// state is still what it held. The lifecycle suite requires it, and a host
+// refuses a shared location whose Prior doesn't have it, since there nothing
+// else stops another instance committing between a preservation and the raise.
+// It is separate from Prior so that adding it breaks no backend built outside
+// this repository.
+type PriorRaiser interface {
+	Prior
+	// Raise raises the stored versions in one transaction, as Open would,
+	// if nothing has committed since OpenPrior. Otherwise it changes nothing
+	// and returns ErrStateMoved, and what was preserved is out of date. A
+	// live holder is ErrInstanceHeld, and a holder past its expiry has its
+	// tenure ended in the same transaction.
+	Raise(ctx context.Context) error
 }
 
 // Database is open coordination state.

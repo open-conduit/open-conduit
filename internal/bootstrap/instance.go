@@ -257,7 +257,7 @@ func standby(log *slog.Logger, every time.Duration) func(context.Context, error)
 			}
 		} else if text := cause.Error(); text != failure {
 			failure = text
-			log.Warn("could not acquire the instance lease; trying again", "error", cause)
+			log.Warn("could not take the state yet; trying again", "error", cause)
 		}
 		//duty:instance_standby
 		t := time.NewTimer(every)
@@ -275,8 +275,8 @@ func standby(log *slog.Logger, every time.Duration) func(context.Context, error)
 // instead of refusing.
 //
 // prepare runs before each Open. It is how the pre-upgrade bundle is taken only
-// once no other instance is live, and taken again if one appeared before Open
-// could raise the state, so the bundle is of what is raised.
+// once no other instance is live, and taken again if anything committed before
+// the state could be raised, so the bundle is of what is raised.
 func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, retry time.Duration, prepare func(context.Context) error) (coordination, storage.Database, error) {
 	return openHeld(ctx, stateDir, ttl, prepare, standby(log, retry))
 }
@@ -297,7 +297,7 @@ func openHeld(ctx context.Context, stateDir string, ttl time.Duration, prepare f
 		if err == nil {
 			break
 		}
-		retry := errors.Is(err, storage.ErrInstanceHeld) || errors.Is(err, storage.ErrTransient)
+		retry := errors.Is(err, storage.ErrInstanceHeld) || errors.Is(err, storage.ErrTransient) || errors.Is(err, storage.ErrStateMoved)
 		if wait == nil || !c.shared() || !retry {
 			return c, nil, err
 		}
