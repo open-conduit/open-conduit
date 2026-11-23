@@ -166,6 +166,9 @@ func TestManagementSubmittedIncludes(t *testing.T) {
 	empty := []byte(`{"version": 1, "scopes": []}`)
 	_, err = web.ApplyFragmentText(ctx, "web", empty, applied.Hash, "web-empty")
 	refused("removing a scope with live Work", err, 409, "scope_in_use")
+	if !strings.Contains(err.Error(), `"web"`) || !strings.Contains(err.Error(), w.Work.ID) {
+		t.Fatalf("the refusal doesn't name the scope and its Work: %v", err)
+	}
 	if _, err = owner.CancelWork(ctx, w.Work.ID, "", "", "cancel-web"); err != nil {
 		t.Fatal(err)
 	}

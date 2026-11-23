@@ -26,7 +26,9 @@ const configNamespace = "core.config"
 var (
 	ErrGenerationConflict = errors.New("config generation conflict")
 	ErrHashMismatch       = errors.New("candidate hash does not match")
-	ErrScopeInUse         = errors.New("scope in use")
+	// ErrScopeInUse is a publish that would remove or reparent a scope with
+	// open Work. It arrives as a *ScopeInUseError naming them.
+	ErrScopeInUse = errors.New("scope in use")
 	// ErrFragmentConflict is a fragment apply naming a fragment hash that
 	// is no longer the include's: someone else applied to it first.
 	ErrFragmentConflict = errors.New("fragment hash conflict")
@@ -552,9 +554,16 @@ func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, e
 		if err != nil {
 			return err
 		}
+		committed, err := committedScopes(tx, active.Generation)
+		if err != nil {
+			return err
+		}
 		for _, scope := range existing {
-			if !wanted[scope.ID] {
-				// Removal requires drained nonterminal Work; history keeps its record.
+			// Removal requires drained nonterminal Work; history keeps its
+			// record. A stored scope the committed generation already lacks
+			// isn't being removed by this publish, so its Work doesn't block
+			// it: the operator resolves that Work through the usual controls.
+			if !wanted[scope.ID] && (committed == nil || committed[scope.ID]) {
 				if err = scopeIdle(tx, scope.ID); err != nil {
 					return err
 				}
@@ -577,15 +586,73 @@ func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, e
 	return nil
 }
 
+// committedScopes is the set of scopes in the committed generation, or nil
+// when that can't be read (none is committed, or its text no longer parses),
+// so the caller treats every stored scope as possibly in it.
+func committedScopes(tx storage.Tx, generation uint64) (map[domain.ID]bool, error) {
+	if generation == 0 {
+		return nil, nil
+	}
+	stored, err := tx.Get(configNamespace, "generation/"+u64(generation))
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	doc, err := config.Parse(stored)
+	if err != nil {
+		return nil, nil
+	}
+	scopes := make(map[domain.ID]bool, len(doc.Scopes))
+	for _, scope := range doc.Scopes {
+		scopes[domain.ID(scope.ID)] = true
+	}
+	return scopes, nil
+}
+
+// ScopeInUseError is a publish refused because a scope it would remove or
+// reparent still has open Work.
+type ScopeInUseError struct {
+	Scope domain.ID
+	Work  []domain.ID
+}
+
+// scopeInUseListed bounds how many Work IDs a refusal spells out.
+const scopeInUseListed = 5
+
+// Detail names the scope and its open Work, for the operator.
+func (e *ScopeInUseError) Detail() string {
+	shown := e.Work[:min(len(e.Work), scopeInUseListed)]
+	ids := make([]string, len(shown))
+	for i, id := range shown {
+		ids[i] = string(id)
+	}
+	list := strings.Join(ids, ", ")
+	if more := len(e.Work) - len(shown); more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	return fmt.Sprintf("scope %q has %d open Work (%s); finish or cancel it first", e.Scope, len(e.Work), list)
+}
+
+func (e *ScopeInUseError) Error() string { return ErrScopeInUse.Error() + ": " + e.Detail() }
+
+// Is makes a ScopeInUseError match ErrScopeInUse.
+func (e *ScopeInUseError) Is(target error) bool { return target == ErrScopeInUse }
+
 func scopeIdle(tx storage.Tx, scope domain.ID) error {
 	works, err := tx.ListWorks()
 	if err != nil {
 		return err
 	}
+	var open []domain.ID
 	for _, w := range works {
 		if w.ScopeID == scope && !w.State.Terminal() {
-			return ErrScopeInUse
+			open = append(open, w.ID)
 		}
+	}
+	if len(open) > 0 {
+		return &ScopeInUseError{Scope: scope, Work: open}
 	}
 	return nil
 }
