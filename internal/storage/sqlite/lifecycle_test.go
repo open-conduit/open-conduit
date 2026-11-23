@@ -26,6 +26,9 @@ func lifecycleHarness(b storage.Backend) conformance.LifecycleHarness {
 		Older: func(t *testing.T, path string) {
 			raw(t, path, fmt.Sprintf("UPDATE metadata SET value='%d' WHERE key='record_format'", sqlite.RecordFormat-1))
 		},
+		Behind: func(t *testing.T, path string) {
+			raw(t, path, "DROP TRIGGER execution_artifacts_delete")
+		},
 		Fingerprint: fingerprint,
 		Corrupt:     corrupt,
 		CommitOutside: func(t *testing.T, path string) {
@@ -579,6 +582,16 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		backend: weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
 			if db, err := existing(location); err == nil {
 				db.Exec("UPDATE instance_lease SET expires_at=NULL WHERE (SELECT CAST(value AS INTEGER) FROM metadata WHERE key='record_format')<" + fmt.Sprint(sqlite.RecordFormat))
+				db.Close()
+			}
+			return sqlite.Backend.Open(ctx, location)
+		}},
+	}, {
+		// Open adds a trigger under a live holder, with no format to raise.
+		name: "schema_under_a_live_holder", failing: "instance_schema_waits_for_the_holder", want: "schema changed under a live holder",
+		backend: weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
+			if db, err := existing(location); err == nil {
+				db.Exec("CREATE TRIGGER IF NOT EXISTS execution_artifacts_delete AFTER DELETE ON executions BEGIN DELETE FROM execution_artifacts WHERE execution_id=OLD.id; END")
 				db.Close()
 			}
 			return sqlite.Backend.Open(ctx, location)

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -172,10 +173,8 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	if err = enableWAL(ctx, db); err != nil {
 		return nil, err
 	}
-	for _, statement := range append(indexes, workIndexes...) {
-		if _, err = db.ExecContext(ctx, statement); err != nil {
-			return nil, fmt.Errorf("sqlite: index: %w", err)
-		}
+	if err = s.addDerived(ctx); err != nil {
+		return nil, fmt.Errorf("sqlite: index: %w", err)
 	}
 	for _, r := range rewrites {
 		if err = s.rewrite(ctx, r); err != nil {
@@ -308,6 +307,80 @@ func admitUpgrade(ctx context.Context, conn *sql.Conn) error {
 		return fmt.Errorf("sqlite: not upgrading the state under a live instance: %w", storage.ErrInstanceHeld)
 	}
 	_, err = conn.ExecContext(ctx, `UPDATE instance_lease SET expires_at=NULL WHERE id=1`)
+	return mapError(err)
+}
+
+// derivedObject reads what a statement in indexes or workIndexes creates, or
+// drops once an index is no longer wanted.
+var derivedObject = regexp.MustCompile(`^(CREATE|DROP) (?:UNIQUE )?(?:INDEX|TABLE|TRIGGER) IF (?:NOT )?EXISTS (\w+)`)
+
+// addDerived brings the database's derived objects up to date. A statement
+// with nothing to do is skipped, so an open of up-to-date state writes
+// nothing. Each change is its own transaction, so a large index doesn't grow
+// the WAL with all the others, and each is admitted like an upgrade: a trigger
+// changes what every later write does, so none may change under a live holder,
+// whatever the stored format says.
+func (s *Store) addDerived(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, "SELECT name FROM sqlite_master")
+	if err != nil {
+		return mapError(err)
+	}
+	present := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		present[name] = true
+	}
+	err = rows.Err()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return mapError(err)
+	}
+	for _, statement := range append(append([]string{}, indexes...), workIndexes...) {
+		m := derivedObject.FindStringSubmatch(statement)
+		if m == nil {
+			return fmt.Errorf("derived statement names no object: %q", statement)
+		}
+		create := m[1] == "CREATE"
+		if present[m[2]] != create {
+			if err = s.changeObject(ctx, m[2], create, statement); err != nil {
+				return err
+			}
+			present[m[2]] = create
+		}
+	}
+	return nil
+}
+
+// changeObject runs statement, which creates or drops the object named, in a
+// transaction that admits it as an upgrade.
+func (s *Store) changeObject(ctx context.Context, name string, create bool, statement string) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return mapError(err)
+	}
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	// Recheck under the write lock: two processes can open the store together.
+	var found int
+	if err = conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name=?", name).Scan(&found); err != nil || (found > 0) == create {
+		return mapError(err)
+	}
+	if err = admitUpgrade(ctx, conn); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, statement); err != nil {
+		return mapError(err)
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
 	return mapError(err)
 }
 
@@ -487,9 +560,11 @@ var schema = []string{
 // expression for SQLite to use the index.
 const unrouted = "json_extract(CAST(record AS TEXT),'$.Routed')=0"
 
-// indexes are derived from records, so they are created on every open: an
-// older database gains them without a schema version change, and an older
-// binary that opens a database with them keeps them current.
+// indexes are derived from records, so an open brings them up to date
+// (addDerived, never under a live holder): an older database gains them
+// without a schema version change, and an older binary that opens a database
+// with them keeps them current. An existing object is never replaced, so a
+// changed definition needs a new name.
 var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
 	`CREATE INDEX IF NOT EXISTS works_live ON works(id) WHERE ` + liveWork,
