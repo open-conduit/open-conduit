@@ -427,6 +427,25 @@ func (b latestOnlyReferencesTx) ReferencedArtifacts(ids []string) ([]string, err
 	return storage.ReferencedIn(xs, ids)
 }
 
+// latestOnlyHolders answers ArtifactHolders from attempts' latest artifacts
+// alone.
+type latestOnlyHolders struct{ storage.Store }
+type latestOnlyHoldersTx struct{ storage.Tx }
+
+func (b latestOnlyHolders) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(latestOnlyHoldersTx{tx}) })
+}
+func (b latestOnlyHoldersTx) ArtifactHolders(id string) ([]domain.ID, error) {
+	xs, err := b.Tx.ListExecutions("")
+	if err != nil {
+		return nil, err
+	}
+	for i := range xs {
+		xs[i].EarlierArtifacts = nil
+	}
+	return storage.HoldersIn(xs, id)
+}
+
 // unsortedReferences reports each referenced ID once per time it was asked
 // for, in the query's order, as a lookup that never grouped its rows might.
 type unsortedReferences struct{ storage.Store }
@@ -754,6 +773,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"finished_attempt_takes_its_stopped_turns_artifacts", "after the Work's cancel", func() storage.Store { return terminalWorkArtifacts{reference.New()} }},
 		{"referenced_artifacts_follow_attempts", "one latest and one earlier", func() storage.Store { return latestOnlyReferences{reference.New()} }},
 		{"referenced_artifacts_follow_attempts", `got ["b-latest" "a-earlier" "b-latest"]`, func() storage.Store { return unsortedReferences{reference.New()} }},
+		{"artifact_holders_follow_attempts", "artifact holders of first", func() storage.Store { return latestOnlyHolders{reference.New()} }},
 		{"sequences_visible_in_order_to_a_waiting_reader", "was skipped", func() storage.Store {
 			return &identityColumn{inner: reference.New(), pending: map[domain.ID]bool{}}
 		}},

@@ -1792,7 +1792,11 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		// Outermost, so what the host settles is scrubbed too.
 		id := state.ExecutionID
 		handle = &scrubbedHandle{RunHandle: handle, scrub: func(ctx context.Context, r extension.Result) extension.Result {
-			return scrubResult(ctx, s.options.Artifacts, r, served.Values(id))
+			var artifacts storage.Artifacts
+			if s.options.Artifacts != nil {
+				artifacts = releaseGuarded{s.options.Artifacts, s}
+			}
+			return scrubResult(ctx, artifacts, r, served.Values(id))
 		}}
 	}
 	attempt.Handle = handle
@@ -2056,6 +2060,10 @@ func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extens
 		}
 	}
 	return s.transact(ctx, &ref, func(tx storage.Tx) error {
+		result := result
+		if err := withoutReleased(tx, ref.ExecutionID, &result); err != nil {
+			return err
+		}
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
 			return err
@@ -2189,6 +2197,9 @@ func (s *Scheduler) complete(ctx context.Context, ref domain.LeaseRef, result ex
 	}
 	return s.transact(ctx, &ref, func(tx storage.Tx) error {
 		result := result
+		if err := withoutReleased(tx, ref.ExecutionID, &result); err != nil {
+			return err
+		}
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
 			return err

@@ -37,6 +37,34 @@ const (
 	retentionIndexKey         = "pending"
 )
 
+// retentionReleasedNamespace holds a claim on each artifact ID whose content
+// is being deleted or was deleted recently, keyed by identity of the ID. It
+// is committed before the delete, in the transaction that finds no attempt
+// keeping the content, and a result naming the ID while it stands doesn't
+// attach it (withoutReleased). Serializable transactions order the two, so
+// an attempt either holds the ID before the claim, which then leaves it, or
+// doesn't come to hold it. A claim is pruned retentionClaimKept after it was
+// last made, and a delete still being retried renews it, so the namespace
+// follows recent releases rather than every release ever made.
+const retentionReleasedNamespace = "core.retention.released"
+
+// retentionClaimKept is how long a claim outlives its delete: long enough
+// for a result already on its way when the content went to be refused.
+const retentionClaimKept = 7 * 24 * time.Hour
+
+type retentionClaim struct{ At time.Time }
+
+// retentionDroppedNamespace records, per attempt, the artifact IDs its
+// results named that were not attached because their content had been
+// released. Run history and telemetry report them, and a repeated result
+// is refused the same IDs after the claim has been pruned.
+const retentionDroppedNamespace = "core.retention.dropped"
+
+type droppedArtifacts struct {
+	ExecutionID domain.ID
+	IDs         []string
+}
+
 // retentionCursorNamespace keeps the sweep's cursors (retentionCursor), so
 // a sweep reads the Work that can have something to expire, not every Work
 // ever made.
@@ -267,6 +295,170 @@ func pendingRetention(tx storage.Tx) ([]retentionRecord, error) {
 		}
 	}
 	return pending, nil
+}
+
+// claimRelease commits a claim on whichever of refs no attempt still keeps,
+// and returns them for deleting. Content no attempt has ever held is free
+// whatever the holds: a hold protects what a backup's snapshot names, and no
+// snapshot names it. Content whose every holder has expired is free unless
+// a retention hold is live, which reports held. Called again after a failed
+// delete, it returns the same refs.
+func (s *Scheduler) claimRelease(ctx context.Context, refs []domain.ArtifactRef) (free []domain.ArtifactRef, held bool, err error) {
+	return s.claimContent(ctx, refs, true)
+}
+
+// claimOrphans is claimRelease for content no attempt holds at all, expired
+// or not: collection's share, leaving the rest to retention.
+func (s *Scheduler) claimOrphans(ctx context.Context, refs []domain.ArtifactRef) ([]domain.ArtifactRef, error) {
+	free, _, err := s.claimContent(ctx, refs, false)
+	return free, err
+}
+
+func (s *Scheduler) claimContent(ctx context.Context, refs []domain.ArtifactRef, expiredHolders bool) (free []domain.ArtifactRef, held bool, err error) {
+	err = s.transact(ctx, nil, func(tx storage.Tx) error {
+		free, held = nil, false
+		holdRead, holdLive := false, false
+	next:
+		for _, ref := range refs {
+			holders, e := tx.ArtifactHolders(ref.ID)
+			if e != nil {
+				return e
+			}
+			if len(holders) > 0 && !expiredHolders {
+				continue
+			}
+			for _, holder := range holders {
+				expired, e := hasKey(tx, retentionNamespace, retentionKey(holder))
+				if e != nil {
+					return e
+				}
+				if !expired {
+					continue next
+				}
+			}
+			if len(holders) > 0 {
+				if !holdRead {
+					if holdLive, e = retentionHeld(tx, s.now()); e != nil {
+						return e
+					}
+					holdRead = true
+				}
+				if holdLive {
+					held = true
+					continue
+				}
+			}
+			if e = putJSON(tx, retentionReleasedNamespace, identity(ref.ID), retentionClaim{At: s.now().UTC()}); e != nil {
+				return e
+			}
+			free = append(free, ref)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return free, held, nil
+}
+
+// deleteClaimed deletes content claimRelease or claimOrphans claimed. A ref
+// that doesn't match what is stored deleted nothing, so its claim goes and
+// the ID's real content stays attachable.
+func (s *Scheduler) deleteClaimed(ctx context.Context, artifacts storage.Artifacts, ref domain.ArtifactRef) error {
+	err := artifacts.Delete(ctx, ref)
+	if errors.Is(err, storage.ErrInvalid) {
+		return errors.Join(err, s.transact(ctx, nil, func(tx storage.Tx) error {
+			return tx.Delete(retentionReleasedNamespace, identity(ref.ID))
+		}))
+	}
+	return err
+}
+
+// pruneClaims removes the claims older than retentionClaimKept.
+func (s *Scheduler) pruneClaims(ctx context.Context) error {
+	return s.transact(ctx, nil, func(tx storage.Tx) error {
+		rows, e := tx.List(retentionReleasedNamespace, "")
+		if e != nil {
+			return e
+		}
+		cutoff := s.now().Add(-retentionClaimKept)
+		for _, row := range rows {
+			var c retentionClaim
+			if e = json.Unmarshal(row.Value, &c); e != nil {
+				return e
+			}
+			if !c.At.After(cutoff) {
+				if e = tx.Delete(retentionReleasedNamespace, row.Key); e != nil {
+					return e
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// withoutReleased drops from result the artifacts whose content has been
+// released, so attempt execution doesn't come to hold content that is going
+// or gone, and records what it dropped on the attempt.
+func withoutReleased(tx storage.Tx, execution domain.ID, result *extension.Result) error {
+	if len(result.Artifacts) == 0 {
+		return nil
+	}
+	key := retentionKey(execution)
+	dropped := droppedArtifacts{ExecutionID: execution}
+	if e := getJSON(tx, retentionDroppedNamespace, key, &dropped); e != nil && !errors.Is(e, storage.ErrNotFound) {
+		return e
+	}
+	known := len(dropped.IDs)
+	kept := make([]domain.ArtifactRef, 0, len(result.Artifacts))
+	for _, ref := range result.Artifacts {
+		if slices.Contains(dropped.IDs, ref.ID) {
+			continue
+		}
+		released, err := hasKey(tx, retentionReleasedNamespace, identity(ref.ID))
+		if err != nil {
+			return err
+		}
+		if released {
+			dropped.IDs = append(dropped.IDs, ref.ID)
+			continue
+		}
+		kept = append(kept, ref)
+	}
+	if len(kept) != len(result.Artifacts) {
+		result.Artifacts = kept
+	}
+	if len(dropped.IDs) != known {
+		return putJSON(tx, retentionDroppedNamespace, key, dropped)
+	}
+	return nil
+}
+
+// DroppedArtifactsInTx lists the artifact IDs execution's results named
+// that were not attached because their content had been released.
+func DroppedArtifactsInTx(tx storage.Tx, execution domain.ID) ([]string, error) {
+	var dropped droppedArtifacts
+	err := getJSON(tx, retentionDroppedNamespace, retentionKey(execution), &dropped)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, nil
+	}
+	return dropped.IDs, err
+}
+
+// releaseGuarded is the artifact store with Delete going through
+// claimRelease, for a path that discards content it was handed: the content
+// stays while an attempt keeps it.
+type releaseGuarded struct {
+	storage.Artifacts
+	s *Scheduler
+}
+
+func (a releaseGuarded) Delete(ctx context.Context, ref storage.ArtifactRef) error {
+	free, _, err := a.s.claimRelease(ctx, []domain.ArtifactRef{ref})
+	if err != nil || len(free) == 0 {
+		return err
+	}
+	return a.s.deleteClaimed(ctx, a.Artifacts, ref)
 }
 
 // DefaultKeptExecutions is the B05 kept_executions default (per Work).
@@ -519,12 +711,21 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 		// a backup copies none of it.
 		if !artifactsDone && !result.Held {
 			artifactsDone = true
-			for _, ref := range r.Artifacts {
-				if s.options.Artifacts == nil {
-					break
+			if s.options.Artifacts != nil && len(r.Artifacts) > 0 {
+				// A hold taken since the list was read stops this release.
+				// Content another attempt keeps stays, and goes with the
+				// last attempt to hold it.
+				free, held, e := s.claimRelease(ctx, r.Artifacts)
+				if held {
+					result.Held = true
 				}
-				if e := s.options.Artifacts.Delete(ctx, ref); e != nil && !errors.Is(e, storage.ErrNotFound) {
+				if e != nil || held {
 					artifactsDone = false
+				}
+				for _, ref := range free {
+					if e := s.deleteClaimed(ctx, s.options.Artifacts, ref); e != nil && !errors.Is(e, storage.ErrNotFound) {
+						artifactsDone = false
+					}
 				}
 			}
 		}
@@ -569,5 +770,5 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			result.Pending++
 		}
 	}
-	return result, nil
+	return result, s.pruneClaims(ctx)
 }

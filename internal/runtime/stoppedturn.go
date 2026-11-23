@@ -50,6 +50,13 @@ func (s *Scheduler) RecordStopped(ctx context.Context, ref domain.LeaseRef, resu
 		if state.Epoch != ref.Epoch || x.Lease.Epoch != ref.Epoch || !x.State.Terminal() || state.Excluded || state.StoppedTurnRecorded {
 			return nil
 		}
+		result := result
+		if err = withoutReleased(tx, x.ID, &result); err != nil {
+			return err
+		}
+		if len(result.Artifacts) == 0 {
+			return nil
+		}
 		if err = tx.PublishFinishedArtifacts(x.ID, result.Artifacts); err != nil {
 			return err
 		}

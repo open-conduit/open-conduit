@@ -129,6 +129,7 @@ type recorder struct {
 	ingressOrder []string
 	rejections   []string
 	expirations  []string
+	dropped      []string
 
 	traces map[domain.ID]string
 }
@@ -321,6 +322,10 @@ func (r *recorder) Put(ns, key string, value []byte) error {
 	case ns == retentionNamespace:
 		if _, err := r.Tx.Get(ns, key); errors.Is(err, storage.ErrNotFound) {
 			r.expirations = append(r.expirations, key)
+		}
+	case ns == retentionDroppedNamespace:
+		if !slices.Contains(r.dropped, key) {
+			r.dropped = append(r.dropped, key)
 		}
 	}
 	return r.Tx.Put(ns, key, value)
@@ -641,6 +646,16 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 				attrs["retention.reason"] = e.Reason
 			}
 			add(observability.Record{Name: "execution.retention_expired", Correlation: r.executionCorrelation(x), Attributes: attrs})
+		}
+	}
+	for _, key := range r.dropped {
+		var d droppedArtifacts
+		if getJSON(r.Tx, retentionDroppedNamespace, key, &d) != nil {
+			continue
+		}
+		if x, err := r.Tx.Execution(d.ExecutionID); err == nil {
+			attrs := map[string]string{"artifacts.dropped": strconv.Itoa(len(d.IDs)), "artifacts.dropped_ids": strings.Join(d.IDs, ","), "record_id": identity("execution.artifacts_dropped", string(x.ID), strconv.Itoa(len(d.IDs)))}
+			add(observability.Record{Name: "execution.artifacts_dropped", Correlation: r.executionCorrelation(x), Attributes: attrs})
 		}
 	}
 	return out

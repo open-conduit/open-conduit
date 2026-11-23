@@ -27,7 +27,8 @@ type CollectResult struct {
 // record. It pages the store with List and asks coordination which IDs of
 // each page are referenced (Tx.ReferencedArtifacts), one View a page, so
 // its cost per step follows the page, never the history retained, and no
-// backend needs a lock. Content referenced by an expired attempt stays
+// backend needs a lock. What it deletes it first claims (claimOrphans), so
+// a late result can't attach content on its way out. Content referenced by an expired attempt stays
 // until retention releases it.
 func (s *Scheduler) CollectArtifacts(ctx context.Context, artifacts storage.ArtifactStore, before time.Time) (CollectResult, error) {
 	var result CollectResult
@@ -62,11 +63,23 @@ func (s *Scheduler) CollectArtifacts(ctx context.Context, artifacts storage.Arti
 		for _, id := range referenced {
 			live[id] = true
 		}
+		var orphans []storage.ArtifactRef
 		for _, item := range page {
-			if live[item.Ref.ID] || !item.PublishedAt.Before(before) {
-				continue
+			if !live[item.Ref.ID] && item.PublishedAt.Before(before) {
+				orphans = append(orphans, item.Ref)
 			}
-			if err = artifacts.Delete(ctx, item.Ref); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		}
+		if len(orphans) == 0 {
+			continue
+		}
+		// The View above spares the common case a write. The claim checks
+		// again, and a result naming a claimed ID doesn't attach it.
+		free, err := s.claimOrphans(ctx, orphans)
+		if err != nil {
+			return result, err
+		}
+		for _, ref := range free {
+			if err = s.deleteClaimed(ctx, artifacts, ref); err != nil && !errors.Is(err, storage.ErrNotFound) {
 				return result, err
 			}
 			result.Deleted++

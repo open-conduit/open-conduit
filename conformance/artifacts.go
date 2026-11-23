@@ -64,6 +64,7 @@ func ArtifactCases() []ArtifactCase {
 		{"delete_is_idempotent_and_checks_the_ref", artifactDelete},
 		{"list_pages_committed_content_once_in_id_order", artifactList},
 		{"import_publishes_exactly_the_ref_or_nothing", artifactImport},
+		{"identical_content_gets_a_new_id", artifactFreshID},
 	}
 }
 
@@ -272,6 +273,44 @@ func artifactOnce(t *testing.T, h ArtifactHarness) error {
 	}
 	if got, err := readArtifact(s, ref); err != nil || got != "once" {
 		return fmt.Errorf("after the extra calls, read %q, %v", got, err)
+	}
+	return nil
+}
+
+// artifactFreshID: every commit gets its own ID, even for the same bytes,
+// and deleting one leaves the other. The host releases content by ID, so a
+// store that deduplicated under one ID would lose content still in use.
+func artifactFreshID(t *testing.T, h ArtifactHarness) error {
+	s, _, err := openArtifacts(t, h)
+	if err != nil {
+		return err
+	}
+	publish := func() (storage.ArtifactRef, error) {
+		w, err := s.Create(artifactCtx, "text/plain")
+		if err != nil {
+			return storage.ArtifactRef{}, fmt.Errorf("create: %w", err)
+		}
+		if _, err = io.WriteString(w, "same bytes"); err != nil {
+			return storage.ArtifactRef{}, fmt.Errorf("write: %w", err)
+		}
+		return w.Commit(artifactCtx)
+	}
+	a, err := publish()
+	if err != nil {
+		return err
+	}
+	b, err := publish()
+	if err != nil {
+		return err
+	}
+	if a.ID == b.ID {
+		return fmt.Errorf("two commits of the same bytes share the ID %s", a.ID)
+	}
+	if err = s.Delete(artifactCtx, a); err != nil {
+		return fmt.Errorf("delete: %w", err)
+	}
+	if got, err := readArtifact(s, b); err != nil || got != "same bytes" {
+		return fmt.Errorf("after deleting its twin, read %q, %v", got, err)
 	}
 	return nil
 }

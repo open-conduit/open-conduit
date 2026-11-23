@@ -71,6 +71,7 @@ Not yet recorded: reads of run output and artifact content, and the CLI's offlin
 | `execution.parked`, `execution.{completed,failed,waiting,handoff,cancelled}` | Execution state | outcome kind and summary, the turn's declared state (`turn.status`), start time, duration, the trigger's type and time (`trigger.type`, `trigger.occurred_at`), Work kind, artifact count, stop state, resource exclusion, executor usage as `Usage` |
 | `execution.stop_confirmed` | Trusted `ConfirmStopped` | epoch |
 | `execution.retention_expired` | Retention ledger | artifact count, kept count |
+| `execution.artifacts_dropped` | A result named content already released, so those refs were not attached | `artifacts.dropped`, `artifacts.dropped_ids` |
 | `lease.renewed`, `lease.released` | Lease | epoch, owner, expiry |
 | `retry.scheduled`, `retry.unblocked`, `retry.blocked` | Retry eligibility | failure count, eligible-at, blocked reason, exhaustion, retry event |
 | `timer.armed`, `timer.fired`, `timer.cancelled` | Timers, with fire and rearm as one commit | timer ID, event type, fire time, recurring |
@@ -173,7 +174,7 @@ Host watch and telemetry events are extension adapters on the public observabili
 - usage and input count
 - wait and wake links
 - the Work's retry eligibility when this is the latest failed attempt
-- retention status
+- retention status, and `dropped_artifacts`: IDs the attempt's results named whose content had already been released, so they were not attached
 - the resource the attempt ran in (`workspace` in `GET /v1/runs`), from the executor's generic `extension.Result.Workspace`: kind, lease reference, directory and the provider's one-line summary
 
 Nothing in it interprets executor payloads or Work kinds. Management serves it at `GET /v1/runs`, filtered by `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind` or `outcome`, with the standard keyset pagination, and at `GET /v1/runs/{id}` with an ETag. A page filters on what each execution and its Work record say and builds the full record (attempt state, trigger, retry and retention) only for the runs it returns, checking the `executor` filter, which only the attempt state carries, as it builds them; `GET /v1/waits?state=active` likewise reads the active Waits through their index and each Wait's timer only for the page. `GET /v1/runs/{id}/live?tail=N` returns a running run's outputs so far (each at most its last `N` bytes, 64 KiB by default) through the executor's optional `extension.LiveExecutor`, in the order its artifacts will have; a run that is not running answers `409 not_live`, and an executor without live output `422 live_unsupported`.
@@ -205,7 +206,7 @@ One retention policy applies to every executor, with two rules:
 `Scheduler.SweepRetention(ctx, limit)` applies both. An attempt is expired only if it is terminal and its resource exclusion is confirmed; an uncertain hold is never released. The sweep runs in phases:
 
 1. Commit an expiration ledger entry with the attempt's artifact references (every turn's) and the rule that expired it (`kept_executions` or `kept_finished_days`). This emits `execution.retention_expired` with `retention.reason`.
-2. Outside the transaction, delete the content through `storage.Artifacts`, then call the optional `extension.ForgetExecutor.Forget` to release executor-private state.
+2. Commit a claim on each artifact ID no unexpired attempt still holds (`core.retention.released`), then, outside the transaction, delete only those through `storage.Artifacts`. Content another attempt holds stays and is released with the last attempt to hold it. A result that names a claimed ID afterwards does not attach it, which `execution.artifacts_dropped` and the run's `dropped_artifacts` report, so the check and the delete cannot race an attachment. Collection and scrubbing delete through the same claim. A claim is pruned seven days after it was last made, so the record follows recent releases; a result that first names released content after that attaches a reference to missing content, reported as an artifact error. Content no attempt has ever held is not subject to a retention hold, because no backup snapshot names it, so a scrubbed original containing a secret is deleted at once even during a backup. Then call the optional `extension.ForgetExecutor.Forget` to release executor-private state.
 3. Record the release.
 
 A crash between phases is completed by a later sweep. Executor-private state of an execution the coordination state no longer holds at all (one from after the bundle an in-place restore went back to) is never reached by `Forget`; an executor that implements `extension.StateSweeper` releases it when the daemon starts ([public executor controls](../extension-protocol/#public-executor-controls)).

@@ -130,6 +130,9 @@ func (s *Scheduler) failureInTx(tx storage.Tx, x domain.Execution, result extens
 	return s.failureWithHintInTx(tx, x, result, now, nil)
 }
 func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, result extension.Result, now time.Time, hint *RetryHint) error {
+	if err := withoutReleased(tx, x.ID, &result); err != nil {
+		return err
+	}
 	policy := s.options.Retry
 	pinned, pinErr := attemptState(tx, x.ID)
 	if pinErr == nil && pinned.Retry.MaxAttempts != 0 {

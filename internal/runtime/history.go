@@ -51,6 +51,9 @@ type Run struct {
 	// recorded failure.
 	Retry     *RetryState
 	Retention RetentionStatus
+	// DroppedArtifacts are artifact IDs the attempt's results named that
+	// were not attached because their content had been released.
+	DroppedArtifacts []string
 }
 
 func envelope(tx storage.Tx, id domain.ID) *domain.Event {
@@ -114,6 +117,9 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 	}
 	if err == nil && retry.FailedExecutionID == x.ID {
 		run.Retry = &retry
+	}
+	if run.DroppedArtifacts, err = DroppedArtifactsInTx(tx, x.ID); err != nil {
+		return Run{}, err
 	}
 	if run.Retention, err = RetentionInTx(tx, x.ID); err != nil {
 		return Run{}, err
