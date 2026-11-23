@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
@@ -225,6 +226,61 @@ func TestArchivePassIsBoundedAndReported(t *testing.T) {
 	}
 }
 
+// On shared state no pass runs, because it would move Events out of the shared
+// log onto one host's disk, and doctor says so. The control is the same
+// settings on unshared state, which archive.
+func TestSharedStateKeepsEventsLive(t *testing.T) {
+	ctx := context.Background()
+	d := rebuildDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+	on := config.Settings{ArchiveFinishedDays: 30}
+	unshared := &countingArchiver{wrapAt: 1}
+	d.runArchivePass(ctx, unshared, on)
+	if unshared.calls != 1 {
+		t.Fatalf("control ran %d pages", unshared.calls)
+	}
+	d.sharedState = true
+	shared := &countingArchiver{wrapAt: 1}
+	d.runArchivePass(ctx, shared, on)
+	if shared.calls != 0 {
+		t.Fatalf("archived %d pages on shared state", shared.calls)
+	}
+	c := sharedArchiveCheck("event_archive", 0, false)
+	if c.Status != runtime.CheckWarn || c.Code != archiveOffOnSharedState || strings.Contains(c.Detail, "archived earlier") || len(c.Items) != 0 {
+		t.Fatalf("doctor: %+v", c)
+	}
+	if c := sharedArchiveCheck("event_archive", 7, false); !strings.Contains(c.Detail, "7 Events archived earlier") {
+		t.Fatalf("doctor doesn't count what another host may hold: %+v", c)
+	}
+}
+
+// Through doctor's real check on shared state: the account of the archive
+// shows with a rebuild it won't attempt, and a failed compaction still shows
+// under its own code rather than being hidden by that account.
+func TestSharedStateDoctorKeepsCompactionFailures(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	d := rebuildDaemon(t, now)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"settings":{"archive_finished_days":30},"connections":[],"scopes":[{"id":"org","name":"org"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configs, err := management.OpenConfig(ctx, d.coord, d.now, config.Registry{}, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.configs = configs
+	d.sharedState = true
+	d.report("database_rebuild", "", rebuildOnSharedState)
+	c := d.eventArchiveCheck(ctx)
+	if c.Code != archiveOffOnSharedState || len(c.Items) != 1 || !strings.HasPrefix(c.Items[0], rebuildOnSharedState) {
+		t.Fatalf("shared account: %+v", c)
+	}
+	d.report("database_compaction", "", "disk_full")
+	if c := d.eventArchiveCheck(ctx); c.Status != runtime.CheckWarn || c.Code != "disk_full" {
+		t.Fatalf("a failed compaction was hidden: %+v", c)
+	}
+}
+
 func TestCompactionPolicy(t *testing.T) {
 	const mib = int64(1 << 20)
 	for name, c := range map[string]struct {
@@ -325,7 +381,7 @@ func TestHolderDoesNotRebuildAtStart(t *testing.T) {
 	if code != rebuildOnSharedState {
 		t.Fatalf("reported %q", code)
 	}
-	if c := rebuildCheck("event_archive", code); c.Status != runtime.CheckInfo || !strings.Contains(c.Detail, "instance lease") {
+	if c := sharedArchiveCheck("event_archive", 0, true); len(c.Items) != 1 || !strings.HasPrefix(c.Items[0], rebuildOnSharedState) || !strings.Contains(c.Items[0], "instance lease") {
 		t.Fatalf("doctor: %+v", c)
 	}
 	// With no rebuild due, a holder clears the report and an attempt recorded

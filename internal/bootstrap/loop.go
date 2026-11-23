@@ -203,6 +203,12 @@ func (d *daemon) runArchivePass(ctx context.Context, archiver eventArchiver, s c
 	if !on {
 		return
 	}
+	// The archive is on this host's disk. A pass would retire Events from the
+	// shared log into it, out of reach of a successor on another host and lost
+	// with this one, so they stay live.
+	if d.sharedState {
+		return
+	}
 	var scanned, archived int
 	kept := map[string]int{}
 	for range archivePages {
@@ -299,6 +305,9 @@ const (
 	// rebuildOnSharedState is a rebuild that is due on state held under the
 	// instance lease, where none is attempted.
 	rebuildOnSharedState = "rebuild_not_attempted_on_shared_state"
+	// archiveOffOnSharedState is archiving turned on for state held under the
+	// instance lease, where no pass runs.
+	archiveOffOnSharedState = "archive_off_on_shared_state"
 )
 
 // rebuildRecord is the last rebuild that didn't succeed. An empty Code means
@@ -468,11 +477,17 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 	if code := d.reportedCode("event_archive", ""); code != "" {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the last archive pass failed; %d Events archived so far", r.Archived)}
 	}
-	if code := d.reportedCode("database_rebuild", ""); code != "" {
-		return rebuildCheck(name, code)
+	// A failure outranks the account of what shared state doesn't do, and a
+	// rebuild it won't attempt is part of that account.
+	rebuild := d.reportedCode("database_rebuild", "")
+	if rebuild != "" && rebuild != rebuildOnSharedState {
+		return rebuildCheck(name, rebuild)
 	}
 	if code := d.reportedCode("database_compaction", ""); code != "" {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: "the last pass couldn't return free space to the disk"}
+	}
+	if d.sharedState {
+		return sharedArchiveCheck(name, r.Archived, rebuild == rebuildOnSharedState)
 	}
 	items := make([]string, 0, len(r.LastLap))
 	for why, n := range r.LastLap {
@@ -482,12 +497,25 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 	return runtime.Check{Name: name, Status: runtime.CheckOK, Code: "archiving", Detail: fmt.Sprintf("%d Events archived; the last full pass left these live", r.Archived), Items: items}
 }
 
-// rebuildCheck is doctor's account of a rebuild that is due and hasn't
-// happened. On shared state that is by design and nothing has failed.
-func rebuildCheck(name, code string) runtime.Check {
-	if code == rebuildOnSharedState {
-		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: code, Detail: "this database predates incremental compaction and is on shared state, where a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
+// sharedArchiveCheck is doctor's account of an archive setting that shared
+// state doesn't act on. Events archived before the state became shared are on
+// the disk of the host that archived them, so it counts them, and it names a
+// rebuild that is due and won't be attempted.
+func sharedArchiveCheck(name string, archived uint64, rebuildDue bool) runtime.Check {
+	detail := "settings.archive_finished_days is set, but the event archive is on this host's disk and a successor on another host couldn't read it, so Events stay in the shared database"
+	if archived > 0 {
+		detail += fmt.Sprintf("; %d Events archived earlier are readable only on the host that holds their archive directory", archived)
 	}
+	c := runtime.Check{Name: name, Status: runtime.CheckWarn, Code: archiveOffOnSharedState, Detail: detail}
+	if rebuildDue {
+		c.Items = []string{rebuildOnSharedState + ": this database predates incremental compaction, and a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
+	}
+	return c
+}
+
+// rebuildCheck is doctor's account of a rebuild that is due and hasn't
+// happened.
+func rebuildCheck(name, code string) runtime.Check {
 	return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the database couldn't be rebuilt to return free space, so it stays in the file for reuse; a start tries again %d days after the last attempt", int(rebuildRetryAfter/(24*time.Hour)))}
 }
 
