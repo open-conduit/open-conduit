@@ -1,8 +1,10 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -105,7 +107,7 @@ func TestSharedStateWithoutALeaseIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := holdInstance(ctx, noLease{db}, "me", nil); !errors.Is(err, storage.ErrInvalid) {
+	if _, err := holdInstance(ctx, noLease{db}, "me", instanceTTL, nil); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("shared state without a lease: %v", err)
 	}
 }
@@ -229,8 +231,11 @@ func TestHoldInstanceWaitsForTheHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	waits := 0
-	held, err := holdInstance(ctx, db, "me", func(context.Context) error {
+	held, err := holdInstance(ctx, db, "me", instanceTTL, func(_ context.Context, cause error) error {
 		waits++
+		if !errors.Is(cause, storage.ErrInstanceHeld) {
+			t.Fatalf("the wait heard %v", cause)
+		}
 		return db.ReleaseInstance(ctx, other)
 	})
 	if err != nil {
@@ -244,6 +249,72 @@ func TestHoldInstanceWaitsForTheHolder(t *testing.T) {
 	}
 }
 
+// flakyAcquire fails its first acquire as the backend's busy database would.
+type flakyAcquire struct {
+	*sqlite.Store
+	failed bool
+}
+
+func (f *flakyAcquire) AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (storage.InstanceRef, error) {
+	if !f.failed {
+		f.failed = true
+		return storage.InstanceRef{}, fmt.Errorf("database busy: %w", storage.ErrTransient)
+	}
+	return f.Store.AcquireInstance(ctx, owner, ttl)
+}
+
+// A transient failure leaves a standby waiting, since it says nothing about
+// the holder. Without a wait it is the caller's error.
+func TestHoldInstanceSurvivesATransientFailure(t *testing.T) {
+	ctx := context.Background()
+	_, path := sharedState(t)
+	db, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, nil); !errors.Is(err, storage.ErrTransient) {
+		t.Fatalf("with no wait: %v", err)
+	}
+	waits := 0
+	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, func(_ context.Context, cause error) error {
+		waits++
+		if !errors.Is(cause, storage.ErrTransient) {
+			t.Fatalf("the wait heard %v", cause)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("a standby gave up on a transient failure: %v", err)
+	}
+	if waits != 1 || held == nil {
+		t.Fatalf("waited %d times, held %v", waits, held)
+	}
+}
+
+// A standby's log tells a storage failure from a live holder, and says each
+// only when there is something new to say.
+func TestStandbyLogsWhyItIsWaiting(t *testing.T) {
+	var out bytes.Buffer
+	wait := standby(slog.New(slog.NewTextHandler(&out, nil)), time.Nanosecond)
+	busy := fmt.Errorf("database busy: %w", storage.ErrTransient)
+	gone := fmt.Errorf("connection refused: %w", storage.ErrTransient)
+	for _, cause := range []error{busy, busy, gone, gone, storage.ErrInstanceHeld, storage.ErrInstanceHeld} {
+		if err := wait(context.Background(), cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := out.String()
+	for want, n := range map[string]int{"database busy": 1, "connection refused": 1, "another instance holds this state": 1} {
+		if got := strings.Count(log, want); got != n {
+			t.Errorf("%q logged %d times, want %d:\n%s", want, got, n, log)
+		}
+	}
+	if first := strings.SplitN(log, "\n", 2)[0]; strings.Contains(first, "another instance") {
+		t.Errorf("a storage failure was logged as a live holder: %s", first)
+	}
+}
+
 // A write refused as superseded tells the daemon, which must stop.
 func TestHeldDatabaseReportsBeingSuperseded(t *testing.T) {
 	ctx := context.Background()
@@ -253,7 +324,7 @@ func TestHeldDatabaseReportsBeingSuperseded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	held, err := holdInstance(ctx, db, "me", nil)
+	held, err := holdInstance(ctx, db, "me", instanceTTL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +359,7 @@ func (s *scriptedLeaser) RenewInstance(context.Context, storage.InstanceRef, tim
 // ends the tenure.
 func TestKeepRetriesUntilSuperseded(t *testing.T) {
 	leaser := &scriptedLeaser{answers: []error{errors.New("database unavailable"), nil, storage.ErrInstanceFenced}, renewed: make(chan struct{}, 3)}
-	h := &heldDatabase{leaser: leaser}
+	h := &heldDatabase{leaser: leaser, ttl: instanceTTL}
 	lost := make(chan error, 1)
 	h.onLost(func(err error) { lost <- err })
 	ticks := make(chan time.Time)

@@ -96,9 +96,10 @@ type Options struct {
 	SweepInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
-	// instanceRenew and instanceRetry pace the instance lease on shared
-	// state (default instanceRenewEvery and instanceRetry). Tests shorten them.
-	instanceRenew, instanceRetry time.Duration
+	// instanceLease, instanceRenew and instanceRetry pace the instance lease
+	// on shared state (default instanceTTL, instanceRenewEvery and
+	// instanceRetry). Tests shorten them.
+	instanceLease, instanceRenew, instanceRetry time.Duration
 	// WebhookAddr enables the webhook listener on this TCP address (for
 	// example 127.0.0.1:8787). Empty falls back to settings.webhooks, and
 	// with neither the daemon is reconcile-only.
@@ -390,6 +391,10 @@ func (o *Options) defaults() error {
 	if o.MetricInterval == 0 {
 		o.MetricInterval = DefaultMetricInterval
 	}
+	faultPace(o)
+	if o.instanceLease == 0 {
+		o.instanceLease = instanceTTL
+	}
 	if o.instanceRenew == 0 {
 		o.instanceRenew = instanceRenewEvery
 	}
@@ -471,7 +476,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// The state directory's storage choice selects the backend.
 	// On state other hosts can reach, a live holder makes this daemon a
 	// standby, here, until it releases the lease or lets it expire.
-	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceRetry)
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry)
 	if err != nil {
 		return err
 	}
