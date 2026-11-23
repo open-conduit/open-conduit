@@ -85,6 +85,9 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
                            (restore a raw database replica into a state directory holding no database, drained;
                            a start that finds a database serves it and leaves the replica alone)
       [--policy FILE]      (limits the config can't raise, read once at start; or OPEN_CONDUIT_POLICY)
+      [--accept-policy sha256:DIGEST|none]
+                           (on shared state, accept running under this policy, or none, in place of the one
+                           the state last ran under; it names one policy, so it accepts no later change)
       [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                            (override the config's settings.webhooks for this run; TYPE is a tunnel
                            a package provides, such as ngrok or cloudflared, and JSON its config)

@@ -16,7 +16,10 @@ type ServeRequest struct {
 	StateDir, ConfigPath, Socket, ToolbeltDir, LifecycleLog string
 	// PolicyPath is the operator's policy above the config (--policy,
 	// OPEN_CONDUIT_POLICY); empty is none.
-	PolicyPath                                     string
+	PolicyPath string
+	// AcceptPolicy accepts running shared state under a policy other than
+	// the one it last ran under: this policy's digest, or "none".
+	AcceptPolicy                                   string
 	PollInterval, LeaseDuration, RetentionInterval time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
 	SweepInterval time.Duration
@@ -187,7 +190,7 @@ func (o *operator) restoreReplicaBeforeServe(r ServeRequest) bool {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "policy", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "restore-replica", "restore-artifacts-from", "restore-archive-from", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
+	fs := newFlags("serve", "config", "policy", "accept-policy", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "restore-replica", "restore-artifacts-from", "restore-archive-from", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -298,6 +301,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	if r.PolicyPath == "" {
 		r.PolicyPath = o.abs(o.env.Getenv("OPEN_CONDUIT_POLICY"))
 	}
+	r.AcceptPolicy = fs.get("accept-policy")
 	return r, -1
 }
 
