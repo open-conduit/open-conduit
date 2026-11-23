@@ -58,6 +58,14 @@ type ArtifactStore interface {
 	Close() error
 }
 
+// ArtifactReach is an ArtifactStore that says whether another host can reach
+// what it holds. Over state several hosts share, a successor on another host
+// can read artifacts only from a store that can. shared is the answer, and
+// stated is false when the store can't say, which claims neither.
+type ArtifactReach interface {
+	SharesLocation() (shared, stated bool)
+}
+
 // StoredArtifact is a committed artifact as List reports it.
 type StoredArtifact struct {
 	Ref ArtifactRef

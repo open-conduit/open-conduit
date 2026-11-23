@@ -748,6 +748,10 @@ func (s *Store) List(ctx context.Context, after string, limit int) ([]storage.St
 	return out, nil
 }
 
+// SharesLocation states that the store is on this host: Open refuses a
+// directory on a network filesystem.
+func (s *Store) SharesLocation() (shared, stated bool) { return false, true }
+
 // recover removes the unpublished streams in pending/ that are not this
 // store's own active writers: those a process that held the store before
 // left, which Open runs once it holds the lock that proves no other process

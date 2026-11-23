@@ -308,6 +308,9 @@ const (
 	// archiveOffOnSharedState is archiving turned on for state held under the
 	// instance lease, where no pass runs.
 	archiveOffOnSharedState = "archive_off_on_shared_state"
+	// artifactsOnThisHost is a shared database whose artifacts are local to
+	// the host holding it.
+	artifactsOnThisHost = "artifacts_on_this_host"
 )
 
 // rebuildRecord is the last rebuild that didn't succeed. An empty Code means
@@ -509,6 +512,29 @@ func sharedArchiveCheck(name string, archived uint64, rebuildDue bool) runtime.C
 	c := runtime.Check{Name: name, Status: runtime.CheckWarn, Code: archiveOffOnSharedState, Detail: detail}
 	if rebuildDue {
 		c.Items = []string{rebuildOnSharedState + ": this database predates incremental compaction, and a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
+	}
+	return c
+}
+
+// artifactReachCheck is doctor's account, on shared state, of whether a
+// successor on another host could read the artifacts. Records survive a
+// takeover either way; what it reports is the content they refer to.
+func (d *daemon) artifactReachCheck(context.Context) runtime.Check {
+	return artifactReach(d.artifacts)
+}
+
+func artifactReach(store storage.ArtifactStore) runtime.Check {
+	c := runtime.Check{Name: "artifact_reach", Status: runtime.CheckInfo, Code: "unstated", Detail: "the artifact store doesn't say whether another host can reach it; a successor there can read artifacts only if it can"}
+	r, ok := store.(storage.ArtifactReach)
+	if !ok {
+		return c
+	}
+	switch shared, stated := r.SharesLocation(); {
+	case !stated:
+	case shared:
+		c.Status, c.Code, c.Detail = runtime.CheckOK, "shared", "another host can reach the artifact store, so a successor there can read artifacts"
+	default:
+		c.Status, c.Code, c.Detail = runtime.CheckWarn, artifactsOnThisHost, "the database is shared but the artifact store is on this host's disk, so a successor on another host can't read the artifacts its records refer to; choose an artifact backend other hosts can reach"
 	}
 	return c
 }
