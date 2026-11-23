@@ -261,8 +261,8 @@ func standby(log *slog.Logger, every time.Duration) func(context.Context) error 
 
 // openServing is openState for the daemon, which waits for a live holder
 // instead of refusing.
-func openServing(ctx context.Context, stateDir string, log *slog.Logger) (coordination, storage.Database, error) {
-	return openHeld(ctx, stateDir, standby(log, instanceRetry))
+func openServing(ctx context.Context, stateDir string, log *slog.Logger, retry time.Duration) (coordination, storage.Database, error) {
+	return openHeld(ctx, stateDir, standby(log, retry))
 }
 
 func openHeld(ctx context.Context, stateDir string, wait func(context.Context) error) (coordination, storage.Database, error) {

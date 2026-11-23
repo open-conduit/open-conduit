@@ -96,6 +96,9 @@ type Options struct {
 	SweepInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
+	// instanceRenew and instanceRetry pace the instance lease on shared
+	// state (default instanceRenewEvery and instanceRetry). Tests shorten them.
+	instanceRenew, instanceRetry time.Duration
 	// WebhookAddr enables the webhook listener on this TCP address (for
 	// example 127.0.0.1:8787). Empty falls back to settings.webhooks, and
 	// with neither the daemon is reconcile-only.
@@ -387,6 +390,12 @@ func (o *Options) defaults() error {
 	if o.MetricInterval == 0 {
 		o.MetricInterval = DefaultMetricInterval
 	}
+	if o.instanceRenew == 0 {
+		o.instanceRenew = instanceRenewEvery
+	}
+	if o.instanceRetry == 0 {
+		o.instanceRetry = instanceRetry
+	}
 	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 || o.StallAfter <= 0 || o.MetricInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
@@ -462,7 +471,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// The state directory's storage choice selects the backend.
 	// On state other hosts can reach, a live holder makes this daemon a
 	// standby, here, until it releases the lease or lets it expire.
-	backend, store, err := openServing(ctx, o.StateDir, d.log)
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceRetry)
 	if err != nil {
 		return err
 	}
@@ -483,7 +492,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 			lose(cause)
 		})
 		//duty:instance_renewal
-		ticks := time.NewTicker(instanceRenewEvery)
+		ticks := time.NewTicker(o.instanceRenew)
 		defer ticks.Stop()
 		kept := make(chan struct{})
 		keepCtx, stopKeeping := context.WithCancel(ctx)
