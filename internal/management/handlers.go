@@ -1490,7 +1490,7 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		}
 		// The replacement keeps the caller's expiry: rotating never
 		// extends how long a credential lasts.
-		if file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ActFor, r.ExpiresAt); err != nil {
+		if file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role, r.Grants, r.ActFor, r.ExpiresAt, r.Host); err != nil {
 			return err
 		}
 		c.target = "credential/" + r.TokenID
@@ -1553,6 +1553,7 @@ func (s *Server) revoke(c *call) (int, any, error) {
 			if !r.Revoked {
 				r.Revoked, r.RevokedAt = true, s.o.Now()
 			}
+			r.Superseded = false
 			at = r.RevokedAt
 			b, _ = json.Marshal(r)
 			if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
@@ -1694,7 +1695,7 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 			}
 		}
 		var err error
-		if file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, in.ActFor, expires); err != nil {
+		if file, err = issueOperatorInTx(tx, now, in.Name, in.Role, in.Grants, in.ActFor, expires, ""); err != nil {
 			return err
 		}
 		c.target = "credential/" + file.TokenID

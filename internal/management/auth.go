@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,6 +51,14 @@ type operatorRecord struct {
 	// Zero never expires: the owner's own credential, and a named one
 	// issued without a TTL.
 	ExpiresAt time.Time `json:",omitempty"`
+	// Host is the instance a takeover issued this owner credential for,
+	// because that instance's disk held no working one. Empty for every other
+	// credential. At most one is active: the next such issue revokes it.
+	Host string `json:",omitempty"`
+	// Superseded marks a Host credential revoked by a later takeover rather
+	// than by an operator. Only this revocation may be replaced automatically:
+	// one an operator made stands until an operator undoes it.
+	Superseded bool `json:",omitempty"`
 }
 
 // expired reports whether the credential's expiry has come at now.
@@ -124,7 +133,7 @@ func newTokenID(prefix string) (string, error) {
 
 // issueOperatorInTx stores only the digest of a fresh operator bearer. A
 // non-zero expires is when it stops authenticating.
-func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants []Grant, actFor string, expires time.Time) (TokenFile, error) {
+func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants []Grant, actFor string, expires time.Time, host string) (TokenFile, error) {
 	token, err := runtime.NewBearer()
 	if err != nil {
 		return TokenFile{}, err
@@ -134,7 +143,7 @@ func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string, grants [
 		return TokenFile{}, err
 	}
 	digest := runtime.TokenDigest(token)
-	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, Grants: grants, ActFor: actFor, CreatedAt: now, ExpiresAt: expires})
+	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, Grants: grants, ActFor: actFor, CreatedAt: now, ExpiresAt: expires, Host: host})
 	if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 		return TokenFile{}, err
 	}
@@ -152,10 +161,15 @@ func revokeAllOperatorsInTx(tx storage.Tx, now time.Time) error {
 		if err = json.Unmarshal(row.Value, &r); err != nil {
 			return err
 		}
-		if r.Revoked {
+		// An operator's revocation overrides a takeover's, so a credential
+		// already retired can't be replaced automatically after this either.
+		if r.Revoked && !r.Superseded {
 			continue
 		}
-		r.Revoked, r.RevokedAt = true, now
+		if !r.Revoked {
+			r.Revoked, r.RevokedAt = true, now
+		}
+		r.Superseded = false
 		b, _ := json.Marshal(r)
 		if err = tx.Put(authNamespace, row.Key, b); err != nil {
 			return err
@@ -241,13 +255,83 @@ func BootstrapOperator(ctx context.Context, store storage.Store, now func() time
 				return ErrCredentialExists
 			}
 		}
-		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{})
+		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{}, "")
 		return err
 	})
 	if err != nil {
 		return err
 	}
 	return WriteTokenFile(path, file)
+}
+
+// EnsureHolderOperator gives the instance holding shared state a working owner
+// credential in its own private file. The store keeps only digests, so a
+// successor on another host can't recover the token its predecessor wrote to
+// disk: when the file is missing, or holds a credential a later takeover
+// retired, it issues one for this instance. Every other credential stays
+// valid, including the one the first instance wrote, and the previous
+// takeover's is retired so that hosts coming and going don't accumulate admin
+// credentials nobody holds. It returns the new credential's ID, or "" when the
+// file already works. A file it can't read, or whose credential an operator
+// revoked, let expire or that this store doesn't know, is left alone and
+// reported as ErrCredentialExists: a revocation is never undone implicitly.
+func EnsureHolderOperator(ctx context.Context, store storage.Store, now func() time.Time, path, instance string) (string, error) {
+	if instance == "" {
+		return "", errors.New("operator credential: no instance to issue it for")
+	}
+	held, err := ReadTokenFile(path)
+	missing := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !missing {
+		return "", fmt.Errorf("%w: %s: %v", ErrCredentialExists, path, err)
+	}
+	var file TokenFile
+	err = store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		file = TokenFile{}
+		at := now()
+		if !missing {
+			b, err := tx.Get(authNamespace, "operator/"+runtime.TokenDigest(held.Token))
+			if errors.Is(err, storage.ErrNotFound) {
+				return fmt.Errorf("%w: %s holds a credential this state doesn't know", ErrCredentialExists, path)
+			}
+			if err != nil {
+				return err
+			}
+			var r operatorRecord
+			if err = json.Unmarshal(b, &r); err != nil {
+				return err
+			}
+			if r.active(at) {
+				return nil
+			}
+			if !r.Superseded {
+				return fmt.Errorf("%w: %s holds a revoked or expired credential", ErrCredentialExists, path)
+			}
+		}
+		rows, err := tx.List(authNamespace, "operator/")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var r operatorRecord
+			if err = json.Unmarshal(row.Value, &r); err != nil {
+				return err
+			}
+			if r.Host == "" || r.Revoked {
+				continue
+			}
+			r.Revoked, r.RevokedAt, r.Superseded = true, at, true
+			b, _ := json.Marshal(r)
+			if err = tx.Put(authNamespace, row.Key, b); err != nil {
+				return err
+			}
+		}
+		file, err = issueOperatorInTx(tx, at, "", "", nil, "", time.Time{}, instance)
+		return err
+	})
+	if err != nil || file.Token == "" {
+		return "", err
+	}
+	return file.TokenID, WriteTokenFile(path, file)
 }
 
 // RecoverOperator is the locked local recovery/rotation path for a lost
@@ -260,7 +344,7 @@ func RecoverOperator(ctx context.Context, store storage.Store, now func() time.T
 			return err
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{})
+		file, err = issueOperatorInTx(tx, now(), "", "", nil, "", time.Time{}, "")
 		return err
 	})
 	if err != nil {

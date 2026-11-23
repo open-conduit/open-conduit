@@ -708,6 +708,19 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = management.BootstrapOperator(ctx, d.coord, d.now, tokenPath); err != nil && !errors.Is(err, management.ErrCredentialExists) {
 		return err
 	}
+	// The credential is in the shared store but its token is on the disk of
+	// whichever host created it, so a successor makes sure of its own.
+	if err != nil && d.sharedState {
+		issued, err := management.EnsureHolderOperator(ctx, d.coord, d.now, tokenPath, d.owner)
+		switch {
+		case errors.Is(err, management.ErrCredentialExists):
+			d.log.Error("operator token file holds no working credential and was left in place; run open-conduit auth recover or use a named operator", "error", err)
+		case err != nil:
+			return err
+		case issued != "":
+			d.log.Warn("issued this instance an operator credential: its disk held no working token", "token_id", issued, "owner", d.owner, "path", tokenPath)
+		}
+	}
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	defer stopLoop()
 	d.ctx = loopCtx
