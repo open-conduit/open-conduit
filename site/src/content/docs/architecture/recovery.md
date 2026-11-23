@@ -247,6 +247,45 @@ open-conduit --data-dir ~/oc-restored drain end    # once the old host is stoppe
 
 It writes a new directory only, so there is no `--in-place` form.
 
+## Taking over on another host
+
+Automatic takeover needs a storage backend that implements `storage.SharedBackend`, because only state several hosts can reach can be fenced from the old host ([instance lease](../domain-storage/#instance-lease)). **No backend in a release implements it, so automatic takeover isn't available yet.** The daemon's side is built and drilled against a stand-in, and a backend added later gets it without a change to the core.
+
+| Backend | Automatic takeover | Recovery point (`doctor`'s `recovery_point`) | After losing the host |
+| --- | --- | --- | --- |
+| `sqlite` | No: it is on one host and takes no instance lease | `replication_unobserved`: a WAL replicator can keep a copy, but SQLite can't see whether one is running | An operator [promotes a replica](#restoring-from-a-replica) or restores a bundle, and loses what the copy hadn't received |
+| `faultinject-shared` | Only in the test build | Not a deployment option | Stand-in for the drills: SQLite on one machine |
+
+A backend that implements `SharedBackend` must still state its own recovery point through `storage.RecoveryStater`. The instance lease stops two writers, but it says nothing about how much committed data a failure of that backend can lose.
+
+### What a successor has
+
+Each host has its own state directory, which must be on a local filesystem. Only what is in the shared store moves with the lease.
+
+| What | Where it lives | At a takeover |
+| --- | --- | --- |
+| Work, Events, timers, config generations, audit ledger, package KV, drain, the record of the enforced policy, the list cursor key | The shared store | **Shared.** The successor continues from the last commit |
+| Artifacts | The artifact store | **Shared only if that store is.** The default file store is on one host, and `doctor` warns with `artifacts_on_this_host` |
+| Policy file | Each host | **Must be provided.** A daemon whose policy differs from the recorded one [doesn't serve](../domain-storage/#instance-lease) until it has that policy or an operator accepts the change |
+| Installed packages (`extensions/` beside the config) | Each host | **Must be provided.** A daemon that can't validate the stored generation doesn't serve, and the shared config is left alone |
+| Config file, `secrets.json`, keychain entries and `cmd:` programs | Each host | **Must be provided.** The stored generation is what runs, and its secret references resolve on the host that holds it. `open-conduit portability` lists what is tied to a machine |
+| Operator token | Each host's `private/` | **Rebuilt.** A successor without a working one issues itself a credential. Named operators are in the store and keep working |
+| `daemon.lock` | Each host's state directory | **Rebuilt.** It only keeps two daemons off one directory on one host. The instance lease, not this file, keeps one writer across hosts |
+| Scheduled and pre-upgrade bundles | `--backup-dir`, by default inside the state directory | **Lost with the host unless shipped.** A successor with no bundle in its directory takes one straight away. Bundles at a [backup destination](../backup-bundles/#backup-destinations) survive |
+| Packages' private directories (`<state>/extensions/<name>`) | Each host | **Lost.** Packages rebuild their caches. What must survive belongs in package KV |
+| Run directories, toolbelt sockets, local processes | Each host | **Lost.** Their attempts are fenced and retried, so the Work survives. An attempt on a remote runner survives only if its executor can prove and adopt it |
+| Workspaces, agent homes | Each host | **Lost.** Workspaces are made again from the remote, so unpushed work is gone, and an agent's next turn starts from its handoff note |
+
+### What hasn't been proved
+
+The drills run real daemons over one database on one machine. These have not been run:
+
+- A failover between two real hosts, or against a real shared database.
+- A network partition. The drills pause and kill the holder instead.
+- A real tunnel moving between hosts.
+- A live attempt adopted across a takeover. The drills prove that an attempt which can't be adopted is fenced and retried.
+- Two real binary versions side by side. The upgrade tests set the stored format back to stand in for an older binary.
+
 ## SQLite migration recovery
 
 Schema migrations run inside one immediate transaction at open (`internal/storage/sqlite`). A failure rolls back and leaves the database unchanged ("migration rolled back"). Open refuses these cases, each before it changes the database:
