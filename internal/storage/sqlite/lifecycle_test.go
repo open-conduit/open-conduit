@@ -185,6 +185,31 @@ func (unfenced) Fence(_ context.Context, now time.Time) error {
 
 type unchecked struct{ storage.Database }
 
+// silent has every Backend method and states no recovery point.
+type silent struct{ storage.Backend }
+
+// overclaiming says it sees a copy that is a negative time behind.
+type overclaiming struct{ storage.Backend }
+
+func (overclaiming) RecoveryPoint(context.Context, string) (storage.RecoveryPoint, error) {
+	return storage.RecoveryPoint{Replication: storage.ReplicationObserved, Lag: -time.Second, Detail: "a replica"}, nil
+}
+
+// scribbling writes to the state it is asked about.
+type scribbling struct{ storage.Backend }
+
+func (scribbling) RecoveryPoint(_ context.Context, location string) (storage.RecoveryPoint, error) {
+	db, err := existing(location)
+	if err != nil {
+		return storage.RecoveryPoint{}, err
+	}
+	defer db.Close()
+	if _, err := db.Exec("INSERT OR REPLACE INTO metadata VALUES ('asked','yes')"); err != nil {
+		return storage.RecoveryPoint{}, err
+	}
+	return storage.RecoveryPoint{Replication: storage.ReplicationNone, Detail: "none"}, nil
+}
+
 // raising opens the state first, as a daemon without the guard would, so
 // the format is already raised when it is asked what to preserve.
 type raising struct{ storage.Backend }
@@ -280,6 +305,18 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// The integrity check trusts what Open's quick check found.
 		name: "integrity_check_passes_anything", failing: "integrity_check_finds_corruption", want: "passed damaged state",
 		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database { return unchecked{db} }},
+	}, {
+		// The backend says nothing about its recovery point.
+		name: "recovery_point_unstated", failing: "states_its_recovery_point", want: "doesn't state",
+		backend: silent{sqlite.Backend},
+	}, {
+		// The statement isn't one the contract allows.
+		name: "recovery_point_invalid", failing: "states_its_recovery_point", want: "invalid recovery point",
+		backend: overclaiming{sqlite.Backend},
+	}, {
+		// Asking changes the state.
+		name: "recovery_point_changes_state", failing: "states_its_recovery_point", want: "changed the state",
+		backend: scribbling{sqlite.Backend},
 	}}
 	for _, control := range controls {
 		t.Run(control.name, func(t *testing.T) {

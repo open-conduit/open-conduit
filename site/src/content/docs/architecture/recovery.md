@@ -200,6 +200,7 @@ dbs:
 - **Start them in either order.** Litestream waits for a database that doesn't exist yet, and the daemon publishes a new one with its schema already in it.
 - **The daemon stays compatible.** Its checkpoints are all passive, so none restarts the WAL under Litestream's read transaction or waits on it. Litestream adds two tables of its own (`_litestream_seq`, `_litestream_lock`), which travel in bundles and do no harm.
 - **Replicate the rest separately.** Litestream covers only the database. Keep artifacts in an object-store [artifact backend](../domain-storage/#backend-lifecycle), or copy `artifacts/` on a schedule, and copy `archive/` if `archive_finished_days` is set. What a restore can't find is [reported and recorded as lost](#restoring-from-a-replica).
+- **Doctor can't confirm it's running.** Its `recovery_point` check reports `replication_unobserved` with or without Litestream, because SQLite can't see a replicator, and gives the newest scheduled bundle's age. Watch Litestream with its own metrics.
 - **Stop Litestream before `backup restore --in-place`,** and point it at an empty replica path afterwards, because the restored database is a new history.
 
 To recover from a lost host:

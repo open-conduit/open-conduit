@@ -81,6 +81,55 @@ type ReplicaRestorer interface {
 	RestoreReplica(ctx context.Context, replica, destination string, now time.Time) error
 }
 
+// Replication is what a backend can say about a continuous copy of its state.
+type Replication string
+
+const (
+	// ReplicationNone says the state can't be continuously copied, so its
+	// recovery point is the latest snapshot.
+	ReplicationNone Replication = "none"
+	// ReplicationUnobserved says another system can continuously copy the
+	// state, but the backend can't see whether one is doing so.
+	ReplicationUnobserved Replication = "unobserved"
+	// ReplicationObserved says the backend sees a continuous copy, and how
+	// far behind it is.
+	ReplicationObserved Replication = "observed"
+)
+
+// RecoveryPoint is a backend's statement of how much committed state could be
+// lost with the location that holds it. It reports what the backend knows and
+// claims nothing it can't see. Whether that is enough is the operator's call.
+type RecoveryPoint struct {
+	Replication Replication
+	// Lag is how far the copy is behind, for ReplicationObserved only.
+	Lag time.Duration
+	// Detail says it in the backend's own terms, for an operator.
+	Detail string
+}
+
+// Valid reports whether the statement is one the contract allows.
+func (p RecoveryPoint) Valid() bool {
+	if p.Detail == "" || p.Lag < 0 {
+		return false
+	}
+	switch p.Replication {
+	case ReplicationNone, ReplicationUnobserved:
+		return p.Lag == 0
+	case ReplicationObserved:
+		return true
+	}
+	return false
+}
+
+// RecoveryStater is a Backend that states its recovery point. Every backend
+// should: the lifecycle conformance suite requires it. It is separate from
+// Backend so that adding it breaks no backend built outside this repository.
+type RecoveryStater interface {
+	// RecoveryPoint states the recovery point of the state at location. It
+	// changes nothing there, and may be called while a Database has it open.
+	RecoveryPoint(ctx context.Context, location string) (RecoveryPoint, error)
+}
+
 // Database is open coordination state.
 type Database interface {
 	Store

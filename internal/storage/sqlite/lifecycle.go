@@ -199,6 +199,16 @@ func (backend) ReadSnapshot(ctx context.Context, snapshot string, now time.Time,
 	return s.View(ctx, read)
 }
 
+// RecoveryPoint states that a WAL replicator can keep a continuous copy of the
+// database. A replicator is a separate process that leaves no signal SQLite
+// can rely on, so this never claims that one is running.
+func (backend) RecoveryPoint(context.Context, string) (storage.RecoveryPoint, error) {
+	return storage.RecoveryPoint{
+		Replication: storage.ReplicationUnobserved,
+		Detail:      "a WAL replicator can keep a continuous copy of this SQLite database, but SQLite can't see whether one is running",
+	}, nil
+}
+
 // Inspect opens a private copy of the database and its WAL, so nothing
 // Open does (recovering the WAL, recording the record format) reaches the
 // original. It owns the original while the inspection is open, so no
