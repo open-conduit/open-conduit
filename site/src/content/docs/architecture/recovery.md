@@ -249,7 +249,7 @@ It writes a new directory only, so there is no `--in-place` form.
 
 ## Taking over on another host
 
-Automatic takeover needs a storage backend that implements `storage.SharedBackend`, because only state several hosts can reach can be fenced from the old host ([instance lease](../domain-storage/#instance-lease)). **No backend in a release implements it, so automatic takeover isn't available yet.** The daemon's side is built and drilled against a stand-in, and a backend added later gets it without a change to the core.
+Automatic takeover needs a storage backend that implements `storage.SharedBackend`, because only state several hosts can reach can be fenced from the old host ([instance lease](../domain-storage/#instance-lease)). **No backend in a release implements it, so automatic takeover isn't available yet.** [#912](https://github.com/open-conduit/open-conduit/issues/912) tracks shipping one. The daemon's side is built and drilled against a stand-in, and a backend added later gets it without a change to the core.
 
 | Backend | Automatic takeover | Recovery point (`doctor`'s `recovery_point`) | After losing the host |
 | --- | --- | --- | --- |
