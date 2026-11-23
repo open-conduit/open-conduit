@@ -24,6 +24,10 @@ func (d *daemon) passed() {}
 // control for starting only the packages the config uses (fault_inject.go).
 func startAll() bool { return false }
 
+// faultPace leaves the instance lease's pace alone in production builds. The
+// faultinject build can shorten it (OPEN_CONDUIT_INSTANCE_TTL).
+func faultPace(*Options) {}
+
 // daemonClock is the daemon's clock. The faultinject build can run it ahead
 // (OPEN_CONDUIT_CLOCK_SKEW), so a test can age history without waiting.
 func daemonClock() func() time.Time { return time.Now }

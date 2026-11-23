@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -208,6 +209,30 @@ func (t *faultyTx) Put(namespace, key string, value []byte) error {
 // starts, as the daemon did before it started only those something needs,
 // so a test can show its check of the running packages catches that.
 func startAll() bool { return os.Getenv("OPEN_CONDUIT_START_ALL_PACKAGES") == "1" }
+
+// faultSharedBackend is SQLite posing as state several hosts reach, so a drill
+// can run real daemons, each on its own state directory, over one database
+// with only the instance lease keeping one writer. It exists only in this build.
+const faultSharedBackend = "faultinject-shared"
+
+type faultShared struct{ storage.Backend }
+
+func (faultShared) SharesLocation(string) bool { return true }
+func (faultShared) Open(ctx context.Context, location string) (storage.Database, error) {
+	return sqlite.Open(ctx, location)
+}
+
+func init() { storage.RegisterBackend(faultSharedBackend, faultShared{sqlite.Backend}) }
+
+// faultPace is OPEN_CONDUIT_INSTANCE_TTL: a shorter instance lease, renewed and
+// retried in the production proportions, so a drill can wait out an expiry.
+func faultPace(o *Options) {
+	ttl, err := time.ParseDuration(os.Getenv("OPEN_CONDUIT_INSTANCE_TTL"))
+	if err != nil || ttl <= 0 {
+		return
+	}
+	o.instanceLease, o.instanceRenew, o.instanceRetry = ttl, ttl/3, ttl/6
+}
 
 // daemonClock is OPEN_CONDUIT_CLOCK_SKEW ahead of real time, so an integration
 // test can age what a restarted daemon finds without waiting for it.

@@ -106,7 +106,7 @@ func TestSharedStateWithoutALeaseIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := holdInstance(ctx, noLease{db}, "me", nil); !errors.Is(err, storage.ErrInvalid) {
+	if _, err := holdInstance(ctx, noLease{db}, "me", instanceTTL, nil); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("shared state without a lease: %v", err)
 	}
 }
@@ -230,7 +230,7 @@ func TestHoldInstanceWaitsForTheHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	waits := 0
-	held, err := holdInstance(ctx, db, "me", func(context.Context) error {
+	held, err := holdInstance(ctx, db, "me", instanceTTL, func(context.Context) error {
 		waits++
 		return db.ReleaseInstance(ctx, other)
 	})
@@ -269,11 +269,11 @@ func TestHoldInstanceSurvivesATransientFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", nil); !errors.Is(err, storage.ErrTransient) {
+	if _, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, nil); !errors.Is(err, storage.ErrTransient) {
 		t.Fatalf("with no wait: %v", err)
 	}
 	waits := 0
-	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", func(context.Context) error {
+	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, func(context.Context) error {
 		waits++
 		return nil
 	})
@@ -294,7 +294,7 @@ func TestHeldDatabaseReportsBeingSuperseded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	held, err := holdInstance(ctx, db, "me", nil)
+	held, err := holdInstance(ctx, db, "me", instanceTTL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func (s *scriptedLeaser) RenewInstance(context.Context, storage.InstanceRef, tim
 // ends the tenure.
 func TestKeepRetriesUntilSuperseded(t *testing.T) {
 	leaser := &scriptedLeaser{answers: []error{errors.New("database unavailable"), nil, storage.ErrInstanceFenced}, renewed: make(chan struct{}, 3)}
-	h := &heldDatabase{leaser: leaser}
+	h := &heldDatabase{leaser: leaser, ttl: instanceTTL}
 	lost := make(chan error, 1)
 	h.onLost(func(err error) { lost <- err })
 	ticks := make(chan time.Time)

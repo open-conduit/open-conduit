@@ -184,7 +184,7 @@ func (a artifactStorage) open(ctx context.Context) (storage.ArtifactStore, error
 // shared location it holds the instance lease until Close, refusing state
 // another instance holds and taking over this host's own crashed tenure.
 func openState(ctx context.Context, stateDir string) (coordination, storage.Database, error) {
-	return openHeld(ctx, stateDir, nil)
+	return openHeld(ctx, stateDir, instanceTTL, nil)
 }
 
 // openArtifacts opens stateDir's artifact store with its chosen backend.
