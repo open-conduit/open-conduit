@@ -47,6 +47,10 @@ type LifecycleHarness struct {
 	// Older makes the closed state at location claim to have been written
 	// by an older binary, at a lower record format.
 	Older func(t *testing.T, location string)
+	// Behind makes the closed state at location lack something Open would
+	// add without raising its versions, such as a derived index or trigger.
+	// Leave it nil for a backend whose Open adds nothing of the kind.
+	Behind func(t *testing.T, location string)
 	// Fingerprint changes whenever anything stored at location changes.
 	Fingerprint func(t *testing.T, location string) string
 	// Corrupt damages the closed state at location in a way that a full
@@ -100,9 +104,54 @@ func LifecycleCases() []LifecycleCase {
 		{"instance_fence_refused_under_a_holder", instanceFenceRefused},
 		{"instance_restore_ends_the_tenure", instanceRestore},
 		{"instance_upgrade_waits_for_the_holder", instanceUpgradeWaits},
+		{"instance_schema_waits_for_the_holder", instanceSchemaWaits},
 		{"instance_refuses_newer_state", instanceRefusesNewer},
 		{"instance_raise_refuses_moved_state", instanceRaiseRefusesMoved},
 	}
+}
+
+// instanceSchemaWaits: Open adds nothing to state a live holder is using, even
+// when its stored versions need no raise, because what it adds can change what
+// the holder's writes do. Once the holder has expired, Open adds it.
+func instanceSchemaWaits(t *testing.T, h LifecycleHarness) error {
+	if h.Behind == nil {
+		return nil
+	}
+	ctx := context.Background()
+	db, leaser, location, _, _, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	if _, err := leaser.AcquireInstance(ctx, "old", instanceTTL); err != nil {
+		db.Close()
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	h.Behind(t, location)
+	before := h.Fingerprint(t, location)
+	if opened, err := h.Backend.Open(ctx, location); err == nil {
+		opened.Close()
+		return errors.New("the schema changed under a live holder")
+	} else if !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("opening state that lacks a derived object under a live holder: %w", err)
+	}
+	if after := h.Fingerprint(t, location); after != before {
+		return errors.New("refusing to add to state under a live holder changed it")
+	}
+	h.ExpireInstance(t, location)
+	opened, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return fmt.Errorf("opening state after its holder expired: %w", err)
+	}
+	if err := opened.Close(); err != nil {
+		return err
+	}
+	if after := h.Fingerprint(t, location); after == before {
+		return errors.New("opening state didn't add what it lacked once its holder had expired")
+	}
+	return nil
 }
 
 // instanceUpgradeWaits: state an older binary holds isn't preserved or raised
