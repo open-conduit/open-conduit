@@ -41,7 +41,7 @@ type instanceDaemon struct {
 	passFile string
 }
 
-func startInstance(t *testing.T, d *drill, name, shared string) *instanceDaemon {
+func startInstance(t *testing.T, d *drill, name, shared string, flags ...string) *instanceDaemon {
 	t.Helper()
 	state := filepath.Join(d.root, name)
 	if err := os.MkdirAll(state, 0o700); err != nil {
@@ -56,7 +56,8 @@ func startInstance(t *testing.T, d *drill, name, shared string) *instanceDaemon 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(daemonBinary(t), "--data-dir", state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String(), "--probe-addr", "127.0.0.1:0", "--webhook-addr", "127.0.0.1:0")
+	args := append([]string{"--data-dir", state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String(), "--probe-addr", "127.0.0.1:0", "--webhook-addr", "127.0.0.1:0"}, flags...)
+	cmd := exec.Command(daemonBinary(t), args...)
 	passes := filepath.Join(d.root, name+".passes")
 	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_INSTANCE_TTL="+takeoverTTL.String(), "OPEN_CONDUIT_PASS_FILE="+passes)
 	cmd.Stdout, cmd.Stderr = out, out
@@ -465,6 +466,77 @@ func TestDaemonCursorSurvivesTakeover(t *testing.T) {
 		}
 	}
 	t.Fatalf("doctor has no artifact_reach check on shared state: %+v", report.Checks)
+}
+
+// The policy is on each host. A daemon without it is refused as it starts, even
+// as a standby, so it can't change the state or be relied on; a host with
+// the same one does, and running without it takes an operator naming that.
+func TestDaemonTakeoverKeepsThePolicy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process kill drills")
+	}
+	d := newDrill(t)
+	shared := filepath.Join(d.root, "shared.db")
+	policy := filepath.Join(d.root, "policy.json")
+	if err := os.WriteFile(policy, []byte(`{"version":1,"limits":{"concurrency":64}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enforced := func(i *instanceDaemon) bool {
+		t.Helper()
+		report, err := i.c.Doctor(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range report.Checks {
+			if c.Name == "policy" {
+				return true
+			}
+		}
+		return false
+	}
+	kill := func(i *instanceDaemon) {
+		t.Helper()
+		if err := i.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		<-i.exited
+	}
+	t.Setenv("OPEN_CONDUIT_POLICY", policy)
+	holder := startInstance(t, d, "a", shared)
+	waitFor(t, "the holder serving", holder.serving)
+	if !enforced(holder) {
+		t.Fatal("the holder doesn't enforce its policy")
+	}
+
+	t.Setenv("OPEN_CONDUIT_POLICY", "")
+	without := startInstance(t, d, "b", shared)
+	select {
+	case <-without.exited:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("a standby without the policy kept running:\n%s", without.log())
+	}
+	if !holder.serving() {
+		t.Fatal("refusing the standby disturbed the holder")
+	}
+	kill(holder)
+	if log := without.log(); !strings.Contains(log, "differs from the one this shared state last ran under") || strings.Contains(log, "open-conduit serving") {
+		t.Fatalf("the refused successor's log:\n%s", log)
+	}
+
+	t.Setenv("OPEN_CONDUIT_POLICY", policy)
+	same := startInstance(t, d, "c", shared)
+	waitFor(t, "a successor with the same policy serving", same.serving)
+	if !enforced(same) {
+		t.Fatal("the successor doesn't enforce the policy")
+	}
+	kill(same)
+
+	t.Setenv("OPEN_CONDUIT_POLICY", "")
+	accepted := startInstance(t, d, "e", shared, "--accept-policy", "none")
+	waitFor(t, "an accepted change serving", accepted.serving)
+	if enforced(accepted) {
+		t.Fatal("a daemon accepted to run without a policy reports one")
+	}
 }
 
 // dataVersion changes when any other connection commits to the database.

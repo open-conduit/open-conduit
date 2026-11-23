@@ -86,6 +86,14 @@ type InstanceLeaser interface {
 type SharedBackend interface {
 	Backend
 	SharesLocation(location string) bool
+	// ViewInPlace calls read once over the latest committed state, as a
+	// standby may every few seconds for as long as it waits: it reads the
+	// state where it is, without copying it, taking ownership or changing
+	// anything, and a holder's writes don't make it fail. Absent state is
+	// os.ErrNotExist, and state stored at newer versions than this binary
+	// writes is ErrSchemaNewer or ErrRecordsNewer. State at older versions
+	// is read as it stands.
+	ViewInPlace(ctx context.Context, location string, read func(Tx) error) error
 }
 
 // Holding is s with every transaction made as the holder ref, whatever Guard

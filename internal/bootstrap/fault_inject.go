@@ -222,8 +222,16 @@ func (faultShared) Open(ctx context.Context, location string) (storage.Database,
 	return sqlite.Open(ctx, location)
 }
 
+func (faultShared) Inspect(ctx context.Context, location string) (storage.Inspection, error) {
+	return sqlite.InspectUnowned(ctx, location)
+}
+
 func (faultShared) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
 	return sqlite.OpenPriorUnowned(ctx, location)
+}
+
+func (faultShared) ViewInPlace(ctx context.Context, location string, read func(storage.Tx) error) error {
+	return sqlite.ViewUnowned(ctx, location, read)
 }
 
 func init() { storage.RegisterBackend(faultSharedBackend, faultShared{sqlite.Backend}) }

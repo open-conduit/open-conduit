@@ -50,6 +50,9 @@ type Options struct {
 	// PolicyPath is the operator's policy above the config (--policy,
 	// OPEN_CONDUIT_POLICY), read once at start; empty is none.
 	PolicyPath string
+	// AcceptPolicy accepts running shared state under a policy other than
+	// the one it last ran under: this policy's digest, or "none".
+	AcceptPolicy string
 	// Socket defaults to StateDir/management.sock.
 	Socket string
 	// ToolbeltDir contains the `os` binary (default: beside the executable).
@@ -483,7 +486,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// Opening raises the stored format, after which an older binary refuses
 	// the database: a bundle of it as it stands is kept first, once no other
 	// instance is changing it.
-	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.preserveBeforeUpgrade, func() {
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.prepareToOpen, func() {
 		d.health.phase.Store(management.PhaseStandby)
 	})
 	if err != nil {
@@ -518,6 +521,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		keepCtx, stopKeeping := context.WithCancel(ctx)
 		go func() { defer close(kept); held.keep(keepCtx, ticks.C, d.log) }()
 		defer func() { stopKeeping(); <-kept }()
+		// Before anything acts on the state: the policy is an authority limit
+		// and lives on each host, so a takeover must not lower it unnoticed.
+		if err = admitPolicy(ctx, held, d.now, d.policy, o.AcceptPolicy, d.owner, d.log); err != nil {
+			return err
+		}
 	}
 	d.recordBuild(ctx, store)
 	archive, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(o.StateDir, backup.ArchiveDir))
