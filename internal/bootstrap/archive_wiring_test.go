@@ -320,6 +320,27 @@ func TestHolderDoesNotRebuildAtStart(t *testing.T) {
 	if _, attempted, err := d.rebuildAttempt(ctx); err != nil || attempted {
 		t.Fatalf("a holder recorded a rebuild: %v %v", attempted, err)
 	}
+	// Doctor says why the file doesn't shrink, and that nothing has failed.
+	code := d.reportedCode("database_rebuild", "")
+	if code != rebuildOnSharedState {
+		t.Fatalf("reported %q", code)
+	}
+	if c := rebuildCheck("event_archive", code); c.Status != runtime.CheckInfo || !strings.Contains(c.Detail, "instance lease") {
+		t.Fatalf("doctor: %+v", c)
+	}
+	// With no rebuild due, a holder clears the report and an attempt recorded
+	// before the state moved to a shared location.
+	if err := d.recordRebuild(ctx, rebuildRecord{Attempted: d.now(), Code: "disk_full"}); err != nil {
+		t.Fatal(err)
+	}
+	done := &fakeCompactor{space: storage.Space{TotalBytes: 100 * mib, Incremental: true}}
+	d.rebuildAtStart(ctx, heldCompactor{Compactor: done, held: &heldDatabase{}}, on)
+	if code := d.reportedCode("database_rebuild", ""); code != "" {
+		t.Fatalf("still reported: %q", code)
+	}
+	if _, attempted, err := d.rebuildAttempt(ctx); err != nil || attempted {
+		t.Fatalf("the old attempt stayed on record: %v %v", attempted, err)
+	}
 	unheld := &fakeCompactor{space: due}
 	d.rebuildAtStart(ctx, unheld, on)
 	if unheld.rebuilds != 1 {
