@@ -149,7 +149,7 @@ func instanceSchemaWaits(t *testing.T, h LifecycleHarness) error {
 		return err
 	}
 	if after := h.Fingerprint(t, location); after == before {
-		return errors.New("Open didn't add what the state lacked once its holder had expired")
+		return errors.New("opening state didn't add what it lacked once its holder had expired")
 	}
 	return nil
 }
