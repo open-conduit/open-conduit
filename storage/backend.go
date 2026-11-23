@@ -142,7 +142,9 @@ type Database interface {
 	// Fence clears the owner and expiry of every Execution lease, keeping
 	// its epoch. No earlier holder can commit afterwards, and the next
 	// Claim advances the epoch. It is how restore, and a standby taking
-	// over the state, end the authority of whoever held it before.
+	// over the state, end the authority of whoever held it before. On a
+	// backend with an instance lease it ends the holder's tenure too,
+	// keeping that epoch, and needs no Guard: it is the owner's own act.
 	Fence(ctx context.Context, now time.Time) error
 	Inspection
 }

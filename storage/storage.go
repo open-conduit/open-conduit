@@ -33,9 +33,14 @@ var (
 // Guard.Now is supplied by the trusted runtime clock, never by an executor.
 // Lease fences every mutation in an executor-originated transaction, including KV.
 // A nil Lease denotes trusted control-plane authority, not unauthenticated access.
+// Instance is the instance lease the writer holds (InstanceLeaser): a backend
+// with that lease refuses a stale one, or none while a holder is recorded,
+// with ErrInstanceFenced. A backend without it refuses any Instance with
+// ErrInvalid, so a holder is never silently unfenced.
 type Guard struct {
-	Now   time.Time
-	Lease *domain.LeaseRef
+	Now      time.Time
+	Lease    *domain.LeaseRef
+	Instance *InstanceRef
 }
 type Store interface {
 	// Transact is serializable, all-or-nothing, and acknowledges only after commit.

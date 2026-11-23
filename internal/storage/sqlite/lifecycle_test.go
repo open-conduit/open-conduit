@@ -27,7 +27,78 @@ func lifecycleHarness(b storage.Backend) conformance.LifecycleHarness {
 		},
 		Fingerprint: fingerprint,
 		Corrupt:     corrupt,
+		ExpireInstance: func(t *testing.T, path string) {
+			raw(t, path, "PRAGMA busy_timeout=5000", "UPDATE instance_lease SET expires_at=1 WHERE expires_at IS NOT NULL")
+		},
 	}
+}
+
+// staleInstance is a database that doesn't compare a writer's reference: every
+// write runs as the latest holder, or as none when nameless is set.
+type staleInstance struct {
+	storage.Database
+	leaser   storage.InstanceLeaser
+	latest   *storage.InstanceRef
+	nameless bool
+}
+
+func (s *staleInstance) AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (storage.InstanceRef, error) {
+	ref, err := s.leaser.AcquireInstance(ctx, owner, ttl)
+	if err == nil {
+		s.latest = &ref
+	}
+	return ref, err
+}
+func (s *staleInstance) RenewInstance(ctx context.Context, ref storage.InstanceRef, ttl time.Duration) error {
+	return s.leaser.RenewInstance(ctx, ref, ttl)
+}
+func (s *staleInstance) ReleaseInstance(ctx context.Context, ref storage.InstanceRef) error {
+	return s.leaser.ReleaseInstance(ctx, ref)
+}
+func (s *staleInstance) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	if (g.Instance != nil && !s.nameless) || (g.Instance == nil && s.nameless) {
+		g.Instance = s.latest
+	}
+	return s.Database.Transact(ctx, g, fn)
+}
+
+// stealing takes a held lease by expiring it first.
+type stealing struct {
+	storage.Database
+	leaser storage.InstanceLeaser
+	expire func() error
+}
+
+func (s stealing) AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (storage.InstanceRef, error) {
+	if err := s.expire(); err != nil {
+		return storage.InstanceRef{}, err
+	}
+	return s.leaser.AcquireInstance(ctx, owner, ttl)
+}
+func (s stealing) RenewInstance(ctx context.Context, ref storage.InstanceRef, ttl time.Duration) error {
+	return s.leaser.RenewInstance(ctx, ref, ttl)
+}
+func (s stealing) ReleaseInstance(ctx context.Context, ref storage.InstanceRef) error {
+	return s.leaser.ReleaseInstance(ctx, ref)
+}
+
+// stealingBackend opens a database whose acquisition ignores a live holder.
+func stealingBackend() storage.Backend {
+	return weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
+		db, err := sqlite.Backend.Open(ctx, location)
+		if err != nil {
+			return nil, err
+		}
+		return stealing{Database: db, leaser: db.(storage.InstanceLeaser), expire: func() error {
+			conn, err := sql.Open("sqlite", location)
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+			_, err = conn.Exec("UPDATE instance_lease SET expires_at=1 WHERE expires_at IS NOT NULL")
+			return err
+		}}, nil
+	}}
 }
 
 func raw(t *testing.T, path string, statements ...string) {
@@ -317,6 +388,36 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// Asking changes the state.
 		name: "recovery_point_changes_state", failing: "states_its_recovery_point", want: "changed the state",
 		backend: scribbling{sqlite.Backend},
+	}, {
+		// The database has no instance lease at all.
+		name: "instance_lease_missing", failing: "instance_lease_admits_one_holder", want: "no instance lease",
+		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database { return unchecked{db} }},
+	}, {
+		// A second instance takes a lease that hasn't expired.
+		name: "instance_lease_stolen", failing: "instance_lease_admits_one_holder", want: "acquired a held lease",
+		backend: stealingBackend(),
+	}, {
+		// A write that names no holder is let through as the holder.
+		name: "instance_write_unnamed", failing: "instance_lease_admits_one_holder", want: "a write naming no holder",
+		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database {
+			return &staleInstance{Database: db, leaser: db.(storage.InstanceLeaser), nameless: true}
+		}},
+	}, {
+		// Restore copies the snapshot with its holder still recorded.
+		name: "instance_restore_keeps_the_tenure", failing: "instance_restore_ends_the_tenure", want: "still holds the snapshot's tenure",
+		backend: weakened{Backend: sqlite.Backend, restore: func(_ context.Context, snapshot, destination string, _ time.Time) error {
+			b, err := os.ReadFile(snapshot)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(destination, b, 0o600)
+		}},
+	}, {
+		// A stale epoch commits on a control-plane transaction.
+		name: "instance_stale_epoch_commits", failing: "instance_takeover_fences_the_old_holder", want: "the old holder's write",
+		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database {
+			return &staleInstance{Database: db, leaser: db.(storage.InstanceLeaser)}
+		}},
 	}}
 	for _, control := range controls {
 		t.Run(control.name, func(t *testing.T) {
