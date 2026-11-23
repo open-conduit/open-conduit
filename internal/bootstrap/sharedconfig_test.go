@@ -76,3 +76,49 @@ func TestRefusalTellsARefusedPackageFromAMissingOne(t *testing.T) {
 		t.Fatalf("the refusal of a package that is here: %s", msg)
 	}
 }
+
+// installPackage writes a package providing an extension type beside config.
+func installPackage(t *testing.T, config, name, extensionType string) {
+	t.Helper()
+	dir := filepath.Join(extensionsRoot(config), name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(protocol.Manifest{Protocol: []int{protocol.Version}, Name: name, Version: "1.0.0", Command: []string{name + "-extension"},
+		Provides: protocol.Provides{Extensions: []protocol.ExtensionDecl{{Type: extensionType}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, name+"-extension"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Packages that conflict are all refused when the daemon catalogues them, so
+// the early check must not count them as providing what the config uses. One
+// package alone, the control, serves the same generation.
+func TestRefusalOfConflictingPackages(t *testing.T) {
+	ctx := context.Background()
+	alone := upgradeDaemon(sharedStateUsing(t, "alpha-x"), time.Now())
+	alone.o.ConfigPath = filepath.Join(t.TempDir(), "config.json")
+	installPackage(t, alone.o.ConfigPath, "alpha", "alpha-x")
+	if err := alone.refuseUnservableConfig(ctx); err != nil {
+		t.Fatalf("control: one package providing the type: %v", err)
+	}
+
+	both := upgradeDaemon(sharedStateUsing(t, "alpha-x"), time.Now())
+	both.o.ConfigPath = filepath.Join(t.TempDir(), "config.json")
+	installPackage(t, both.o.ConfigPath, "alpha", "alpha-x")
+	// A type must start with its package's name, and this one does for both.
+	installPackage(t, both.o.ConfigPath, "alpha-x", "alpha-x")
+	err := both.refuseUnservableConfig(ctx)
+	if !errors.Is(err, management.ErrStoredConfigRefused) {
+		t.Fatalf("conflicting packages: %v", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "registration_conflict") || !strings.Contains(msg, "alpha: ") || !strings.Contains(msg, "alpha-x: ") || strings.Contains(msg, "--adopt-config") {
+		t.Fatalf("the refusal of conflicting packages: %s", msg)
+	}
+}
