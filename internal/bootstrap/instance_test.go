@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,69 @@ func TestSharedStateWithoutALeaseIsRefused(t *testing.T) {
 	}
 }
 
+// The owner survives a restart, and never follows the directory to a host
+// that shares its name and path, or to another host at all.
+func TestInstanceOwnerIsThisCopysOwn(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	first, err := ownerOn(dir, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := ownerOn(dir, "node"); err != nil || again != first {
+		t.Fatalf("restart: owner %q, want %q (%v)", again, first, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "private", instanceFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(filepath.Join(copied, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copied, "private", instanceFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if other, err := ownerOn(copied, "node"); err != nil || other == first {
+		t.Fatalf("a copy on a host of the same name kept the owner %q (%v)", other, err)
+	}
+	if other, err := ownerOn(dir, "renamed"); err != nil || strings.HasSuffix(other, strings.TrimPrefix(first, "node")) {
+		t.Fatalf("another host kept the ID: %q (%v)", other, err)
+	}
+}
+
+// viewCounting records reads through View and refuses any Transact.
+type viewCounting struct {
+	storage.Database
+	views int
+}
+
+func (v *viewCounting) View(ctx context.Context, fn func(storage.Tx) error) error {
+	v.views++
+	return v.Database.View(ctx, fn)
+}
+func (v *viewCounting) Transact(context.Context, storage.Guard, func(storage.Tx) error) error {
+	return errors.New("a read became a write transaction")
+}
+
+// A held database reads through the backend's View, never a write transaction.
+func TestHeldDatabaseReadsThroughView(t *testing.T) {
+	ctx := context.Background()
+	_, path := sharedState(t)
+	db, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	spy := &viewCounting{Database: db}
+	held := &heldDatabase{Database: spy}
+	if err := storage.View(ctx, held, time.Now(), func(storage.Tx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if spy.views != 1 {
+		t.Fatalf("reached the backend's View %d times", spy.views)
+	}
+}
+
 // Closing gives the lease up, so unheld state takes a write naming no holder.
 func TestOpenStateReleasesOnClose(t *testing.T) {
 	ctx := context.Background()
@@ -127,7 +191,11 @@ func TestOpenStateReleasesOnClose(t *testing.T) {
 func TestOpenStateTakesOverOwnCrashedTenure(t *testing.T) {
 	ctx := context.Background()
 	dir, path := sharedState(t)
-	crash(t, path, instanceOwner(dir))
+	owner, err := instanceOwner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crash(t, path, owner)
 	_, db, err := openState(ctx, dir)
 	if err != nil {
 		t.Fatalf("open after a crash: %v", err)

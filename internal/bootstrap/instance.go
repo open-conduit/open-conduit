@@ -2,11 +2,16 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/open-conduit/open-conduit/storage"
@@ -26,13 +31,107 @@ const (
 	instanceReleaseTimeout = 5 * time.Second
 )
 
+// instanceFile keeps this state directory's identity under the lease.
+const instanceFile = "instance.id"
+
+// instanceIdentity is instanceFile. Host and Inode bind it to this copy of the
+// file on this host, so a directory copied elsewhere gets an identity of its
+// own rather than inheriting a tenure, whatever the hosts are called.
+type instanceIdentity struct {
+	ID    string `json:"id"`
+	Host  string `json:"host"`
+	Inode uint64 `json:"inode"`
+}
+
 // instanceOwner names this host's use of a state directory. It is the same
 // across restarts, so a restarted daemon or an offline command takes over its
 // own crashed tenure at once and the Execution leases stay for it to adopt.
-// Another host, or another state directory on one database, is another owner.
-func instanceOwner(stateDir string) string {
-	host, _ := os.Hostname()
-	return host + ":" + drainOrigin(stateDir)
+// It rests on a random ID, because two hosts can share a hostname and a state
+// path; the hostname is there for whoever reads the owner.
+func instanceOwner(stateDir string) (string, error) {
+	host, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("instance identity: %w", err)
+	}
+	return ownerOn(stateDir, host)
+}
+
+// ownerOn is instanceOwner on the host named. The caller holds the state
+// directory's lock, so nothing else writes the file.
+func ownerOn(stateDir, host string) (string, error) {
+	path := filepath.Join(stateDir, "private", instanceFile)
+	if id, ok := readIdentity(path, host); ok {
+		return host + "/" + id, nil
+	}
+	id, err := writeIdentity(path, host)
+	if err != nil {
+		return "", fmt.Errorf("instance identity: %w", err)
+	}
+	return host + "/" + id, nil
+}
+
+// readIdentity is the stored ID if the file is this host's own. Anything else
+// (missing, damaged, copied) means a fresh identity, which is always safe: the
+// worst it costs is waiting out a lease and retrying the attempts it held.
+func readIdentity(path, host string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var i instanceIdentity
+	if json.Unmarshal(data, &i) != nil || i.ID == "" || i.Host != host || i.Inode != uint64(stat.Ino) {
+		return "", false
+	}
+	return i.ID, true
+}
+
+// writeIdentity publishes a new identity. The file is written under a
+// temporary name first, because the rename keeps the inode it records.
+func writeIdentity(path, host string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".instance-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", errors.New("the filesystem reports no inode")
+	}
+	i := instanceIdentity{ID: hex.EncodeToString(random), Host: host, Inode: uint64(stat.Ino)}
+	data, err := json.Marshal(i)
+	if err != nil {
+		return "", err
+	}
+	if _, err = f.Write(append(data, '\n')); err != nil {
+		return "", err
+	}
+	if err = f.Sync(); err != nil {
+		return "", err
+	}
+	if err = f.Close(); err != nil {
+		return "", err
+	}
+	return i.ID, os.Rename(f.Name(), path)
 }
 
 // heldDatabase is a Database held under the instance lease: every transaction
@@ -178,7 +277,11 @@ func openHeld(ctx context.Context, stateDir string, wait func(context.Context) e
 	if !c.shared() {
 		return c, db, nil
 	}
-	held, err := holdInstance(ctx, db, instanceOwner(stateDir), wait)
+	owner, err := instanceOwner(stateDir)
+	if err != nil {
+		return c, nil, errors.Join(err, db.Close())
+	}
+	held, err := holdInstance(ctx, db, owner, wait)
 	if err != nil {
 		return c, nil, errors.Join(err, db.Close())
 	}
