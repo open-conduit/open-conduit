@@ -891,6 +891,9 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 	if d.policy != nil {
 		checks = append(checks, d.policyCheck)
 	}
+	if d.sharedState {
+		checks = append(checks, d.artifactReachCheck)
+	}
 	return checks
 }
 

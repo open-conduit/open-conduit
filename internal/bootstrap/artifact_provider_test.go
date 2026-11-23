@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/protocol/artifactstore"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -61,6 +62,47 @@ func provider(t *testing.T, mode string) storage.ArtifactBackend {
 	t.Setenv(providerEnv, mode)
 	return artifactstore.Command(exe)
 }
+
+// What a store says about its reach decides doctor's account on shared state,
+// including across a provider's process boundary, where one that says nothing
+// is reported as unstated and never as shared.
+func TestArtifactReachOnSharedState(t *testing.T) {
+	ctx := context.Background()
+	open := func(t *testing.T, b storage.ArtifactBackend) storage.ArtifactStore {
+		t.Helper()
+		store, err := b.Open(ctx, filepath.Join(t.TempDir(), "artifacts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		return store
+	}
+	for _, tc := range []struct {
+		name   string
+		store  func(*testing.T) storage.ArtifactStore
+		status string
+		code   string
+	}{
+		{"file store", func(t *testing.T) storage.ArtifactStore { return open(t, artifacts.Backend) }, runtime.CheckWarn, artifactsOnThisHost},
+		{"file store through a provider", func(t *testing.T) storage.ArtifactStore { return open(t, provider(t, "serve")) }, runtime.CheckWarn, artifactsOnThisHost},
+		{"provider that says nothing", func(t *testing.T) storage.ArtifactStore { return open(t, provider(t, "stutter")) }, runtime.CheckInfo, "unstated"},
+		{"store that can't say", func(t *testing.T) storage.ArtifactStore { return reachStore{stated: false} }, runtime.CheckInfo, "unstated"},
+		{"shared store", func(t *testing.T) storage.ArtifactStore { return reachStore{shared: true, stated: true} }, runtime.CheckOK, "shared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if c := artifactReach(tc.store(t)); c.Status != tc.status || c.Code != tc.code {
+				t.Fatalf("doctor: %+v", c)
+			}
+		})
+	}
+}
+
+type reachStore struct {
+	storage.ArtifactStore
+	shared, stated bool
+}
+
+func (r reachStore) SharesLocation() (bool, bool) { return r.shared, r.stated }
 
 // A store in another process meets the same contract as the file store.
 func TestProviderConformance(t *testing.T) {

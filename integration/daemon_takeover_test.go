@@ -451,6 +451,20 @@ func TestDaemonCursorSurvivesTakeover(t *testing.T) {
 	if len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
 		t.Fatalf("the second page: %+v after %+v", second.Items, first.Items)
 	}
+	// The drill's artifacts are in the default file store, on one host's disk.
+	report, err := standby.c.Doctor(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range report.Checks {
+		if c.Name == "artifact_reach" {
+			if c.Status != "warn" || c.Code != "artifacts_on_this_host" {
+				t.Fatalf("doctor's artifact_reach: %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor has no artifact_reach check on shared state: %+v", report.Checks)
 }
 
 // dataVersion changes when any other connection commits to the database.

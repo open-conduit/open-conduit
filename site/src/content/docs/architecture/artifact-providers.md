@@ -17,7 +17,7 @@ The host sends up to 32 requests at once, but only one at a time on any handle. 
 
 ## Version handshake
 
-`artifactstore.initialize` is the first call on a connection and comes once. The provider opens `location`, creating the store if it is absent, and answers with the version it speaks. Any version other than 1 is refused with `unsupported_protocol_version`.
+`artifactstore.initialize` is the first call on a connection and comes once. The provider opens `location`, creating the store if it is absent, and answers with the version it speaks. Any version other than 1 is refused with `unsupported_protocol_version`. It may add `"shared": true` or `"shared": false` to say whether another host can reach what the store holds, which `doctor` reports on shared state. A provider that leaves it out makes no claim.
 
 ```text
 {"version": 1, "location": "s3://bucket/prefix"}

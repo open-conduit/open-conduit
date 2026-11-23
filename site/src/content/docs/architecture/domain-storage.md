@@ -213,6 +213,8 @@ The lease is separate from `Database` so that adding it breaks no backend built 
 
 **List cursors survive a takeover.** On shared state the key that signs them is in the store rather than `private/cursor.key`, so a cursor from the old holder still works on its successor until it expires. Reading it takes the same access as reading the store, and a cursor only resumes a list its caller is already authorised for.
 
+**Artifacts follow only if their store does.** The database's records survive a takeover, but the content they refer to is wherever the artifact backend keeps it. A store says whether another host can reach it through `storage.ArtifactReach`, and a provider says so when it initializes. On shared state `doctor` reports the answer as `artifact_reach`. The default file store refuses a network filesystem, so it is on one host: `doctor` warns with `artifacts_on_this_host`, because a successor elsewhere can't read those artifacts. Which store to run is the operator's choice, so the daemon still starts.
+
 ## Evidence
 
 Run `go test -race ./...` and `go vet ./...` from the repository root; no external service is needed.

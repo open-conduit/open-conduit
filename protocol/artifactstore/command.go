@@ -72,6 +72,18 @@ type client struct {
 type process struct {
 	conn   *jsonrpc.Conn
 	exited chan struct{}
+	// shared is what the provider said about its store's reach, if anything.
+	shared *bool
+}
+
+// SharesLocation is what the running provider stated when it started.
+func (s *client) SharesLocation() (shared, stated bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.proc == nil || s.proc.shared == nil {
+		return false, false
+	}
+	return *s.proc.shared, true
 }
 
 func (s *client) current(ctx context.Context) (*process, error) {
@@ -139,6 +151,7 @@ func start(ctx context.Context, path, location string) (*process, error) {
 		<-p.exited
 		return nil, decodeError(err)
 	}
+	p.shared = res.Shared
 	return p, nil
 }
 

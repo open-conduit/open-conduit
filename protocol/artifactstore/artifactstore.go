@@ -104,6 +104,9 @@ type InitializeParams struct {
 // InitializeResult is MethodInitialize's answer.
 type InitializeResult struct {
 	Version int `json:"version"`
+	// Shared says whether another host can reach what the store holds. A
+	// provider that leaves it out makes no claim either way.
+	Shared *bool `json:"shared,omitempty"`
 }
 
 // CreateParams is MethodCreate's input.
@@ -286,7 +289,13 @@ func (s *server) serve(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 		s.store = store
-		return InitializeResult{Version: Version}, nil
+		out := InitializeResult{Version: Version}
+		if r, ok := store.(storage.ArtifactReach); ok {
+			if shared, stated := r.SharesLocation(); stated {
+				out.Shared = &shared
+			}
+		}
+		return out, nil
 	}
 	store, err := s.opened()
 	if err != nil {
