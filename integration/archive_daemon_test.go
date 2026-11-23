@@ -100,20 +100,34 @@ func TestDaemonArchivesAndCompacts(t *testing.T) {
 	}
 	d.extra = []string{"--webhook-addr", "127.0.0.1:0", "--retention-interval", "100ms"}
 	d.start("")
-	addr := func() string {
-		var found string
-		d.until("webhooks listening", 30*time.Second, func() bool {
+	// addr is the webhook listener's address. Only a first start can also
+	// wait for a reconcile: a daemon killed mid-scan leaves the scan's lease
+	// behind, and the next start can't scan until that lease runs out.
+	addr := func(reconciled bool) string {
+		t.Helper()
+		var found, unmet string
+		if !eventually(30*time.Second, func() bool {
 			r, err := d.c.Doctor(ctx, false)
 			if err != nil {
+				unmet = "doctor failed: " + err.Error()
 				return false
 			}
-			m := listenerAddr.FindStringSubmatch(check(r, "webhooks").Detail)
+			webhooks := check(r, "webhooks")
+			m := listenerAddr.FindStringSubmatch(webhooks.Detail)
 			if m == nil {
+				unmet = "no listener in doctor's webhooks check: " + webhooks.Detail
 				return false
 			}
 			found = m[1]
-			return strings.Contains(strings.Join(check(r, "reconcile_lag").Items, " "), ": reconciled")
-		})
+			lag := check(r, "reconcile_lag")
+			if reconciled && !strings.Contains(strings.Join(lag.Items, " "), ": reconciled") {
+				unmet = fmt.Sprintf("no completed reconcile: %s %v", lag.Code, lag.Items)
+				return false
+			}
+			return true
+		}) {
+			t.Fatalf("timed out waiting for webhooks listening: %s", unmet)
+		}
 		return found
 	}
 	n := fake.OpenIssue("Archived", "", githubtest.User{Login: "alice", Type: "User"}, "backlog")
@@ -134,7 +148,7 @@ func TestDaemonArchivesAndCompacts(t *testing.T) {
 			t.Fatalf("delivery %s: %d", guid, res.StatusCode)
 		}
 	}
-	listening := addr()
+	listening := addr(true)
 	for i := range archivedDeliveries {
 		post(listening, fmt.Sprintf("guid-%d", i))
 	}
@@ -215,7 +229,7 @@ func TestDaemonArchivesAndCompacts(t *testing.T) {
 	check("archived")
 
 	// A redelivery is still a duplicate, with its original gone from the live log.
-	listening = addr()
+	listening = addr(false)
 	for i := range archivedDeliveries {
 		post(listening, fmt.Sprintf("guid-%d", i))
 	}
