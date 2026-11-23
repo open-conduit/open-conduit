@@ -197,6 +197,45 @@ func (h *heldDatabase) keep(ctx context.Context, ticks <-chan time.Time, log *sl
 	}
 }
 
+// heldCompactor is a backend's Compactor under the instance lease. Compaction
+// runs outside a transaction, so no epoch check covers it: Reclaim proves the
+// tenure first, and a holder paused after that proof can only move free pages,
+// which changes no record. Rebuild is refused, because it holds up every write
+// including the renewal, so a long one would let the lease lapse and hand a
+// healthy holder's state to a standby.
+type heldCompactor struct {
+	storage.Compactor
+	held *heldDatabase
+}
+
+// errRebuildHeld is why a holder doesn't rebuild.
+var errRebuildHeld = fmt.Errorf("a rebuild would stop the instance lease being renewed: %w", storage.ErrInvalid)
+
+func (c heldCompactor) Reclaim(ctx context.Context, bytes int64) (int64, error) {
+	if err := c.held.leaser.RenewInstance(ctx, c.held.ref, c.held.ttl); err != nil {
+		if errors.Is(err, storage.ErrInstanceFenced) {
+			c.held.fenced(err)
+		}
+		return 0, err
+	}
+	return c.Compactor.Reclaim(ctx, bytes)
+}
+
+func (c heldCompactor) Rebuild(context.Context) error { return errRebuildHeld }
+
+// compactorOf is db's Compactor, under its lease when it is held, and nil when
+// its backend has none.
+func compactorOf(db storage.Database) storage.Compactor {
+	c, ok := rawDatabase(db).(storage.Compactor)
+	if !ok {
+		return nil
+	}
+	if h, ok := db.(*heldDatabase); ok {
+		return heldCompactor{Compactor: c, held: h}
+	}
+	return c
+}
+
 // rawDatabase is the backend's own Database under any lease, for the optional
 // interfaces a backend implements beside it.
 func rawDatabase(db storage.Database) storage.Database {

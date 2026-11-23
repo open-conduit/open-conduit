@@ -296,6 +296,9 @@ const (
 	rebuildKey          = "rebuild"
 	rebuildRetryAfter   = 7 * 24 * time.Hour
 	rebuildInterrupted  = "interrupted"
+	// rebuildOnSharedState is a rebuild that is due on state held under the
+	// instance lease, where none is attempted.
+	rebuildOnSharedState = "rebuild_not_attempted_on_shared_state"
 )
 
 // rebuildRecord is the last rebuild that didn't succeed. An empty Code means
@@ -392,6 +395,14 @@ func (d *daemon) rebuildAtStart(ctx context.Context, c storage.Compactor, s conf
 		d.clear("database_rebuild", "")
 		return
 	}
+	// A holder can't stop writing for as long as a rewrite takes: its lease
+	// would lapse. Free pages stay in the file and are reused, and doctor says
+	// why the file doesn't shrink.
+	if _, leased := c.(heldCompactor); leased {
+		d.log.Warn("database not rebuilt: a rewrite would stop the instance lease being renewed, so free space stays in the file and is reused", "file_bytes", space.TotalBytes, "free_bytes", space.FreeBytes)
+		d.report("database_rebuild", "", rebuildOnSharedState)
+		return
+	}
 	//duty:database_rebuild
 	if attempted && d.now().Before(last.Attempted.Add(rebuildRetryAfter)) {
 		code := last.Code
@@ -458,7 +469,7 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the last archive pass failed; %d Events archived so far", r.Archived)}
 	}
 	if code := d.reportedCode("database_rebuild", ""); code != "" {
-		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the database couldn't be rebuilt to return free space, so it stays in the file for reuse; a start tries again %d days after the last attempt", int(rebuildRetryAfter/(24*time.Hour)))}
+		return rebuildCheck(name, code)
 	}
 	if code := d.reportedCode("database_compaction", ""); code != "" {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: "the last pass couldn't return free space to the disk"}
@@ -469,6 +480,15 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 	}
 	slices.Sort(items)
 	return runtime.Check{Name: name, Status: runtime.CheckOK, Code: "archiving", Detail: fmt.Sprintf("%d Events archived; the last full pass left these live", r.Archived), Items: items}
+}
+
+// rebuildCheck is doctor's account of a rebuild that is due and hasn't
+// happened. On shared state that is by design and nothing has failed.
+func rebuildCheck(name, code string) runtime.Check {
+	if code == rebuildOnSharedState {
+		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: code, Detail: "this database predates incremental compaction and is on shared state, where a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
+	}
+	return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the database couldn't be rebuilt to return free space, so it stays in the file for reuse; a start tries again %d days after the last attempt", int(rebuildRetryAfter/(24*time.Hour)))}
 }
 
 // toolbeltGrace is how long a revoked or expired token, a finished

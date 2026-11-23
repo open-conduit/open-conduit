@@ -527,9 +527,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	defer archive.Close()
 	d.events = archive
-	if c, ok := rawDatabase(store).(storage.Compactor); ok {
-		d.compactor = c
-	}
+	d.compactor = compactorOf(store)
 
 	logFile, err := openLog(o.LifecycleLog)
 	if err != nil {

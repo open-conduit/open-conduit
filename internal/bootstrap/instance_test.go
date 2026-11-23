@@ -345,6 +345,64 @@ func TestHeldDatabaseReportsBeingSuperseded(t *testing.T) {
 	}
 }
 
+// countingCompactor records what reaches the backend's compaction.
+type countingCompactor struct {
+	storage.Compactor
+	reclaims, rebuilds int
+}
+
+func (c *countingCompactor) Reclaim(context.Context, int64) (int64, error) {
+	c.reclaims++
+	return 0, nil
+}
+
+func (c *countingCompactor) Rebuild(context.Context) error {
+	c.rebuilds++
+	return nil
+}
+
+// A holder reclaims while it holds the state. Once superseded it touches
+// nothing and is told so, and it never rebuilds, in or out of the start path.
+func TestHeldCompactionNeedsTheTenure(t *testing.T) {
+	ctx := context.Background()
+	_, path := sharedState(t)
+	db, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	got, err := holdInstance(ctx, db, "me", instanceTTL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := got.(*heldDatabase)
+	var lost error
+	held.onLost(func(err error) { lost = err })
+	if _, ok := compactorOf(held).(heldCompactor); !ok {
+		t.Fatalf("a held database's compactor: %T", compactorOf(held))
+	}
+	if _, ok := compactorOf(db).(heldCompactor); ok {
+		t.Fatal("an unheld database's compactor is under a lease")
+	}
+	inner := &countingCompactor{}
+	c := heldCompactor{Compactor: inner, held: held}
+	if _, err := c.Reclaim(ctx, 1); err != nil || inner.reclaims != 1 {
+		t.Fatalf("holder's reclaim: %v, %d reached the backend", err, inner.reclaims)
+	}
+	if err := c.Rebuild(ctx); !errors.Is(err, errRebuildHeld) || inner.rebuilds != 0 {
+		t.Fatalf("holder's rebuild: %v, %d reached the backend", err, inner.rebuilds)
+	}
+	if _, err := db.AcquireInstance(ctx, "me", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Reclaim(ctx, 1); !errors.Is(err, storage.ErrInstanceFenced) || inner.reclaims != 1 {
+		t.Fatalf("superseded reclaim: %v, %d reached the backend", err, inner.reclaims)
+	}
+	if !errors.Is(lost, storage.ErrInstanceFenced) {
+		t.Fatalf("not told it was superseded: %v", lost)
+	}
+}
+
 // scriptedLeaser answers renewals in order and reports each one.
 type scriptedLeaser struct {
 	storage.InstanceLeaser
