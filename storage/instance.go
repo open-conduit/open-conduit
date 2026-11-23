@@ -68,6 +68,22 @@ type InstanceLeaser interface {
 	ReleaseInstance(ctx context.Context, ref InstanceRef) error
 }
 
+// SharedBackend is a Backend whose state at a location several hosts can reach
+// at once, so a standby on another host can take it over. Where SharesLocation
+// is true, Open and Inspect take no exclusive ownership (a standby must be able
+// to open the state while another instance runs on it), the Database must be
+// an InstanceLeaser, and that lease is what guarantees one writer. A host
+// refuses a shared location whose Database has no lease.
+//
+// A backend that doesn't implement it keeps Open's exclusive ownership, which
+// already guarantees one writer, so its daemon doesn't hold the lease and an
+// idle one writes nothing. It can't offer automatic takeover: a replica of its
+// state is a recovery point, not state the old host has been fenced from.
+type SharedBackend interface {
+	Backend
+	SharesLocation(location string) bool
+}
+
 // Holding is s with every transaction made as the holder ref, whatever Guard
 // its caller built, so no call site can leave the reference out. It keeps s
 // a Viewer when it is one. Compose it inside Retry or outside it: a fenced

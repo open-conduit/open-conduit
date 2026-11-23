@@ -480,6 +480,11 @@ func oneOwner(t *testing.T, h LifecycleHarness) error {
 	if err != nil {
 		return err
 	}
+	// A shared location is open to a standby by design: the instance lease
+	// keeps its one writer, and the instance_ cases prove that.
+	if s, ok := h.Backend.(storage.SharedBackend); ok && s.SharesLocation(location) {
+		return nil
+	}
 	second := func(holder string) error {
 		if db, err := h.Backend.Open(ctx, location); !errors.Is(err, storage.ErrInUse) {
 			if err == nil {

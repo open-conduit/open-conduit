@@ -181,7 +181,11 @@ A backend states its recovery point by implementing `storage.RecoveryStater`, wh
 
 ### Instance lease
 
-`storage.InstanceLeaser` is the contract for one active instance over state a second host could reach ([#693](https://github.com/open-conduit/open-conduit/issues/693)). The daemon doesn't take this lease yet: until it does, the state's single owner (`ErrInUse`) is still what guarantees one writer.
+`storage.InstanceLeaser` is the contract for one active instance over state a second host could reach ([#693](https://github.com/open-conduit/open-conduit/issues/693)). A backend offers takeover by implementing `storage.SharedBackend`: where `SharesLocation(location)` is true, several hosts can reach the state, `Open` and `Inspect` take no exclusive ownership, and the instance lease is what keeps one writer. A host refuses a shared location whose database has no lease.
+
+On a shared location the daemon holds the lease for as long as it serves, renewing it every ten seconds on a thirty-second lease, and every transaction it makes names its tenure. A daemon that finds another instance holding the state waits as a cold standby, before it starts packages or serves anything, until the lease is released or expires. One that learns it was superseded, from a refused write or renewal, stops. Each offline command holds the lease until it closes and refuses state another instance holds. The owner is the host and state directory, so a restart or an offline command on the same host takes over a crashed tenure at once and keeps its Execution leases to adopt.
+
+SQLite is not a shared backend. `Open`'s exclusive ownership already guarantees its one writer, so its daemon doesn't hold the lease and an idle one writes nothing. It can't offer automatic takeover: a WAL replica is asynchronous and can't fence the old host, so it is a [recovery point](../recovery/#restoring-from-a-replica) that an operator promotes.
 
 - `AcquireInstance(ctx, owner, ttl)` grants a tenure, an `InstanceRef` of owner and strictly higher epoch. A different owner gets `ErrInstanceHeld` until the lease expires or is released. The same owner may acquire at once, superseding its earlier tenure, which is a restart.
 - A takeover from a different owner fences every Execution lease in the same transaction, because what proved those attempts went with the old host. A restart by the same owner leaves them, so it can still adopt its attempts.

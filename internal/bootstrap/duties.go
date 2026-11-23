@@ -64,6 +64,8 @@ var hostDuties = []hostDuty{
 	{Name: dutyShipment, Durable: true, WhenOwed: true, Applies: func(d *daemon) bool { return d.o.BackupInterval >= 0 && d.backups.db != nil }},
 	{Name: "host_loop", Why: "drives the other duties; each one's due time is durable or re-derived at start"},
 	{Name: "lease_renewal", Why: "only while an attempt runs, which is itself a reason not to stop"},
+	{Name: "instance_renewal", Why: "only on shared state, where a stopped daemon's lease is meant to lapse so a standby can take over"},
+	{Name: "instance_standby", Why: "a standby asking for the lease; a stopped one asks again when it starts"},
 	{Name: "resource_reconcile", Why: "re-derived from durable leases on the first pass after a start"},
 	{Name: "container_reconcile", Why: "re-derived from durable attempts on the first pass after a start"},
 	{Name: "package_drain", Why: "retiring packages exist only in a running process"},

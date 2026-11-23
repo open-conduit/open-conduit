@@ -180,14 +180,11 @@ func (a artifactStorage) open(ctx context.Context) (storage.ArtifactStore, error
 	return a.backend.Open(ctx, a.location)
 }
 
-// openState opens stateDir's coordination state with its chosen backend.
+// openState opens stateDir's coordination state with its chosen backend. At a
+// shared location it holds the instance lease until Close, refusing state
+// another instance holds and taking over this host's own crashed tenure.
 func openState(ctx context.Context, stateDir string) (coordination, storage.Database, error) {
-	c, err := coordinationOf(stateDir)
-	if err != nil {
-		return c, nil, err
-	}
-	db, err := c.open(ctx)
-	return c, db, err
+	return openHeld(ctx, stateDir, nil)
 }
 
 // openArtifacts opens stateDir's artifact store with its chosen backend.
