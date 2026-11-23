@@ -69,6 +69,24 @@ func ReferencedIn(xs []domain.Execution, ids []string) ([]string, error) {
 	return out, nil
 }
 
+// HoldersIn is ArtifactHolders over xs, for a store that answers it by
+// reading its attempts: those of xs that reference id, as one of their
+// Artifacts or EarlierArtifacts, each once and in ID order. An empty ID is
+// ErrInvalid.
+func HoldersIn(xs []domain.Execution, id string) ([]domain.ID, error) {
+	if id == "" {
+		return nil, ErrInvalid
+	}
+	out := []domain.ID{}
+	for _, x := range xs {
+		if slices.ContainsFunc(x.AllArtifacts(), func(r domain.ArtifactRef) bool { return r.ID == id }) {
+			out = append(out, x.ID)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
 // referenceQuery checks a ReferencedArtifacts query and returns its IDs as
 // a set.
 func referenceQuery(ids []string) (map[string]bool, error) {

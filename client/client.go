@@ -1972,6 +1972,9 @@ type Run struct {
 	Interrupt *Trigger     `json:"interrupt,omitempty"`
 	Retry     *RetryStatus `json:"retry,omitempty"`
 	Retention Retention    `json:"retention"`
+	// DroppedArtifacts are artifact IDs the run's results named that were
+	// not attached because their content had been released.
+	DroppedArtifacts []string `json:"dropped_artifacts,omitempty"`
 }
 
 // TurnTimeLimit says the run's turn ended at its time limit: its executor

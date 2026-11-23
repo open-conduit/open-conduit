@@ -339,6 +339,18 @@ func (t *storeTx) ReferencedArtifacts(ids []string) ([]string, error) {
 	return storage.ReferencedIn(xs, ids)
 }
 
+// ArtifactHolders answers from the attempts the extension can see.
+func (t *storeTx) ArtifactHolders(id string) ([]domain.ID, error) {
+	if id == "" {
+		return nil, storage.ErrInvalid
+	}
+	xs, err := t.ListExecutions("")
+	if err != nil {
+		return nil, err
+	}
+	return storage.HoldersIn(xs, id)
+}
+
 // LiveExecutions filters ListExecutions: the host serves no narrower read.
 func (t *storeTx) LiveExecutions() ([]domain.Execution, error) {
 	xs, err := t.ListExecutions("")

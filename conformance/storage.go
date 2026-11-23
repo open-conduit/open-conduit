@@ -107,6 +107,7 @@ func StorageCases() []StorageCase {
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 		{"finished_attempt_takes_its_stopped_turns_artifacts", finishedArtifacts},
 		{"referenced_artifacts_follow_attempts", referencedArtifacts},
+		{"artifact_holders_follow_attempts", artifactHolders},
 		{"sequences_visible_in_order_to_a_waiting_reader", sequenceVisibility},
 		{"kv_prefixes_and_order_are_bytes", kvBytes},
 		{"transient_aborts_commit_nothing_and_retry", transientAborts},
@@ -546,6 +547,65 @@ func referencedArtifacts(s storage.Store) error {
 		}
 		if _, err := tx.ReferencedArtifacts(oversized); !errors.Is(err, storage.ErrInvalid) {
 			return fmt.Errorf("referenced artifacts: an oversized query: got %v, want %v", err, storage.ErrInvalid)
+		}
+		return nil
+	})
+}
+
+// artifactHolders: ArtifactHolders names every attempt holding an ID, as
+// its latest or earlier artifact, in ID order, none for an ID no attempt
+// holds, and refuses an empty ID.
+func artifactHolders(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if _, err := claim(s, c); err != nil {
+		return err
+	}
+	first := domain.ArtifactRef{ID: "first", Size: 1, MediaType: "text/plain"}
+	second := domain.ArtifactRef{ID: "second", Size: 1, MediaType: "text/plain"}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		x, err := tx.Execution("execution")
+		if err != nil {
+			return err
+		}
+		x.State, x.Artifacts = domain.ExecutionCancelled, []domain.ArtifactRef{first}
+		if err = tx.PutExecution(x, x.Revision); err != nil {
+			return err
+		}
+		// A second attempt, of another Work, holds the same ID.
+		if err = tx.PutWork(domain.Work{ID: "other-work", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		if err = tx.PutExecution(domain.Execution{ID: "other-execution", WorkID: "other-work", ExecutorBinding: "shell", Attempt: 1, State: domain.ExecutionPending, TriggerID: "trigger"}, 0); err != nil {
+			return err
+		}
+		other, err := tx.Execution("other-execution")
+		if err != nil {
+			return err
+		}
+		other.State, other.Artifacts = domain.ExecutionCancelled, []domain.ArtifactRef{first}
+		return tx.PutExecution(other, other.Revision)
+	}); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		return tx.PublishFinishedArtifacts("execution", []domain.ArtifactRef{second})
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		for id, want := range map[string][]domain.ID{"first": {"execution", "other-execution"}, "second": {"execution"}} {
+			if got, err := tx.ArtifactHolders(id); err != nil || !slices.Equal(got, want) {
+				return fmt.Errorf("artifact holders of %s: %v, %v, want %v", id, got, err, want)
+			}
+		}
+		if got, err := tx.ArtifactHolders("orphan"); err != nil || len(got) != 0 {
+			return fmt.Errorf("artifact holders of an orphan: %v, %v", got, err)
+		}
+		if _, err := tx.ArtifactHolders(""); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("artifact holders of an empty ID: got %v, want %v", err, storage.ErrInvalid)
 		}
 		return nil
 	})

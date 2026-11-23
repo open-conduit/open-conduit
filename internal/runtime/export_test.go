@@ -44,3 +44,9 @@ func WaitScanned(tx storage.Tx, id domain.ID) (uint64, error) {
 func HoldForCapacity(ctx context.Context, s *Scheduler, ref domain.LeaseRef, r *extension.NoCapacityError) error {
 	return s.holdForCapacity(ctx, ref, r)
 }
+
+// GuardedArtifacts is a with Delete going through the release claim, as
+// scrubbing uses it.
+func GuardedArtifacts(s *Scheduler, a storage.Artifacts) storage.Artifacts {
+	return releaseGuarded{a, s}
+}

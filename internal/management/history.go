@@ -143,6 +143,7 @@ type wireRun struct {
 	Interrupt        *wireTrigger   `json:"interrupt,omitempty"`
 	Retry            *wireRetry     `json:"retry,omitempty"`
 	Retention        wireRetention  `json:"retention"`
+	DroppedArtifacts []string       `json:"dropped_artifacts,omitempty"`
 }
 
 func trigger(e *domain.Event) *wireTrigger {
@@ -195,6 +196,7 @@ func toRun(r runtime.Run) wireRun {
 	if r.Retention.Expired {
 		out.Retention = wireRetention{State: "expired", ExpiredAt: ts(r.Retention.ExpiredAt), ContentReleased: r.Retention.ArtifactsReleased}
 	}
+	out.DroppedArtifacts = r.DroppedArtifacts
 	return out
 }
 

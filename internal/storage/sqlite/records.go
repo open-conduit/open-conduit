@@ -911,6 +911,26 @@ func (t *transaction) Release(ref domain.LeaseRef) error {
 	return t.writeExecution(x, true)
 }
 
+func (t *transaction) ArtifactHolders(id string) ([]domain.ID, error) {
+	if id == "" {
+		return nil, storage.ErrInvalid
+	}
+	rows, err := t.query("SELECT execution_id FROM execution_artifacts WHERE artifact_id=? ORDER BY execution_id", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.ID{}
+	for rows.Next() {
+		var holder string
+		if err = rows.Scan(&holder); err != nil {
+			return nil, err
+		}
+		out = append(out, domain.ID(holder))
+	}
+	return out, rows.Err()
+}
+
 func (t *transaction) ReferencedArtifacts(ids []string) ([]string, error) {
 	if err := storage.ValidReferenceQuery(ids); err != nil {
 		return nil, err

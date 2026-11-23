@@ -241,6 +241,12 @@ type Tx interface {
 	// attempts retained. More than MaxReferenceQuery IDs, or an empty one,
 	// is ErrInvalid.
 	ReferencedArtifacts(ids []string) ([]string, error)
+	// ArtifactHolders returns the attempts that reference id, as one of
+	// their Artifacts or EarlierArtifacts, each once and in ID order. Two
+	// attempts may hold one ID, so content is released only once none that
+	// still keeps its content holds it. Its cost follows the attempts
+	// holding id, not the attempts retained. An empty ID is ErrInvalid.
+	ArtifactHolders(id string) ([]domain.ID, error)
 	// Claim enters running on both Work and Execution and advances the lease epoch.
 	Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error)
 	// Renew extends the lease to now+ttl, keeping the stored expiry when
@@ -314,6 +320,10 @@ type ArtifactWriter interface {
 
 // Artifacts is what every participant uses to publish and read content.
 type Artifacts interface {
+	// Create starts a writer. Each commit gets an ID the store has never
+	// given before, even for identical bytes: the host releases content by
+	// ID, so a store that reused one could have new content deleted with
+	// the old.
 	Create(context.Context, string) (ArtifactWriter, error)
 	// Open streams committed content. The ref must be the one Commit
 	// returned: a different size, media type or digest is ErrInvalid, and

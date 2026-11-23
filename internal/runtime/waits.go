@@ -232,6 +232,9 @@ func (s *Scheduler) installPendingSubscriptions(ctx context.Context, limit int) 
 	return nil
 }
 func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wait, resume bool, result extension.Result) error {
+	if err := withoutReleased(tx, ref.ExecutionID, &result); err != nil {
+		return err
+	}
 	{
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
@@ -1540,6 +1543,10 @@ func (s *Scheduler) acknowledgeWaiting(ctx context.Context, ref domain.LeaseRef,
 	return s.transact(ctx, nil, func(tx storage.Tx) error {
 		state, err := attemptState(tx, ref.ExecutionID)
 		if err != nil {
+			return err
+		}
+		result := result
+		if err := withoutReleased(tx, ref.ExecutionID, &result); err != nil {
 			return err
 		}
 		x, err := tx.Execution(ref.ExecutionID)

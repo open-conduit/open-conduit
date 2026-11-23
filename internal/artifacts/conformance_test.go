@@ -130,6 +130,25 @@ func (r trusting) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// deduplicating gives identical content the ID it was first committed under.
+type deduplicating struct {
+	storage.ArtifactWriter
+	store storage.ArtifactStore
+	seen  map[string]storage.ArtifactRef
+}
+
+func (w deduplicating) Commit(ctx context.Context) (storage.ArtifactRef, error) {
+	ref, err := w.ArtifactWriter.Commit(ctx)
+	if err != nil {
+		return ref, err
+	}
+	if first, ok := w.seen[ref.SHA256]; ok {
+		return first, w.store.Delete(ctx, ref)
+	}
+	w.seen[ref.SHA256] = ref
+	return ref, nil
+}
+
 func TestWeakenedArtifactsAreRejected(t *testing.T) {
 	controls := []struct {
 		name, failing, want string
@@ -197,6 +216,15 @@ func TestWeakenedArtifactsAreRejected(t *testing.T) {
 			return weakStore{ArtifactStore: s, imp: func(ctx context.Context, ref storage.ArtifactRef, source io.Reader) error {
 				ref.SHA256 = ""
 				return s.Import(ctx, ref, source)
+			}}
+		},
+	}, {
+		// Identical content is stored once, under the first commit's ID.
+		name: "commit_deduplicates", failing: "identical_content_gets_a_new_id", want: "share the ID",
+		wrap: func(s storage.ArtifactStore) storage.ArtifactStore {
+			seen := map[string]storage.ArtifactRef{}
+			return weakStore{ArtifactStore: s, create: func(w storage.ArtifactWriter) storage.ArtifactWriter {
+				return deduplicating{w, s, seen}
 			}}
 		},
 	}}

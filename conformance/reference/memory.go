@@ -1024,6 +1024,9 @@ func (t *transaction) ListExecutions(work domain.ID) ([]domain.Execution, error)
 func (t *transaction) ReferencedArtifacts(ids []string) ([]string, error) {
 	return storage.ReferencedIn(sortedValues(t.data.Executions), ids)
 }
+func (t *transaction) ArtifactHolders(id string) ([]domain.ID, error) {
+	return storage.HoldersIn(sortedValues(t.data.Executions), id)
+}
 func (t *transaction) ListWaits(work domain.ID) ([]domain.Wait, error) {
 	out := []domain.Wait{}
 	for _, w := range sortedValues(t.data.Waits) {

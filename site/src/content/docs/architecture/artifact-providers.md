@@ -31,7 +31,7 @@ A **ref** is `{"id", "size", "media_type", "sha256"}`. `sha256` is 64 lower-case
 | --- | --- | --- | --- |
 | `artifactstore.create` | `{"media_type"}` | handle | Starts a writer |
 | `artifactstore.write` | `{"handle", "chunk"}` | `{}` | Appends to a writer |
-| `artifactstore.commit` | handle | ref | Publishes the content and ends the writer |
+| `artifactstore.commit` | handle | ref | Publishes the content and ends the writer. Every commit gets a new ID, even for identical bytes |
 | `artifactstore.abort` | handle | `{}` | Discards the content and ends the writer |
 | `artifactstore.open` | ref | handle | Starts a reader. A ref that doesn't match the stored content is `invalid`, and an unknown ID `not_found` |
 | `artifactstore.read` | handle | `{"chunk"?, "eof"?}` | Returns the next bytes. An answer must have a chunk, `eof: true` or both |
