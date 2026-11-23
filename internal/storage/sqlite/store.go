@@ -32,7 +32,7 @@ const SchemaVersion uint32 = 1
 // the highest format that opened it, and Open refuses a database whose format
 // is newer than its own (ErrRecordsNewer), before it changes anything.
 // TestRecordFieldsArePinned fails until a field change comes with a bump.
-const RecordFormat uint32 = 9
+const RecordFormat uint32 = 10
 
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat
@@ -439,6 +439,7 @@ var indexes = []string{
 	// and accepting a retired delivery again.
 	`CREATE TABLE IF NOT EXISTS event_tombstones (id TEXT PRIMARY KEY, source TEXT NOT NULL, delivery_id TEXT NOT NULL, record BLOB NOT NULL, UNIQUE(source,delivery_id))`,
 	`CREATE INDEX IF NOT EXISTS event_tombstones_sequence ON event_tombstones(` + tombstoneSequence + `)`,
+	instanceTable,
 }
 
 // tombstoneSequence reads a tombstone's sequence from its record, so
@@ -565,6 +566,16 @@ func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.T
 }
 
 func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.run(ctx, g, true, fn)
+}
+
+// transactUnfenced is transact without the instance lease check, for the
+// operations that manage that lease.
+func (s *Store) transactUnfenced(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.run(ctx, g, false, fn)
+}
+
+func (s *Store) run(ctx context.Context, g storage.Guard, fenced bool, fn func(storage.Tx) error) error {
 	if g.Now.IsZero() || fn == nil {
 		return storage.ErrInvalid
 	}
@@ -611,6 +622,11 @@ func (s *Store) transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	}()
 	t := &transaction{conn: conn, caller: ctx, ctx: work, now: g.Now, live: true}
 	defer func() { t.live = false }()
+	if fenced {
+		if err = t.authorizeInstance(g.Instance); err != nil {
+			return err
+		}
+	}
 	if g.Lease != nil {
 		if err = t.authorize(*g.Lease); err != nil {
 			return err

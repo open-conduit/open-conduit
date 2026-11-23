@@ -81,7 +81,9 @@ func (m *Memory) transact(ctx context.Context, g storage.Guard, fn func(storage.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if g.Now.IsZero() {
+	// The double has no instance lease, so it can't honour a holder's
+	// reference: refuse it rather than leave that holder unfenced.
+	if g.Now.IsZero() || g.Instance != nil {
 		return storage.ErrInvalid
 	}
 	m.cmu.RLock()

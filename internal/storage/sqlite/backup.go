@@ -225,7 +225,7 @@ func Restore(ctx context.Context, snapshotPath, destination string, now time.Tim
 	if err != nil {
 		return err
 	}
-	err = restored.Fence(ctx, now)
+	err = restored.fenceRestored(ctx, now)
 	if err == nil {
 		_, err = restored.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	}

@@ -52,6 +52,9 @@ type LifecycleHarness struct {
 	// Corrupt damages the closed state at location in a way that a full
 	// integrity check finds, even if opening it does not.
 	Corrupt func(t *testing.T, location string)
+	// ExpireInstance makes the instance lease at location, which may be
+	// open, already past its expiry, so no case waits on a real clock.
+	ExpireInstance func(t *testing.T, location string)
 }
 
 // LifecycleCase is one lifecycle guarantee.
@@ -87,7 +90,315 @@ func LifecycleCases() []LifecycleCase {
 		{"fence_ends_live_lease_authority", fenceInPlace},
 		{"integrity_check_finds_corruption", integrityCheck},
 		{"states_its_recovery_point", statesRecoveryPoint},
+		{"instance_lease_admits_one_holder", instanceOneHolder},
+		{"instance_takeover_fences_the_old_holder", instanceTakeover},
+		{"instance_restart_keeps_execution_leases", instanceRestart},
+		{"instance_release_ends_the_tenure", instanceRelease},
+		{"instance_fence_refused_under_a_holder", instanceFenceRefused},
+		{"instance_restore_ends_the_tenure", instanceRestore},
 	}
+}
+
+// instanceRestore: a snapshot taken under a holder restores with no holder,
+// so that holder's reference commits nothing there and the next acquisition
+// still advances the epoch.
+func instanceRestore(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, _, _, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	a, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return err
+	}
+	snapshot := filepath.Join(t.TempDir(), "snapshot")
+	if err := db.Snapshot(ctx, snapshot, nil); err != nil {
+		return err
+	}
+	destination := h.Location(t, t.TempDir())
+	if err := h.Backend.Restore(ctx, snapshot, destination, c.Now()); err != nil {
+		return err
+	}
+	restored, err := h.Backend.Open(ctx, destination)
+	if err != nil {
+		return err
+	}
+	defer restored.Close()
+	if err := instanceWrite(restored, c, &a, "stale"); !errors.Is(err, storage.ErrInstanceFenced) {
+		return fmt.Errorf("restored state still holds the snapshot's tenure: %v", err)
+	}
+	if err := instanceWrite(restored, c, nil, "unheld"); err != nil {
+		return fmt.Errorf("restored state still holds the snapshot's tenure: %w", err)
+	}
+	leaser, ok := restored.(storage.InstanceLeaser)
+	if !ok {
+		return errors.New("the restored database has no instance lease")
+	}
+	next, err := leaser.AcquireInstance(ctx, "b", instanceTTL)
+	if err != nil {
+		return fmt.Errorf("acquiring restored state: %w", err)
+	}
+	if next.Epoch <= a.Epoch {
+		return fmt.Errorf("restored state reused epoch %d", a.Epoch)
+	}
+	return nil
+}
+
+const instanceTTL = time.Hour
+
+// instanceDB opens seeded state with an Execution lease live, as a leaser.
+func instanceDB(t *testing.T, h LifecycleHarness) (storage.Database, storage.InstanceLeaser, string, domain.LeaseRef, *Clock, error) {
+	location, err := openSeeded(t, h)
+	if err != nil {
+		return nil, nil, "", domain.LeaseRef{}, nil, err
+	}
+	db, err := h.Backend.Open(context.Background(), location)
+	if err != nil {
+		return nil, nil, "", domain.LeaseRef{}, nil, err
+	}
+	c := NewClock()
+	ref, err := claim(db, c)
+	if err != nil {
+		db.Close()
+		return nil, nil, "", domain.LeaseRef{}, nil, err
+	}
+	leaser, ok := db.(storage.InstanceLeaser)
+	if !ok {
+		db.Close()
+		return nil, nil, "", domain.LeaseRef{}, nil, errors.New("the database has no instance lease")
+	}
+	return db, leaser, location, ref, c, nil
+}
+
+// instanceWrite writes one KV key as ref (nil for no holder named).
+func instanceWrite(db storage.Store, c *Clock, ref *storage.InstanceRef, key string) error {
+	return db.Transact(context.Background(), storage.Guard{Now: c.Now(), Instance: ref}, func(tx storage.Tx) error {
+		return tx.Put("instance", key, []byte("x"))
+	})
+}
+
+func instanceWrote(db storage.Viewer, key string) (bool, error) {
+	var found bool
+	err := db.View(context.Background(), func(tx storage.Tx) error {
+		_, err := tx.Get("instance", key)
+		if errors.Is(err, storage.ErrNotFound) {
+			found = false
+			return nil
+		}
+		found = err == nil
+		return err
+	})
+	return found, err
+}
+
+// instanceOneHolder: a live holder excludes any other, its reference
+// commits, and a write naming no holder is refused.
+func instanceOneHolder(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, _, _, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := wantError(func() error { _, err := leaser.AcquireInstance(ctx, "", instanceTTL); return err }(), storage.ErrInvalid); err != nil {
+		return fmt.Errorf("acquire without an owner: %w", err)
+	}
+	if err := wantError(func() error { _, err := leaser.AcquireInstance(ctx, "a", 0); return err }(), storage.ErrInvalid); err != nil {
+		return fmt.Errorf("acquire without a ttl: %w", err)
+	}
+	a, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return err
+	}
+	if _, err := leaser.AcquireInstance(ctx, "b", instanceTTL); !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("a second instance acquired a held lease: %v", err)
+	}
+	if err := instanceWrite(db, c, &a, "holder"); err != nil {
+		return fmt.Errorf("the holder's write: %w", err)
+	}
+	if err := wantError(instanceWrite(db, c, nil, "unnamed"), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("a write naming no holder: %w", err)
+	}
+	if wrote, err := instanceWrote(db, "unnamed"); err != nil || wrote {
+		return fmt.Errorf("a write naming no holder committed (%v)", err)
+	}
+	forged := storage.InstanceRef{Owner: "b", Epoch: a.Epoch}
+	if err := wantError(instanceWrite(db, c, &forged, "forged"), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("a write under another owner's epoch: %w", err)
+	}
+	return nil
+}
+
+// instanceTakeover: once the lease has expired a successor acquires a
+// higher epoch, the old holder can commit, renew and release nothing, and
+// the Execution leases it held are fenced in the same step.
+func instanceTakeover(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, location, lease, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	a, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return err
+	}
+	h.ExpireInstance(t, location)
+	// Past its expiry with no successor, the holder still holds the state.
+	if err := instanceWrite(db, c, &a, "expired"); err != nil {
+		return fmt.Errorf("an expired holder with no successor: %w", err)
+	}
+	if err := leaser.RenewInstance(ctx, a, instanceTTL); err != nil {
+		return fmt.Errorf("renewing an expired lease with no successor: %w", err)
+	}
+	h.ExpireInstance(t, location)
+	b, err := leaser.AcquireInstance(ctx, "b", instanceTTL)
+	if err != nil {
+		return fmt.Errorf("acquiring an expired lease: %w", err)
+	}
+	if b.Epoch <= a.Epoch {
+		return fmt.Errorf("takeover reused epoch %d after %d", b.Epoch, a.Epoch)
+	}
+	if err := wantError(instanceWrite(db, c, &a, "stale"), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("the old holder's write: %w", err)
+	}
+	if wrote, err := instanceWrote(db, "stale"); err != nil || wrote {
+		return fmt.Errorf("the old holder's write committed (%v)", err)
+	}
+	if err := wantError(leaser.RenewInstance(ctx, a, instanceTTL), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("the old holder's renewal: %w", err)
+	}
+	if err := wantError(leaser.ReleaseInstance(ctx, a), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("the old holder's release: %w", err)
+	}
+	if err := instanceWrite(db, c, &b, "successor"); err != nil {
+		return fmt.Errorf("the successor's write: %w", err)
+	}
+	return fenced(storage.Holding(db, b), lease, c)
+}
+
+// instanceRestart: the same owner acquires at once under a higher epoch,
+// which supersedes its earlier tenure and leaves Execution leases alone, so
+// a restarted daemon can still adopt its attempts.
+func instanceRestart(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, _, lease, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	first, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return err
+	}
+	second, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return fmt.Errorf("the same owner reacquiring: %w", err)
+	}
+	if second.Epoch <= first.Epoch {
+		return fmt.Errorf("reacquiring reused epoch %d", first.Epoch)
+	}
+	if err := wantError(instanceWrite(db, c, &first, "stale"), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("the superseded tenure's write: %w", err)
+	}
+	var x domain.Execution
+	if err := db.View(ctx, func(tx storage.Tx) (err error) { x, err = tx.Execution(lease.ExecutionID); return err }); err != nil {
+		return err
+	}
+	if x.Lease.Owner == "" || x.Lease.Epoch != lease.Epoch {
+		return fmt.Errorf("a restart by the same owner fenced its Execution lease: %+v", x.Lease)
+	}
+	return nil
+}
+
+// instanceFenceRefused: a superseded holder's Fence on held state commits
+// nothing, so the successor keeps its tenure and its Execution lease.
+func instanceFenceRefused(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, location, _, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := leaser.AcquireInstance(ctx, "a", instanceTTL); err != nil {
+		return err
+	}
+	h.ExpireInstance(t, location)
+	b, err := leaser.AcquireInstance(ctx, "b", instanceTTL)
+	if err != nil {
+		return err
+	}
+	held, err := claim(storage.Holding(db, b), c)
+	if err != nil {
+		return fmt.Errorf("the successor's claim: %w", err)
+	}
+	if err := wantError(db.Fence(ctx, c.Now()), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("a Fence under a live holder: %w", err)
+	}
+	if err := instanceWrite(db, c, &b, "successor"); err != nil {
+		return fmt.Errorf("a Fence under a live holder ended its tenure: %w", err)
+	}
+	if _, err := leaser.AcquireInstance(ctx, "c", instanceTTL); !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("a Fence under a live holder let another instance acquire: %v", err)
+	}
+	var x domain.Execution
+	if err := db.View(ctx, func(tx storage.Tx) (err error) { x, err = tx.Execution(held.ExecutionID); return err }); err != nil {
+		return err
+	}
+	if x.Lease.Owner == "" || x.Lease.Epoch != held.Epoch {
+		return fmt.Errorf("a Fence under a live holder cleared its Execution lease: %+v", x.Lease)
+	}
+	return nil
+}
+
+// instanceRelease: a release lets a successor in at once and is safe to
+// repeat, and Fence works once nobody holds the state.
+func instanceRelease(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, _, _, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	a, err := leaser.AcquireInstance(ctx, "a", instanceTTL)
+	if err != nil {
+		return err
+	}
+	if err := leaser.ReleaseInstance(ctx, a); err != nil {
+		return err
+	}
+	if err := leaser.ReleaseInstance(ctx, a); err != nil {
+		return fmt.Errorf("releasing twice: %w", err)
+	}
+	if err := wantError(instanceWrite(db, c, &a, "released"), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("a released holder's write: %w", err)
+	}
+	if err := instanceWrite(db, c, nil, "unheld"); err != nil {
+		return fmt.Errorf("a control-plane write on unheld state: %w", err)
+	}
+	b, err := leaser.AcquireInstance(ctx, "b", instanceTTL)
+	if err != nil {
+		return fmt.Errorf("acquiring a released lease: %w", err)
+	}
+	if b.Epoch <= a.Epoch {
+		return fmt.Errorf("acquiring after a release reused epoch %d", a.Epoch)
+	}
+	if err := leaser.ReleaseInstance(ctx, b); err != nil {
+		return err
+	}
+	if err := db.Fence(ctx, c.Now()); err != nil {
+		return fmt.Errorf("a Fence on unheld state: %w", err)
+	}
+	next, err := leaser.AcquireInstance(ctx, "c", instanceTTL)
+	if err != nil {
+		return fmt.Errorf("acquiring after Fence: %w", err)
+	}
+	if next.Epoch <= b.Epoch {
+		return fmt.Errorf("acquiring after Fence reused epoch %d", b.Epoch)
+	}
+	return nil
 }
 
 var lifecycleNow = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)

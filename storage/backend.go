@@ -56,8 +56,9 @@ type Backend interface {
 	OpenPrior(ctx context.Context, location string) (Prior, error)
 	// Restore publishes the snapshot at a previously absent destination,
 	// never over existing state. Every Execution lease in it is fenced (see
-	// Database.Fence) before the restored state can be opened, so no lease
-	// holder from before the snapshot can commit to it.
+	// Database.Fence) and any instance tenure it recorded is ended before
+	// the restored state can be opened, so no holder of either lease from
+	// before the snapshot can commit to it.
 	Restore(ctx context.Context, snapshot, destination string, now time.Time) error
 	// ReadSnapshot calls read once over the state Restore would publish from
 	// snapshot, raised to this binary's versions, and publishes nothing: the
@@ -141,8 +142,11 @@ type Database interface {
 	Snapshot(ctx context.Context, path string, read func(Tx) error) error
 	// Fence clears the owner and expiry of every Execution lease, keeping
 	// its epoch. No earlier holder can commit afterwards, and the next
-	// Claim advances the epoch. It is how restore, and a standby taking
-	// over the state, end the authority of whoever held it before.
+	// Claim advances the epoch. On a backend with an instance lease it is
+	// a write like any other: while a holder is recorded it is refused with
+	// ErrInstanceFenced and changes nothing, so a superseded instance can't
+	// use it against its successor. A takeover needs no Fence, because
+	// AcquireInstance fences the Execution leases itself.
 	Fence(ctx context.Context, now time.Time) error
 	Inspection
 }

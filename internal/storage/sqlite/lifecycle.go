@@ -429,30 +429,30 @@ func (s *Store) snapshot(ctx context.Context, path string, read func(storage.Tx)
 	return errors.Join(err, db.Close())
 }
 
-// Fence clears every Execution lease's owner and expiry in one
-// transaction, keeping epochs.
+// Fence clears every Execution lease's owner and expiry in one transaction,
+// keeping epochs. It is an ordinary write naming no holder, so it is refused
+// while an instance holds the state.
 func (s *Store) Fence(ctx context.Context, now time.Time) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}
 	return s.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		t := tx.(*transaction)
-		xs, err := t.ListExecutions("")
-		if err != nil {
+		return tx.(*transaction).fenceExecutions(now)
+	})
+}
+
+// fenceRestored is Fence for a private copy being restored, which nothing
+// else can reach: it also ends the tenure the copy recorded, since that
+// holder has no authority over the restored state.
+func (s *Store) fenceRestored(ctx context.Context, now time.Time) error {
+	if now.IsZero() {
+		return storage.ErrInvalid
+	}
+	return s.lease(ctx, now, func(t *transaction) error {
+		if err := t.fenceExecutions(now); err != nil {
 			return err
 		}
-		for _, x := range xs {
-			if x.Lease.Owner == "" && x.Lease.ExpiresAt.IsZero() {
-				continue
-			}
-			x.Lease.Owner = ""
-			x.Lease.ExpiresAt = time.Time{}
-			x.Revision++
-			x.UpdatedAt = now
-			if err = t.writeExecution(x, true); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := t.exec(`UPDATE instance_lease SET expires_at=NULL WHERE id=1`)
+		return err
 	})
 }
