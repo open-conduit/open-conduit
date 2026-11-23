@@ -215,9 +215,9 @@ func (c coordination) shared() bool {
 
 // holdInstance takes the lease on an open database at a shared location. wait
 // decides what a live holder or a transient failure means: nil refuses, and
-// otherwise it returns once it is worth asking again. A shared database with no lease is refused, since
+// otherwise it hears which one it was and returns once it is worth asking again. A shared database with no lease is refused, since
 // nothing would keep two instances from writing to it.
-func holdInstance(ctx context.Context, db storage.Database, owner string, ttl time.Duration, wait func(context.Context) error) (storage.Database, error) {
+func holdInstance(ctx context.Context, db storage.Database, owner string, ttl time.Duration, wait func(context.Context, error) error) (storage.Database, error) {
 	leaser, ok := db.(storage.InstanceLeaser)
 	if !ok {
 		return nil, fmt.Errorf("a shared storage location needs a backend with an instance lease: %w", storage.ErrInvalid)
@@ -236,20 +236,28 @@ func holdInstance(ctx context.Context, db storage.Database, owner string, ttl ti
 		if wait == nil {
 			return nil, fmt.Errorf("another instance is running on this state: %w", err)
 		}
-		if err := wait(ctx); err != nil {
+		if err := wait(ctx, err); err != nil {
 			return nil, err
 		}
 	}
 }
 
 // standby is the wait of a daemon that found the state held: it stays out
-// until the holder releases the lease or lets it expire.
-func standby(log *slog.Logger, every time.Duration) func(context.Context) error {
-	logged := false
-	return func(ctx context.Context) error {
-		if !logged {
-			logged = true
-			log.Info("another instance holds this state; waiting to take over")
+// until the holder releases the lease or lets it expire. A storage failure is
+// logged apart from a live holder, at its first occurrence and whenever it
+// changes, so a standby that can't reach the state doesn't look like a healthy
+// one.
+func standby(log *slog.Logger, every time.Duration) func(context.Context, error) error {
+	held, failure := false, ""
+	return func(ctx context.Context, cause error) error {
+		if errors.Is(cause, storage.ErrInstanceHeld) {
+			if !held {
+				held = true
+				log.Info("another instance holds this state; waiting to take over")
+			}
+		} else if text := cause.Error(); text != failure {
+			failure = text
+			log.Warn("could not acquire the instance lease; trying again", "error", cause)
 		}
 		//duty:instance_standby
 		t := time.NewTimer(every)
@@ -269,7 +277,7 @@ func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, re
 	return openHeld(ctx, stateDir, ttl, standby(log, retry))
 }
 
-func openHeld(ctx context.Context, stateDir string, ttl time.Duration, wait func(context.Context) error) (coordination, storage.Database, error) {
+func openHeld(ctx context.Context, stateDir string, ttl time.Duration, wait func(context.Context, error) error) (coordination, storage.Database, error) {
 	c, err := coordinationOf(stateDir)
 	if err != nil {
 		return c, nil, err

@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -230,8 +231,11 @@ func TestHoldInstanceWaitsForTheHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	waits := 0
-	held, err := holdInstance(ctx, db, "me", instanceTTL, func(context.Context) error {
+	held, err := holdInstance(ctx, db, "me", instanceTTL, func(_ context.Context, cause error) error {
 		waits++
+		if !errors.Is(cause, storage.ErrInstanceHeld) {
+			t.Fatalf("the wait heard %v", cause)
+		}
 		return db.ReleaseInstance(ctx, other)
 	})
 	if err != nil {
@@ -273,8 +277,11 @@ func TestHoldInstanceSurvivesATransientFailure(t *testing.T) {
 		t.Fatalf("with no wait: %v", err)
 	}
 	waits := 0
-	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, func(context.Context) error {
+	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", instanceTTL, func(_ context.Context, cause error) error {
 		waits++
+		if !errors.Is(cause, storage.ErrTransient) {
+			t.Fatalf("the wait heard %v", cause)
+		}
 		return nil
 	})
 	if err != nil {
@@ -282,6 +289,29 @@ func TestHoldInstanceSurvivesATransientFailure(t *testing.T) {
 	}
 	if waits != 1 || held == nil {
 		t.Fatalf("waited %d times, held %v", waits, held)
+	}
+}
+
+// A standby's log tells a storage failure from a live holder, and says each
+// only when there is something new to say.
+func TestStandbyLogsWhyItIsWaiting(t *testing.T) {
+	var out bytes.Buffer
+	wait := standby(slog.New(slog.NewTextHandler(&out, nil)), time.Nanosecond)
+	busy := fmt.Errorf("database busy: %w", storage.ErrTransient)
+	gone := fmt.Errorf("connection refused: %w", storage.ErrTransient)
+	for _, cause := range []error{busy, busy, gone, gone, storage.ErrInstanceHeld, storage.ErrInstanceHeld} {
+		if err := wait(context.Background(), cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := out.String()
+	for want, n := range map[string]int{"database busy": 1, "connection refused": 1, "another instance holds this state": 1} {
+		if got := strings.Count(log, want); got != n {
+			t.Errorf("%q logged %d times, want %d:\n%s", want, got, n, log)
+		}
+	}
+	if first := strings.SplitN(log, "\n", 2)[0]; strings.Contains(first, "another instance") {
+		t.Errorf("a storage failure was logged as a live holder: %s", first)
 	}
 }
 
