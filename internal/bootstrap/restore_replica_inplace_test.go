@@ -156,8 +156,22 @@ func TestReplicaInPlaceFinishesAnInterruptedSwap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.InPlace.AlreadyRestored || info.InPlace.MovedAside == "" {
-		t.Fatalf("report %+v", info.InPlace)
+	if info.InPlace.AlreadyRestored || info.InPlace.MovedAside == "" || !info.Drained {
+		t.Fatalf("report %+v, in place %+v", info, info.InPlace)
+	}
+	if info.InPlace.Check == nil || !info.InPlace.Check.OK {
+		t.Fatalf("the finished swap wasn't checked: %+v", info.InPlace.Check)
+	}
+	if got, err := os.Stat(info.TokenFile); err != nil || got.Mode().Perm() != 0o600 {
+		t.Fatalf("token %q: %v, %v", info.TokenFile, got, err)
+	}
+	if len(info.Scopes) == 0 {
+		t.Fatalf("scopes not reported: %+v", info)
+	}
+	// With the swap finished, the next start leaves the directory alone.
+	again, err := RestoreReplicaInPlace(ctx, f.database, state, replicaOnce(f))
+	if err != nil || !again.InPlace.AlreadyRestored || again.InPlace.Check != nil {
+		t.Fatalf("the start after: %+v, %v", again.InPlace, err)
 	}
 	if err := restoreInterrupted(state); err != nil {
 		t.Fatal(err)

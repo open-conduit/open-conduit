@@ -13,9 +13,12 @@ import (
 
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/localfs"
 	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // RestoreReplicaInPlace restores a replica into stateDir itself, which may be
@@ -77,7 +80,11 @@ func RestoreReplicaInPlace(ctx context.Context, replica, stateDir string, o cli.
 	switch present, err := current.backend.Present(ctx, current.location); {
 	case err != nil:
 		return info, err
-	case present && !o.Once && resumed == nil:
+	case present && resumed != nil:
+		// This run put the state in place, so it does what the interrupted
+		// one didn't get to.
+		return finishReplicaInPlace(ctx, lock, stateDir, o, policy, info)
+	case present && !o.Once:
 		return info, fmt.Errorf("%s already holds state, and a replica restore never replaces it: restore into an empty directory: %w", stateDir, os.ErrExist)
 	case present:
 		report.AlreadyRestored = true
@@ -114,7 +121,6 @@ func RestoreReplicaInPlace(ctx context.Context, replica, stateDir string, o cli.
 	if err != nil {
 		return info, err
 	}
-	info.Drained = true
 	info.Artifacts, info.MissingArtifacts = restored.Artifacts, restored.MissingArtifacts
 	info.ArchivedEvents, info.MissingEvents = restored.ArchivedEvents, restored.MissingEvents
 	if err := restoreStopped(); err != nil {
@@ -129,12 +135,27 @@ func RestoreReplicaInPlace(ctx context.Context, replica, stateDir string, o cli.
 		return info, fmt.Errorf("the in-place restore stopped part way: %w (run it again to finish)", err)
 	}
 	report.MovedAside, report.MovedItems = filepath.Join(stateDir, swap.Aside), swap.Moved
+	return finishReplicaInPlace(ctx, lock, stateDir, o, policy, info)
+}
+
+// finishReplicaInPlace reconciles a directory a replica was just swapped into
+// and reports on it, ending with a state check. Unlike a bundle's, its drain
+// stays until the operator ends it.
+func finishReplicaInPlace(ctx context.Context, lock *management.Lock, stateDir string, o cli.ReplicaOptions, policy *config.Policy, info cli.ReplicaInfo) (cli.ReplicaInfo, error) {
 	info.TokenFile = filepath.Join(stateDir, stagedToken)
 	_, store, err := openState(ctx, stateDir)
 	if err != nil {
 		return info, err
 	}
-	if err := forgetLaterRuns(ctx, lock, stateDir, store, report); err != nil {
+	if err := store.View(ctx, func(tx storage.Tx) error {
+		_, on, err := runtime.DrainInTx(tx)
+		info.Drained = on
+		return err
+	}); err != nil {
+		store.Close()
+		return info, err
+	}
+	if err := forgetLaterRuns(ctx, lock, stateDir, store, info.InPlace); err != nil {
 		store.Close()
 		return info, err
 	}
@@ -152,7 +173,7 @@ func RestoreReplicaInPlace(ctx context.Context, replica, stateDir string, o cli.
 	if err != nil {
 		return info, err
 	}
-	report.Check = &check
+	info.InPlace.Check = &check
 	return info, nil
 }
 

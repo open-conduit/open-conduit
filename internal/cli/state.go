@@ -196,7 +196,8 @@ type ReplicaInfo struct {
 	ConfigProblems   []ConfigEntry `json:"config_problems,omitempty"`
 	// InPlace is what restoring into the state directory itself did. Its
 	// already_restored says the directory held state and was left alone, and
-	// Drained then says nothing about it: only a restore that ran sets it.
+	// Drained then says nothing about it: only a run that restored the
+	// replica or finished its swap sets it.
 	InPlace *InPlaceReport `json:"in_place,omitempty"`
 }
 
