@@ -213,8 +213,8 @@ func (c coordination) shared() bool {
 }
 
 // holdInstance takes the lease on an open database at a shared location. wait
-// decides what a live holder means: nil refuses, and otherwise it returns once
-// it is worth asking again. A shared database with no lease is refused, since
+// decides what a live holder or a transient failure means: nil refuses, and
+// otherwise it returns once it is worth asking again. A shared database with no lease is refused, since
 // nothing would keep two instances from writing to it.
 func holdInstance(ctx context.Context, db storage.Database, owner string, wait func(context.Context) error) (storage.Database, error) {
 	leaser, ok := db.(storage.InstanceLeaser)
@@ -226,7 +226,10 @@ func holdInstance(ctx context.Context, db storage.Database, owner string, wait f
 		if err == nil {
 			return &heldDatabase{Database: db, leaser: leaser, ref: ref}, nil
 		}
-		if !errors.Is(err, storage.ErrInstanceHeld) {
+		// A transient failure says nothing about who holds the state, and a
+		// standby that gave up on one would be gone when it is needed.
+		transient := errors.Is(err, storage.ErrTransient)
+		if !transient && !errors.Is(err, storage.ErrInstanceHeld) || transient && wait == nil {
 			return nil, fmt.Errorf("instance lease: %w", err)
 		}
 		if wait == nil {

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -241,6 +242,46 @@ func TestHoldInstanceWaitsForTheHolder(t *testing.T) {
 	}
 	if err := putKey(ctx, held); err != nil {
 		t.Fatalf("the new holder's write: %v", err)
+	}
+}
+
+// flakyAcquire fails its first acquire as the backend's busy database would.
+type flakyAcquire struct {
+	*sqlite.Store
+	failed bool
+}
+
+func (f *flakyAcquire) AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (storage.InstanceRef, error) {
+	if !f.failed {
+		f.failed = true
+		return storage.InstanceRef{}, fmt.Errorf("database busy: %w", storage.ErrTransient)
+	}
+	return f.Store.AcquireInstance(ctx, owner, ttl)
+}
+
+// A transient failure leaves a standby waiting, since it says nothing about
+// the holder. Without a wait it is the caller's error.
+func TestHoldInstanceSurvivesATransientFailure(t *testing.T) {
+	ctx := context.Background()
+	_, path := sharedState(t)
+	db, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", nil); !errors.Is(err, storage.ErrTransient) {
+		t.Fatalf("with no wait: %v", err)
+	}
+	waits := 0
+	held, err := holdInstance(ctx, &flakyAcquire{Store: db}, "me", func(context.Context) error {
+		waits++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("a standby gave up on a transient failure: %v", err)
+	}
+	if waits != 1 || held == nil {
+		t.Fatalf("waited %d times, held %v", waits, held)
 	}
 }
 
