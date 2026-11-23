@@ -104,17 +104,32 @@ type policyChange struct {
 	// write records the policy; audit is when that changes what the state
 	// is held to, rather than noting that new state starts with none.
 	write, audit bool
+	// unknown is state that has run with no record, so before says nothing
+	// about what it ran under.
+	unknown bool
+}
+
+// previous names what the state was held to before this change.
+func (c policyChange) previous() string {
+	if c.unknown {
+		return "unknown"
+	}
+	return policyName(c.before.Digest)
 }
 
 // decidePolicy holds shared state to the policy it last ran under. The file is
 // on each host, so a successor started without it would otherwise run with no
 // ceilings. Which of two policies is stricter can't be told from outside, so
-// any difference needs accept to name this policy; only adding one where there
-// was none needs nothing, because that can only narrow what is allowed.
+// any difference needs accept to name this policy; only adding one to state
+// recorded as having none needs nothing, because that can only narrow what is
+// allowed.
 //
 // State that has run but has no record (a bundle from before the first one, or
-// state that has just become shared) may have run under any policy, so it
-// counts as unknown: running it with none takes the same acceptance.
+// state that has just become shared) may have run under any policy, so any
+// policy here could be looser than the last. Running it takes accept naming
+// this policy, or none, once; the record then holds it. That one acceptance is
+// the cost of state becoming shared, and it is paid by an operator who is
+// there, rather than guessed at by a daemon during a failover.
 func decidePolicy(tx storage.Tx, have enforcedPolicy, accept string) (policyChange, error) {
 	var c policyChange
 	raw, err := tx.Get(policyNamespace, policyKey)
@@ -135,22 +150,18 @@ func decidePolicy(tx storage.Tx, have enforcedPolicy, accept string) (policyChan
 		c.write, c.audit = true, true
 		return c, nil
 	}
-	if have.Digest != "" {
-		c.write, c.audit = true, true
-		return c, nil
-	}
 	ran, err := management.HasStoredGeneration(tx)
 	if err != nil {
 		return c, err
 	}
 	if !ran {
-		c.write = true
+		c.write, c.audit = true, have.Digest != ""
 		return c, nil
 	}
-	if accept != noPolicy {
-		return c, fmt.Errorf("%w: it has run before with no record of its policy and this daemon has none; start it with its policy, or accept running without one with --accept-policy %s", ErrPolicyChanged, noPolicy)
+	if !acceptsPolicy(accept, have.Digest) {
+		return c, fmt.Errorf("%w: it has run before with no record of its policy and this daemon has %s; start it with the policy it ran under and accept that with --accept-policy %s", ErrPolicyChanged, have, policyName(have.Digest))
 	}
-	c.write, c.audit = true, true
+	c.unknown, c.write, c.audit = true, true, true
 	return c, nil
 }
 
@@ -175,7 +186,7 @@ func admitPolicy(ctx context.Context, store storage.Store, now func() time.Time,
 			return nil
 		}
 		_, err = tx.AppendAudit(domain.AuditRecord{Actor: "system:serve", Action: "core.policy.changed", Outcome: domain.AuditOK, Detail: map[string]string{
-			"previous": policyName(change.before.Digest), "current": policyName(have.Digest), "instance": owner,
+			"previous": change.previous(), "current": policyName(have.Digest), "instance": owner,
 		}})
 		return err
 	})
@@ -183,7 +194,7 @@ func admitPolicy(ctx context.Context, store storage.Store, now func() time.Time,
 		return err
 	}
 	if change.audit {
-		log.Warn("the policy this shared state runs under changed", "previous", policyName(change.before.Digest), "current", policyName(have.Digest), "owner", owner)
+		log.Warn("the policy this shared state runs under changed", "previous", change.previous(), "current", policyName(have.Digest), "owner", owner)
 	}
 	return nil
 }

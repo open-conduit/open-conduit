@@ -88,8 +88,36 @@ func TestAdmitPolicyOfStateWithNoRecord(t *testing.T) {
 	if err := admitPolicy(ctx, open(t, true), now, nil, "none", "owner", log); err != nil {
 		t.Fatalf("accepted: %v", err)
 	}
-	if err := admitPolicy(ctx, open(t, true), now, &config.Policy{Digest: "aaaa"}, "", "owner", log); err != nil {
-		t.Fatalf("adding a policy: %v", err)
+	// Any policy file is a claim about state whose last policy isn't known: it
+	// could be looser than the one the state ran under.
+	if err := admitPolicy(ctx, open(t, true), now, &config.Policy{Digest: "aaaa"}, "", "owner", log); !errors.Is(err, ErrPolicyChanged) {
+		t.Fatalf("state that ran, with no record and a policy: %v", err)
+	}
+	if err := admitPolicy(ctx, open(t, true), now, &config.Policy{Digest: "aaaa"}, "none", "owner", log); !errors.Is(err, ErrPolicyChanged) {
+		t.Fatalf("accepting a different policy: %v", err)
+	}
+	accepted := open(t, true)
+	if err := admitPolicy(ctx, accepted, now, &config.Policy{Digest: "aaaa"}, "sha256:aaaa", "owner", log); err != nil {
+		t.Fatalf("accepted by digest: %v", err)
+	}
+	var records []domain.AuditRecord
+	if err := accepted.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		var err error
+		records, err = tx.AuditRecords(0, 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Detail["previous"] != "unknown" || records[0].Detail["current"] != "sha256:aaaa" {
+		t.Fatalf("audit of unknown state: %+v", records)
+	}
+	// Once accepted, the record is what holds it, so no flag is needed again.
+	if err := admitPolicy(ctx, accepted, now, &config.Policy{Digest: "aaaa"}, "", "owner", log); err != nil {
+		t.Fatalf("after acceptance: %v", err)
+	}
+	// New state with a policy, the control, needs nothing.
+	if err := admitPolicy(ctx, open(t, false), now, &config.Policy{Digest: "aaaa"}, "", "owner", log); err != nil {
+		t.Fatalf("new state with a policy: %v", err)
 	}
 }
 
