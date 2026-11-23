@@ -222,6 +222,10 @@ func (faultShared) Open(ctx context.Context, location string) (storage.Database,
 	return sqlite.Open(ctx, location)
 }
 
+func (faultShared) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	return sqlite.OpenPriorUnowned(ctx, location)
+}
+
 func init() { storage.RegisterBackend(faultSharedBackend, faultShared{sqlite.Backend}) }
 
 // faultPace is OPEN_CONDUIT_INSTANCE_TTL: a shorter instance lease, renewed and

@@ -41,7 +41,7 @@ type LifecycleHarness struct {
 	// Location names fresh, absent state for the backend, using dir (a
 	// private temporary directory) for any files.
 	Location func(t *testing.T, dir string) string
-	// Age makes the closed state at location claim to have been written
+	// Age makes the state at location, which may be open, claim to have been written
 	// by a newer binary, as NewerSchema or NewerRecords says.
 	Age func(t *testing.T, location string, newer Newer)
 	// Older makes the closed state at location claim to have been written
@@ -96,7 +96,93 @@ func LifecycleCases() []LifecycleCase {
 		{"instance_release_ends_the_tenure", instanceRelease},
 		{"instance_fence_refused_under_a_holder", instanceFenceRefused},
 		{"instance_restore_ends_the_tenure", instanceRestore},
+		{"instance_upgrade_waits_for_the_holder", instanceUpgradeWaits},
+		{"instance_refuses_newer_state", instanceRefusesNewer},
 	}
+}
+
+// instanceUpgradeWaits: state an older binary holds isn't preserved or raised
+// while that holder is live. Once it has expired, Open raises the state and
+// ends its tenure in one step, so it can't renew onto the raised format.
+func instanceUpgradeWaits(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, location, _, _, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	old, err := leaser.AcquireInstance(ctx, "old", instanceTTL)
+	if err != nil {
+		db.Close()
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	h.Older(t, location)
+	before := h.Fingerprint(t, location)
+	if raised, err := h.Backend.Open(ctx, location); err == nil {
+		raised.Close()
+		return errors.New("the stored format was raised under a live holder")
+	} else if !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("opening older state under a live holder: %w", err)
+	}
+	if prior, err := h.Backend.OpenPrior(ctx, location); err == nil {
+		if prior != nil {
+			prior.Close()
+		}
+		return errors.New("older state was preserved under a live holder")
+	} else if !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("preserving older state under a live holder: %w", err)
+	}
+	if after := h.Fingerprint(t, location); after != before {
+		return errors.New("refusing to raise state under a live holder changed it")
+	}
+	h.ExpireInstance(t, location)
+	raised, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return fmt.Errorf("opening older state after its holder expired: %w", err)
+	}
+	defer raised.Close()
+	stored, err := raised.Stored(ctx)
+	if err != nil {
+		return err
+	}
+	if stored != h.Backend.Writes() {
+		return fmt.Errorf("the state is at %+v after Open, want %+v", stored, h.Backend.Writes())
+	}
+	next, ok := raised.(storage.InstanceLeaser)
+	if !ok {
+		return errors.New("the database has no instance lease")
+	}
+	if err := next.RenewInstance(ctx, old, instanceTTL); !errors.Is(err, storage.ErrInstanceFenced) {
+		return fmt.Errorf("the expired holder renewed onto the raised format: %v", err)
+	}
+	return nil
+}
+
+// instanceRefusesNewer: a standby that opened the state before a newer binary
+// raised it can't take it over.
+func instanceRefusesNewer(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	for _, c := range []struct {
+		newer Newer
+		want  error
+	}{{NewerSchema, storage.ErrSchemaNewer}, {NewerRecords, storage.ErrRecordsNewer}} {
+		db, leaser, location, _, _, err := instanceDB(t, h)
+		if err != nil {
+			return err
+		}
+		h.Age(t, location, c.newer)
+		_, err = leaser.AcquireInstance(ctx, "standby", instanceTTL)
+		closeErr := db.Close()
+		if !errors.Is(err, c.want) {
+			return fmt.Errorf("acquired state stored newer than this binary writes: %v", err)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
 }
 
 // instanceRestore: a snapshot taken under a holder restores with no holder,

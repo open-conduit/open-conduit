@@ -273,18 +273,37 @@ func standby(log *slog.Logger, every time.Duration) func(context.Context, error)
 
 // openServing is openState for the daemon, which waits for a live holder
 // instead of refusing.
-func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, retry time.Duration) (coordination, storage.Database, error) {
-	return openHeld(ctx, stateDir, ttl, standby(log, retry))
+//
+// prepare runs before each Open. It is how the pre-upgrade bundle is taken only
+// once no other instance is live, and taken again if one appeared before Open
+// could raise the state, so the bundle is of what is raised.
+func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, retry time.Duration, prepare func(context.Context) error) (coordination, storage.Database, error) {
+	return openHeld(ctx, stateDir, ttl, prepare, standby(log, retry))
 }
 
-func openHeld(ctx context.Context, stateDir string, ttl time.Duration, wait func(context.Context, error) error) (coordination, storage.Database, error) {
+func openHeld(ctx context.Context, stateDir string, ttl time.Duration, prepare func(context.Context) error, wait func(context.Context, error) error) (coordination, storage.Database, error) {
 	c, err := coordinationOf(stateDir)
 	if err != nil {
 		return c, nil, err
 	}
-	db, err := c.open(ctx)
-	if err != nil {
-		return c, nil, err
+	var db storage.Database
+	for {
+		if prepare != nil {
+			err = prepare(ctx)
+		}
+		if err == nil {
+			db, err = c.open(ctx)
+		}
+		if err == nil {
+			break
+		}
+		retry := errors.Is(err, storage.ErrInstanceHeld) || errors.Is(err, storage.ErrTransient)
+		if wait == nil || !c.shared() || !retry {
+			return c, nil, err
+		}
+		if err = wait(ctx, err); err != nil {
+			return c, nil, err
+		}
 	}
 	if !c.shared() {
 		return c, db, nil

@@ -39,6 +39,11 @@ var (
 // A location the backend cannot resolve the same way from any process (a
 // relative path) is refused with ErrInvalid. A SharedBackend's shared location
 // is the exception: the instance lease guarantees its one writer instead.
+//
+// Open raises the stored versions only in a transaction that finds no live
+// instance holder, and ends any expired holder's tenure in that transaction,
+// so no instance runs on a format it doesn't know. With a live holder it
+// returns ErrInstanceHeld and changes nothing.
 type Backend interface {
 	// Present reports whether state exists at location, without creating
 	// or changing anything.
@@ -53,7 +58,9 @@ type Backend interface {
 	// this binary's versions, without changing it, so it can be preserved
 	// first. It takes the same ownership as Open, until Close. It returns
 	// nil, and no error, when Open would raise nothing: the state is absent,
-	// current, or newer (which Open refuses).
+	// current, or newer (which Open refuses). When it would raise state a
+	// live instance holds, it returns ErrInstanceHeld, since a copy taken now
+	// would be stale by the time Open could raise it.
 	OpenPrior(ctx context.Context, location string) (Prior, error)
 	// Restore publishes the snapshot at a previously absent destination,
 	// never over existing state. Every Execution lease in it is fenced (see

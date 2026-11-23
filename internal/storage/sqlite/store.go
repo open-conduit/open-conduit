@@ -165,8 +165,7 @@ func open(ctx context.Context, path string, walLimit int64) (*Store, error) {
 	if err = checkRecordFormat(ctx, db); err != nil {
 		return nil, err
 	}
-	// Raise the stored format, never lower it: two binaries can open together.
-	if _, err = db.ExecContext(ctx, `INSERT INTO metadata VALUES ('record_format',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER)`, fmt.Sprint(recordFormat)); err != nil {
+	if err = s.raiseRecordFormat(ctx); err != nil {
 		return nil, err
 	}
 
@@ -234,7 +233,7 @@ func createDatabase(ctx context.Context, abs string) error {
 
 // checkRecordFormat refuses a database whose records a newer binary wrote. A
 // database without the entry predates it and holds format 1.
-func checkRecordFormat(ctx context.Context, db *sql.DB) error {
+func checkRecordFormat(ctx context.Context, db queryRower) error {
 	stored, err := storedRecordFormat(ctx, db)
 	if err != nil {
 		return err
@@ -245,8 +244,56 @@ func checkRecordFormat(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// queryRower is a database or one connection to it.
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// raiseRecordFormat raises the stored format, never lowers it, and only in a
+// transaction that finds no live holder: a running older binary would drop
+// the new fields from whatever it rewrote. A holder past its expiry may still
+// renew, so the same transaction ends its tenure and it can't come back to
+// write over the raised format. Its owner and epoch stay, so the same owner
+// can still adopt its attempts.
+func (s *Store) raiseRecordFormat(ctx context.Context) error {
+	stored, err := storedRecordFormat(ctx, s.db)
+	if err != nil || stored >= recordFormat {
+		return err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return mapError(err)
+	}
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	// Recheck under the write lock: two binaries can open together.
+	if err = checkRecordFormat(ctx, conn); err != nil {
+		return err
+	}
+	expiry, err := recordedExpiry(ctx, conn)
+	if err != nil {
+		return mapError(err)
+	}
+	if expiry.Valid {
+		if expiry.Int64 > time.Now().UnixNano() {
+			return fmt.Errorf("sqlite: not raising the record format under a live instance: %w", storage.ErrInstanceHeld)
+		}
+		if _, err = conn.ExecContext(ctx, `UPDATE instance_lease SET expires_at=NULL WHERE id=1`); err != nil {
+			return mapError(err)
+		}
+	}
+	if _, err = conn.ExecContext(ctx, `INSERT INTO metadata VALUES ('record_format',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER)`, fmt.Sprint(recordFormat)); err != nil {
+		return mapError(err)
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	return mapError(err)
+}
+
 // storedRecordFormat is the format the database holds: 1 without the entry.
-func storedRecordFormat(ctx context.Context, db *sql.DB) (uint32, error) {
+func storedRecordFormat(ctx context.Context, db queryRower) (uint32, error) {
 	var stored uint32 = 1
 	var value string
 	switch err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='record_format'").Scan(&value); {

@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,68 @@ func await[T any](t *testing.T, d *servedDaemon, c <-chan T, what string) T {
 		t.Fatalf("%s: timed out\n%s", what, d.log.text())
 	}
 	panic("unreachable")
+}
+
+// A newer daemon on older state a live instance holds waits without changing
+// it or keeping a bundle, then preserves and raises it once the holder expires.
+func TestUpgradeWaitsForTheHolderThroughServe(t *testing.T) {
+	root, err := os.MkdirTemp("", "oc-upgrade-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	location := filepath.Join(root, "shared.db")
+	ctx := context.Background()
+	direct, err := sqlite.Open(ctx, location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := direct.AcquireInstance(ctx, "older", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := direct.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	older := sqlite.RecordFormat - 1
+	if _, err := db.Exec(`UPDATE metadata SET value=? WHERE key='record_format'`, fmt.Sprint(older)); err != nil {
+		t.Fatal(err)
+	}
+	format := func() (v uint32) {
+		t.Helper()
+		if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM metadata WHERE key='record_format'`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	d := serveShared(t, root, "new", location, nil)
+	await(t, d, d.log.seen, "the newer daemon waiting as a standby")
+	if got := format(); got != older {
+		t.Fatalf("the format was raised to %d under a live holder", got)
+	}
+	bundles := func() []string {
+		names, _ := upgradeBundles(filepath.Join(d.state, "backups"))
+		return names
+	}
+	if got := bundles(); len(got) != 0 {
+		t.Fatalf("a bundle was kept while the holder could still change the state: %v", got)
+	}
+
+	if _, err := db.Exec(`UPDATE instance_lease SET expires_at=1`); err != nil {
+		t.Fatal(err)
+	}
+	await(t, d, d.ready, "the newer daemon serving")
+	if got := format(); got != sqlite.RecordFormat {
+		t.Fatalf("the format is %d after the takeover", got)
+	}
+	if got := bundles(); len(got) != 1 {
+		t.Fatalf("pre-upgrade bundles after the takeover: %v", got)
+	}
 }
 
 // Two real daemons on one shared database: the second waits as a standby,

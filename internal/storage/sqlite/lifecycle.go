@@ -352,15 +352,28 @@ func (backend) Writes() storage.StoredVersion {
 }
 
 func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	return b.openPrior(ctx, location, true)
+}
+
+// OpenPriorUnowned is OpenPrior without the location's lock, as Open is to the
+// backend's Open, for a backend that shares the location under the lease.
+func OpenPriorUnowned(ctx context.Context, location string) (storage.Prior, error) {
+	return backend{}.openPrior(ctx, location, false)
+}
+
+func (b backend) openPrior(ctx context.Context, location string, exclusive bool) (storage.Prior, error) {
 	switch present, err := b.Present(ctx, location); {
 	case err != nil:
 		return nil, err
 	case !present:
 		return nil, nil
 	}
-	lock, err := own(location)
-	if err != nil {
-		return nil, err
+	var lock *os.File
+	if exclusive {
+		var err error
+		if lock, err = own(location); err != nil {
+			return nil, err
+		}
 	}
 	u := url.URL{Scheme: "file", Path: location}
 	q := u.Query()
@@ -369,7 +382,9 @@ func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior,
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
-		lock.Close()
+		if lock != nil {
+			lock.Close()
+		}
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
@@ -389,6 +404,15 @@ func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior,
 	if schema == SchemaVersion && records >= recordFormat {
 		return nil, p.Close()
 	}
+	// A live instance is still changing this state, so a copy of it now
+	// would be stale by the time Open could raise it.
+	expiry, err := recordedExpiry(ctx, db)
+	if err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	if expiry.Valid && expiry.Int64 > time.Now().UnixNano() {
+		return nil, errors.Join(storage.ErrInstanceHeld, p.Close())
+	}
 	p.stored = storage.StoredVersion{Schema: schema, Records: records}
 	return p, nil
 }
@@ -404,7 +428,13 @@ func (p *prior) Stored() storage.StoredVersion { return p.stored }
 func (p *prior) Snapshot(ctx context.Context, path string, read func(storage.Tx) error) error {
 	return p.s.snapshot(ctx, path, read, p.stored.Schema)
 }
-func (p *prior) Close() error { return errors.Join(p.s.db.Close(), p.lock.Close()) }
+func (p *prior) Close() error {
+	err := p.s.db.Close()
+	if p.lock != nil {
+		err = errors.Join(err, p.lock.Close())
+	}
+	return err
+}
 
 // Snapshot takes an online backup to path, then reads that copy, so read
 // sees exactly the state the snapshot holds.

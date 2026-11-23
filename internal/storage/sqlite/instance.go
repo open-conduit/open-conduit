@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/open-conduit/open-conduit/storage"
@@ -37,6 +38,34 @@ func (t *transaction) instance() (instanceRow, bool, error) {
 		return instanceRow{}, false, mapError(err)
 	}
 	return r, true, nil
+}
+
+// recordedExpiry is the instance lease's stored expiry, not valid when no
+// instance holds the state. A database from before the lease has no table yet.
+func recordedExpiry(ctx context.Context, q queryRower) (sql.NullInt64, error) {
+	var tables int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='instance_lease'`).Scan(&tables); err != nil || tables == 0 {
+		return sql.NullInt64{}, err
+	}
+	var expires sql.NullInt64
+	err := q.QueryRowContext(ctx, `SELECT expires_at FROM instance_lease WHERE id=1`).Scan(&expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sql.NullInt64{}, nil
+	}
+	return expires, err
+}
+
+// refuseNewer stops a binary taking state a newer one has raised, which it
+// would write without the fields it doesn't know.
+func (t *transaction) refuseNewer() error {
+	var schema uint32
+	if err := t.conn.QueryRowContext(t.ctx, "PRAGMA user_version").Scan(&schema); err != nil {
+		return mapError(err)
+	}
+	if schema > SchemaVersion {
+		return fmt.Errorf("sqlite: %w (schema %d; this binary supports %d): use a matching newer binary", storage.ErrSchemaNewer, schema, SchemaVersion)
+	}
+	return checkRecordFormat(t.ctx, t.conn)
 }
 
 // authorizeInstance is the check every write transaction makes under the
@@ -79,6 +108,9 @@ func (s *Store) AcquireInstance(ctx context.Context, owner string, ttl time.Dura
 	var ref storage.InstanceRef
 	now := time.Now()
 	err := s.lease(ctx, now, func(t *transaction) error {
+		if err := t.refuseNewer(); err != nil {
+			return err
+		}
 		r, ok, err := t.instance()
 		if err != nil {
 			return err
