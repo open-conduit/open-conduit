@@ -474,17 +474,20 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 	}); err != nil {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: errorCode(err), Detail: "can't read the archive record"}
 	}
-	if d.sharedState {
-		return sharedArchiveCheck(name, r.Archived)
-	}
 	if code := d.reportedCode("event_archive", ""); code != "" {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the last archive pass failed; %d Events archived so far", r.Archived)}
 	}
-	if code := d.reportedCode("database_rebuild", ""); code != "" {
-		return rebuildCheck(name, code)
+	// A failure outranks the account of what shared state doesn't do, and a
+	// rebuild it won't attempt is part of that account.
+	rebuild := d.reportedCode("database_rebuild", "")
+	if rebuild != "" && rebuild != rebuildOnSharedState {
+		return rebuildCheck(name, rebuild)
 	}
 	if code := d.reportedCode("database_compaction", ""); code != "" {
 		return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: "the last pass couldn't return free space to the disk"}
+	}
+	if d.sharedState {
+		return sharedArchiveCheck(name, r.Archived, rebuild == rebuildOnSharedState)
 	}
 	items := make([]string, 0, len(r.LastLap))
 	for why, n := range r.LastLap {
@@ -496,21 +499,23 @@ func (d *daemon) eventArchiveCheck(ctx context.Context) runtime.Check {
 
 // sharedArchiveCheck is doctor's account of an archive setting that shared
 // state doesn't act on. Events archived before the state became shared are on
-// the disk of the host that archived them, so it counts them.
-func sharedArchiveCheck(name string, archived uint64) runtime.Check {
+// the disk of the host that archived them, so it counts them, and it names a
+// rebuild that is due and won't be attempted.
+func sharedArchiveCheck(name string, archived uint64, rebuildDue bool) runtime.Check {
 	detail := "settings.archive_finished_days is set, but the event archive is on this host's disk and a successor on another host couldn't read it, so Events stay in the shared database"
 	if archived > 0 {
 		detail += fmt.Sprintf("; %d Events archived earlier are readable only on the host that holds their archive directory", archived)
 	}
-	return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: archiveOffOnSharedState, Detail: detail}
+	c := runtime.Check{Name: name, Status: runtime.CheckWarn, Code: archiveOffOnSharedState, Detail: detail}
+	if rebuildDue {
+		c.Items = []string{rebuildOnSharedState + ": this database predates incremental compaction, and a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
+	}
+	return c
 }
 
 // rebuildCheck is doctor's account of a rebuild that is due and hasn't
-// happened. On shared state that is by design and nothing has failed.
+// happened.
 func rebuildCheck(name, code string) runtime.Check {
-	if code == rebuildOnSharedState {
-		return runtime.Check{Name: name, Status: runtime.CheckInfo, Code: code, Detail: "this database predates incremental compaction and is on shared state, where a rewrite would stop the instance lease being renewed, so none is attempted; its free space stays in the file and is reused"}
-	}
 	return runtime.Check{Name: name, Status: runtime.CheckWarn, Code: code, Detail: fmt.Sprintf("the database couldn't be rebuilt to return free space, so it stays in the file for reuse; a start tries again %d days after the last attempt", int(rebuildRetryAfter/(24*time.Hour)))}
 }
 
