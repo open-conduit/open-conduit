@@ -102,6 +102,48 @@ func (f holderBlindFence) Fence(ctx context.Context, now time.Time) error {
 	return f.Database.Fence(ctx, now)
 }
 
+// sharedOpen poses as a backend whose location several hosts reach: it opens
+// without taking ownership.
+type sharedOpen struct{ storage.Backend }
+
+func (sharedOpen) SharesLocation(string) bool { return true }
+func (sharedOpen) Open(ctx context.Context, location string) (storage.Database, error) {
+	return sqlite.Open(ctx, location)
+}
+func (sharedOpen) Inspect(ctx context.Context, location string) (storage.Inspection, error) {
+	return sqlite.Open(ctx, location)
+}
+
+// sharedButOwned says its location is shared and still refuses a second opener.
+type sharedButOwned struct{ storage.Backend }
+
+func (sharedButOwned) SharesLocation(string) bool { return true }
+
+// sharedNoLease is shared, with a database that has no instance lease.
+type sharedNoLease struct{ sharedOpen }
+
+func (b sharedNoLease) Open(ctx context.Context, location string) (storage.Database, error) {
+	db, err := b.sharedOpen.Open(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	return unchecked{db}, nil
+}
+
+// A shared location admits a standby where any other refuses a second owner.
+func TestSharedLocationAdmitsAStandby(t *testing.T) {
+	h := lifecycleHarness(sharedOpen{sqlite.Backend})
+	for _, c := range conformance.LifecycleCases() {
+		if c.Name == "one_owner_at_a_time" {
+			if err := c.Check(t, h); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatal("no case one_owner_at_a_time")
+}
+
 // stealingBackend opens a database whose acquisition ignores a live holder.
 func stealingBackend() storage.Backend {
 	return weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
@@ -412,6 +454,14 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// The database has no instance lease at all.
 		name: "instance_lease_missing", failing: "instance_lease_admits_one_holder", want: "no instance lease",
 		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database { return unchecked{db} }},
+	}, {
+		// A shared location that still refuses a standby at Open.
+		name: "shared_location_refuses_a_standby", failing: "one_owner_at_a_time", want: "a standby could not open",
+		backend: sharedButOwned{sqlite.Backend},
+	}, {
+		// A shared location with nothing to keep one writer.
+		name: "shared_location_without_a_lease", failing: "one_owner_at_a_time", want: "no instance lease",
+		backend: sharedNoLease{sharedOpen{sqlite.Backend}},
 	}, {
 		// A second instance takes a lease that hasn't expired.
 		name: "instance_lease_stolen", failing: "instance_lease_admits_one_holder", want: "acquired a held lease",

@@ -37,7 +37,8 @@ var (
 // beside a database file, an advisory lock on a database server), so two
 // hosts or state directories naming the same state cannot both own it.
 // A location the backend cannot resolve the same way from any process (a
-// relative path) is refused with ErrInvalid.
+// relative path) is refused with ErrInvalid. A SharedBackend's shared location
+// is the exception: the instance lease guarantees its one writer instead.
 type Backend interface {
 	// Present reports whether state exists at location, without creating
 	// or changing anything.

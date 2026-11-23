@@ -460,11 +460,36 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	// The state directory's storage choice selects the backend.
-	backend, store, err := openState(ctx, o.StateDir)
+	// On state other hosts can reach, a live holder makes this daemon a
+	// standby, here, until it releases the lease or lets it expire.
+	backend, store, err := openServing(ctx, o.StateDir, d.log)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	if held, ok := store.(*heldDatabase); ok {
+		// Superseded, this daemon has no authority left: it stops, and
+		// comes back as a standby if something restarts it.
+		var lose context.CancelCauseFunc
+		ctx, lose = context.WithCancelCause(ctx)
+		defer lose(nil)
+		defer func() {
+			if cause := context.Cause(ctx); errors.Is(cause, storage.ErrInstanceFenced) {
+				err = fmt.Errorf("another instance took over this state: %w", cause)
+			}
+		}()
+		held.onLost(func(cause error) {
+			d.log.Error("another instance took over this state; stopping")
+			lose(cause)
+		})
+		//duty:instance_renewal
+		ticks := time.NewTicker(instanceRenewEvery)
+		defer ticks.Stop()
+		kept := make(chan struct{})
+		keepCtx, stopKeeping := context.WithCancel(ctx)
+		go func() { defer close(kept); held.keep(keepCtx, ticks.C, d.log) }()
+		defer func() { stopKeeping(); <-kept }()
+	}
 	d.recordBuild(ctx, store)
 	archive, err := sqlite.ArchiveBackend.Open(ctx, filepath.Join(o.StateDir, backup.ArchiveDir))
 	if err != nil {
@@ -472,7 +497,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	defer archive.Close()
 	d.events = archive
-	if c, ok := store.(storage.Compactor); ok {
+	if c, ok := rawDatabase(store).(storage.Compactor); ok {
 		d.compactor = c
 	}
 
@@ -495,7 +520,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.passTimes, err = newPassTimes(meter.Meter(telemetry.Scope)); err != nil {
 		return err
 	}
-	if timer, ok := store.(storage.TransactionTimer); ok {
+	if timer, ok := rawDatabase(store).(storage.TransactionTimer); ok {
 		if d.txTimes, err = newTxTimes(meter.Meter(telemetry.Scope)); err != nil {
 			return err
 		}

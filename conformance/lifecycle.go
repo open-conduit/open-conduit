@@ -471,6 +471,31 @@ func presentCreatesNothing(t *testing.T, h LifecycleHarness) error {
 	return nil
 }
 
+// sharedOwners: a shared location admits a standby while another instance has
+// it open, and its database has the lease that keeps the one writer.
+func sharedOwners(ctx context.Context, h LifecycleHarness, location string) error {
+	db, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, ok := db.(storage.InstanceLeaser); !ok {
+		return errors.New("a shared location's database has no instance lease")
+	}
+	standby, err := h.Backend.Open(ctx, location)
+	if err != nil {
+		return fmt.Errorf("a standby could not open a shared location: %w", err)
+	}
+	if err := standby.Close(); err != nil {
+		return err
+	}
+	i, err := h.Backend.Inspect(ctx, location)
+	if err != nil {
+		return fmt.Errorf("a standby could not inspect a shared location: %w", err)
+	}
+	return i.Close()
+}
+
 // oneOwner: while a Database or an Inspection owns state, neither Open nor
 // Inspect can open it again, in this process or any other; once it closes,
 // they can.
@@ -479,6 +504,9 @@ func oneOwner(t *testing.T, h LifecycleHarness) error {
 	location, err := openSeeded(t, h)
 	if err != nil {
 		return err
+	}
+	if s, ok := h.Backend.(storage.SharedBackend); ok && s.SharesLocation(location) {
+		return sharedOwners(ctx, h, location)
 	}
 	second := func(holder string) error {
 		if db, err := h.Backend.Open(ctx, location); !errors.Is(err, storage.ErrInUse) {
