@@ -2,9 +2,12 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -50,6 +53,95 @@ func TestAdmitPolicy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// State that has run but holds no record may have run under any policy: a
+// restored bundle from before the first record is the way to get here. New
+// state, the control, starts with none and needs nothing.
+func TestAdmitPolicyOfStateWithNoRecord(t *testing.T) {
+	ctx := context.Background()
+	now := func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	open := func(t *testing.T, ran bool) *sqlite.Store {
+		t.Helper()
+		db, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		if ran {
+			if err = db.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+				return tx.Put("core.config", "active", []byte(`{"Generation":1}`))
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return db
+	}
+	if err := admitPolicy(ctx, open(t, false), now, nil, "", "owner", log); err != nil {
+		t.Fatalf("new state: %v", err)
+	}
+	if err := admitPolicy(ctx, open(t, true), now, nil, "", "owner", log); !errors.Is(err, ErrPolicyChanged) {
+		t.Fatalf("state that ran, with no record and no policy: %v", err)
+	}
+	if err := admitPolicy(ctx, open(t, true), now, nil, "none", "owner", log); err != nil {
+		t.Fatalf("accepted: %v", err)
+	}
+	if err := admitPolicy(ctx, open(t, true), now, &config.Policy{Digest: "aaaa"}, "", "owner", log); err != nil {
+		t.Fatalf("adding a policy: %v", err)
+	}
+}
+
+// A newer binary with the wrong policy must leave the stored format alone, or
+// a correctly configured standby on the older binary can't open the state. The
+// control opens the same state without the check and raises it.
+func TestRefusedPolicyLeavesTheFormat(t *testing.T) {
+	ctx := context.Background()
+	state := olderState(t)
+	path := filepath.Join(state, "conduit.db")
+	choice, _ := json.Marshal(storageChoice{Backend: sharedTestBackend, Location: path})
+	if err := os.WriteFile(filepath.Join(state, storageFile), choice, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := sqlite.OpenPriorUnowned(ctx, path)
+	if err != nil || seed == nil {
+		t.Fatalf("older state: %v", err)
+	}
+	seed.Close()
+	func() {
+		defer sqlite.SimulateRecordFormat(olderFormat)()
+		db, err := sqlite.Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		raw, _ := json.Marshal(enforcedPolicy{Digest: "aaaa", Path: "/policy"})
+		if err = db.Transact(ctx, storage.Guard{Now: upgradeStart}, func(tx storage.Tx) error {
+			return tx.Put(policyNamespace, policyKey, raw)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	d := upgradeDaemon(state, upgradeStart)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, db, err := openServing(ctx, state, log, time.Minute, time.Millisecond, d.prepareToOpen, func() {})
+	if !errors.Is(err, ErrPolicyChanged) {
+		if db != nil {
+			db.Close()
+		}
+		t.Fatalf("opening under the wrong policy: %v", err)
+	}
+	if got := storedFormat(t, path); got != fmt.Sprint(olderFormat) {
+		t.Fatalf("a refused daemon raised the format to %s", got)
+	}
+	_, db, err = openServing(ctx, state, log, time.Minute, time.Millisecond, d.preserveBeforeUpgrade, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := storedFormat(t, path); got != fmt.Sprint(sqlite.RecordFormat) {
+		t.Fatalf("control: the same open without the check left the format at %s", got)
 	}
 }
 

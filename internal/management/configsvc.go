@@ -142,6 +142,16 @@ func openConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	return c, nil
 }
 
+// HasStoredGeneration reports whether a config generation was ever committed,
+// so tx is state that has run rather than state just created.
+func HasStoredGeneration(tx storage.Tx) (bool, error) {
+	_, err := tx.Get(configNamespace, "active")
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // StoredGeneration reads the committed generation's number and normalized
 // document without validating it: 0 and nil when none is committed. The
 // daemon reads the operator's package grants from it (settings.extensions)

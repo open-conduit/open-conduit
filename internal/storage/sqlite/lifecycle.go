@@ -319,7 +319,11 @@ func (i inspection) Stored(ctx context.Context) (storage.StoredVersion, error) {
 	return i.s.Stored(ctx)
 }
 func (i inspection) Close() error {
-	return errors.Join(i.s.Close(), os.RemoveAll(i.dir), i.lock.Close())
+	err := errors.Join(i.s.Close(), os.RemoveAll(i.dir))
+	if i.lock != nil {
+		err = errors.Join(err, i.lock.Close())
+	}
+	return err
 }
 
 // copyPrivate copies src to a new private file and returns the hash of the
@@ -359,6 +363,22 @@ func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior,
 // backend's Open, for a backend that shares the location under the lease.
 func OpenPriorUnowned(ctx context.Context, location string) (storage.Prior, error) {
 	return backend{}.openPrior(ctx, location, false)
+}
+
+// InspectUnowned is Inspect without taking ownership of the location, as a
+// shared backend's Inspect must not: a standby reads state a holder is running.
+func InspectUnowned(ctx context.Context, location string) (storage.Inspection, error) {
+	switch present, err := (backend{}).Present(ctx, location); {
+	case err != nil:
+		return nil, err
+	case !present:
+		return nil, fmt.Errorf("sqlite: no database at %s: %w", location, os.ErrNotExist)
+	}
+	i, err := inspect(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	return i, nil
 }
 
 func (b backend) openPrior(ctx context.Context, location string, exclusive bool) (storage.Prior, error) {

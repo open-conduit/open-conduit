@@ -486,7 +486,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// Opening raises the stored format, after which an older binary refuses
 	// the database: a bundle of it as it stands is kept first, once no other
 	// instance is changing it.
-	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.preserveBeforeUpgrade, func() {
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.prepareToOpen, func() {
 		d.health.phase.Store(management.PhaseStandby)
 	})
 	if err != nil {

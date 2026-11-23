@@ -468,7 +468,8 @@ func TestDaemonCursorSurvivesTakeover(t *testing.T) {
 	t.Fatalf("doctor has no artifact_reach check on shared state: %+v", report.Checks)
 }
 
-// The policy is on each host. A successor without it doesn't serve, a host with
+// The policy is on each host. A daemon without it is refused as it starts, even
+// as a standby, so it can't change the state or be relied on; a host with
 // the same one does, and running without it takes an operator naming that.
 func TestDaemonTakeoverKeepsThePolicy(t *testing.T) {
 	if testing.Short() {
@@ -509,15 +510,15 @@ func TestDaemonTakeoverKeepsThePolicy(t *testing.T) {
 
 	t.Setenv("OPEN_CONDUIT_POLICY", "")
 	without := startInstance(t, d, "b", shared)
-	waitFor(t, "the policyless daemon waiting as a standby", func() bool {
-		return strings.Contains(without.log(), "another instance holds this state")
-	})
-	kill(holder)
 	select {
 	case <-without.exited:
 	case <-time.After(30 * time.Second):
-		t.Fatalf("a successor without the policy kept running:\n%s", without.log())
+		t.Fatalf("a standby without the policy kept running:\n%s", without.log())
 	}
+	if !holder.serving() {
+		t.Fatal("refusing the standby disturbed the holder")
+	}
+	kill(holder)
 	if log := without.log(); !strings.Contains(log, "differs from the one this shared state last ran under") || strings.Contains(log, "open-conduit serving") {
 		t.Fatalf("the refused successor's log:\n%s", log)
 	}

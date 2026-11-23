@@ -222,6 +222,10 @@ func (faultShared) Open(ctx context.Context, location string) (storage.Database,
 	return sqlite.Open(ctx, location)
 }
 
+func (faultShared) Inspect(ctx context.Context, location string) (storage.Inspection, error) {
+	return sqlite.InspectUnowned(ctx, location)
+}
+
 func (faultShared) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
 	return sqlite.OpenPriorUnowned(ctx, location)
 }

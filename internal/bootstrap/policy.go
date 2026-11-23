@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -89,35 +90,79 @@ func (p enforcedPolicy) String() string {
 	return "policy sha256:" + p.Digest + " (" + p.Path + ")"
 }
 
-// admitPolicy holds a holder of shared state to the policy that state last
-// ran under. The file is on each host, so a successor started without it would
-// otherwise run with no ceilings. Which of two policies is stricter can't be
-// told from outside, so any difference needs accept to name this policy; only
-// adding one where there was none needs nothing, because that can only narrow
-// what is allowed. Every change is recorded in the audit ledger.
-func admitPolicy(ctx context.Context, store storage.Store, now func() time.Time, policy *config.Policy, accept, owner string, log *slog.Logger) error {
-	have := enforcedPolicy{}
-	if policy != nil {
-		have = enforcedPolicy{Digest: policy.Digest, Path: policy.Path}
+// heldPolicy is this daemon's policy as the record states one.
+func heldPolicy(policy *config.Policy) enforcedPolicy {
+	if policy == nil {
+		return enforcedPolicy{}
 	}
-	var before enforcedPolicy
-	changed := false
+	return enforcedPolicy{Digest: policy.Digest, Path: policy.Path}
+}
+
+// policyChange is what admitting a policy to the state in tx would do.
+type policyChange struct {
+	before enforcedPolicy
+	// write records the policy; audit is when that changes what the state
+	// is held to, rather than noting that new state starts with none.
+	write, audit bool
+}
+
+// decidePolicy holds shared state to the policy it last ran under. The file is
+// on each host, so a successor started without it would otherwise run with no
+// ceilings. Which of two policies is stricter can't be told from outside, so
+// any difference needs accept to name this policy; only adding one where there
+// was none needs nothing, because that can only narrow what is allowed.
+//
+// State that has run but has no record (a bundle from before the first one, or
+// state that has just become shared) may have run under any policy, so it
+// counts as unknown: running it with none takes the same acceptance.
+func decidePolicy(tx storage.Tx, have enforcedPolicy, accept string) (policyChange, error) {
+	var c policyChange
+	raw, err := tx.Get(policyNamespace, policyKey)
+	found := err == nil
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return c, err
+	}
+	if found {
+		if err = json.Unmarshal(raw, &c.before); err != nil {
+			return c, fmt.Errorf("the recorded policy is unreadable: %w", err)
+		}
+		if c.before.Digest == have.Digest {
+			return c, nil
+		}
+		if c.before.Digest != "" && !acceptsPolicy(accept, have.Digest) {
+			return c, fmt.Errorf("%w: it last ran under %s and this daemon has %s; start it with that policy, or accept this one with --accept-policy %s", ErrPolicyChanged, c.before, have, policyName(have.Digest))
+		}
+		c.write, c.audit = true, true
+		return c, nil
+	}
+	if have.Digest != "" {
+		c.write, c.audit = true, true
+		return c, nil
+	}
+	ran, err := management.HasStoredGeneration(tx)
+	if err != nil {
+		return c, err
+	}
+	if !ran {
+		c.write = true
+		return c, nil
+	}
+	if accept != noPolicy {
+		return c, fmt.Errorf("%w: it has run before with no record of its policy and this daemon has none; start it with its policy, or accept running without one with --accept-policy %s", ErrPolicyChanged, noPolicy)
+	}
+	c.write, c.audit = true, true
+	return c, nil
+}
+
+// admitPolicy records the policy for the holder of shared state, or refuses
+// it. Every change of what the state is held to is in the audit ledger.
+func admitPolicy(ctx context.Context, store storage.Store, now func() time.Time, policy *config.Policy, accept, owner string, log *slog.Logger) error {
+	have := heldPolicy(policy)
+	var change policyChange
 	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
-		before, changed = enforcedPolicy{}, false
-		raw, err := tx.Get(policyNamespace, policyKey)
-		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		var err error
+		if change, err = decidePolicy(tx, have, accept); err != nil || !change.write {
 			return err
-		}
-		if err == nil {
-			if err = json.Unmarshal(raw, &before); err != nil {
-				return fmt.Errorf("the recorded policy is unreadable: %w", err)
-			}
-		}
-		if before.Digest == have.Digest {
-			return nil
-		}
-		if before.Digest != "" && !acceptsPolicy(accept, have.Digest) {
-			return fmt.Errorf("%w: it last ran under %s and this daemon has %s; start it with that policy, or accept this one with --accept-policy %s", ErrPolicyChanged, before, have, policyName(have.Digest))
 		}
 		b, err := json.Marshal(have)
 		if err != nil {
@@ -126,19 +171,71 @@ func admitPolicy(ctx context.Context, store storage.Store, now func() time.Time,
 		if err = tx.Put(policyNamespace, policyKey, b); err != nil {
 			return err
 		}
-		changed = true
+		if !change.audit {
+			return nil
+		}
 		_, err = tx.AppendAudit(domain.AuditRecord{Actor: "system:serve", Action: "core.policy.changed", Outcome: domain.AuditOK, Detail: map[string]string{
-			"previous": policyName(before.Digest), "current": policyName(have.Digest), "instance": owner,
+			"previous": policyName(change.before.Digest), "current": policyName(have.Digest), "instance": owner,
 		}})
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	if changed {
-		log.Warn("the policy this shared state runs under changed", "previous", policyName(before.Digest), "current", policyName(have.Digest), "owner", owner)
+	if change.audit {
+		log.Warn("the policy this shared state runs under changed", "previous", policyName(change.before.Digest), "current", policyName(have.Digest), "owner", owner)
 	}
 	return nil
+}
+
+// prepareToOpen runs before each Open of the state. A daemon that wouldn't be
+// admitted must not get as far as Open, which can raise the stored format or
+// add to the schema and so lock out a correctly configured older standby. It
+// also means a standby with the wrong policy is refused when it starts, not
+// when it is needed.
+func (d *daemon) prepareToOpen(ctx context.Context) error {
+	if err := refuseUnadmittedPolicy(ctx, d.o.StateDir, d.policy, d.o.AcceptPolicy); err != nil {
+		return err
+	}
+	return d.preserveBeforeUpgrade(ctx)
+}
+
+// refuseUnadmittedPolicy decides admission from a read of the state that
+// changes nothing. admitPolicy decides again under the lease. A read that
+// fails is retried as a transient failure, except state this binary can't open
+// at all, which Open refuses in its own words.
+func refuseUnadmittedPolicy(ctx context.Context, stateDir string, policy *config.Policy, accept string) error {
+	c, err := coordinationOf(stateDir)
+	if err != nil {
+		return err
+	}
+	if !c.shared() {
+		return nil
+	}
+	present, err := c.backend.Present(ctx, c.location)
+	if err != nil || !present {
+		return err
+	}
+	inspection, err := c.backend.Inspect(ctx, c.location)
+	switch {
+	case err == nil:
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, storage.ErrSchemaNewer), errors.Is(err, storage.ErrRecordsNewer):
+		return nil
+	case errors.Is(err, storage.ErrInstanceHeld):
+		// Raising a private copy waits for the holder too, so this daemon
+		// is a standby until it can read the state.
+		return err
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return fmt.Errorf("reading the state's policy: %v: %w", err, storage.ErrTransient)
+	}
+	defer inspection.Close()
+	have := heldPolicy(policy)
+	return inspection.View(ctx, func(tx storage.Tx) error {
+		_, err := decidePolicy(tx, have, accept)
+		return err
+	})
 }
 
 // policyName is a digest as --accept-policy takes it.

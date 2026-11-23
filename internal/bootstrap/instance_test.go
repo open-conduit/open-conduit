@@ -28,6 +28,10 @@ func (sharedSQLite) Open(ctx context.Context, location string) (storage.Database
 	return sqlite.Open(ctx, location)
 }
 
+func (sharedSQLite) Inspect(ctx context.Context, location string) (storage.Inspection, error) {
+	return sqlite.InspectUnowned(ctx, location)
+}
+
 func (sharedSQLite) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
 	return sqlite.OpenPriorUnowned(ctx, location)
 }
