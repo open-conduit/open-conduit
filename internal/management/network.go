@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // NetworkConfig is the opt-in management listener on a TCP address: the
@@ -401,4 +404,42 @@ func CursorKey(path string) ([]byte, error) {
 	return key, nil
 }
 
-const cursorKeySize = 32
+// SharedCursorKey is the key list cursors are signed with on state several
+// hosts reach, kept in the store and made on first use, so a cursor a client
+// holds survives a takeover as CursorKey's survives a restart. Anything that can
+// read the store can read it, which gives no more than that access already
+// does: a cursor only resumes a list its caller is authorised for.
+func SharedCursorKey(ctx context.Context, store storage.Store, now func() time.Time) ([]byte, error) {
+	var key []byte
+	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		key = nil
+		b, err := tx.Get(authNamespace, cursorKeyRecord)
+		if err == nil {
+			if err = json.Unmarshal(b, &key); err != nil || len(key) != cursorKeySize {
+				return errors.New("stored cursor key is malformed")
+			}
+			return nil
+		}
+		if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		key = make([]byte, cursorKeySize)
+		if _, err = rand.Read(key); err != nil {
+			return err
+		}
+		b, err = json.Marshal(key)
+		if err != nil {
+			return err
+		}
+		return tx.Put(authNamespace, cursorKeyRecord, b)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+const (
+	cursorKeySize   = 32
+	cursorKeyRecord = "cursor_key"
+)

@@ -408,6 +408,51 @@ func TestDaemonDrainSurvivesTakeover(t *testing.T) {
 	})
 }
 
+// A list cursor the holder issued still works on its successor, which has none
+// of the holder's disk.
+func TestDaemonCursorSurvivesTakeover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process kill drills")
+	}
+	d := newDrill(t)
+	shared := filepath.Join(d.root, "shared.db")
+	holder := startInstance(t, d, "a", shared)
+	waitFor(t, "the holder serving", holder.serving)
+	ctx := context.Background()
+	if _, err := holder.c.BeginDrain(ctx, "keep the Work still"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one", "two"} {
+		if _, err := holder.c.SubmitEvent(ctx, client.EventRequest{ScopeID: "drill", Type: "drill.event", DeliveryID: "cursor-" + id, CorrelationKey: &client.Key{Source: "drill", ExternalID: id}}, "submit-cursor-"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "both Events routed to Work", func() bool {
+		page, err := holder.c.Works(ctx, url.Values{"scope_id": {"drill"}})
+		return err == nil && len(page.Items) == 2
+	})
+	first, err := holder.c.Works(ctx, url.Values{"scope_id": {"drill"}, "limit": {"1"}})
+	if err != nil || len(first.Items) != 1 || first.NextCursor == "" {
+		t.Fatalf("the first page: %+v %v", first, err)
+	}
+	standby := startInstance(t, d, "b", shared)
+	waitFor(t, "the second daemon waiting as a standby", func() bool {
+		return strings.Contains(standby.log(), "another instance holds this state")
+	})
+	if err := holder.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-holder.exited
+	waitFor(t, "the standby serving", standby.serving)
+	second, err := standby.c.Works(ctx, url.Values{"scope_id": {"drill"}, "limit": {"1"}, "cursor": {first.NextCursor}})
+	if err != nil {
+		t.Fatalf("the holder's cursor on its successor: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("the second page: %+v after %+v", second.Items, first.Items)
+	}
+}
+
 // dataVersion changes when any other connection commits to the database.
 func dataVersion(t *testing.T, c *sql.Conn) int64 {
 	t.Helper()
