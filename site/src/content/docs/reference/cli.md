@@ -88,6 +88,9 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
       [--accept-policy sha256:DIGEST|none]
                            (on shared state, accept running under this policy, or none, in place of the one
                            the state last ran under; it names one policy, so it accepts no later change)
+      [--adopt-config GENERATION]
+                           (on shared state, replace this stored generation, which doesn't validate on this
+                           host, with this host's config file for every host; it names one generation)
       [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
                            (override the config's settings.webhooks for this run; TYPE is a tunnel
                            a package provides, such as ngrok or cloudflared, and JSON its config)

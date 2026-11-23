@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,16 +79,55 @@ type Adoption struct {
 	Cause  error
 }
 
+// ErrStoredConfigRefused is a daemon on shared state refusing a stored
+// generation it can't validate. It leaves that generation in place.
+var ErrStoredConfigRefused = errors.New("this daemon can't serve the shared state's stored configuration")
+
+// RefuseStoredConfig is the refusal of a stored generation on shared state,
+// because of cause, naming what the generation uses that this host lacks and
+// how an operator replaces it.
+func RefuseStoredConfig(generation uint64, normalized []byte, cause error) error {
+	if config.PolicyRefused(cause) {
+		return policyRefusal(generation, cause)
+	}
+	needs := ""
+	if names := config.UnregisteredNames(normalized, cause); len(names) > 0 {
+		needs = "; it uses " + strings.Join(names, ", ") + ", which this host doesn't have"
+	}
+	return fmt.Errorf("%w: generation %d doesn't validate here%s: %w; install what it needs on this host, or replace it for every host with this host's config file using --adopt-config %d", ErrStoredConfigRefused, generation, needs, cause, generation)
+}
+
+// policyRefusal is a stored generation the daemon's policy doesn't allow.
+func policyRefusal(generation uint64, cause error) error {
+	return fmt.Errorf("stored generation %d breaks the daemon's policy, so it doesn't start: %w; to replace it, start once under a policy that allows it, apply a config that fits, then put the policy back", generation, cause)
+}
+
+// AuditActionConfigAdopted is the audit Action of an operator replacing shared
+// state's stored generation with one host's config file.
+const AuditActionConfigAdopted = "core.config.adopted"
+
+// OpenHeldConfig is OpenConfig for shared state. A generation that doesn't
+// validate may mean only that this host lacks something the others have, so it
+// is never replaced from this host's file unless accept names that generation.
+func OpenHeldConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, accept uint64) (*ConfigService, error) {
+	return openConfigChecked(ctx, store, now, registry, path, def, &accept)
+}
+
 // OpenConfig restores the committed generation. With no activation record it
 // validates the config file and activates it as generation 1; with no config
 // file either, it activates def instead when given (the default
 // configuration), writing no file: the first apply writes it. Disk edits alone
 // never change an already committed generation that still validates; one that
 // no longer does is replaced by the config file when the file validates, so
-// the daemon can always start once the file is fixed. The exception is a
-// generation the daemon's policy refuses, which doesn't start at all.
+// the daemon can always start once the file is fixed. The exceptions are a
+// generation the daemon's policy refuses, which doesn't start at all, and
+// shared state (OpenHeldConfig).
 func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
-	c, err := openConfig(ctx, store, now, registry, path, def)
+	return openConfigChecked(ctx, store, now, registry, path, def, nil)
+}
+
+func openConfigChecked(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *uint64) (*ConfigService, error) {
+	c, err := openConfig(ctx, store, now, registry, path, def, held)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +137,9 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	return c, nil
 }
 
-func openConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
+// openConfig opens the committed generation. held is set on shared state, to
+// the generation an operator accepts replacing (0 for none).
+func openConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte, held *uint64) (*ConfigService, error) {
 	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
 	if def != nil {
 		if s, err := config.Validate(def, registry); err == nil {
@@ -132,10 +174,20 @@ func openConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		// Not adoption's case: this generation is what the daemon last ran,
 		// and the policy says it doesn't start. Replacing it from a file on
 		// disk would decide that for the operator.
-		return nil, fmt.Errorf("stored generation %d breaks the daemon's policy, so it doesn't start: %w; to replace it, start once under a policy that allows it, apply a config that fits, then put the policy back", active.Generation, err)
+		return nil, policyRefusal(active.Generation, err)
 	}
 	if err != nil {
-		return c.adopt(ctx, active.Generation, normalized, err)
+		if held == nil {
+			return c.adopt(ctx, active.Generation, normalized, err, nil)
+		}
+		if *held != active.Generation {
+			return nil, RefuseStoredConfig(active.Generation, normalized, err)
+		}
+		stored := active.Generation
+		return c.adopt(ctx, stored, normalized, err, func(tx storage.Tx, generation uint64, hash string) error {
+			_, err := tx.AppendAudit(domain.AuditRecord{Actor: "system:serve", Action: AuditActionConfigAdopted, Target: "config/generation", Outcome: domain.AuditOK, Detail: map[string]string{"replaced_generation": u64(stored), "generation": u64(generation), "hash": hash}})
+			return err
+		})
 	}
 	c.current, c.generation, c.fileGeneration = snapshot, active.Generation, active.Generation
 	c.history[active.Generation] = snapshot
@@ -157,23 +209,33 @@ func HasStoredGeneration(tx storage.Tx) (bool, error) {
 // daemon reads the operator's package grants from it (settings.extensions)
 // to start the packages, which run before the configuration opens.
 func StoredGeneration(ctx context.Context, store storage.Store, now func() time.Time) (uint64, []byte, error) {
-	var active activation
+	var generation uint64
 	var normalized []byte
 	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
-		active, normalized = activation{}, nil
-		b, err := tx.Get(configNamespace, "active")
-		if errors.Is(err, storage.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if err = json.Unmarshal(b, &active); err != nil {
-			return err
-		}
-		normalized, err = tx.Get(configNamespace, "generation/"+u64(active.Generation))
+		var err error
+		generation, normalized, err = StoredGenerationIn(tx)
 		return err
 	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return generation, normalized, nil
+}
+
+// StoredGenerationIn is StoredGeneration within a transaction or view.
+func StoredGenerationIn(tx storage.Tx) (uint64, []byte, error) {
+	var active activation
+	b, err := tx.Get(configNamespace, "active")
+	if errors.Is(err, storage.ErrNotFound) {
+		return 0, nil, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if err = json.Unmarshal(b, &active); err != nil {
+		return 0, nil, err
+	}
+	normalized, err := tx.Get(configNamespace, "generation/"+u64(active.Generation))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -182,7 +244,8 @@ func StoredGeneration(ctx context.Context, store storage.Store, now func() time.
 
 // adopt publishes the config file over a stored generation that failed
 // validation with cause. Its scopes still stand in for a folder that has gone.
-func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []byte, cause error) (*ConfigService, error) {
+// record, when given, writes an audit record in the publishing transaction.
+func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []byte, cause error, record Recorder) (*ConfigService, error) {
 	fail := func(err error) (*ConfigService, error) {
 		return nil, fmt.Errorf("stored generation %d no longer validates (%w); fix %s and restart to adopt it instead: %v", stored, cause, c.path, err)
 	}
@@ -194,7 +257,10 @@ func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []b
 	if err != nil {
 		return fail(err)
 	}
-	if err = c.publish(ctx, snapshot, stored); err != nil {
+	c.mu.Lock()
+	err = c.publishLocked(ctx, snapshot, stored, record)
+	c.mu.Unlock()
+	if err != nil {
 		return fail(err)
 	}
 	c.fileGeneration = c.generation

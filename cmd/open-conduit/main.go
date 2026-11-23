@@ -118,7 +118,7 @@ func main() {
 func serve(r cli.ServeRequest) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, PolicyPath: r.PolicyPath, AcceptPolicy: r.AcceptPolicy, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval, CallTimeout: r.CallTimeout,
+	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, PolicyPath: r.PolicyPath, AcceptPolicy: r.AcceptPolicy, AdoptConfig: r.AdoptConfig, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval, CallTimeout: r.CallTimeout,
 		BackupInterval: r.BackupInterval, BackupDir: r.BackupDir, BackupsKept: r.BackupsKept,
 		UpgradeBundlesKept: r.UpgradeBundlesKept, UpgradeBundlesMaxAge: r.UpgradeBundlesMaxAge, NoUpgradeBundle: r.NoUpgradeBundle,
 		WebhookAddr: r.WebhookAddr, ProbeAddr: r.ProbeAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Config: r.TunnelConfig, PublicURL: r.PublicURL},

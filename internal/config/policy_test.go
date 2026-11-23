@@ -241,3 +241,19 @@ func TestLoadPolicy(t *testing.T) {
 		t.Fatal("no policy must allow everything")
 	}
 }
+
+// Only a registration's name is reported as missing: a secret reference with
+// an unknown scheme is a value that must never be echoed.
+func TestUnregisteredNames(t *testing.T) {
+	doc := []byte(`{"scopes":[{"extensions":[{"type":"notes"}],"secret_refs":{"token":"vault:do-not-echo"}}]}`)
+	err := &ValidationError{Diagnostics: []Diagnostic{
+		{"scopes/0/extensions/0/type", "unknown_registration", "not registered"},
+		{"scopes/0/secret_refs/token", "unknown_registration", "no scheme"},
+	}}
+	if got := UnregisteredNames(doc, err); len(got) != 1 || got[0] != "notes" {
+		t.Fatalf("names: %v", got)
+	}
+	if got := UnregisteredNames(doc, errors.New("other")); got != nil {
+		t.Fatalf("an unrelated error named %v", got)
+	}
+}
