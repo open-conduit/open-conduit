@@ -34,6 +34,8 @@ type instanceDaemon struct {
 	// accepts. The credential is in the shared database, and only the
 	// instance that first created it wrote the token to its own disk.
 	tokenDir string
+	// passFile is where this daemon publishes its completed loop passes.
+	passFile string
 }
 
 func startInstance(t *testing.T, d *drill, name, shared string) *instanceDaemon {
@@ -52,12 +54,13 @@ func startInstance(t *testing.T, d *drill, name, shared string) *instanceDaemon 
 		t.Fatal(err)
 	}
 	cmd := exec.Command(daemonBinary(t), "--data-dir", state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String())
-	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_INSTANCE_TTL="+takeoverTTL.String())
+	passes := filepath.Join(d.root, name+".passes")
+	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_INSTANCE_TTL="+takeoverTTL.String(), "OPEN_CONDUIT_PASS_FILE="+passes)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	i := &instanceDaemon{t: t, state: state, logs: logs, cmd: cmd, exited: make(chan struct{}), tokenDir: filepath.Join(d.root, "a")}
+	i := &instanceDaemon{t: t, state: state, logs: logs, passFile: passes, cmd: cmd, exited: make(chan struct{}), tokenDir: filepath.Join(d.root, "a")}
 	go func() { _ = cmd.Wait(); out.Close(); close(i.exited) }()
 	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGCONT)
@@ -89,6 +92,22 @@ func (i *instanceDaemon) serving() bool {
 	}
 	_, err := i.c.Health(context.Background())
 	return err == nil
+}
+
+// settle waits for full loop passes that began after the call, so what the
+// daemon would do with the state at the call has been done.
+func (i *instanceDaemon) settle() {
+	i.t.Helper()
+	count := func() int {
+		b, err := os.ReadFile(i.passFile)
+		if err != nil {
+			return 0
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+		return n
+	}
+	target := count() + 1 + settlePasses
+	waitFor(i.t, "the daemon's loop passes", func() bool { return count() >= target })
 }
 
 // tenure is the instance lease as the shared database records it.
@@ -219,6 +238,70 @@ func TestDaemonTakeoverFromKilledHolder(t *testing.T) {
 	}
 	waitFor(t, "the retry parking", func() bool {
 		w, err := f.standby.c.Work(ctx, f.work.ID)
+		return err == nil && w.State == "waiting"
+	})
+}
+
+// A drain is the operator's hold on the state, so it outlives a takeover. The
+// successor starts nothing until it is ended, and doesn't ask anyone to prove
+// the old holder stopped, because the lease already has.
+func TestDaemonDrainSurvivesTakeover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process kill drills")
+	}
+	d := newDrill(t)
+	shared := filepath.Join(d.root, "shared.db")
+	holder := startInstance(t, d, "a", shared)
+	waitFor(t, "the holder serving", holder.serving)
+	ctx := context.Background()
+	if _, err := holder.c.BeginDrain(ctx, "before a takeover"); err != nil {
+		t.Fatal(err)
+	}
+	standby := startInstance(t, d, "b", shared)
+	waitFor(t, "the second daemon waiting as a standby", func() bool {
+		return strings.Contains(standby.log(), "another instance holds this state")
+	})
+	if err := holder.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-holder.exited
+	waitFor(t, "the standby serving", standby.serving)
+	status, err := standby.c.DrainStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Draining || status.Reason != "before a takeover" {
+		t.Fatalf("the drain after the takeover: %+v", status)
+	}
+	log := standby.log()
+	if !strings.Contains(log, "no attempt starts until you run") || strings.Contains(log, "moved here") {
+		t.Fatalf("the successor's start log:\n%s", log)
+	}
+	if _, err := standby.c.SubmitEvent(ctx, client.EventRequest{ScopeID: "drill", Type: "drill.event", DeliveryID: "drained-1", CorrelationKey: &client.Key{Source: "drill", ExternalID: "one"}}, "submit-drained-1"); err != nil {
+		t.Fatal(err)
+	}
+	var work client.Work
+	waitFor(t, "the Event routed to Work", func() bool {
+		page, err := standby.c.Works(ctx, url.Values{"scope_id": {"drill"}})
+		if err != nil || len(page.Items) != 1 {
+			return false
+		}
+		work = page.Items[0]
+		return true
+	})
+	standby.settle()
+	xs, err := standby.c.Executions(ctx, url.Values{"work_id": {work.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(xs.Items) != 0 {
+		t.Fatalf("a drained successor started attempts: %+v", xs.Items)
+	}
+	if _, err := standby.c.EndDrain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the Work running once the drain ended", func() bool {
+		w, err := standby.c.Work(ctx, work.ID)
 		return err == nil && w.State == "waiting"
 	})
 }

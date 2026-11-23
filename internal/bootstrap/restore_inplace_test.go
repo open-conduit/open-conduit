@@ -310,6 +310,29 @@ func TestRestoreInPlaceKeepsAnExternalStore(t *testing.T) {
 	}
 }
 
+// Shared state is never swapped out of a directory: another instance may be
+// running on it, and this host's lock can't see that.
+func TestRestoreInPlaceRefusesToReplaceSharedState(t *testing.T) {
+	ctx := context.Background()
+	f := newInPlaceFixture(t)
+	write(t, filepath.Join(f.state, storageFile), `{"backend":"`+sharedTestBackend+`"}`)
+	_, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{})
+	if !errors.Is(err, storage.ErrInvalid) || !strings.Contains(err.Error(), "shared state") {
+		t.Fatalf("restoring over shared state: %v", err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(f.state, ".restore-*")); len(matches) != 0 || len(asides(t, f.state)) != 0 {
+		t.Fatalf("the refused restore staged or moved: %v", matches)
+	}
+	if !exists(filepath.Join(f.state, "conduit.db")) {
+		t.Fatal("the shared database was moved")
+	}
+	// The negative control: the same directory on an unshared backend restores.
+	write(t, filepath.Join(f.state, storageFile), `{"backend":"sqlite"}`)
+	if _, err := RestoreInPlace(ctx, f.bundle, f.state, cli.RestoreOptions{}); err != nil {
+		t.Fatalf("restoring unshared state: %v", err)
+	}
+}
+
 // An in-place restore moves a daemon whose database is outside the state
 // directory to the empty location the operator names, records it, and
 // leaves the replaced database where it was.

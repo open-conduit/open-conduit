@@ -244,6 +244,9 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 	if err != nil {
 		return info, err
 	}
+	if err := refuseSharedReplace(stateDir, o.DatabaseLocation); err != nil {
+		return info, err
+	}
 	if err := keepsStorage(stateDir, previous, o); err != nil {
 		return info, err
 	}
@@ -296,6 +299,18 @@ func RestoreInPlace(ctx context.Context, bundle, stateDir string, o cli.RestoreO
 		report.LaterTimeline = append(report.LaterTimeline, cli.LaterEntry{Path: a.Location, Note: "the replaced artifact store, which " + aside + " names: left where it is"})
 	}
 	return finishInPlace(ctx, lock, stateDir, o, policy, info)
+}
+
+// refuseSharedReplace stops an in-place restore swapping away state other
+// instances share: moving it from this directory would pull it from under a
+// live holder, which no lock on this host can see. The bundle goes to an empty
+// location the operator names instead.
+func refuseSharedReplace(stateDir, location string) error {
+	c, err := coordinationOf(stateDir)
+	if err != nil || location != "" || !c.shared() {
+		return err
+	}
+	return fmt.Errorf("%s uses shared state at %s, which other instances may be running on: name the empty location the bundle's database goes to (--database-location LOC): %w", stateDir, c.location, storage.ErrInvalid)
 }
 
 // keepsStorage refuses an in-place restore that would move the daemon off

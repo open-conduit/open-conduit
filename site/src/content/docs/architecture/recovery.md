@@ -81,6 +81,8 @@ The report (`GET /v1/drain`) gives `safe_to_move`, what is still `blocking` it (
 
 A drain is durable, so a daemon stays drained until you run `drain end`, across a restart, a recreated container or a move of its directory to any path. A copy of the state can't tell that the daemon it came from has stopped, so starting one never ends the drain by itself, and two live copies can't both act on the same Work by accident. The one exception is a restore from a bundle, which ends the drain with an audit record because the restore is itself the deliberate step.
 
+On [shared state](../domain-storage/#instance-lease) the instance lease already proves which daemon may run, so a successor doesn't ask you to confirm the old one has stopped. A drain still holds across a takeover, since it is your decision and not a statement about who is running: the successor starts nothing until you run `drain end`. A replica is a separate copy the lease can't reach, so it always starts drained.
+
 ## Moving a daemon to another machine
 
 1. **Ask what won't travel.** `open-conduit portability` (admin) lists what is tied to this machine, and exits 1 until nothing is and the daemon is drained:
