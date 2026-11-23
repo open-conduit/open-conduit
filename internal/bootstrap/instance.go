@@ -276,9 +276,14 @@ func standby(log *slog.Logger, every time.Duration) func(context.Context, error)
 //
 // prepare runs before each Open. It is how the pre-upgrade bundle is taken only
 // once no other instance is live, and taken again if anything committed before
-// the state could be raised, so the bundle is of what is raised.
-func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, retry time.Duration, prepare func(context.Context) error) (coordination, storage.Database, error) {
-	return openHeld(ctx, stateDir, ttl, prepare, standby(log, retry))
+// the state could be raised, so the bundle is of what is raised. waiting is
+// called each time the daemon has to wait as a standby.
+func openServing(ctx context.Context, stateDir string, log *slog.Logger, ttl, retry time.Duration, prepare func(context.Context) error, waiting func()) (coordination, storage.Database, error) {
+	wait := standby(log, retry)
+	return openHeld(ctx, stateDir, ttl, prepare, func(ctx context.Context, cause error) error {
+		waiting()
+		return wait(ctx, cause)
+	})
 }
 
 func openHeld(ctx context.Context, stateDir string, ttl time.Duration, prepare func(context.Context) error, wait func(context.Context, error) error) (coordination, storage.Database, error) {

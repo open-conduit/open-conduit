@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -102,6 +103,37 @@ func TestProbesFollowPhaseAndLoop(t *testing.T) {
 
 // GET /v1/health's state is the phase while starting or stopping, and
 // degraded while running with any component not ready.
+// A standby is alive, so an orchestrator leaves it running, and not ready, so
+// it gets no traffic. Reading its state would need a store it doesn't have yet.
+func TestProbesOnStandby(t *testing.T) {
+	d := &daemon{o: Options{StallAfter: time.Minute}, now: time.Now}
+	d.health.phase.Store(management.PhaseStandby)
+	h := d.probeHandler()
+	if code, body := probe(t, h, "/livez"); code != http.StatusOK || body != "ok\n" {
+		t.Fatalf("standby /livez: %d %q", code, body)
+	}
+	if code, body := probe(t, h, "/readyz"); code != http.StatusServiceUnavailable || body != "standby\n" {
+		t.Fatalf("standby /readyz: %d %q", code, body)
+	}
+}
+
+// A superseded instance refuses a delivery before any package sees it, and
+// stops answering for the public URL. The control shows the same request
+// reaches the handler while it holds the state.
+func TestSupersededInstanceRefusesWebhooks(t *testing.T) {
+	d := &daemon{o: Options{}, now: time.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d.hooks.probeToken = "token"
+	h := d.webhookHandler()
+	path := "/" + probePath + "token"
+	if code, _ := probe(t, h, path); code != http.StatusOK {
+		t.Fatalf("holder: %d", code)
+	}
+	d.health.superseded.Store(true)
+	if code, body := probe(t, h, path); code != http.StatusServiceUnavailable || body == "token" {
+		t.Fatalf("superseded: %d %q", code, body)
+	}
+}
+
 func TestHealthState(t *testing.T) {
 	ready := map[string]string{"database": "ready", "host_loop": "ready"}
 	stalled := map[string]string{"database": "ready", "host_loop": "stalled"}

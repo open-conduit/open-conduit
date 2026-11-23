@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,7 +56,7 @@ func startInstance(t *testing.T, d *drill, name, shared string) *instanceDaemon 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(daemonBinary(t), "--data-dir", state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String())
+	cmd := exec.Command(daemonBinary(t), "--data-dir", state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String(), "--probe-addr", "127.0.0.1:0", "--webhook-addr", "127.0.0.1:0")
 	passes := filepath.Join(d.root, name+".passes")
 	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_INSTANCE_TTL="+takeoverTTL.String(), "OPEN_CONDUIT_PASS_FILE="+passes)
 	cmd.Stdout, cmd.Stderr = out, out
@@ -92,6 +95,22 @@ func (i *instanceDaemon) serving() bool {
 	}
 	_, err := i.c.Health(context.Background())
 	return err == nil
+}
+
+// probe answers a probe path on the address this daemon logged.
+func (i *instanceDaemon) probe(path string) (int, string) {
+	i.t.Helper()
+	m := regexp.MustCompile(`probe listener serving" address=(\S+)`).FindStringSubmatch(i.log())
+	if m == nil {
+		i.t.Fatalf("no probe listener in the log:\n%s", i.log())
+	}
+	r, err := http.Get("http://" + m[1] + path)
+	if err != nil {
+		i.t.Fatal(err)
+	}
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	return r.StatusCode, strings.TrimSpace(string(b))
 }
 
 // settle waits for full loop passes that began after the call, so what the
@@ -172,6 +191,15 @@ func newTakeover(t *testing.T) *takeoverFixture {
 	if standby.serving() {
 		t.Fatal("the standby served while the holder's lease was live")
 	}
+	if code, body := standby.probe("/livez"); code != http.StatusOK {
+		t.Fatalf("standby /livez: %d %q", code, body)
+	}
+	if code, body := standby.probe("/readyz"); code != http.StatusServiceUnavailable || body != "standby" {
+		t.Fatalf("standby /readyz: %d %q", code, body)
+	}
+	if strings.Contains(standby.log(), "webhook listener serving") {
+		t.Fatal("the standby opened the webhook listener while the holder's lease was live")
+	}
 	return &takeoverFixture{d: d, holder: holder, standby: standby, db: db, work: page.Items[0], attempt: xs.Items[0], before: readTenure(t, db)}
 }
 
@@ -200,6 +228,13 @@ func (f *takeoverFixture) awaitTakeover(t *testing.T) tenure {
 		t.Fatalf("takeover: %+v -> %+v", last, now)
 	}
 	waitFor(t, "the standby serving", f.standby.serving)
+	waitFor(t, "the successor ready", func() bool {
+		code, _ := f.standby.probe("/readyz")
+		return code == http.StatusOK
+	})
+	if !strings.Contains(f.standby.log(), "webhook listener serving") {
+		t.Fatal("the successor did not open the webhook listener")
+	}
 	return now
 }
 

@@ -578,6 +578,14 @@ func (d *daemon) capture(ctx context.Context, name string, props map[string]any)
 // request with its receipt (extension.WebhookReceipt).
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A superseded instance can persist nothing, so it must not
+		// acknowledge a delivery or answer for the public URL. The sender's
+		// retry or the next reconcile reaches the holder.
+		if d.health.superseded.Load() {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "this instance no longer holds the state", http.StatusServiceUnavailable)
+			return
+		}
 		name := strings.TrimPrefix(r.URL.Path, "/")
 		d.hooks.mu.Lock()
 		token, forwarder := d.hooks.probeToken, d.hooks.forwarder
