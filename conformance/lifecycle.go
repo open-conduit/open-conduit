@@ -93,7 +93,8 @@ func LifecycleCases() []LifecycleCase {
 		{"instance_lease_admits_one_holder", instanceOneHolder},
 		{"instance_takeover_fences_the_old_holder", instanceTakeover},
 		{"instance_restart_keeps_execution_leases", instanceRestart},
-		{"instance_release_and_fence_end_the_tenure", instanceRelease},
+		{"instance_release_ends_the_tenure", instanceRelease},
+		{"instance_fence_refused_under_a_holder", instanceFenceRefused},
 		{"instance_restore_ends_the_tenure", instanceRestore},
 	}
 }
@@ -312,8 +313,48 @@ func instanceRestart(t *testing.T, h LifecycleHarness) error {
 	return nil
 }
 
+// instanceFenceRefused: a superseded holder's Fence on held state commits
+// nothing, so the successor keeps its tenure and its Execution lease.
+func instanceFenceRefused(t *testing.T, h LifecycleHarness) error {
+	ctx := context.Background()
+	db, leaser, location, _, c, err := instanceDB(t, h)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := leaser.AcquireInstance(ctx, "a", instanceTTL); err != nil {
+		return err
+	}
+	h.ExpireInstance(t, location)
+	b, err := leaser.AcquireInstance(ctx, "b", instanceTTL)
+	if err != nil {
+		return err
+	}
+	held, err := claim(storage.Holding(db, b), c)
+	if err != nil {
+		return fmt.Errorf("the successor's claim: %w", err)
+	}
+	if err := wantError(db.Fence(ctx, c.Now()), storage.ErrInstanceFenced); err != nil {
+		return fmt.Errorf("a Fence under a live holder: %w", err)
+	}
+	if err := instanceWrite(db, c, &b, "successor"); err != nil {
+		return fmt.Errorf("a Fence under a live holder ended its tenure: %w", err)
+	}
+	if _, err := leaser.AcquireInstance(ctx, "c", instanceTTL); !errors.Is(err, storage.ErrInstanceHeld) {
+		return fmt.Errorf("a Fence under a live holder let another instance acquire: %v", err)
+	}
+	var x domain.Execution
+	if err := db.View(ctx, func(tx storage.Tx) (err error) { x, err = tx.Execution(held.ExecutionID); return err }); err != nil {
+		return err
+	}
+	if x.Lease.Owner == "" || x.Lease.Epoch != held.Epoch {
+		return fmt.Errorf("a Fence under a live holder cleared its Execution lease: %+v", x.Lease)
+	}
+	return nil
+}
+
 // instanceRelease: a release lets a successor in at once and is safe to
-// repeat, and Fence ends a tenure without changing its epoch's order.
+// repeat, and Fence works once nobody holds the state.
 func instanceRelease(t *testing.T, h LifecycleHarness) error {
 	ctx := context.Background()
 	db, leaser, _, _, c, err := instanceDB(t, h)
@@ -344,11 +385,11 @@ func instanceRelease(t *testing.T, h LifecycleHarness) error {
 	if b.Epoch <= a.Epoch {
 		return fmt.Errorf("acquiring after a release reused epoch %d", a.Epoch)
 	}
-	if err := db.Fence(ctx, c.Now()); err != nil {
+	if err := leaser.ReleaseInstance(ctx, b); err != nil {
 		return err
 	}
-	if err := wantError(instanceWrite(db, c, &b, "fenced"), storage.ErrInstanceFenced); err != nil {
-		return fmt.Errorf("a holder's write after Fence: %w", err)
+	if err := db.Fence(ctx, c.Now()); err != nil {
+		return fmt.Errorf("a Fence on unheld state: %w", err)
 	}
 	next, err := leaser.AcquireInstance(ctx, "c", instanceTTL)
 	if err != nil {

@@ -429,9 +429,22 @@ func (s *Store) snapshot(ctx context.Context, path string, read func(storage.Tx)
 	return errors.Join(err, db.Close())
 }
 
-// Fence clears every Execution lease's owner and expiry, and ends any
-// instance's tenure, in one transaction, keeping epochs.
+// Fence clears every Execution lease's owner and expiry in one transaction,
+// keeping epochs. It is an ordinary write naming no holder, so it is refused
+// while an instance holds the state.
 func (s *Store) Fence(ctx context.Context, now time.Time) error {
+	if now.IsZero() {
+		return storage.ErrInvalid
+	}
+	return s.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		return tx.(*transaction).fenceExecutions(now)
+	})
+}
+
+// fenceRestored is Fence for a private copy being restored, which nothing
+// else can reach: it also ends the tenure the copy recorded, since that
+// holder has no authority over the restored state.
+func (s *Store) fenceRestored(ctx context.Context, now time.Time) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}

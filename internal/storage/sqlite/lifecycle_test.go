@@ -82,6 +82,26 @@ func (s stealing) ReleaseInstance(ctx context.Context, ref storage.InstanceRef) 
 	return s.leaser.ReleaseInstance(ctx, ref)
 }
 
+// holderBlindFence ends whatever tenure is recorded before it fences, as a
+// Fence that doesn't check the lease would.
+type holderBlindFence struct {
+	storage.Database
+	storage.InstanceLeaser
+	location string
+}
+
+func (f holderBlindFence) Fence(ctx context.Context, now time.Time) error {
+	conn, err := sql.Open("sqlite", f.location)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.Exec("UPDATE instance_lease SET expires_at=NULL"); err != nil {
+		return err
+	}
+	return f.Database.Fence(ctx, now)
+}
+
 // stealingBackend opens a database whose acquisition ignores a live holder.
 func stealingBackend() storage.Backend {
 	return weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
@@ -401,6 +421,16 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		name: "instance_write_unnamed", failing: "instance_lease_admits_one_holder", want: "a write naming no holder",
 		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database {
 			return &staleInstance{Database: db, leaser: db.(storage.InstanceLeaser), nameless: true}
+		}},
+	}, {
+		// Fence ends a live successor's tenure without naming it.
+		name: "instance_fence_ignores_the_holder", failing: "instance_fence_refused_under_a_holder", want: "a Fence under a live holder",
+		backend: weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
+			db, err := sqlite.Backend.Open(ctx, location)
+			if err != nil {
+				return nil, err
+			}
+			return holderBlindFence{Database: db, InstanceLeaser: db.(storage.InstanceLeaser), location: location}, nil
 		}},
 	}, {
 		// Restore copies the snapshot with its holder still recorded.
