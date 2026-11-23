@@ -182,8 +182,11 @@ type daemon struct {
 	events storage.EventArchive
 	// compactor gives the database\'s free space back, when its backend can.
 	compactor storage.Compactor
-	backups   backupState
-	duties    dutyClock
+	// sharedState is set when this daemon holds its state under the instance
+	// lease, so a successor on another host may take it over.
+	sharedState bool
+	backups     backupState
+	duties      dutyClock
 	// retaining is set while a retention pass runs. startup is this start's
 	// timing, recorded once its first pass is done.
 	retaining     atomic.Bool
@@ -494,6 +497,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	defer store.Close()
 	d.health.phase.CompareAndSwap(management.PhaseStandby, management.PhaseStarting)
 	if held, ok := store.(*heldDatabase); ok {
+		d.sharedState = true
 		// Superseded, this daemon has no authority left: it stops, and
 		// comes back as a standby if something restarts it.
 		var lose context.CancelCauseFunc

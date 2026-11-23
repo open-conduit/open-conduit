@@ -225,6 +225,33 @@ func TestArchivePassIsBoundedAndReported(t *testing.T) {
 	}
 }
 
+// On shared state no pass runs, because it would move Events out of the shared
+// log onto one host's disk, and doctor says so. The control is the same
+// settings on unshared state, which archive.
+func TestSharedStateKeepsEventsLive(t *testing.T) {
+	ctx := context.Background()
+	d := rebuildDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+	on := config.Settings{ArchiveFinishedDays: 30}
+	unshared := &countingArchiver{wrapAt: 1}
+	d.runArchivePass(ctx, unshared, on)
+	if unshared.calls != 1 {
+		t.Fatalf("control ran %d pages", unshared.calls)
+	}
+	d.sharedState = true
+	shared := &countingArchiver{wrapAt: 1}
+	d.runArchivePass(ctx, shared, on)
+	if shared.calls != 0 {
+		t.Fatalf("archived %d pages on shared state", shared.calls)
+	}
+	c := sharedArchiveCheck("event_archive", 0)
+	if c.Status != runtime.CheckWarn || c.Code != archiveOffOnSharedState || strings.Contains(c.Detail, "archived earlier") {
+		t.Fatalf("doctor: %+v", c)
+	}
+	if c := sharedArchiveCheck("event_archive", 7); !strings.Contains(c.Detail, "7 Events archived earlier") {
+		t.Fatalf("doctor doesn't count what another host may hold: %+v", c)
+	}
+}
+
 func TestCompactionPolicy(t *testing.T) {
 	const mib = int64(1 << 20)
 	for name, c := range map[string]struct {
