@@ -14,6 +14,12 @@ type Space struct {
 
 // Compactor is a Database that can give free space back to the disk. It is
 // optional: a backend without file space to manage has nothing to do here.
+//
+// Its methods run outside a transaction, so the instance lease's epoch check
+// doesn't cover them. They must therefore change no record, whoever calls them
+// and whatever commits meanwhile. On a shared location the host proves its
+// tenure before Reclaim and doesn't call Rebuild, which would hold up the
+// lease's renewal.
 type Compactor interface {
 	// Space reports how the file is used.
 	Space(context.Context) (Space, error)

@@ -366,6 +366,11 @@ func (d *daemon) rebuildAtStart(ctx context.Context, c storage.Compactor, s conf
 	if c == nil || s.ArchiveFinishedDays == 0 {
 		return
 	}
+	// A holder can't stop writing for as long as a rewrite takes: its lease
+	// would lapse. Free pages stay in the file and are reused.
+	if _, leased := c.(heldCompactor); leased {
+		return
+	}
 	fail := func(err error) {
 		if ctx.Err() == nil {
 			d.log.Warn("database not rebuilt: free space stays in the file and is reused", "error", err)

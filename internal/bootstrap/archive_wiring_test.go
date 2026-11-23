@@ -304,6 +304,29 @@ func TestCompactionRunsAndFailsQuietly(t *testing.T) {
 	}
 }
 
+// A lease holder leaves a rebuild alone even when one is due. The control is
+// the same space on an unheld database, which rebuilds.
+func TestHolderDoesNotRebuildAtStart(t *testing.T) {
+	ctx := context.Background()
+	const mib = int64(1 << 20)
+	d := rebuildDaemon(t, time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC))
+	on := config.Settings{ArchiveFinishedDays: 30}
+	due := storage.Space{TotalBytes: 400 * mib, FreeBytes: 200 * mib}
+	held := &fakeCompactor{space: due}
+	d.rebuildAtStart(ctx, heldCompactor{Compactor: held, held: &heldDatabase{}}, on)
+	if held.rebuilds != 0 {
+		t.Fatalf("a holder rebuilt %d times", held.rebuilds)
+	}
+	if _, attempted, err := d.rebuildAttempt(ctx); err != nil || attempted {
+		t.Fatalf("a holder recorded a rebuild: %v %v", attempted, err)
+	}
+	unheld := &fakeCompactor{space: due}
+	d.rebuildAtStart(ctx, unheld, on)
+	if unheld.rebuilds != 1 {
+		t.Fatalf("control rebuilds = %d", unheld.rebuilds)
+	}
+}
+
 func rebuildDaemon(t *testing.T, now time.Time) *daemon {
 	t.Helper()
 	d := backupDaemon(t, now)
