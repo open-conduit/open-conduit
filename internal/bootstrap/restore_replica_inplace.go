@@ -90,6 +90,11 @@ func RestoreReplicaInPlace(ctx context.Context, replica, stateDir string, o cli.
 		report.AlreadyRestored = true
 		return info, nil
 	}
+	// A replica becomes unshared SQLite here, so restoring it would quietly
+	// take this directory off the state its instance lease governs.
+	if current.shared() {
+		return info, fmt.Errorf("%s uses shared state at %s, where the instance lease decides who runs, and a replica is a separate copy: restore it into another directory: %w", stateDir, current.location, storage.ErrInvalid)
+	}
 	previous, err := readChoice(stateDir)
 	if err != nil {
 		return info, err

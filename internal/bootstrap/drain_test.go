@@ -50,7 +50,7 @@ func TestDrainSurvivesAStartAnywhere(t *testing.T) {
 	}
 	defer store.Close()
 	var logged bytes.Buffer
-	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved); err != nil {
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"level=WARN", "drain end", "old daemon", "reason=moving", "origin=" + state, "state_dir=" + moved} {
@@ -59,11 +59,19 @@ func TestDrainSurvivesAStartAnywhere(t *testing.T) {
 		}
 	}
 	logged.Reset()
-	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), state); err != nil {
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), state, false); err != nil {
 		t.Fatal(err)
 	}
 	if s := logged.String(); !strings.Contains(s, "drain end") || strings.Contains(s, "old daemon") {
 		t.Errorf("a start where the drain began logged: %s", s)
+	}
+	// Under the instance lease the old daemon is known to have lost the state.
+	logged.Reset()
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved, true); err != nil {
+		t.Fatal(err)
+	}
+	if s := logged.String(); !strings.Contains(s, "drain end") || strings.Contains(s, "old daemon") {
+		t.Errorf("a takeover under the lease logged: %s", s)
 	}
 	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		d, on, err := runtime.DrainInTx(tx)
@@ -82,7 +90,7 @@ func TestDrainSurvivesAStartAnywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	logged.Reset()
-	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved); err != nil || logged.Len() != 0 {
+	if err := logDrainInForce(ctx, store, now, slog.New(slog.NewTextHandler(&logged, nil)), moved, false); err != nil || logged.Len() != 0 {
 		t.Errorf("no drain: %v, logged %q", err, logged.String())
 	}
 }

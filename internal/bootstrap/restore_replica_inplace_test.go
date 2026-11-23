@@ -134,6 +134,29 @@ func TestReplicaNeverReplacesADatabase(t *testing.T) {
 	}
 }
 
+// A replica is unshared SQLite, so it can't quietly take a directory off the
+// shared state its instance lease governs.
+func TestReplicaRefusesADirectoryOnSharedState(t *testing.T) {
+	ctx := context.Background()
+	f := newReplicaFixture(t)
+	state := emptyVolume(t)
+	choice := `{"backend":"` + sharedTestBackend + `"}`
+	if err := os.WriteFile(filepath.Join(state, storageFile), []byte(choice), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RestoreReplicaInPlace(ctx, f.database, state, replicaOnce(f))
+	if !errors.Is(err, storage.ErrInvalid) || !strings.Contains(err.Error(), "shared state") {
+		t.Fatalf("a replica into a shared directory: %v", err)
+	}
+	kept, err := os.ReadFile(filepath.Join(state, storageFile))
+	if err != nil || string(kept) != choice {
+		t.Fatalf("the storage choice changed: %q, %v", kept, err)
+	}
+	if exists(filepath.Join(state, "conduit.db")) {
+		t.Fatal("the refused restore wrote a database")
+	}
+}
+
 // A swap that stops part way is finished by the next start, drained, and not
 // restored a second time.
 func TestReplicaInPlaceFinishesAnInterruptedSwap(t *testing.T) {

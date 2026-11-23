@@ -631,7 +631,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	reg := d.configRegistry()
 	d.defaultDoc = d.defaultConfig()
-	if err = logDrainInForce(ctx, d.coord, d.now(), d.log, o.StateDir); err != nil {
+	_, leased := store.(*heldDatabase)
+	if err = logDrainInForce(ctx, d.coord, d.now(), d.log, o.StateDir, leased); err != nil {
 		return err
 	}
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {

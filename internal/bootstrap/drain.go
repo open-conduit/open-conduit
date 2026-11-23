@@ -25,8 +25,10 @@ func drainOrigin(stateDir string) string {
 
 // logDrainInForce says at start that this daemon will launch nothing, and why,
 // since a drain outlives a restart or a move and the daemon otherwise looks
-// idle. Started away from where the drain began, it names the step that's left.
-func logDrainInForce(ctx context.Context, store storage.Store, now time.Time, log *slog.Logger, stateDir string) error {
+// idle. Started away from where the drain began, it names the step that's left:
+// proving the old daemon has stopped. Under the instance lease (leased) that
+// is already proved, so a drain that outlived a takeover only asks to be ended.
+func logDrainInForce(ctx context.Context, store storage.Store, now time.Time, log *slog.Logger, stateDir string, leased bool) error {
 	var drain runtime.Drain
 	var on bool
 	if err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
@@ -37,7 +39,7 @@ func logDrainInForce(ctx context.Context, store storage.Store, now time.Time, lo
 		return err
 	}
 	attrs := []any{"since", drain.Since, "reason", drain.Reason, "origin", drain.Origin}
-	if here := drainOrigin(stateDir); drain.Origin != here {
+	if here := drainOrigin(stateDir); !leased && drain.Origin != here {
 		log.Warn("draining: this state moved here while drained, and no attempt starts until you run `open-conduit drain end` once the old daemon is stopped", append(attrs, "state_dir", here)...)
 		return nil
 	}
