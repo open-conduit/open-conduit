@@ -155,8 +155,8 @@ func (o *operator) serviceInstall(h *ServiceHost, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if r.Restore != "" {
-		return usageError(o.errOut, "service install takes no --restore: stop the service, run backup restore BUNDLE --in-place, then start it")
+	if r.Restore != "" || r.RestoreReplica != "" {
+		return usageError(o.errOut, "service install takes no --restore or --restore-replica: stop the service, run backup restore BUNDLE --in-place or backup restore-replica DATABASE --in-place, then start it")
 	}
 	if r.NoUpgradeBundle {
 		return usageError(o.errOut, "service install takes no --no-upgrade-bundle, which would skip the bundle on every later upgrade: stop the service, run serve --no-upgrade-bundle once, then start it")

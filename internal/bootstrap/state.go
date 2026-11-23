@@ -30,7 +30,7 @@ import (
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {
-	return &cli.StateOps{ListDestination: ListDestination, FetchBundle: FetchBundle, Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, RestoreReplica: RestoreReplica, Check: CheckState, RecoverOperator: RecoverOperator}
+	return &cli.StateOps{ListDestination: ListDestination, FetchBundle: FetchBundle, Keygen: backup.GenerateKey, Backup: BackupState, Verify: VerifyBundle, Restore: RestoreState, RestoreInPlace: RestoreInPlace, RestoreReplica: RestoreReplica, RestoreReplicaInPlace: RestoreReplicaInPlace, Check: CheckState, RecoverOperator: RecoverOperator}
 }
 
 // locked opens a stopped instance's state directory under its daemon lock.
@@ -257,11 +257,8 @@ func RestoreReplica(ctx context.Context, replica, destination string, o cli.Repl
 	if err != nil {
 		return info, err
 	}
-	if o.ArtifactsFrom != "" && target.ArtifactLocation != "" {
-		return info, fmt.Errorf("--artifacts-from copies into the restored directory's file store, so it can't be combined with --artifacts-location, which keeps using that store")
-	}
-	if target.Database != "" {
-		return info, fmt.Errorf("a replica restores into the new directory: --database-location doesn't apply")
+	if err := checkReplicaTarget(o, target); err != nil {
+		return info, err
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
@@ -296,6 +293,17 @@ func RestoreReplica(ctx context.Context, replica, destination string, o cli.Repl
 	info.ConfigGeneration, info.ConfigProblems, err = restoredConfig(ctx, store, restoreConfigPath(o.RestoreOptions), policy)
 	info.StartConfig = o.StartConfig
 	return info, err
+}
+
+// checkReplicaTarget refuses the choices a replica restore can't honour.
+func checkReplicaTarget(o cli.ReplicaOptions, target backup.Target) error {
+	if o.ArtifactsFrom != "" && target.ArtifactLocation != "" {
+		return fmt.Errorf("--artifacts-from copies into the restored directory's file store, so it can't be combined with --artifacts-location, which keeps using that store")
+	}
+	if target.Database != "" {
+		return fmt.Errorf("a replica restores into the new directory: --database-location doesn't apply")
+	}
+	return nil
 }
 
 // replicaPublished is a test seam: an error stops a replica restore where a

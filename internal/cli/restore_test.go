@@ -82,6 +82,22 @@ func TestRestoreInPlaceCommands(t *testing.T) {
 	if msg, code := run("serve", "--restore-start-config", "new.json"); code == 0 || !strings.Contains(msg, "goes with --restore") || served != 2 {
 		t.Fatalf("--restore-start-config alone: %d %q", code, msg)
 	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"serve", "--restore", "b", "--restore-replica", "r"}, "alternatives"},
+		{[]string{"serve", "--restore-artifacts-from", "a"}, "go with --restore-replica"},
+		{[]string{"serve", "--restore-archive-from", "a"}, "go with --restore-replica"},
+		{[]string{"serve", "--restore-replica", "r", "--restore-database-location", "l"}, "doesn't apply"},
+		{[]string{"service", "install", "--restore-replica", "r"}, "takes no --restore"},
+		{[]string{"backup", "restore-replica", "r"}, "--to DIR"},
+		{[]string{"backup", "restore-replica", "r", "--to", "d", "--in-place"}, "--to DIR"},
+	} {
+		if msg, code := run(c.args...); code == 0 || !strings.Contains(msg, c.want) {
+			t.Errorf("%v: %d %q, want it refused with %q", c.args, code, msg, c.want)
+		}
+	}
 	if msg, code := run("service", "install", "--restore", "b"); code == 0 || !strings.Contains(msg, "takes no --restore") {
 		t.Fatalf("service install --restore: %d %q", code, msg)
 	}
