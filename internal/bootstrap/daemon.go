@@ -100,6 +100,9 @@ type Options struct {
 	// on shared state (default instanceTTL, instanceRenewEvery and
 	// instanceRetry). Tests shorten them.
 	instanceLease, instanceRenew, instanceRetry time.Duration
+	// afterUpgradeBundle, in tests, runs between keeping a pre-upgrade bundle
+	// and raising the state it preserved.
+	afterUpgradeBundle func()
 	// WebhookAddr enables the webhook listener on this TCP address (for
 	// example 127.0.0.1:8787). Empty falls back to settings.webhooks, and
 	// with neither the daemon is reconcile-only.
@@ -468,15 +471,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}); err != nil {
 		return err
 	}
-	// Opening raises the stored format, after which an older binary refuses
-	// the database: keep a bundle of it as it stands first.
-	if err = d.preserveBeforeUpgrade(ctx); err != nil {
-		return err
-	}
 	// The state directory's storage choice selects the backend.
 	// On state other hosts can reach, a live holder makes this daemon a
 	// standby, here, until it releases the lease or lets it expire.
-	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry)
+	// Opening raises the stored format, after which an older binary refuses
+	// the database: a bundle of it as it stands is kept first, once no other
+	// instance is changing it.
+	backend, store, err := openServing(ctx, o.StateDir, d.log, o.instanceLease, o.instanceRetry, d.preserveBeforeUpgrade)
 	if err != nil {
 		return err
 	}

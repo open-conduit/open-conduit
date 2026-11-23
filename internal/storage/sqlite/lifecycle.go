@@ -352,15 +352,28 @@ func (backend) Writes() storage.StoredVersion {
 }
 
 func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	return b.openPrior(ctx, location, true)
+}
+
+// OpenPriorUnowned is OpenPrior without the location's lock, as Open is to the
+// backend's Open, for a backend that shares the location under the lease.
+func OpenPriorUnowned(ctx context.Context, location string) (storage.Prior, error) {
+	return backend{}.openPrior(ctx, location, false)
+}
+
+func (b backend) openPrior(ctx context.Context, location string, exclusive bool) (storage.Prior, error) {
 	switch present, err := b.Present(ctx, location); {
 	case err != nil:
 		return nil, err
 	case !present:
 		return nil, nil
 	}
-	lock, err := own(location)
-	if err != nil {
-		return nil, err
+	var lock *os.File
+	if exclusive {
+		var err error
+		if lock, err = own(location); err != nil {
+			return nil, err
+		}
 	}
 	u := url.URL{Scheme: "file", Path: location}
 	q := u.Query()
@@ -369,11 +382,22 @@ func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior,
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
-		lock.Close()
+		if lock != nil {
+			lock.Close()
+		}
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	// One connection stays pinned for the write position, and the other
+	// reads and takes the snapshot.
+	db.SetMaxOpenConns(2)
 	p := &prior{s: &Store{db: db, readers: db, path: location}, lock: lock}
+	if p.pin, err = db.Conn(ctx); err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	// Read first, so a commit after any read below is seen by Raise.
+	if err = p.pin.QueryRowContext(ctx, "PRAGMA data_version").Scan(&p.position); err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
 	var schema uint32
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&schema); err != nil {
 		return nil, errors.Join(err, p.Close())
@@ -389,6 +413,15 @@ func (b backend) OpenPrior(ctx context.Context, location string) (storage.Prior,
 	if schema == SchemaVersion && records >= recordFormat {
 		return nil, p.Close()
 	}
+	// A live instance is still changing this state, so a copy of it now
+	// would be stale by the time Open could raise it.
+	expiry, err := recordedExpiry(ctx, db)
+	if err != nil {
+		return nil, errors.Join(err, p.Close())
+	}
+	if expiry.Valid && expiry.Int64 > time.Now().UnixNano() {
+		return nil, errors.Join(storage.ErrInstanceHeld, p.Close())
+	}
 	p.stored = storage.StoredVersion{Schema: schema, Records: records}
 	return p, nil
 }
@@ -398,13 +431,53 @@ type prior struct {
 	s      *Store
 	lock   *os.File
 	stored storage.StoredVersion
+	// pin is the connection position was read on: PRAGMA data_version
+	// changes when another connection commits, and means nothing across
+	// connections.
+	pin      *sql.Conn
+	position int64
+}
+
+var _ storage.PriorRaiser = (*prior)(nil)
+
+// Raise implements storage.PriorRaiser. The comparison and the raise share one
+// write transaction on the pinned connection, so nothing can commit between
+// them.
+func (p *prior) Raise(ctx context.Context) error {
+	for _, pragma := range []string{"PRAGMA query_only=0", "PRAGMA synchronous=FULL", "BEGIN IMMEDIATE"} {
+		if _, err := p.pin.ExecContext(ctx, pragma); err != nil {
+			return mapError(err)
+		}
+	}
+	defer p.pin.ExecContext(context.Background(), "ROLLBACK")
+	var now int64
+	if err := p.pin.QueryRowContext(ctx, "PRAGMA data_version").Scan(&now); err != nil {
+		return mapError(err)
+	}
+	if now != p.position {
+		return fmt.Errorf("sqlite: %w", storage.ErrStateMoved)
+	}
+	return raiseAndCommit(ctx, p.pin)
 }
 
 func (p *prior) Stored() storage.StoredVersion { return p.stored }
 func (p *prior) Snapshot(ctx context.Context, path string, read func(storage.Tx) error) error {
 	return p.s.snapshot(ctx, path, read, p.stored.Schema)
 }
-func (p *prior) Close() error { return errors.Join(p.s.db.Close(), p.lock.Close()) }
+func (p *prior) Close() error {
+	var err error
+	if p.pin != nil {
+		err = p.pin.Close()
+		if errors.Is(err, sql.ErrConnDone) {
+			err = nil
+		}
+	}
+	err = errors.Join(err, p.s.db.Close())
+	if p.lock != nil {
+		err = errors.Join(err, p.lock.Close())
+	}
+	return err
+}
 
 // Snapshot takes an online backup to path, then reads that copy, so read
 // sees exactly the state the snapshot holds.

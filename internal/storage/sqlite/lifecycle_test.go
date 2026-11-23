@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,9 @@ func lifecycleHarness(b storage.Backend) conformance.LifecycleHarness {
 		},
 		Fingerprint: fingerprint,
 		Corrupt:     corrupt,
+		CommitOutside: func(t *testing.T, path string) {
+			raw(t, path, "PRAGMA busy_timeout=5000", "INSERT OR REPLACE INTO kv VALUES ('lifecycle','outside',x'00')")
+		},
 		ExpireInstance: func(t *testing.T, path string) {
 			raw(t, path, "PRAGMA busy_timeout=5000", "UPDATE instance_lease SET expires_at=1 WHERE expires_at IS NOT NULL")
 		},
@@ -60,6 +64,110 @@ func (s *staleInstance) Transact(ctx context.Context, g storage.Guard, fn func(s
 		g.Instance = s.latest
 	}
 	return s.Database.Transact(ctx, g, fn)
+}
+
+// acquiresNewer takes state stored at newer versions than it writes.
+type acquiresNewer struct {
+	storage.Database
+	leaser storage.InstanceLeaser
+}
+
+func (a acquiresNewer) AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (storage.InstanceRef, error) {
+	ref, err := a.leaser.AcquireInstance(ctx, owner, ttl)
+	if errors.Is(err, storage.ErrRecordsNewer) || errors.Is(err, storage.ErrSchemaNewer) {
+		return storage.InstanceRef{Owner: owner, Epoch: 99}, nil
+	}
+	return ref, err
+}
+func (a acquiresNewer) RenewInstance(ctx context.Context, ref storage.InstanceRef, ttl time.Duration) error {
+	return a.leaser.RenewInstance(ctx, ref, ttl)
+}
+func (a acquiresNewer) ReleaseInstance(ctx context.Context, ref storage.InstanceRef) error {
+	return a.leaser.ReleaseInstance(ctx, ref)
+}
+
+// priorIgnoresHolder preserves state a live instance is still changing.
+type priorIgnoresHolder struct{ storage.Backend }
+
+func (p priorIgnoresHolder) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	if db, err := existing(location); err == nil {
+		db.Exec("UPDATE instance_lease SET expires_at=NULL")
+		db.Close()
+	}
+	return p.Backend.OpenPrior(ctx, location)
+}
+
+// blindRaise raises what it preserved without comparing the write position.
+type blindRaise struct{ storage.Backend }
+
+type blindPrior struct {
+	storage.Prior
+	location string
+}
+
+func (b blindRaise) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	p, err := b.Backend.OpenPrior(ctx, location)
+	if p == nil || err != nil {
+		return p, err
+	}
+	return blindPrior{p, location}, nil
+}
+
+func (p blindPrior) Raise(context.Context) error {
+	db, err := existing(p.location)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(fmt.Sprintf("PRAGMA busy_timeout=5000; UPDATE metadata SET value='%d' WHERE key='record_format'", sqlite.RecordFormat))
+	return err
+}
+
+// A rewrite waits for a live holder as the format raise does: the holder would
+// go on writing records in the shape the rewrite replaced.
+func TestOpenLeavesRewritesToALiveHolder(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	db, err := sqlite.Backend.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := db.(storage.InstanceLeaser).AcquireInstance(ctx, "old", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw(t, path, "DELETE FROM metadata WHERE key='rewrite_turn_schema'")
+	before := fingerprint(t, path)
+	if db, err := sqlite.Backend.Open(ctx, path); !errors.Is(err, storage.ErrInstanceHeld) {
+		if err == nil {
+			db.Close()
+		}
+		t.Fatalf("open with a rewrite pending under a live holder: %v", err)
+	}
+	if after := fingerprint(t, path); after != before {
+		t.Fatal("refusing the rewrite changed the state")
+	}
+	raw(t, path, "UPDATE instance_lease SET expires_at=1")
+	db, err = sqlite.Backend.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open after the holder expired: %v", err)
+	}
+	defer db.Close()
+	if err := db.(storage.InstanceLeaser).RenewInstance(ctx, old, time.Hour); !errors.Is(err, storage.ErrInstanceFenced) {
+		t.Fatalf("the expired holder renewed over the rewrite: %v", err)
+	}
+	var done int
+	check, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	if err := check.QueryRow("SELECT count(*) FROM metadata WHERE key='rewrite_turn_schema'").Scan(&done); err != nil || done != 1 {
+		t.Fatalf("the rewrite did not run: %d, %v", done, err)
+	}
 }
 
 // stealing takes a held lease by expiring it first.
@@ -112,6 +220,9 @@ func (sharedOpen) Open(ctx context.Context, location string) (storage.Database, 
 }
 func (sharedOpen) Inspect(ctx context.Context, location string) (storage.Inspection, error) {
 	return sqlite.Open(ctx, location)
+}
+func (sharedOpen) OpenPrior(ctx context.Context, location string) (storage.Prior, error) {
+	return sqlite.OpenPriorUnowned(ctx, location)
 }
 
 // sharedButOwned says its location is shared and still refuses a second opener.
@@ -462,6 +573,30 @@ func TestWeakenedLifecycleIsRejected(t *testing.T) {
 		// A shared location with nothing to keep one writer.
 		name: "shared_location_without_a_lease", failing: "one_owner_at_a_time", want: "no instance lease",
 		backend: sharedNoLease{sharedOpen{sqlite.Backend}},
+	}, {
+		// Open raises the stored format under a live holder.
+		name: "upgrade_under_a_live_holder", failing: "instance_upgrade_waits_for_the_holder", want: "raised under a live holder",
+		backend: weakened{Backend: sqlite.Backend, open: func(ctx context.Context, location string) (storage.Database, error) {
+			if db, err := existing(location); err == nil {
+				db.Exec("UPDATE instance_lease SET expires_at=NULL WHERE (SELECT CAST(value AS INTEGER) FROM metadata WHERE key='record_format')<" + fmt.Sprint(sqlite.RecordFormat))
+				db.Close()
+			}
+			return sqlite.Backend.Open(ctx, location)
+		}},
+	}, {
+		// OpenPrior preserves state a live holder is still changing.
+		name: "prior_under_a_live_holder", failing: "instance_upgrade_waits_for_the_holder", want: "preserved under a live holder",
+		backend: priorIgnoresHolder{sqlite.Backend},
+	}, {
+		// Raise doesn't look for commits since the state was preserved.
+		name: "raise_over_a_commit", failing: "instance_raise_refuses_moved_state", want: "raised over a commit",
+		backend: blindRaise{sqlite.Backend},
+	}, {
+		// A standby takes state a newer binary has raised.
+		name: "instance_acquires_newer_state", failing: "instance_refuses_newer_state", want: "acquired state",
+		backend: weakened{Backend: sqlite.Backend, wrap: func(db storage.Database) storage.Database {
+			return acquiresNewer{Database: db, leaser: db.(storage.InstanceLeaser)}
+		}},
 	}, {
 		// A second instance takes a lease that hasn't expired.
 		name: "instance_lease_stolen", failing: "instance_lease_admits_one_holder", want: "acquired a held lease",

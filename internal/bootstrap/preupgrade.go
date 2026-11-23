@@ -64,9 +64,31 @@ func (d *daemon) preserveBeforeUpgrade(ctx context.Context) error {
 		d.log.Warn("starting on an older database without a pre-upgrade bundle, as --no-upgrade-bundle asks: going back to the older binary will need a bundle taken earlier", "record_format", stored.Records, "schema", stored.Schema)
 		return prior.Close()
 	}
-	path, err := d.takeUpgradeBundle(ctx, c.name, prior)
+	path, created, err := d.takeUpgradeBundle(ctx, c.name, prior)
 	if err != nil {
 		return fmt.Errorf("not starting: this binary would upgrade the database from record format %d, schema %d, and the bundle that makes going back possible could not be taken (backup directory %s): %w. The database is unchanged. Fix that, or run serve --no-upgrade-bundle once to go ahead without a way back", stored.Records, stored.Schema, d.o.BackupDir, err)
+	}
+	// On shared state another instance could commit before Open raises it,
+	// and the bundle would silently miss that. Raising here, on the condition
+	// that nothing has moved, makes the bundle exactly what was raised.
+	if c.shared() {
+		raiser, ok := prior.(storage.PriorRaiser)
+		if !ok {
+			return fmt.Errorf("a shared storage location needs a backend that can raise what it preserved: %w", storage.ErrInvalid)
+		}
+		if d.o.afterUpgradeBundle != nil {
+			d.o.afterUpgradeBundle()
+		}
+		if err := raiser.Raise(ctx); err != nil {
+			if created && (errors.Is(err, storage.ErrStateMoved) || errors.Is(err, storage.ErrInstanceHeld)) {
+				// It is behind the state now: leave no bundle that
+				// looks like the way back and isn't.
+				if rmErr := os.RemoveAll(path); rmErr != nil {
+					d.log.Warn("could not remove an out-of-date pre-upgrade bundle", "path", path, "error", rmErr)
+				}
+			}
+			return err
+		}
 	}
 	d.log.Info("pre-upgrade bundle kept", "path", path, "record_format", stored.Records, "schema", stored.Schema, "bytes", treeSize(path))
 	d.pruneUpgradeBundles()
@@ -77,9 +99,11 @@ func (d *daemon) preserveBeforeUpgrade(ctx context.Context) error {
 // later start clears, and publishes it only once it restores. When a start
 // that stopped before raising the format already kept this same state, that
 // bundle stands, so a crash loop can't rotate older ones out.
-func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prior storage.Prior) (string, error) {
+//
+// created says this call published the bundle, rather than finding it.
+func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prior storage.Prior) (path string, created bool, err error) {
 	if err := os.MkdirAll(d.o.BackupDir, 0o700); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if stale, err := filepath.Glob(filepath.Join(d.o.BackupDir, ".conduit-snapshot-*")); err == nil {
 		for _, p := range stale {
@@ -88,12 +112,12 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 	}
 	_, files, err := openArtifacts(ctx, d.o.StateDir)
 	if err != nil {
-		return "", fmt.Errorf("artifacts: %w", err)
+		return "", false, fmt.Errorf("artifacts: %w", err)
 	}
 	defer files.Close()
 	events, closeEvents, err := openEventArchive(ctx, d.o.StateDir)
 	if err != nil {
-		return "", fmt.Errorf("event archive: %w", err)
+		return "", false, fmt.Errorf("event archive: %w", err)
 	}
 	defer closeEvents()
 	// The key is read as backup create reads it, since packages aren't
@@ -110,33 +134,43 @@ func (d *daemon) takeUpgradeBundle(ctx context.Context, backendName string, prio
 	defer os.RemoveAll(stage)
 	build := d.o.Version + " (" + d.o.Commit + ")"
 	if err := backup.CreatePrior(ctx, stage, key, backendName, prior, files, events, build, retentionExpired, now, lastBuild); err != nil {
-		return "", err
+		return "", false, err
 	}
 	within := d.upgradeVerifyDir()
 	if err := verifyUpgradeBundle(ctx, stage, within, now); err != nil {
-		return "", fmt.Errorf("verifying it by restoring it into %s: %w", within, err)
+		return "", false, fmt.Errorf("verifying it by restoring it into %s: %w", within, err)
 	}
 	staged, err := backup.Inspect(stage)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	names, _ := upgradeBundles(d.o.BackupDir)
 	if len(names) > 0 {
 		newest := filepath.Join(d.o.BackupDir, names[len(names)-1])
 		if held, err := backup.Inspect(newest); err == nil && held.DatabaseSHA256 == staged.DatabaseSHA256 {
-			return newest, nil
+			return newest, false, nil
 		}
 	}
-	path := filepath.Join(d.o.BackupDir, upgradeBundlePrefix+stamp)
+	// A retake can land in the second an earlier bundle is named for.
+	path = filepath.Join(d.o.BackupDir, upgradeBundlePrefix+stamp)
+	for {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			break
+		} else if err != nil {
+			return "", false, err
+		}
+		now = now.Add(time.Second)
+		path = filepath.Join(d.o.BackupDir, upgradeBundlePrefix+now.Format(bundleLayout))
+	}
 	if err := os.Rename(stage, path); err != nil {
-		return "", err
+		return "", false, err
 	}
 	dir, err := os.Open(d.o.BackupDir)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer dir.Close()
-	return path, dir.Sync()
+	return path, true, dir.Sync()
 }
 
 // upgradeVerifyDir is where the verification restore goes: the backup

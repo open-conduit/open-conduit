@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +56,7 @@ type servedDaemon struct {
 
 // serveShared runs a real daemon on its own state directory over the shared
 // database at location, as a separate host would.
-func serveShared(t *testing.T, root, name, location string, onReady func()) *servedDaemon {
+func serveShared(t *testing.T, root, name, location string, onReady func(), tweak ...func(*Options)) *servedDaemon {
 	t.Helper()
 	state := filepath.Join(root, name)
 	if err := os.MkdirAll(state, 0o700); err != nil {
@@ -71,19 +73,21 @@ func serveShared(t *testing.T, root, name, location string, onReady func()) *ser
 	d := &servedDaemon{state: state, ready: make(chan struct{}), done: make(chan error, 1), cancel: cancel,
 		log: &signalWriter{want: "another instance holds this state", seen: make(chan struct{})}}
 	t.Cleanup(cancel)
-	go func() {
-		d.done <- Serve(ctx, Options{
-			StateDir: state, ConfigPath: filepath.Join(state, "config.json"), Socket: filepath.Join(state, "m.sock"),
-			ToolbeltDir: state, Log: d.log, NoTunnel: true, NoTelemetry: true, BackupInterval: -1,
-			PollInterval: 10 * time.Millisecond, instanceRenew: 10 * time.Millisecond, instanceRetry: 10 * time.Millisecond,
-			Ready: func() {
-				if onReady != nil {
-					onReady()
-				}
-				close(d.ready)
-			},
-		})
-	}()
+	o := Options{
+		StateDir: state, ConfigPath: filepath.Join(state, "config.json"), Socket: filepath.Join(state, "m.sock"),
+		ToolbeltDir: state, Log: d.log, NoTunnel: true, NoTelemetry: true, BackupInterval: -1,
+		PollInterval: 10 * time.Millisecond, instanceRenew: 10 * time.Millisecond, instanceRetry: 10 * time.Millisecond,
+		Ready: func() {
+			if onReady != nil {
+				onReady()
+			}
+			close(d.ready)
+		},
+	}
+	for _, f := range tweak {
+		f(&o)
+	}
+	go func() { d.done <- Serve(ctx, o) }()
 	return d
 }
 
@@ -98,6 +102,126 @@ func await[T any](t *testing.T, d *servedDaemon, c <-chan T, what string) T {
 		t.Fatalf("%s: timed out\n%s", what, d.log.text())
 	}
 	panic("unreachable")
+}
+
+// A newer daemon on older state a live instance holds waits without changing
+// it or keeping a bundle, then preserves and raises it once the holder expires.
+func TestUpgradeWaitsForTheHolderThroughServe(t *testing.T) {
+	root, err := os.MkdirTemp("", "oc-upgrade-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	location := filepath.Join(root, "shared.db")
+	ctx := context.Background()
+	direct, err := sqlite.Open(ctx, location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := direct.AcquireInstance(ctx, "older", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := direct.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	older := sqlite.RecordFormat - 1
+	if _, err := db.Exec(`UPDATE metadata SET value=? WHERE key='record_format'`, fmt.Sprint(older)); err != nil {
+		t.Fatal(err)
+	}
+	format := func() (v uint32) {
+		t.Helper()
+		if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM metadata WHERE key='record_format'`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	d := serveShared(t, root, "new", location, nil)
+	await(t, d, d.log.seen, "the newer daemon waiting as a standby")
+	if got := format(); got != older {
+		t.Fatalf("the format was raised to %d under a live holder", got)
+	}
+	bundles := func() []string {
+		names, _ := upgradeBundles(filepath.Join(d.state, "backups"))
+		return names
+	}
+	if got := bundles(); len(got) != 0 {
+		t.Fatalf("a bundle was kept while the holder could still change the state: %v", got)
+	}
+
+	if _, err := db.Exec(`UPDATE instance_lease SET expires_at=1`); err != nil {
+		t.Fatal(err)
+	}
+	await(t, d, d.ready, "the newer daemon serving")
+	if got := format(); got != sqlite.RecordFormat {
+		t.Fatalf("the format is %d after the takeover", got)
+	}
+	if got := bundles(); len(got) != 1 {
+		t.Fatalf("pre-upgrade bundles after the takeover: %v", got)
+	}
+}
+
+// An older instance commits after the pre-upgrade bundle and before the raise.
+// The raise is refused, the bundle is retaken, and the one kept holds the write.
+func TestUpgradeBundleHoldsAWriteMadeBeforeTheRaise(t *testing.T) {
+	root, err := os.MkdirTemp("", "oc-upgrade-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	location := filepath.Join(root, "shared.db")
+	direct, err := sqlite.Open(context.Background(), location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := direct.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", location+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE metadata SET value=? WHERE key='record_format'`, fmt.Sprint(sqlite.RecordFormat-1)); err != nil {
+		t.Fatal(err)
+	}
+	var bundlesTaken atomic.Int32
+	var wrote error
+	d := serveShared(t, root, "new", location, nil, func(o *Options) {
+		o.afterUpgradeBundle = func() {
+			if bundlesTaken.Add(1) == 1 {
+				_, wrote = db.Exec(`INSERT INTO kv VALUES ('drill','between',x'01')`)
+			}
+		}
+	})
+	await(t, d, d.ready, "the newer daemon serving")
+	if wrote != nil {
+		t.Fatal(wrote)
+	}
+	if got := bundlesTaken.Load(); got != 2 {
+		t.Fatalf("the bundle was taken %d times, want it retaken once", got)
+	}
+	names, _ := upgradeBundles(filepath.Join(d.state, "backups"))
+	if len(names) != 1 {
+		t.Fatalf("bundles kept: %v", names)
+	}
+	bundle, err := sql.Open("sqlite", "file:"+filepath.Join(d.state, "backups", names[0], "conduit.db")+"?mode=ro&immutable=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Close()
+	var held int
+	if err := bundle.QueryRow(`SELECT count(*) FROM kv WHERE namespace='drill' AND key='between'`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	if held != 1 {
+		t.Fatal("the pre-upgrade bundle misses a write committed before the raise")
+	}
 }
 
 // Two real daemons on one shared database: the second waits as a standby,

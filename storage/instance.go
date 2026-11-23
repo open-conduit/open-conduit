@@ -56,6 +56,10 @@ type InstanceLeaser interface {
 	// those attempts went with that owner's host. An owner must therefore
 	// name something stable that can prove its own attempts again, and be
 	// unique among the instances sharing the state.
+	//
+	// It refuses state stored at newer versions than this binary writes
+	// (ErrSchemaNewer, ErrRecordsNewer), so a standby that opened the state
+	// before a newer binary raised it can't take it over.
 	AcquireInstance(ctx context.Context, owner string, ttl time.Duration) (InstanceRef, error)
 	// RenewInstance extends the lease to the backend's now+ttl, never
 	// shortening it. A holder past its expiry may still renew if nobody has
