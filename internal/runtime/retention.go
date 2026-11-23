@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"time"
@@ -48,11 +49,72 @@ const (
 // follows recent releases rather than every release ever made.
 const retentionReleasedNamespace = "core.retention.released"
 
+// Claims are pruned in the order they were made, from a queue: an entry per
+// claim keyed by its sequence number, with the next sequence to prune and
+// to assign in the cursor namespace. A prune reads from the head and stops
+// at the first entry not yet due, so a sweep with nothing due reads the two
+// cursors and one entry, however many claims stand. Renewing a claim queues
+// a new entry; the old one, whose sequence the claim no longer carries,
+// removes nothing when it reaches the head.
+const (
+	retentionClaimQueueNamespace  = "core.retention.released.queue"
+	retentionClaimCursorNamespace = "core.retention.released.cursor"
+	retentionClaimHead            = "head"
+	retentionClaimTail            = "tail"
+)
+
 // retentionClaimKept is how long a claim outlives its delete: long enough
 // for a result already on its way when the content went to be refused.
 const retentionClaimKept = 7 * 24 * time.Hour
 
-type retentionClaim struct{ At time.Time }
+type retentionClaim struct {
+	At  time.Time
+	Seq uint64
+}
+
+// retentionClaimEntry is one claim's place in the queue.
+type retentionClaimEntry struct {
+	Key string
+	At  time.Time
+}
+
+func retentionClaimSeq(seq uint64) string { return fmt.Sprintf("%020d", seq) }
+
+// claimCursor reads a queue cursor, zero before the first claim.
+func claimCursor(tx storage.Tx, name string) (uint64, error) {
+	var n uint64
+	if e := getJSON(tx, retentionClaimCursorNamespace, name, &n); e != nil && !errors.Is(e, storage.ErrNotFound) {
+		return 0, e
+	}
+	return n, nil
+}
+
+// putClaim claims id at now. A claim less than half its window old stands
+// as it is, so a delete retried every sweep queues a bounded number of
+// entries and its claim never comes due while the retries continue.
+func putClaim(tx storage.Tx, id string, now time.Time) error {
+	key := identity(id)
+	var current retentionClaim
+	e := getJSON(tx, retentionReleasedNamespace, key, &current)
+	if e == nil && now.Sub(current.At) < retentionClaimKept/2 {
+		return nil
+	}
+	if e != nil && !errors.Is(e, storage.ErrNotFound) {
+		return e
+	}
+	seq, e := claimCursor(tx, retentionClaimTail)
+	if e != nil {
+		return e
+	}
+	at := now.UTC()
+	if e = putJSON(tx, retentionClaimQueueNamespace, retentionClaimSeq(seq), retentionClaimEntry{Key: key, At: at}); e != nil {
+		return e
+	}
+	if e = putJSON(tx, retentionClaimCursorNamespace, retentionClaimTail, seq+1); e != nil {
+		return e
+	}
+	return putJSON(tx, retentionReleasedNamespace, key, retentionClaim{At: at, Seq: seq})
+}
 
 // retentionDroppedNamespace records, per attempt, the artifact IDs its
 // results named that were not attached because their content had been
@@ -348,7 +410,7 @@ func (s *Scheduler) claimContent(ctx context.Context, refs []domain.ArtifactRef,
 					continue
 				}
 			}
-			if e = putJSON(tx, retentionReleasedNamespace, identity(ref.ID), retentionClaim{At: s.now().UTC()}); e != nil {
+			if e = putClaim(tx, ref.ID, s.now()); e != nil {
 				return e
 			}
 			free = append(free, ref)
@@ -374,27 +436,61 @@ func (s *Scheduler) deleteClaimed(ctx context.Context, artifacts storage.Artifac
 	return err
 }
 
-// pruneClaims removes the claims older than retentionClaimKept.
-func (s *Scheduler) pruneClaims(ctx context.Context) error {
-	return s.transact(ctx, nil, func(tx storage.Tx) error {
-		rows, e := tx.List(retentionReleasedNamespace, "")
-		if e != nil {
-			return e
-		}
-		cutoff := s.now().Add(-retentionClaimKept)
-		for _, row := range rows {
-			var c retentionClaim
-			if e = json.Unmarshal(row.Value, &c); e != nil {
+// pruneClaims removes the claims older than retentionClaimKept, at most
+// limit queue entries a transaction. It carries on until nothing is due, so
+// a burst of claims can't outrun the sweeps, and its cost follows what is
+// due rather than the claims standing.
+func (s *Scheduler) pruneClaims(ctx context.Context, limit int) error {
+	cutoff := s.now().Add(-retentionClaimKept)
+	for {
+		more := false
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			more = false
+			head, e := claimCursor(tx, retentionClaimHead)
+			if e != nil {
 				return e
 			}
-			if !c.At.After(cutoff) {
-				if e = tx.Delete(retentionReleasedNamespace, row.Key); e != nil {
+			tail, e := claimCursor(tx, retentionClaimTail)
+			if e != nil {
+				return e
+			}
+			n := 0
+			for head < tail && n < limit {
+				var entry retentionClaimEntry
+				if e = getJSON(tx, retentionClaimQueueNamespace, retentionClaimSeq(head), &entry); e != nil {
 					return e
 				}
+				if entry.At.After(cutoff) {
+					break
+				}
+				var claim retentionClaim
+				e = getJSON(tx, retentionReleasedNamespace, entry.Key, &claim)
+				if e != nil && !errors.Is(e, storage.ErrNotFound) {
+					return e
+				}
+				if e == nil && claim.Seq == head {
+					if e = tx.Delete(retentionReleasedNamespace, entry.Key); e != nil {
+						return e
+					}
+				}
+				if e = tx.Delete(retentionClaimQueueNamespace, retentionClaimSeq(head)); e != nil {
+					return e
+				}
+				head++
+				n++
 			}
+			if n == 0 {
+				return nil
+			}
+			more = n == limit && head < tail
+			return putJSON(tx, retentionClaimCursorNamespace, retentionClaimHead, head)
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+		if !more {
+			return nil
+		}
+	}
 }
 
 // withoutReleased drops from result the artifacts whose content has been
@@ -770,5 +866,5 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			result.Pending++
 		}
 	}
-	return result, s.pruneClaims(ctx)
+	return result, s.pruneClaims(ctx, limit)
 }

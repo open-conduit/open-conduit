@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -304,4 +307,109 @@ func TestProductionCollectionClaimsWhatItDeletes(t *testing.T) {
 		}
 		return e
 	})
+}
+
+// countingStore counts the KV lists of the claim namespaces.
+type countingStore struct {
+	storage.Store
+	lists *atomic.Int64
+}
+type countingTx struct {
+	storage.Tx
+	lists *atomic.Int64
+}
+
+func (s countingStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(countingTx{tx, s.lists}) })
+}
+func (t countingTx) List(ns, prefix string) ([]storage.Entry, error) {
+	if strings.HasPrefix(ns, "core.retention.released") {
+		t.lists.Add(1)
+	}
+	return t.Tx.List(ns, prefix)
+}
+
+func claimRows(t *testing.T, f conformance.RuntimeFixture, ns string) int {
+	t.Helper()
+	n := 0
+	routingRead(t, f, func(tx storage.Tx) error {
+		rows, e := tx.List(ns, "")
+		n = len(rows)
+		return e
+	})
+	return n
+}
+
+// Claims are pruned from the queue without listing them, past the sweep's
+// limit when more are due, and only once they are due.
+func TestProductionClaimsPruneFromTheQueue(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	store := newListedArtifacts()
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		store.add(id, f.Clock.Now())
+	}
+	lists := &atomic.Int64{}
+	s, err := runtime.NewScheduler(countingStore{f.Store, lists}, f.Clock.Now, d.Router, d.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(time.Hour)
+	if r, err := s.CollectArtifacts(ctx, store, f.Clock.Now()); err != nil || r.Deleted != 5 {
+		t.Fatalf("collect: %+v %v", r, err)
+	}
+	if _, err = s.SweepRetention(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := claimRows(t, f, "core.retention.released"); got != 5 {
+		t.Fatalf("%d claims before they were due, want 5", got)
+	}
+	f.Clock.Advance(7*24*time.Hour + time.Minute)
+	if _, err = s.SweepRetention(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := claimRows(t, f, "core.retention.released") + claimRows(t, f, "core.retention.released.queue"); got != 0 {
+		t.Fatalf("%d claim rows left after they came due", got)
+	}
+	if lists.Load() != 0 {
+		t.Fatalf("a sweep listed the claims %d times", lists.Load())
+	}
+}
+
+// failingDelete fails every delete, as an unavailable store does.
+type failingDelete struct{ *listedArtifacts }
+
+func (failingDelete) Delete(context.Context, storage.ArtifactRef) error {
+	return errors.New("store unavailable")
+}
+
+// A delete still being retried keeps its claim past the window, and the
+// queue entry its renewal replaced removes nothing.
+func TestProductionRetriedDeleteKeepsItsClaim(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	store := newListedArtifacts()
+	ref := store.add("retried", f.Clock.Now())
+	finishedWithArtifacts(t, f, d, "retried", []domain.ArtifactRef{ref})
+	options := d.Options
+	options.Artifacts, options.KeptFinished = failingDelete{store}, time.Hour
+	s, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(2 * time.Hour)
+	for range 12 {
+		if r, err := s.SweepRetention(ctx, 10); err != nil || r.Pending != 1 {
+			t.Fatalf("sweep: %+v %v", r, err)
+		}
+		if got := claimRows(t, f, "core.retention.released"); got != 1 {
+			t.Fatalf("%d claims while the delete is retried, want 1", got)
+		}
+		f.Clock.Advance(24 * time.Hour)
+	}
+	if got := claimRows(t, f, "core.retention.released.queue"); got > 3 {
+		t.Fatalf("retries left %d queue entries", got)
+	}
 }
