@@ -87,6 +87,12 @@ type ServeRequest struct {
 	// --restore-trust-key and --restore-accept-unsigned.
 	RestoreTrustKeys      []string
 	RestoreAcceptUnsigned bool
+	// RestoreReplica is a raw database replica to restore into StateDir
+	// before serving, only when it holds no database, so a restart never
+	// replaces what the daemon has committed (serve --restore-replica).
+	// RestoreArtifactsFrom and RestoreArchiveFrom are where copies of the
+	// file artifact store and event archive survive.
+	RestoreReplica, RestoreArtifactsFrom, RestoreArchiveFrom string
 }
 
 // tunnelType is a tunnel type's name, as a manifest declares it.
@@ -123,6 +129,9 @@ func (o *operator) serve(args []string) int {
 	if r.Restore != "" && !o.restoreBeforeServe(r) {
 		return 1
 	}
+	if r.RestoreReplica != "" && !o.restoreReplicaBeforeServe(r) {
+		return 1
+	}
 	return o.env.Serve(r)
 }
 
@@ -151,10 +160,34 @@ func (o *operator) restoreBeforeServe(r ServeRequest) bool {
 	return true
 }
 
+// restoreReplicaBeforeServe restores serve --restore-replica's replica into a
+// state directory holding no database, and reports what it did on stderr. A
+// failed restore, or a restored directory with problems, stops the start.
+func (o *operator) restoreReplicaBeforeServe(r ServeRequest) bool {
+	if o.env.State == nil || o.env.State.RestoreReplicaInPlace == nil {
+		fmt.Fprintln(o.errOut, "open-conduit: serve --restore-replica: offline state commands are not available in this binary")
+		return false
+	}
+	cx, cancel := offlineCtx()
+	defer cancel()
+	info, err := o.env.State.RestoreReplicaInPlace(cx, r.RestoreReplica, r.StateDir, ReplicaOptions{RestoreOptions: RestoreOptions{ConfigPath: r.ConfigPath, PolicyPath: r.PolicyPath, ArtifactBackend: r.RestoreArtifacts, ArtifactLocation: r.RestoreArtifactsLocation, ArtifactCommand: r.RestoreArtifactsCommand, StartConfig: r.RestoreStartConfig, Once: true}, ArtifactsFrom: r.RestoreArtifactsFrom, ArchiveFrom: r.RestoreArchiveFrom})
+	if err != nil {
+		fmt.Fprintf(o.errOut, "open-conduit: serve --restore-replica: %s\n", err)
+		return false
+	}
+	report, _ := json.Marshal(info)
+	fmt.Fprintf(o.errOut, "open-conduit: serve --restore-replica: %s\n", report)
+	if p := info.InPlace; p != nil && p.Check != nil && !p.Check.OK {
+		fmt.Fprintln(o.errOut, "open-conduit: serve --restore-replica: the restored state directory has problems (in_place.check); not serving it")
+		return false
+	}
+	return true
+}
+
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "policy", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
+	fs := newFlags("serve", "config", "policy", "toolbelt-dir", "lifecycle-log", "backup-dir", "restore", "restore-database-location", "restore-artifacts", "restore-artifacts-location", "restore-artifacts-command", "restore-start-config", "restore-trust-key", "restore-replica", "restore-artifacts-from", "restore-archive-from", "webhook-addr", "tunnel", "tunnel-config", "public-url", "web-addr", "web-host", "management-addr", "management-tls-cert", "management-tls-key", "management-client-ca", "web-subject-header", "web-token-file", "probe-addr")
 	trustedProxy := fs.fs.Bool("management-trusted-proxy", false, "")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -227,12 +260,23 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.RestoreArtifacts, r.RestoreArtifactsLocation = fs.get("restore-artifacts"), fs.get("restore-artifacts-location")
 	r.RestoreArtifactsCommand = fs.get("restore-artifacts-command")
 	r.RestoreDatabaseLocation = fs.get("restore-database-location")
-	if r.Restore == "" && (r.RestoreArtifacts != "" || r.RestoreArtifactsLocation != "" || r.RestoreArtifactsCommand != "" || r.RestoreDatabaseLocation != "") {
-		return ServeRequest{}, usageError(o.errOut, "--restore-database-location, --restore-artifacts, --restore-artifacts-location and --restore-artifacts-command go with --restore BUNDLE")
+	r.RestoreReplica = o.abs(fs.get("restore-replica"))
+	r.RestoreArtifactsFrom, r.RestoreArchiveFrom = o.abs(fs.get("restore-artifacts-from")), o.abs(fs.get("restore-archive-from"))
+	if r.Restore != "" && r.RestoreReplica != "" {
+		return ServeRequest{}, usageError(o.errOut, "--restore and --restore-replica are alternatives: give one")
+	}
+	if r.RestoreReplica == "" && (r.RestoreArtifactsFrom != "" || r.RestoreArchiveFrom != "") {
+		return ServeRequest{}, usageError(o.errOut, "--restore-artifacts-from and --restore-archive-from go with --restore-replica DATABASE")
+	}
+	if r.RestoreReplica != "" && r.RestoreDatabaseLocation != "" {
+		return ServeRequest{}, usageError(o.errOut, "--restore-database-location doesn't apply to --restore-replica, which restores into the state directory")
+	}
+	if r.Restore == "" && r.RestoreReplica == "" && (r.RestoreArtifacts != "" || r.RestoreArtifactsLocation != "" || r.RestoreArtifactsCommand != "" || r.RestoreDatabaseLocation != "") {
+		return ServeRequest{}, usageError(o.errOut, "--restore-database-location, --restore-artifacts, --restore-artifacts-location and --restore-artifacts-command go with --restore BUNDLE or --restore-replica DATABASE")
 	}
 	if v := fs.get("restore-start-config"); v != "" {
-		if r.Restore == "" {
-			return ServeRequest{}, usageError(o.errOut, "--restore-start-config goes with --restore BUNDLE")
+		if r.Restore == "" && r.RestoreReplica == "" {
+			return ServeRequest{}, usageError(o.errOut, "--restore-start-config goes with --restore BUNDLE or --restore-replica DATABASE")
 		}
 		r.RestoreStartConfig = o.abs(v)
 	}

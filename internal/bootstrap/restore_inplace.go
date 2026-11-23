@@ -580,17 +580,10 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 		store.Close()
 		return info, err
 	}
-	removed, err := management.ForgetRuns(lock, stateDir, func(ids []domain.ID) (map[domain.ID]bool, error) {
-		return knownExecutions(ctx, store, ids)
-	})
-	for _, id := range removed {
-		report.RemovedRuns = append(report.RemovedRuns, string(id))
-	}
-	if err != nil {
+	if err := forgetLaterRuns(ctx, lock, stateDir, store, report); err != nil {
 		store.Close()
-		return info, fmt.Errorf("removing the run directories of executions from after the bundle: %w", err)
+		return info, err
 	}
-	report.LaterTimeline = append(report.LaterTimeline, laterTimeline(stateDir)...)
 	if info.Scopes, err = scopeIDs(ctx, store); err != nil {
 		store.Close()
 		return info, err
@@ -607,6 +600,23 @@ func finishInPlace(ctx context.Context, lock *management.Lock, stateDir string, 
 	}
 	report.Check = &check
 	return info, nil
+}
+
+// forgetLaterRuns removes the run directories of executions the restored
+// database doesn't know, and reports what else stays from after the restore
+// point.
+func forgetLaterRuns(ctx context.Context, lock *management.Lock, stateDir string, store storage.Database, report *cli.InPlaceReport) error {
+	removed, err := management.ForgetRuns(lock, stateDir, func(ids []domain.ID) (map[domain.ID]bool, error) {
+		return knownExecutions(ctx, store, ids)
+	})
+	for _, id := range removed {
+		report.RemovedRuns = append(report.RemovedRuns, string(id))
+	}
+	if err != nil {
+		return fmt.Errorf("removing the run directories of executions from after the restore point: %w", err)
+	}
+	report.LaterTimeline = append(report.LaterTimeline, laterTimeline(stateDir)...)
+	return nil
 }
 
 // knownExecutions reports which of ids the restored database holds.

@@ -179,6 +179,15 @@ open-conduit serve --restore /backups/conduit-20261102T090000Z
 
 Before serving, it restores the bundle in place exactly as `backup restore --in-place` does, and prints the report to stderr. A restore that fails, or a restored directory whose state check finds problems, stops the start. With an artifact store outside the volume, name the empty store the bundle's artifacts go to with `--restore-artifacts NAME --restore-artifacts-location LOC`, as `--artifacts` and `--artifacts-location` do for `backup restore`. To start on a config for this machine rather than the bundle's generation, as a move to a new path needs, add `--restore-start-config FILE`, which does what `--start-config` does: a config that doesn't validate, or drops a scope with open Work, stops the start with nothing published. It applies only when the bundle is restored, so a restart never puts it back over a config applied since. It restores a given bundle once: a restart that finds the directory restored from it already (`restored.json`) serves the directory as it is, so the container can keep the flag until its next deployment. `service install` refuses `--restore`; for an installed service, stop it and run `backup restore --in-place`.
 
+A container that lost its volume can start from a [replica](#restoring-from-a-replica) the same way:
+
+```sh
+open-conduit serve --restore-replica /recovered/conduit.db \
+  --restore-artifacts-from /recovered/artifacts --restore-archive-from /recovered/archive
+```
+
+It restores only into a state directory that holds no database, so it can stay in the container's command: a restart finds the database, leaves it alone and serves it, even if the replica has since changed or gone. The directory must be owner-only (`0700`), as for any start. The daemon comes up drained, so run `drain end` through its management API once the old host is stopped for good. `--restore-artifacts NAME --restore-artifacts-location LOC` keeps using an object store, and `--restore-start-config FILE` starts on a config for this machine.
+
 ## Continuous replication
 
 Bundles and WAL replication do different jobs, and a deployment that can't afford to lose a day should run both:
@@ -229,6 +238,7 @@ open-conduit --data-dir ~/oc-restored drain end    # once the old host is stoppe
 - **The replica is not changed.** A WAL beside it is applied to a private copy, and the restored file is owner-only whatever mode the replicator wrote. Tables a replicator added to the database stay in it.
 - **It verifies and fences.** A file that isn't a database, fails its integrity check or was written by a newer binary is refused, and nothing is published. Every lease is fenced, and a fresh operator token replaces the old one.
 - **It starts drained.** Nothing in a replica shows that the host it came from has stopped, so no attempt starts until you run `drain end`. The drain is written before the directory is published, so a restore that stops part way can't leave a copy that runs. A restore from a bundle ends the drain instead, because a bundle is a point you chose to go back to.
+- **`--in-place` restores into the daemon's own directory,** which may be an empty mounted volume, under its lock. It refuses a directory that holds a database, because a replica restore never replaces one. `artifacts/` and `archive/` already in the directory are used as the surviving copies unless you name others. A restore that stops part way is finished by the next one, and it is drained before the swap begins.
 - **The config is checked as for a bundle,** against the installed packages and the daemon's policy. `--start-config FILE` starts on a config for this machine.
 - **Artifacts and archived Events are separate from the database,** so a WAL replica doesn't carry them. `--artifacts-from` copies a surviving file store and `--archive-from` a surviving event archive. With an artifact store outside the host, `--artifacts NAME --artifacts-location LOC` keeps using it and checks that each object is there. An archived record later than the replica is left out, because the restored daemon will issue that sequence again.
 - **What's missing is reported, not fatal.** `missing_artifacts` and `missing_events` name what couldn't be brought back. The restored database records them as lost, so `state check` passes and later bundles omit them. An artifact store that can't be reached fails the restore instead, since an outage isn't a loss.
@@ -288,7 +298,7 @@ Recovery order:
 
 `TestReplicaRestoresWhatSurvived` (in `internal/bootstrap`) restores a world-readable replica holding a replicator's table, with its artifacts and archive: the lease is fenced, the directory starts drained and a bundle of it verifies. `TestReplicaReportsWhatIsMissing` restores the same replica with neither, and it still passes `state check` and can be backed up. Removing the record of what was lost is its negative control, which the backup refuses. `TestReplicaIsDrainedBeforeItIsPublished` stops the restore just after publishing and finds the directory drained. `TestReplicaAppliesTheWALBesideIt` keeps a commit that exists only in the WAL.
 
-`TestDaemonReplicationDrill` (in `integration`, run by `make drill-replication`) replicates a real daemon with Litestream through commits, `Reclaim` and `Rebuild`, deletes its state directory, restores the replica and starts on it: the same Work is there, nothing launches until the drain ends, and it then completes. `TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file's bytes between a state check's copies while keeping its size and modification time, with a file that never settles as its negative control.
+`TestDaemonReplicationDrill` (in `integration`, run by `make drill-replication`) replicates a real daemon with Litestream through commits, `Reclaim` and `Rebuild`, deletes its state directory, restores the replica and starts on it: the same Work is there, nothing launches until the drain ends, and it then completes. `TestReplicaNeverReplacesADatabase` (in `internal/bootstrap`) commits after an in-place replica restore, removes the replica and restarts: the commit survives, and without `serve`'s once-only rule the same directory is refused. `TestReplicaInPlaceFinishesAnInterruptedSwap` stops the swap part way. `TestInspectRetakesACopyTornByAWriter` (in `internal/storage/sqlite`) changes the file's bytes between a state check's copies while keeping its size and modification time, with a file that never settles as its negative control.
 
 ## History
 

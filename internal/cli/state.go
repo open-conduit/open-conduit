@@ -194,6 +194,10 @@ type ReplicaInfo struct {
 	StartConfig      string        `json:"start_config,omitempty"`
 	ConfigGeneration uint64        `json:"config_generation,omitempty"`
 	ConfigProblems   []ConfigEntry `json:"config_problems,omitempty"`
+	// InPlace is what restoring into the state directory itself did. Its
+	// already_restored says the directory held state and was left alone, and
+	// Drained then says nothing about it: only a restore that ran sets it.
+	InPlace *InPlaceReport `json:"in_place,omitempty"`
 }
 
 // BackupOptions are `backup create`'s choices.
@@ -232,6 +236,9 @@ type StateOps struct {
 	// RestoreReplica publishes a new state directory from a raw database
 	// replica, drained.
 	RestoreReplica func(ctx context.Context, replica, destination string, o ReplicaOptions) (ReplicaInfo, error)
+	// RestoreReplicaInPlace restores a replica into stateDir itself, when it
+	// holds no database. With Once, one that does is left as it is.
+	RestoreReplicaInPlace func(ctx context.Context, replica, stateDir string, o ReplicaOptions) (ReplicaInfo, error)
 	// ListDestination names the complete bundles a configured destination
 	// holds, and FetchBundle downloads one into an absent directory,
 	// authenticating it.
@@ -297,8 +304,8 @@ func (o *operator) backup(args []string) int {
 		}
 		return o.emit(o.env.State.Restore(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	case "restore-replica":
-		if f.get("to") == "" {
-			return usageError(o.errOut, "backup restore-replica needs --to DIR (an absent directory)")
+		if (f.get("to") != "") == *inPlace {
+			return usageError(o.errOut, "backup restore-replica needs --to DIR (an absent directory) or --in-place (the daemon's own state directory, holding no database, with the daemon stopped)")
 		}
 		ro := ReplicaOptions{RestoreOptions: RestoreOptions{ArtifactBackend: f.get("artifacts"), ArtifactLocation: f.get("artifacts-location"), ArtifactCommand: f.get("artifacts-command"), DatabaseLocation: f.get("database-location"), ConfigPath: o.configPath(f.get("config")), PolicyPath: o.abs(o.env.Getenv("OPEN_CONDUIT_POLICY"))}}
 		if v := f.get("start-config"); v != "" {
@@ -309,6 +316,10 @@ func (o *operator) backup(args []string) int {
 		}
 		if v := f.get("archive-from"); v != "" {
 			ro.ArchiveFrom = o.abs(v)
+		}
+		if *inPlace {
+			info, err := o.env.State.RestoreReplicaInPlace(cx, o.abs(pos[0]), o.stateDir(), ro)
+			return o.restoredReplica(info, err)
 		}
 		return o.emit(o.env.State.RestoreReplica(cx, o.abs(pos[0]), o.abs(f.get("to")), ro))
 	}
@@ -349,6 +360,16 @@ func (o *operator) backupKeygen(path string) (KeyPair, error) {
 		return KeyPair{}, err
 	}
 	return KeyPair{Path: path, PublicKey: public}, nil
+}
+
+// restoredReplica prints an in-place replica restore's report, and fails when
+// the restored directory's state check found problems.
+func (o *operator) restoredReplica(info ReplicaInfo, err error) int {
+	code := o.emit(info, err)
+	if code == 0 && info.InPlace != nil && info.InPlace.Check != nil && !info.InPlace.Check.OK {
+		return 1
+	}
+	return code
 }
 
 // restoredInPlace prints an in-place restore's report, and fails when the
