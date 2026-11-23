@@ -1553,6 +1553,7 @@ func (s *Server) revoke(c *call) (int, any, error) {
 			if !r.Revoked {
 				r.Revoked, r.RevokedAt = true, s.o.Now()
 			}
+			r.Superseded = false
 			at = r.RevokedAt
 			b, _ = json.Marshal(r)
 			if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {

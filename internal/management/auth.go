@@ -161,10 +161,15 @@ func revokeAllOperatorsInTx(tx storage.Tx, now time.Time) error {
 		if err = json.Unmarshal(row.Value, &r); err != nil {
 			return err
 		}
-		if r.Revoked {
+		// An operator's revocation overrides a takeover's, so a credential
+		// already retired can't be replaced automatically after this either.
+		if r.Revoked && !r.Superseded {
 			continue
 		}
-		r.Revoked, r.RevokedAt = true, now
+		if !r.Revoked {
+			r.Revoked, r.RevokedAt = true, now
+		}
+		r.Superseded = false
 		b, _ := json.Marshal(r)
 		if err = tx.Put(authNamespace, row.Key, b); err != nil {
 			return err

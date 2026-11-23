@@ -102,6 +102,35 @@ func TestHolderOperatorHonoursARevocation(t *testing.T) {
 	}
 }
 
+// auth recover also covers a credential a takeover had already retired. The
+// control is the same sequence without the recover, where the host does get a
+// new credential, so the refusal is the recover's doing.
+func TestHolderOperatorRecoverOverridesATakeover(t *testing.T) {
+	for _, recovered := range []bool{false, true} {
+		f := newHolderFixture(t)
+		ctx := context.Background()
+		if err := management.BootstrapOperator(ctx, f.store, f.now, f.path("first")); err != nil {
+			t.Fatal(err)
+		}
+		f.issued("a")
+		f.issued("b") // retires a's
+		retired := f.read("a")
+		if !recovered {
+			f.issued("a")
+			continue
+		}
+		if err := management.RecoverOperator(ctx, f.store, f.now, f.path("operator")); err != nil {
+			t.Fatal(err)
+		}
+		if id, err := f.ensure("a"); !errors.Is(err, management.ErrCredentialExists) || id != "" {
+			t.Fatalf("a host retired before the recover: issued %q, %v", id, err)
+		}
+		if f.read("a") != retired {
+			t.Fatal("the retired file was replaced after the recover")
+		}
+	}
+}
+
 func TestHolderOperatorLeavesAnUnreadableFile(t *testing.T) {
 	f := newHolderFixture(t)
 	path := f.path("a")
