@@ -33,9 +33,9 @@ type instanceDaemon struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
 	c      *client.Client
-	// tokenDir is the state directory whose operator token this daemon
-	// accepts. The credential is in the shared database, and only the
-	// instance that first created it wrote the token to its own disk.
+	// tokenDir is the state directory whose operator token the drill uses
+	// for this daemon: the first instance's, which stays valid across a
+	// takeover because its credential is in the shared database.
 	tokenDir string
 	// passFile is where this daemon publishes its completed loop passes.
 	passFile string
@@ -275,6 +275,73 @@ func TestDaemonTakeoverFromKilledHolder(t *testing.T) {
 		w, err := f.standby.c.Work(ctx, f.work.ID)
 		return err == nil && w.State == "waiting"
 	})
+}
+
+// A successor on another host has none of its predecessor's disk. It ends up
+// with its own working token, without revoking the one the operator already
+// holds, and a further takeover retires it rather than piling up credentials.
+func TestDaemonSuccessorHasAWorkingToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process kill drills")
+	}
+	f := newTakeover(t)
+	ctx := context.Background()
+	token := func(name string) client.TokenFile {
+		t.Helper()
+		file, err := client.ReadTokenFile(filepath.Join(f.d.root, name, "private", "operator.token"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	first := token("a")
+	if _, err := os.Stat(filepath.Join(f.standby.state, "private", "operator.token")); !os.IsNotExist(err) {
+		t.Fatalf("a standby wrote a token before it held the lease: %v", err)
+	}
+	if err := f.holder.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-f.holder.exited
+	f.awaitTakeover(t)
+	second := token("b")
+	if second.TokenID == first.TokenID {
+		t.Fatal("the successor reused its predecessor's credential")
+	}
+	socket := "unix://" + filepath.Join(f.standby.state, "management.sock")
+	works := func(file client.TokenFile) error {
+		c, err := client.New(socket, file.Token)
+		if err != nil {
+			return err
+		}
+		_, err = c.Works(ctx, url.Values{"scope_id": {"drill"}})
+		return err
+	}
+	if err := works(second); err != nil {
+		t.Fatalf("the successor's own token: %v", err)
+	}
+	if err := works(first); err != nil {
+		t.Fatalf("the takeover revoked the token the operator held: %v", err)
+	}
+
+	third := startInstance(t, f.d, "c", filepath.Join(f.d.root, "shared.db"))
+	waitFor(t, "the third daemon waiting as a standby", func() bool {
+		return strings.Contains(third.log(), "another instance holds this state")
+	})
+	if err := f.standby.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-f.standby.exited
+	waitFor(t, "the third daemon serving", third.serving)
+	socket = "unix://" + filepath.Join(third.state, "management.sock")
+	if err := works(token("c")); err != nil {
+		t.Fatalf("the third instance's own token: %v", err)
+	}
+	if err := works(first); err != nil {
+		t.Fatalf("a second takeover revoked the first token: %v", err)
+	}
+	if err := works(second); err == nil {
+		t.Fatal("the previous takeover's credential still authenticates")
+	}
 }
 
 // A drain is the operator's hold on the state, so it outlives a takeover. The
